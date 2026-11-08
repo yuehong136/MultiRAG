@@ -48,6 +48,7 @@ from common.asyncio_utils import finish_owned_work
 from common.config_utils import show_configs
 from common.connection_utils import timeout
 from common.constants import MAXIMUM_TASK_PAGE_NUMBER, PAGERANK_FLD, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, SVR_CONSUMER_GROUP_NAME, TAG_FLD, LLMType, ParserType, PipelineTaskType
+from common.doc_store.doc_store_base import OrderByExpr
 from common.exceptions import TaskCanceledException
 from common.file_utils import get_project_base_directory
 from common.graphrag_config import GraphRAGExecutionConfig
@@ -433,6 +434,28 @@ async def collect(db: Session) -> tuple[Any, Any]:
         memory = memory_for_task(db, task_obj, msg) if task_obj else None
         task = task_obj.to_dict() if memory is not None else None
         if task is not None:
+            # Validate the persisted owner before acknowledging a redelivery.
+            # Memory tasks have no Document/KB row to provide this guard.
+            if task_obj.progress >= 1 or task_obj.progress < 0:
+                redis_msg.ack()
+                if task_obj.progress >= 1:
+                    DONE_TASKS += 1
+                else:
+                    FAILED_TASKS += 1
+                return None, None
+            if await asyncio.to_thread(_memory_task_has_extracted_messages, memory.tenant_id, memory.id, msg["source_id"]):
+                # Message storage and SQL are not one transaction. An older
+                # attempt may have saved some/all derived messages before its
+                # SQL commit failed. Do not extract again or call it complete.
+                TaskService.update_progress(
+                    db,
+                    task_obj.id,
+                    {"progress": -1, "progress_msg": "Existing extracted memory requires reconciliation; automatic replay stopped to avoid duplicate derived messages."},
+                )
+                db.commit()
+                redis_msg.ack()
+                FAILED_TASKS += 1
+                return None, None
             task["tenant_id"] = memory.tenant_id
     else:
         # 普通任务，从数据库获取
@@ -457,6 +480,24 @@ async def collect(db: Session) -> tuple[Any, Any]:
         task["source_id"] = msg["source_id"]
         task["message_dict"] = msg["message_dict"]
     return redis_msg, task
+
+
+def _memory_task_has_extracted_messages(tenant_id: str, memory_id: str, source_id: int) -> bool:
+    """Detect an uncertain earlier storage write, including inactive results."""
+    _, count = settings.msgStoreConn.search(
+        select_fields=["message_id"],
+        highlight_fields=[],
+        condition={"source_id": source_id},
+        match_expressions=[],
+        order_by=OrderByExpr(),
+        offset=0,
+        limit=1,
+        index_names=f"memory_{tenant_id}",
+        memory_ids=[memory_id],
+        agg_fields=[],
+        hide_forgotten=False,
+    )
+    return count > 0
 
 
 async def get_storage_binary(bucket: str, name: str) -> bytes:
@@ -3098,8 +3139,9 @@ async def handle_task() -> None:
                 # Expiring ownership is shared by Python and Go. Preserve a
                 # cancel_requested state; only active attempts become terminal.
                 await asyncio.to_thread(finish_runtime, task_id)
-                # analyze_v2 任务不记录 pipeline 操作日志（临时 doc_id，无对应 Document 记录）
-                if task_type != "analyze_v2":
+                # These tasks own no Document/KB; memory results and progress
+                # must commit without entering document pipeline bookkeeping.
+                if task_type not in {"analyze_v2", PipelineTaskType.MEMORY.lower()}:
                     referred_document_id = None
                     if task_type in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
                         referred_document_id = task["doc_ids"][0]
@@ -3112,13 +3154,18 @@ async def handle_task() -> None:
                             await finish_status_write(asyncio.to_thread(record_task_pipeline, db.get_bind(), task_id, task["doc_id"], task["kb_id"], "", "{}", task_type=pipeline_task_type))
                 clear_log_context()
 
+            if task_type == PipelineTaskType.MEMORY.lower():
+                # Keep a failed SQL commit retryable after an independent
+                # message-store write. The replay guard above reconciles it.
+                db.commit()
             redis_msg.ack()
         except Exception:
             logging.exception("Error in main loop")
             db.rollback()  # 回滚事务
             raise
         else:
-            db.commit()  # 提交事务
+            if task_type != PipelineTaskType.MEMORY.lower():
+                db.commit()  # 提交事务
 
 
 async def get_server_ip() -> str:

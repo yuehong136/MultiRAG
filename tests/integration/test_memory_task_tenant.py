@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -107,12 +108,14 @@ async def test_enqueue_collect_execute_and_reject_forgery(
         assert persisted.doc_id == env["mid"] and persisted.digest == str(queued["source_id"])
     raw = MessageService.get_by_message_id(env["mid"], queued["source_id"], env["tenant"])
     assert raw["user_id"] == "subject"
-    with Session(bootstrapped_engine) as db:
-        redis_msg, task = await worker.collect(db)
-        assert task["tenant_id"] == env["tenant"]
-        assert (await mms.handle_save_to_memory_task(db, task))[0] is True
-        db.commit()
-        redis_msg.ack()
+
+    @contextmanager
+    def connection() -> Iterator[Session]:
+        with Session(bootstrapped_engine) as db:
+            yield db
+
+    monkeypatch.setattr(worker, "db_connection", connection)
+    await worker.handle_task()
     with Session(bootstrapped_engine) as reader:
         assert reader.get(Task, queued["id"]).progress == 1
         assert reader.get(Task, queued["id"]).process_duration >= 0
@@ -139,6 +142,59 @@ async def test_enqueue_collect_execute_and_reject_forgery(
         assert persisted.progress == 1
     assert REDIS_CONN.REDIS.xpending(env["queue"], worker.SVR_CONSUMER_GROUP_NAME)["pending"] == 0
     env["journal"].event("memory-chain-readback", tenant_matches_db=True, raw_and_extracted_count=2, denied_variants=5, denied_model_and_storage_effects=0, queue_pending=0)
+
+
+async def test_memory_redelivery_preserves_committed_and_uncertain_storage_results(
+    bootstrapped_engine: sa.Engine, bootstrapped_async_engine: AsyncEngine, memory_resources: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = memory_resources
+    extracts: list[str] = []
+
+    async def extract(db: Session, tenant_id: str, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        extracts.append(tenant_id)
+        return [{"message_type": "semantic", "content": "controlled", "valid_at": "2026-11-08 00:00:00", "invalid_at": None}]
+
+    @contextmanager
+    def connection() -> Iterator[Session]:
+        with Session(bootstrapped_engine) as db:
+            yield db
+
+    monkeypatch.setattr(mms, "extract_by_llm", extract)
+    monkeypatch.setattr(worker, "db_connection", connection)
+    async with AsyncSession(bootstrapped_async_engine, expire_on_commit=False) as db:
+        assert (
+            await mms.queue_save_to_memory_task(db, [env["mid"]], {"user_id": "subject", "agent_id": "agent", "session_id": "session", "user_input": "controlled", "agent_response": "controlled"})
+        )[0]
+        await db.commit()
+    queued = json.loads(REDIS_CONN.REDIS.xrange(env["queue"])[0][1]["message"])
+    await worker.handle_task()
+    with Session(bootstrapped_engine) as reader:
+        assert reader.get(Task, queued["id"]).progress == 1
+    before_calls = list(env["calls"])
+    before_counter = REDIS_CONN.REDIS.get(f"{env['queue']}:memory")
+
+    # A completed task delivered again must not call the model or write memory.
+    assert REDIS_CONN.queue_product(env["queue"], queued)
+    await worker.handle_task()
+    assert env["calls"] == before_calls and extracts == [env["tenant"]]
+    assert REDIS_CONN.REDIS.get(f"{env['queue']}:memory") == before_counter
+
+    # Reproduce the historical failure: message storage committed, SQL progress
+    # rolled back. Preserve those results and require reconciliation, not replay.
+    with Session(bootstrapped_engine) as db:
+        db.get(Task, queued["id"]).progress = 0
+        db.commit()
+    assert REDIS_CONN.queue_product(env["queue"], queued)
+    await worker.handle_task()
+    with Session(bootstrapped_engine) as reader:
+        task = reader.get(Task, queued["id"])
+        assert task.progress == -1
+        assert "reconciliation" in task.progress_msg
+    assert len(MessageService.get_recent_messages([env["tenant"]], [env["mid"]], "agent", "session", 10)) == 2
+    assert env["calls"] == before_calls and extracts == [env["tenant"]]
+    assert REDIS_CONN.REDIS.get(f"{env['queue']}:memory") == before_counter
+    assert REDIS_CONN.REDIS.xpending(env["queue"], worker.SVR_CONSUMER_GROUP_NAME)["pending"] == 0
+    env["journal"].event("memory-redelivery-readback", completed_replay_model_calls=0, uncertain_replay_model_calls=0, derived_writes=1, uncertain_task_requires_reconciliation=True, queue_pending=0)
 
 
 def test_configuration_equivalence_and_occupied_change_sql(bootstrapped_engine: sa.Engine, memory_resources: dict[str, Any]) -> None:

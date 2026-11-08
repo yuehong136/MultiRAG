@@ -20,11 +20,14 @@ def owned_task(monkeypatch: pytest.MonkeyPatch) -> Task:
     task = Task(id="task", doc_id="memory", digest="42", task_type="memory", progress=0)
     monkeypatch.setattr(mms.MemoryService, "get_by_memory_id", lambda db, mid: memory if mid == "memory" else None)
     monkeypatch.setattr(TaskService, "get_by_id", lambda db, tid: task if tid == "task" else None)
+    monkeypatch.setattr(worker, "_memory_task_has_extracted_messages", lambda *args: False)
     return task
 
 
 @pytest.mark.parametrize("change", [{"tenant_id": None}, {"tenant_id": "foreign"}, {"memory_id": "foreign"}, {"memory_id": "missing"}, {"source_id": 43}, {"source_id": True}])
-async def test_invalid_queue_cannot_run_memory_work(db: Session, owned_task: Task, monkeypatch: pytest.MonkeyPatch, change: dict[str, Any]) -> None:
+@pytest.mark.parametrize("progress", [0.0, 1.0])
+async def test_invalid_queue_cannot_run_memory_work(db: Session, owned_task: Task, monkeypatch: pytest.MonkeyPatch, change: dict[str, Any], progress: float) -> None:
+    owned_task.progress = progress
     payload = {"id": "task", "task_type": "memory", "tenant_id": "owner", "memory_id": "memory", "source_id": 42, "message_dict": {}} | change
     acknowledged: list[bool] = []
 
