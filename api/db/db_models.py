@@ -3060,6 +3060,49 @@ class File2Document(BaseModel):
     document_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="document id")
 
 
+class FileCommit(BaseModel):
+    """Immutable complete folder snapshot, ordered within its tenant scope."""
+
+    __tablename__ = "t_ai_file_commits"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "folder_id", "sequence", name="uq_file_commits_scope_sequence"),
+        sa.CheckConstraint("sequence >= 1", name="ck_file_commits_sequence"),
+        sa.CheckConstraint("file_count >= 0", name="ck_file_commits_file_count"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    folder_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    parent_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    message: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
+    author_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    tree_state: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+
+class FileCommitItem(BaseModel):
+    """Change receipt belonging to an immutable folder snapshot."""
+
+    __tablename__ = "t_ai_file_commit_items"
+    __table_args__ = (
+        sa.UniqueConstraint("commit_id", "file_id", name="uq_file_commit_items_commit_file"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    commit_id: Mapped[str] = mapped_column(String(32), sa.ForeignKey("usr_ai.t_ai_file_commits.id", ondelete="RESTRICT"), index=True, nullable=False)
+    file_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    operation: Mapped[str] = mapped_column(String(16), nullable=False)
+    old_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    new_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    old_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    new_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    old_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    new_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class Task(BaseModel):
     __tablename__ = "t_ai_tasks"
     __table_args__ = {"schema": "usr_ai"}

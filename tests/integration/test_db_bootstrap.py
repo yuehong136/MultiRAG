@@ -17,6 +17,8 @@ import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -25,12 +27,76 @@ from api.db import UserAccountKind
 from api.db.db_models import Base, User
 from api.db.services.user_service import UserService
 from tests.support.database import scratch_database
+from tests.support.resource_journal import ResourceJournal
 
 _USER_ACCOUNT_REVISION = "7c8d9e0f1a2b"
 _PRE_USER_ACCOUNT_REVISION = "e4f6a8b0c2d4"
 _PRE_PROVIDER_REVISION = "a7c9e1f3b5d7"
 _PROVIDER_REVISION = "b8d0f2a4c6e8"
 _NON_SECRET_PLACEHOLDER = "x"
+
+
+@pytest.mark.parametrize("model_first", [False, True], ids=["stored-upgrade", "model-first"])
+def test_file_commit_schema_upgrade_preserves_history(bootstrapped_engine: sa.Engine, alembic_cfg: Config, monkeypatch: pytest.MonkeyPatch, model_first: bool) -> None:
+    """Both bootstrap paths enforce snapshot ordering and retain committed history."""
+    from api.db.db_models import FileCommit, FileCommitItem
+
+    revision = ScriptDirectory.from_config(alembic_cfg).get_revision("c9e1f3a5b7d9")
+    assert revision is not None
+    migration = revision.module
+    schema = "file_commit_" + uuid.uuid4().hex[:12]
+    journal = ResourceJournal("file_commit_schema")
+    journal.event("reserve-schema", schema=schema, database=bootstrapped_engine.url.database)
+    monkeypatch.setattr(migration, "SCHEMA", schema)
+    with bootstrapped_engine.begin() as connection:
+        connection.execute(sa.schema.CreateSchema(schema))
+    try:
+        with bootstrapped_engine.begin() as connection:
+            monkeypatch.setattr(migration, "op", Operations(MigrationContext.configure(connection)))
+            if model_first:
+                metadata = sa.MetaData()
+                for model in (FileCommit, FileCommitItem):
+                    model.__table__.to_metadata(metadata, schema=schema, referred_schema_fn=lambda *_args: schema)
+                metadata.create_all(connection)
+            migration.upgrade()
+            migration.upgrade()
+            inspector = sa.inspect(connection)
+            for model in (FileCommit, FileCommitItem):
+                actual = {column["name"]: column for column in inspector.get_columns(model.__tablename__, schema=schema)}
+                assert set(actual) == set(model.__table__.columns.keys())
+                for column in model.__table__.columns:
+                    assert actual[column.name]["type"].compile(dialect=connection.dialect) == column.type.compile(dialect=connection.dialect)
+                    assert actual[column.name]["nullable"] == column.nullable
+            commits, items = migration._tables()
+            snapshot = {"file": {"name": "original", "hash": "a" * 64, "parent_id": "folder"}}
+            connection.execute(commits.insert().values(id="commit", tenant_id="tenant", folder_id="folder", sequence=1, author_id="user", file_count=1, tree_state=snapshot))
+            connection.execute(items.insert().values(id="item", commit_id="commit", file_id="file", operation="add", new_hash="a" * 64))
+            with pytest.raises(IntegrityError), connection.begin_nested():
+                connection.execute(commits.insert().values(id="duplicate", tenant_id="tenant", folder_id="folder", sequence=1, author_id="user", file_count=0, tree_state={}))
+            with pytest.raises(IntegrityError), connection.begin_nested():
+                connection.execute(items.insert().values(id="orphan", commit_id="missing", file_id="file", operation="add"))
+            with pytest.raises(RuntimeError, match="persisted file commit history"):
+                migration.downgrade()
+        with bootstrapped_engine.connect() as reader:
+            assert reader.scalar(sa.select(commits.c.tree_state).where(commits.c.id == "commit")) == snapshot
+            assert reader.scalar(sa.select(sa.func.count()).select_from(items)) == 1
+        with bootstrapped_engine.begin() as connection:
+            monkeypatch.setattr(migration, "op", Operations(MigrationContext.configure(connection)))
+            connection.execute(items.delete())
+            connection.execute(commits.delete())
+            migration.downgrade()
+            assert not sa.inspect(connection).has_table(commits.name, schema=schema)
+            assert not sa.inspect(connection).has_table(items.name, schema=schema)
+            connection.execute(sa.text(f'CREATE TABLE "{schema}".t_ai_file_commits (id VARCHAR(32) PRIMARY KEY)'))
+            with pytest.raises(RuntimeError, match="Incompatible file commit columns"):
+                migration.upgrade()
+    finally:
+        with bootstrapped_engine.begin() as connection:
+            connection.execute(sa.schema.DropSchema(schema, cascade=True))
+        with bootstrapped_engine.connect() as reader:
+            absent = schema not in sa.inspect(reader).get_schema_names()
+            journal.event("schema-cleanup-readback", schema=schema, absent=absent)
+            assert absent
 
 
 @pytest.fixture(scope="module")
