@@ -99,6 +99,8 @@ func TestInitRejectsInvalidConfiguration(t *testing.T) {
 		{Host: " ", Port: 6379},
 		{Host: " localhost", Port: 6379},
 		{Host: "redis://localhost", Port: 6379},
+		{Host: "[127.0.0.1]", Port: 6379},
+		{Host: "[::1", Port: 6379},
 		{Host: "localhost", Port: 0},
 		{Host: "localhost", Port: 65536},
 		{Host: "localhost", Port: 6379, DB: -1},
@@ -113,6 +115,35 @@ func TestInitRejectsInvalidConfiguration(t *testing.T) {
 	if NewDistributedLock("lock", "value", time.Second, 0) != nil || NewTokenBucket("bucket", 1, 1) != nil {
 		t.Fatal("uninitialized constructors acquired a client")
 	}
+}
+
+func TestInitPreservesBracketedIPv6LoaderContract(t *testing.T) {
+	instance, journal := newRegisteredRedis(t)
+	resetRedisLifecycle(t)
+	config := redisTestConfig(t, instance)
+	// server.FromConfigFile's existing [IPv6]:port parser retains brackets.
+	// An IPv4-mapped IPv6 address exercises a real socket against our owned
+	// IPv4 listener without requiring an optional host IPv6 interface.
+	config.Host = "[::ffff:" + config.Host + "]"
+	if err := Init(&config); err != nil {
+		t.Fatalf("loader's bracketed IPv6 host was rejected: %v", err)
+	}
+	client := Get()
+	wantAddress := net.JoinHostPort("::ffff:127.0.0.1", strconv.Itoa(config.Port))
+	if client.GetClient().Options().Addr != wantAddress || client.config.Host != "::ffff:127.0.0.1" || config.Host != "[::ffff:127.0.0.1]" {
+		t.Fatal("IPv6 brackets were duplicated or caller configuration was mutated")
+	}
+	if err := client.PingContext(t.Context()); err != nil {
+		t.Fatal("normalized IPv6 socket did not reach the owned server")
+	}
+	for _, host := range []string{"[::1]", "::1", "[fe80::1%lo0]", "fe80::1%lo0"} {
+		candidate := config
+		candidate.Host = host
+		if err := Init(&candidate); err != nil || Get() != client {
+			t.Fatalf("valid IPv6 configuration rejected before idempotent reuse: host=%s error=%v", host, err)
+		}
+	}
+	journal.Event("redis-ipv6-loader-address-contract", map[string]any{"address": wantAddress, "actual_mapped_socket": true, "caller_config_unchanged": true})
 }
 
 func TestInitFailureRetryCloseAndReinitialize(t *testing.T) {

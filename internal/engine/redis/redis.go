@@ -23,6 +23,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,11 +117,22 @@ func Init(cfg *server.RedisConfig) error {
 		return fmt.Errorf("redis configuration is required")
 	}
 	config := *cfg
+	// The existing config loader preserves the brackets in [IPv6]:port.
+	// Normalize only a valid bracketed IPv6 address before JoinHostPort.
+	if strings.HasPrefix(config.Host, "[") && strings.HasSuffix(config.Host, "]") {
+		address, err := netip.ParseAddr(config.Host[1 : len(config.Host)-1])
+		if err != nil || !address.Is6() {
+			return fmt.Errorf("redis bracketed host must be an IPv6 address")
+		}
+		config.Host = address.String()
+	}
 	if config.Host == "" || config.Host != strings.TrimSpace(config.Host) || strings.ContainsAny(config.Host, " \t\r\n/[]") {
 		return fmt.Errorf("redis host must be a nonempty hostname or unbracketed IP address")
 	}
-	if strings.Contains(config.Host, ":") && net.ParseIP(config.Host) == nil {
-		return fmt.Errorf("redis host is not a valid IP address")
+	if strings.Contains(config.Host, ":") {
+		if _, err := netip.ParseAddr(config.Host); err != nil {
+			return fmt.Errorf("redis host is not a valid IP address")
+		}
 	}
 	if config.Port < 1 || config.Port > 65535 || config.DB < 0 {
 		return fmt.Errorf("redis port must be between 1 and 65535 and database must be nonnegative")
