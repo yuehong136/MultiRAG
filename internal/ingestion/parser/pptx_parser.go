@@ -15,7 +15,8 @@ type relationship struct {
 	Mode   string `xml:"TargetMode,attr"`
 }
 type relationships struct {
-	Items []relationship `xml:"Relationship"`
+	XMLName xml.Name       `xml:"Relationships"`
+	Items   []relationship `xml:"Relationship"`
 }
 
 func resolvePart(a officeArchive, rels relationships, id, base, kind string) (string, error) {
@@ -39,7 +40,8 @@ func resolvePart(a officeArchive, rels relationships, id, base, kind string) (st
 }
 func parsePPTX(a officeArchive) (*Result, error) {
 	var presentation struct {
-		Slides []struct {
+		XMLName xml.Name `xml:"presentation"`
+		Slides  []struct {
 			ID string `xml:"http://schemas.openxmlformats.org/officeDocument/2006/relationships id,attr"`
 		} `xml:"sldIdLst>sldId"`
 	}

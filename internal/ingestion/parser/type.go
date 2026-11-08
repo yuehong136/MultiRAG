@@ -60,13 +60,11 @@ func Parse(filename string, data []byte, config map[string]string) (*Result, err
 		result.Format, result.Backend = format, backend
 		return result, nil
 	case OfficeOxide:
-		// Word conversion is absent in the pinned C FFI. Do not claim a successful
-		// parse based on Format() alone. Use the builtin DOCX extractor instead.
 		switch format {
-		case "xls", "ppt", "pptx", "xlsx":
+		case "doc", "docx", "xls", "ppt", "pptx", "xlsx":
 			return parseOfficeOxide(format, data)
 		default:
-			return nil, fmt.Errorf("%w: office_oxide %s (DOCX uses builtin)", ErrUnsupported, format)
+			return nil, fmt.Errorf("%w: office_oxide %s", ErrUnsupported, format)
 		}
 	default:
 		return nil, fmt.Errorf("%w: library %q", ErrUnsupported, backend)

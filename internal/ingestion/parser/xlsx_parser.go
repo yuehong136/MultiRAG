@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/xml"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,7 +24,8 @@ func (s richString) text() string {
 }
 func parseXLSX(a officeArchive) (*Result, error) {
 	var workbook struct {
-		Sheets []struct {
+		XMLName xml.Name `xml:"workbook"`
+		Sheets  []struct {
 			Name string `xml:"name,attr"`
 			ID   string `xml:"http://schemas.openxmlformats.org/officeDocument/2006/relationships id,attr"`
 		} `xml:"sheets>sheet"`
@@ -36,7 +38,8 @@ func parseXLSX(a officeArchive) (*Result, error) {
 		return nil, err
 	}
 	var shared struct {
-		Items []richString `xml:"si"`
+		XMLName xml.Name     `xml:"sst"`
+		Items   []richString `xml:"si"`
 	}
 	if a["xl/sharedStrings.xml"] != nil {
 		if err := a.decode("xl/sharedStrings.xml", &shared); err != nil {
@@ -50,7 +53,8 @@ func parseXLSX(a officeArchive) (*Result, error) {
 			return nil, err
 		}
 		var content struct {
-			Rows []struct {
+			XMLName xml.Name `xml:"worksheet"`
+			Rows    []struct {
 				Cells []struct {
 					Ref    string     `xml:"r,attr"`
 					Type   string     `xml:"t,attr"`

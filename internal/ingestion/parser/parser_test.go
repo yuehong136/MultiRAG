@@ -66,7 +66,7 @@ func TestParserFailsClosed(t *testing.T) {
 			t.Fatal(file, result, err)
 		}
 	}
-	for _, file := range []string{"x.doc", "x.docx", "x.pdf"} {
+	for _, file := range []string{"x.pdf"} {
 		if _, err := Parse(file, []byte("bytes"), map[string]string{"lib_type": OfficeOxide}); !errors.Is(err, ErrUnsupported) {
 			t.Fatal(file, err)
 		}

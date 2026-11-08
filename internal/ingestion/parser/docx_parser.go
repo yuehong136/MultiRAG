@@ -13,6 +13,12 @@ func parseDOCX(a officeArchive) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	var envelope struct {
+		XMLName xml.Name `xml:"document"`
+	}
+	if err := xml.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("decode DOCX document: %w", err)
+	}
 	d := xml.NewDecoder(bytes.NewReader(data))
 	var lines []string
 	var paragraph strings.Builder
