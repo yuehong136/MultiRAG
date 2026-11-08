@@ -8,14 +8,15 @@ readme = "README.md"
 # 将解析限制在两个经过验证的解释器系列内。
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "aiohttp>=3.9.0,<4.0.0",
     "akshare>=1.15.78,<2.0.0",
     "alembic>=1.13.2",
     "anthropic==0.76.0",
     "arxiv==4.0.0",
     "asana>=5.2.2",
     "atlassian-python-api==4.0.7",
-    # discord-py 在 discord/player.py 模块加载期无条件 import audioop；audioop 已被
-    # PEP 594 从 3.13 标准库移除，audioop-lts 是其 3.13+ 回填（3.12 仍用标准库）
+    # Discord voice support uses audioop, removed from the Python 3.13 stdlib.
+    # Keep its explicit 3.13+ backfill; Python 3.12 retains the stdlib module.
     "audioop-lts>=0.2.1; python_version >= '3.13'",
     "azure-identity>=1.25.3",
     "azure-storage-blob==12.22.0",
@@ -39,7 +40,8 @@ dependencies = [
     "dashscope==1.25.11",
     "deepl==1.18.0",
     "demjson3==3.0.6",
-    "discord-py==2.3.2",
+    "defusedxml>=0.7.1,<0.8.0",
+    "discord-py>=2.6,<3.0",
     "docxtpl>=0.19.0",
     "dropbox==12.0.2",
     "duckduckgo-search>=7.2.0,<8.0.0",

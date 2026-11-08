@@ -2007,14 +2007,15 @@ wheels = [
 
 [[package]]
 name = "discord-py"
-version = "2.3.2"
+version = "2.7.1"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "aiohttp" },
+    { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/6f/cb/a360101905102684a4fe6fc543976842383f54ddeeef020959e4965c416e/discord.py-2.3.2.tar.gz", hash = "sha256:4560f70f2eddba7e83370ecebd237ac09fbb4980dc66507482b0c0e5b8f76b9c" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ef/57/9a2d9abdabdc9db8ef28ce0cf4129669e1c8717ba28d607b5ba357c4de3b/discord_py-2.7.1.tar.gz", hash = "sha256:24d5e6a45535152e4b98148a9dd6b550d25dc2c9fb41b6d670319411641249da" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/9c/7e/5f1b24b2ced0c4b3042204f7827b57c7dcb26d368e9b0fde8cec7853cf30/discord.py-2.3.2-py3-none-any.whl", hash = "sha256:9da4679fc3cb10c64b388284700dc998663e0e57328283bbfcfc2525ec5960a6" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/f7/a7/17208c3b3f92319e7fad259f1c6d5a5baf8fd0654c54846ced329f83c3eb/discord_py-2.7.1-py3-none-any.whl", hash = "sha256:849dca2c63b171146f3a7f3f8acc04248098e9e6203412ce3cf2745f284f7439" },
 ]
 
 [[package]]
@@ -4495,6 +4496,7 @@ version = "0.9.9"
 source = { virtual = "." }
 dependencies = [
     { name = "agentrun-sdk" },
+    { name = "aiohttp" },
     { name = "akshare" },
     { name = "alembic" },
     { name = "alibabacloud-dingtalk" },
@@ -4521,6 +4523,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "dashscope" },
     { name = "deepl" },
+    { name = "defusedxml" },
     { name = "demjson3" },
     { name = "discord-py" },
     { name = "docxtpl" },
@@ -4676,6 +4679,7 @@ eval = [
 [package.metadata]
 requires-dist = [
     { name = "agentrun-sdk", specifier = ">=0.0.23,<1.0.0" },
+    { name = "aiohttp", specifier = ">=3.9.0,<4.0.0" },
     { name = "akshare", specifier = ">=1.15.78,<2.0.0" },
     { name = "alembic", specifier = ">=1.13.2" },
     { name = "alibabacloud-dingtalk", specifier = ">=2.0.0" },
@@ -4702,8 +4706,9 @@ requires-dist = [
     { name = "cryptography", specifier = ">=46.0.3,<49.0.0" },
     { name = "dashscope", specifier = "==1.25.11" },
     { name = "deepl", specifier = "==1.18.0" },
+    { name = "defusedxml", specifier = ">=0.7.1,<0.8.0" },
     { name = "demjson3", specifier = "==3.0.6" },
-    { name = "discord-py", specifier = "==2.3.2" },
+    { name = "discord-py", specifier = ">=2.6,<3.0" },
     { name = "docxtpl", specifier = ">=0.19.0" },
     { name = "dropbox", specifier = "==12.0.2" },
     { name = "duckduckgo-search", specifier = ">=7.2.0,<8.0.0" },
