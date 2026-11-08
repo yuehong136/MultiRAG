@@ -2153,3 +2153,75 @@ Go 新增 HuaweiCloud、ModelScope、OrcaRouter 和 Qiniu 的目录、factory �
 现有 provider 的发现、Replicate rerank 和 xAI 音频按各自协议执行。具体能力、路径与
 明确不支持的功能统一见 [Go 模型驱动合同](../../internal/entity/models/README.md)。
 这些 Go 能力不改变 Python 生产模型目录；受控 HTTP/SQL/CLI 验收不等同真实供应商验证。
+
+## 文件完整快照与历史
+
+文件提交保存目录的完整状态：包含当时所有文件、空文件和子目录的名称、父目录、
+大小及 SHA-256。历史树仅使用持久化元数据；普通 Files 的移动、重命名或删除不会改变
+已有快照。Python 生产后端与并行 Go 实现使用相同表与对象格式。
+
+以下路径都挂在 `/api/v1` 下。`folders/{id}`、`workspaces/{id}` 和 `workspace/{id}`
+使用 File 目录 ID；`datasets/{id}` 使用数据集 ID，必须唯一解析到该租户的知识库目录。
+名称映射缺失或重复时返回 409。没有 memories 或 skills 的文件提交别名。
+
+| 方法 | 相对所选目录的路径 | 结果 |
+| --- | --- | --- |
+| POST | `/commits` | 原子应用普通文件变更并保存完整快照 |
+| GET | `/commits` | 提交历史，支持 `page`、`page_size` 和 `desc` |
+| GET | `/commits/{commit_id}` | 提交元数据与变更记录 |
+| GET | `/commits/{commit_id}/files` | 本次相对父提交的变更记录 |
+| GET | `/commits/diff?from={id}&to={id}` | 比较两个完整快照 |
+| GET | `/changes` | 比较当前工作目录与最新完整快照 |
+| GET | `/commits/{commit_id}/tree` | 当时的完整目录树 |
+| GET | `/commits/{commit_id}/files/{file_id}/content` | 当时的文件内容 |
+
+`GET /api/v1/files/{file_id}/versions` 返回有权访问的目录中的该文件变更历史。
+文件行已删除时仍可查询历史；所属目录和成员权限需要仍然有效。
+
+所有入口均要求有效身份与目标租户的有效成员关系。数据集读取还遵守 `me` / `team`
+可见性，写快照只允许创建者、owner 或 admin；直接目录别名执行相同数据集权限检查，
+不能绕过私有目录。祖先、子文件、提交和内容分别限定到授权目录与租户。
+Python Web JWT 的个人租户可以与目标共享租户不同，权限仍由目标租户成员关系决定。
+Skills、连接器等托管目录使用各自生命周期；普通父目录包含托管子目录时拒绝整体快照。
+关联到 Document 的数据集文件编辑返回 409，应先走现有数据集文档生命周期，再创建快照。
+
+创建示例：
+
+```json
+{
+  "message": "新增说明文件",
+  "parent_id": "当前已读到的提交ID",
+  "files": [
+    {
+      "file_id": "调用方生成的唯一文件ID",
+      "operation": "add",
+      "file_name": "note.txt",
+      "content": "说明内容"
+    }
+  ]
+}
+```
+
+`message` 和 `files` 必填；`files: []` 保存当前完整工作目录。`add` 要求新的文件 ID、
+`file_name` 与 `content`，`modify` 要求现有文件 ID 与 `content`，`delete` 只删除普通
+文件行，`rename` 要求 `new_name`，可用 `old_name` 检查名称未变。内容允许空字符串。
+文件夹删除、越界文件 ID、重复 ID、重复同级名称、路径型名称和未知 JSON 字段均拒绝。
+一次快照最多 1000 个节点、32 MiB 内容；提交消息最多 512 个字符。
+历史分页每页 1–100 条，以持久化 `sequence` 排序，不依赖同毫秒时间戳。
+
+`parent_id` 省略时在目录根行锁内接续最新提交；显式 null 要求没有父提交，提供具体 ID
+则要求当前 head 匹配，否则 409。Python 和 Go 通过相同 SQL 根目录锁串行更新。
+完整快照会包含当前目录全部状态，`files` 是创建快照前应用的工作目录编辑。
+
+成功响应为 `{"code": 0, "message": "success", "data": ...}`。无权访问或不存在的资源
+返回 404，失效凭据返回鉴权错误；参数错误为 422、head/生命周期冲突为 409，存储不可用
+或校验失败为 503。Go 沿用其既有鉴权中间件的业务错误信封。content 响应为
+`{"content": "..."}`，按 UTF-8 解码，非法字节替换；它不是原始二进制下载接口。
+
+快照对象使用 `.file-commits/{tenant}/{folder}/{commit}/{hash}`；普通 Files 的工作副本
+使用独立 `.file-working/...` 键，删除工作副本不影响历史对象。对象写入后校验字节和哈希，
+SQL 失败时仅补偿本次新写对象并严格确认删除。SQL COMMIT 的确认丢失时独立读回结果，
+不能确认则保留对象并报需要恢复，禁止盲删可能已提交的历史内容。
+历史对象不会由文件提交 API 清除；已有历史与替换前工作对象的保留/回收需单独管理。
+根行锁协调文件提交写入；旧 Files / 数据集的其他写入入口尚未统一使用该锁，
+创建快照时应避免同时经其他入口编辑同一目录。

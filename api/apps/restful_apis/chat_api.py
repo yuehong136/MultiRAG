@@ -1129,6 +1129,12 @@ async def update_session(
             if "reference" in req:
                 return _error("`reference` cannot be changed.")
 
+            # Keep the strict unknown-field contract before constructing SQL.
+            # Recognized identity fields retain their existing filtering below.
+            unknown = set(req).difference(ConversationService.model.__table__.columns.keys(), {"chat_id"})
+            if unknown:
+                return _error(f'Unrecognized field name: "{sorted(unknown)[0]}"', RetCode.EXCEPTION_ERROR)
+
             name = req.get("name")
             if name is not None:
                 if not isinstance(name, str) or not name.strip():

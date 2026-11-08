@@ -53,3 +53,16 @@ def test_retired_session_put_does_not_access_storage(client: Any, monkeypatch: p
     monkeypatch.setattr(ConversationService, "update_by_id", forbid_access)
     response = client.put("/api/v1/chats/chat-1/sessions/session-1", json={"name": "retired"})
     assert response.status_code == 405
+
+
+def test_session_update_rejects_unknown_field_before_write(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(DialogService, "query", classmethod(lambda cls, db, **kw: [object()]))
+    monkeypatch.setattr(ConversationService, "query", classmethod(lambda cls, db, **kw: [object()]))
+
+    def forbid_write(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("Unknown session field reached a write")
+
+    monkeypatch.setattr(ConversationService, "update_by_id", forbid_write)
+    response = client.patch("/api/v1/chats/chat-1/sessions/session-1", json={"unknown_key": "unknown_value"})
+    assert response.status_code == 200
+    assert response.json() == {"code": RetCode.EXCEPTION_ERROR, "message": 'Unrecognized field name: "unknown_key"'}
