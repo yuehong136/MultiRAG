@@ -148,7 +148,7 @@ def get_login_channels():
 
 
 @router.post("/auth/login", summary="登录")
-async def login(request: LoginRequest, db: AsyncSession = Depends(get_async_db)):
+async def login(request: LoginRequest, db: AsyncSession = Depends(get_async_db)) -> Response:
     """
     登录
 
@@ -187,6 +187,7 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_async_db))
     elif user:
         response_data = user.to_dict(for_self=True)
         user.access_token = get_uuid()
+        user.last_login_time = get_format_time()
         current_ts = current_timestamp()
         current_date = datetime_format(datetime.now())
         user.update_time = current_ts

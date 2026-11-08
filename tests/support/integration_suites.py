@@ -58,6 +58,7 @@ DATABASE_TESTS = frozenset(
         "test_rdbms_state_sql.py",
         "test_model_default_backfill.py",
         "test_pdf_page_task_defaults.py",
+        "test_password_login_time.py",
         "test_principal_auth.py",
         "test_retrieval_parent_fallback.py",
         "test_retrieval_rerank_authorization.py",
