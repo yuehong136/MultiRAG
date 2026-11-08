@@ -111,6 +111,7 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_document_status.py",
         "test_dropbox_deleted_sync.py",
         "test_file_batch_delete.py",
+        "test_file_commits.py",
         "test_gitlab_deleted_sync.py",
         "test_github_sync_defaults.py",
         "test_gmail_deleted_sync.py",
@@ -213,6 +214,9 @@ def required_services(paths: list[Path]) -> set[str]:
             continue
         if path.name == "test_channel_managed_transports.py":
             required.update(("postgresql", "redis"))
+            continue
+        if path.name == "test_file_commits.py":
+            required.update(("postgresql", "minio"))
             continue
         if path.name == "test_connector_task_controls.py":
             required.add("postgresql")
