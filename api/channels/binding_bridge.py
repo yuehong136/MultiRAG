@@ -8,7 +8,7 @@ import hashlib
 import logging
 import secrets
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal, Protocol, runtime_checkable
@@ -29,6 +29,7 @@ from api.channels.core.base import (
     IncomingIdentityAssertion,
     IncomingMessage,
     InteractionReplySession,
+    MessageHandler,
     OutgoingMessage,
     ReplyActionIds,
     ReplyActionKind,
@@ -228,7 +229,7 @@ class BindingBridge:
         self._interaction_owner = f"channel-{secrets.token_hex(12)}"
         self._interaction_revisions: dict[str, int] = {}
         self._interaction_wakeup = asyncio.Event()
-        self._scheduler: Callable[[IncomingMessage], Awaitable[None]] | None = None
+        self._scheduler: MessageHandler | None = None
         self._preparations: dict[int, asyncio.Task[_PreparedMessage]] = {}
         self._actions: dict[str, _RegisteredAction] = {}
         self._latest_execution_by_conversation: dict[str, str] = {}
@@ -241,7 +242,7 @@ class BindingBridge:
 
     def set_message_scheduler(
         self,
-        scheduler: Callable[[IncomingMessage], Awaitable[None]],
+        scheduler: MessageHandler,
     ) -> None:
         self._scheduler = scheduler
 

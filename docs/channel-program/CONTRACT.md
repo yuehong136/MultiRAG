@@ -1,6 +1,6 @@
 # Channel 前后端契约
 
-> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-24 · **变更提交**：见文末变更日志
+> **契约版本**：`channel-api/v1` · **最后变更**：2026-11-09 · **变更提交**：见文末变更日志
 >
 > 本文件是 channel 前后端接口的**唯一真源**。前端仓不得保存第二份契约描述。
 > 契约变更 = 改本文件 + 在本文件末尾的变更日志追加一行
@@ -626,3 +626,5 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-24 | v1（private additive，不 bump） | 新增 EIM-I7 / CHN-X21 generation-scoped Contact directory event endpoint。body 只含 bounded event/header proof/identifier/status，不携 MultiRAG authority；worker 用相同 ASCII event ID 发送 `Idempotency-Key`。服务端重锁 DB authority，以 atomic receipt + identity/account CAS 单事务实现 duplicate/stale/terminal poison ACK；account revision 是跨进程 cache fence，invalidate 仅加速。当前 API 在既有 preflight 加法广告 `identity_event_receipt=true`；旧响应缺字段或 preflight 失败默认 false，只有 advertised managed Feishu 安装 handler 并订阅，demo/legacy 不订阅；合法 NO_LINK 为 204 零写。公开 Channel API、execution SSE 与已有 private command 均未改变；未改配置、未后台订阅或 rollout | 本次提交（未 rollout） |
 | 2026-08-23 | v1（private additive，不 bump） | 定义 EIM-U15 / CHN-X15 的 generation-scoped delivery claim/ACK 与 durable callback receipt：只有 PostgreSQL receipt 提交后才快速 ACK，Principal 解析、当前 revision claim 与 U14 MCP 恢复全部异步；CardKit 只消费安全 native-form/terminal projection，H5/URL 和敏感写后置。当前是 app-bound WebSocket + tenant/app/operator/message lineage，不把 webhook signature 写成已实现 | `41675183`（状态 `✅`） |
 | 2026-08-25 | v1（private capability additive，不 bump） | CHN-U18 在既有 generation-scoped preflight 增加 `interaction_delivery=true`。它只证明该 API/worker 版本能消费 U15 durable outbox，不镜像默认关闭且携密钥的 producer 配置；worker 不再读取该配置或要求 payload key。旧 API 缺字段、404/超时/非法响应仍默认 false。发布可恢复为 migration + 新 API disabled → 新 worker 取得 consumer 能力 → API producer enabled，不再存在先产 form、后启 worker 的空窗 | 本次提交 |
+
+| 2026-11-09 | v1（provider/endpoint additive，不 bump） | CHN-P15 注册 Discord、Telegram、LINE、WeCom；管理表单仍为 v1，原私有 DTO 不变。新增 API 统一 callback listener 与派生 workload token 保护的 generation-scoped inbox peek/ack；地址、字段、容量、失败与发布规则见 [managed 文本渠道合同](MANAGED_TEXT_TRANSPORTS.md)。多 secret merge-patch 保留未提交的 secret。真实厂商与生产 rollout 尚未验收 | 本次提交 |

@@ -13,6 +13,7 @@ from urllib.parse import quote
 import httpx
 
 from api.channel_capabilities import ChannelRuntimeCapabilities, parse_channel_runtime_capabilities
+from api.channel_runtime.callbacks import CallbackBatch
 from api.channel_runtime.schemas import DesiredRuntime, DesiredRuntimeList, RuntimeBindingConfig, RuntimeState
 from api.channels.agent_bridge import AgentExecutionError, AgentReply
 from api.channels.core.base import ChannelFormAction, IncomingIdentityAssertion
@@ -135,6 +136,24 @@ class ChannelRuntimeClient:
                 )
         except TimeoutError as exc:
             raise ChannelRuntimeClientError("RUNTIME_API_TIMEOUT") from exc
+
+    async def fetch_callback_events(self) -> CallbackBatch:
+        """Peek this generation's callback inbox without removing its head."""
+        if self._binding_id is None or self._binding_generation is None:
+            raise ChannelRuntimeClientError("RUNTIME_BINDING_SCOPE_MISMATCH")
+        encoded = quote(self._binding_id, safe="")
+        response = await self._request("GET", f"{self._base_url}/api/v1/internal/channel-bindings/{encoded}/callback-inbox")
+        try:
+            return CallbackBatch.model_validate(response.json())
+        except (ValueError, TypeError):
+            raise ChannelRuntimeClientError("RUNTIME_CALLBACK_INVALID") from None
+
+    async def ack_callback_event(self, receipt: str) -> None:
+        """Acknowledge only the current inbox head after worker admission."""
+        if self._binding_id is None or self._binding_generation is None:
+            raise ChannelRuntimeClientError("RUNTIME_BINDING_SCOPE_MISMATCH")
+        encoded = quote(self._binding_id, safe="")
+        await self._request("POST", f"{self._base_url}/api/v1/internal/channel-bindings/{encoded}/callback-inbox/ack", json={"receipt": receipt}, expected_status=204)
 
     async def report(
         self,

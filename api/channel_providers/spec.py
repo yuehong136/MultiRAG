@@ -18,6 +18,7 @@ rather than by the JSON Schema.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -167,8 +168,16 @@ class ProviderSpec:
     description: str = ""
     description_i18n_key: str | None = None
 
+    # An installation can contain several independently addressable apps.
+    account_identity_components: tuple[str, ...] = ()
+
     def account_identity(self, public_config: Any) -> str | None:
         """The provider account a channel connects as, or None if unset."""
 
+        if self.account_identity_components:
+            parts = [resolve_path(public_config, path) for path in self.account_identity_components]
+            if any(not isinstance(part, str) or not part for part in parts):
+                return None
+            return json.dumps(parts, separators=(",", ":"))
         value = resolve_path(public_config, self.account_identity_path)
         return value if isinstance(value, str) and value else None

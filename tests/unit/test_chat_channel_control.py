@@ -710,7 +710,7 @@ def test_an_unregistered_provider_is_refused_by_the_registry_not_by_a_literal() 
     """
 
     with pytest.raises(ValidationError, match="unknown channel provider"):
-        ChannelCreateRequest.model_validate({"name": "Demo", "channel": "wecom", "config": {}})
+        ChannelCreateRequest.model_validate({"name": "Demo", "channel": "unregistered_test_provider", "config": {}})
 
     # Every registered name is accepted without listing any of them here.
     for name in provider_names():

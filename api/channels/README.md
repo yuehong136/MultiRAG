@@ -9,6 +9,8 @@ MultiRAG 自己的执行边界，不在传输层拼提示词，也不让外部�
 > `api/channel_execution/`、`api/channel_runtime/` 时提交要带 CHN ID（AGENTS.md 核心规则 5）。
 > 下面的「已实现 / 尚未实现或不能宣称」两节仍是**已上线行为的权威描述**，账本不重复它。
 
+CHN-P15 新增 Discord、Telegram、LINE、WeCom 的 managed 文本 transport，当前为本地实现、尚未部署；配置、统一回调地址与验收边界见 [managed 文本渠道合同](../../docs/channel-program/MANAGED_TEXT_TRANSPORTS.md)。
+
 当前提供两种运行模式：
 
 | 模式 | 入口 | 绑定来源 | 适用场景 |

@@ -48,6 +48,10 @@ class _Registration(NamedTuple):
 
 
 _PROVIDERS: Final[dict[str, _Registration]] = {
+    "discord": _Registration(spec="api.channel_providers.discord", transport="api.channels.discord.provider"),
+    "telegram": _Registration(spec="api.channel_providers.telegram", transport="api.channels.telegram.provider"),
+    "line": _Registration(spec="api.channel_providers.line", transport="api.channels.line.provider"),
+    "wecom": _Registration(spec="api.channel_providers.wecom", transport="api.channels.wecom.provider"),
     "dingtalk": _Registration(
         spec="api.channel_providers.dingtalk",
         transport="api.channels.dingtalk.provider",

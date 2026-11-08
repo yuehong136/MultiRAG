@@ -9,7 +9,7 @@ import os
 import signal
 import socket
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
@@ -21,6 +21,7 @@ from api.channel_providers import provider_spec
 from api.channel_runtime.schemas import RuntimeState
 from api.channels.agent_bridge import FeishuAgentBridge, MultiRAGAgentClient
 from api.channels.binding_bridge import BindingBridge, InteractionPresenter
+from api.channels.callback import CallbackChannel
 from api.channels.core.base import (
     ActionHandler,
     ChannelAction,
@@ -28,6 +29,7 @@ from api.channels.core.base import (
     ChannelFormAction,
     FormActionHandler,
     IncomingMessage,
+    MessageAdmission,
     MessageHandler,
 )
 from api.channels.identity_events import IdentityEventChannel
@@ -140,7 +142,7 @@ class LifecycleMessageBridge(Protocol):
 
     def set_message_scheduler(
         self,
-        scheduler: Callable[[IncomingMessage], Awaitable[None]],
+        scheduler: MessageHandler,
     ) -> None: ...
 
     def message_queued(self, message: IncomingMessage, *, queue_position: int) -> None: ...
@@ -247,6 +249,7 @@ class ChannelWorker:
         self._provider_name = provider_name
         self._provider = channel_provider(provider_name)
         self._channel = channel
+        self._retryable_ingress = getattr(channel, "retryable_ingress", False) is True
         self._bridge = bridge
         self._agent_client = agent_client
         self._state_store = state_store
@@ -305,7 +308,7 @@ class ChannelWorker:
         finally:
             await self.close()
 
-    async def enqueue(self, message: IncomingMessage) -> None:
+    async def enqueue(self, message: IncomingMessage) -> MessageAdmission:
         """Fast SDK callback target: no Redis, HTTP, or reply I/O is allowed."""
 
         observation = _IngressObservation(
@@ -319,13 +322,13 @@ class ChannelWorker:
                 rejection_reason = self._bridge.message_rejection_reason(message)
                 if rejection_reason is not None:
                     observation.finalize(ChannelResult.DROPPED, rejection_reason)
-                    return
+                    return MessageAdmission.DENIED
             elif not lifecycle.accepts_message(message):
                 observation.finalize(
                     ChannelResult.DROPPED,
                     ChannelReason.POLICY_REJECTED,
                 )
-                return
+                return MessageAdmission.DENIED
 
         if not self._accepting_messages:
             observation.finalize(
@@ -337,7 +340,7 @@ class ChannelWorker:
                 _short_hash(message.message_id),
                 _short_hash(message.message_id),
             )
-            return
+            return MessageAdmission.RETRY
 
         order_key = _message_order_key(message)
         order = self._conversation_orders.get(order_key)
@@ -353,14 +356,15 @@ class ChannelWorker:
                 ChannelResult.REJECTED,
                 ChannelReason.FOLLOWUP_QUEUE_FULL,
             )
-            lifecycle.message_rejected(message, reason="FOLLOWUP_QUEUE_FULL")
+            if not self._retryable_ingress:
+                lifecycle.message_rejected(message, reason="FOLLOWUP_QUEUE_FULL")
             LOGGER.warning(
                 "channel_event=followup_queue_full trace_id=%s message_id_hash=%s queue_position=%s result=rejected error_code=FOLLOWUP_QUEUE_FULL",
                 _short_hash(message.execution_id),
                 _short_hash(message.execution_id),
                 queue_position,
             )
-            return
+            return MessageAdmission.RETRY
 
         try:
             self._queue.put_nowait(
@@ -379,14 +383,14 @@ class ChannelWorker:
                 ChannelResult.REJECTED,
                 ChannelReason.GLOBAL_QUEUE_FULL,
             )
-            if lifecycle is not None:
+            if lifecycle is not None and not self._retryable_ingress:
                 lifecycle.message_rejected(message, reason="GLOBAL_QUEUE_FULL")
             LOGGER.error(
                 "channel_event=queue_full trace_id=%s message_id_hash=%s result=dropped error_code=QUEUE_FULL",
                 _short_hash(message.execution_id),
                 _short_hash(message.execution_id),
             )
-            return
+            return MessageAdmission.RETRY
 
         order.next_ticket += 1
         order.pending += 1
@@ -397,6 +401,7 @@ class ChannelWorker:
             operation=observation.operation,
             depth=self._queue.qsize(),
         )
+        return MessageAdmission.ACCEPTED
 
     async def close(self) -> None:
         """Stop intake, terminalize what is already visible, then release.
@@ -759,6 +764,8 @@ async def _run_managed_channel(
             leader_renew_interval_seconds=tuning.leader_renew_seconds,
         )
         channel = plan.channel
+        if isinstance(channel, CallbackChannel):
+            channel.bind_inbox(runtime_client.fetch_callback_events, runtime_client.ack_callback_event)
         if runtime_capabilities.identity_event_receipt and isinstance(channel, IdentityEventChannel):
             # The current API advertises durable receipt support before the
             # handler becomes the transport subscription gate. Old API

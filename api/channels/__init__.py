@@ -1,6 +1,6 @@
 """External chat-channel transports.
 
-Transport packages self-register their builders when imported. Runtime
-supervision and business-message handling intentionally live outside the
-upstream-shaped ``core`` and transport boundaries.
+The pure provider registry resolves worker descriptors lazily. Runtime
+supervision and business-message handling live outside transport adapters;
+provider packages do not self-register or start listeners during import.
 """

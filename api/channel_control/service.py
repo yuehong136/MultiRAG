@@ -407,6 +407,19 @@ class ChannelControlService:
                     channel.config = next_public_config
                     runtime_changed = True
                 if plaintext is not None:
+                    if secret is not None and len(spec.secret_paths) > 1:
+                        # A merge-patch may rotate only one of several secrets.
+                        # Replacing the whole envelope silently discarded the
+                        # others, which was invisible with one-secret providers.
+                        try:
+                            previous = await self._secret_store.decrypt(
+                                tenant_id=tenant_id,
+                                channel_id=channel.id,
+                                encrypted=EncryptedSecret(ciphertext=secret.ciphertext, key_id=secret.key_id, version=secret.version),
+                            )
+                        except SecretStoreUnavailable as error:
+                            raise ChannelCredentialUnavailable from error
+                        plaintext = {**previous, **plaintext}
                     next_version = (secret.version + 1) if secret is not None else 1
                     encrypted = await self._encrypt_secret(
                         tenant_id=tenant_id,
@@ -1118,6 +1131,18 @@ class ChannelControlService:
             # message stays true when a provider needs a different set.
             labels = ", ".join(field.label for field in spec.form.fields if field.path in set(missing))
             raise InvalidChannelConfiguration(f"{labels} must be set before enabling the channel.")
+
+        if len(spec.secret_paths) > 1 and secret is not None:
+            credentials, _ = await self._whole_credential(
+                tenant_id=channel.tenant_id,
+                channel_id=channel.id,
+                provider=channel.channel,
+                public_config=_sanitize_public_config(channel.config),
+                encrypted=EncryptedSecret(ciphertext=secret.ciphertext, key_id=secret.key_id, version=secret.version),
+            )
+            missing_secrets = [field.label for field in spec.form.fields if field.required and field.secret and not credentials.get(field.path.rsplit(".", 1)[-1])]
+            if missing_secrets:
+                raise InvalidChannelConfiguration(f"{', '.join(missing_secrets)} must be set before enabling the channel.")
 
         account_id = spec.account_identity(_sanitize_public_config(channel.config))
         if account_id is not None:

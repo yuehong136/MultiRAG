@@ -264,7 +264,15 @@ class OutgoingMessage:
         return self.content
 
 
-MessageHandler = Callable[[IncomingMessage], Awaitable[None]]
+class MessageAdmission(StrEnum):
+    """Whether a transport may acknowledge its upstream message."""
+
+    ACCEPTED = "accepted"
+    RETRY = "retry"
+    DENIED = "denied"
+
+
+MessageHandler = Callable[[IncomingMessage], Awaitable[MessageAdmission | None]]
 
 
 class ReplySessionState(StrEnum):
@@ -477,11 +485,13 @@ class Channel(ABC):
 
         self._form_action_handler = handler
 
-    async def _dispatch(self, message: IncomingMessage) -> None:
+    async def _dispatch(self, message: IncomingMessage) -> MessageAdmission:
         if self._handler is None:
-            return
+            return MessageAdmission.RETRY
         try:
-            await self._handler(message)
+            admission = await self._handler(message)
+            # Legacy non-worker handlers return None on successful completion.
+            return admission if isinstance(admission, MessageAdmission) else MessageAdmission.ACCEPTED
         except Exception:  # framework boundary: one bad message must not kill the channel
             LOGGER.error(
                 "channel_event=dispatch_failed channel=%s account_id_hash=%s message_id_hash=%s result=failed error_code=HANDLER_FAILURE",
@@ -489,6 +499,7 @@ class Channel(ABC):
                 _short_hash(self.account_id),
                 _short_hash(message.message_id),
             )
+            return MessageAdmission.RETRY
 
     async def _dispatch_action(self, action: ChannelAction) -> ChannelActionResponse:
         if self._action_handler is None:

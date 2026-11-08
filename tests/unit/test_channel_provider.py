@@ -41,7 +41,7 @@ def test_worker_provider_resolves_a_registered_descriptor() -> None:
     assert isinstance(provider, WorkerProvider)
 
 
-@pytest.mark.parametrize("name", ["telegram", "FEISHU", "", "api.channels.feishu.provider"])
+@pytest.mark.parametrize("name", ["unregistered_test_provider", "FEISHU", "", "api.channels.feishu.provider"])
 def test_worker_provider_fails_closed_for_unregistered_names(name: str) -> None:
     # A stray provider name must not import an arbitrary module.
     with pytest.raises(UnsupportedChannelProvider, match="CHANNEL_NOT_SUPPORTED"):
