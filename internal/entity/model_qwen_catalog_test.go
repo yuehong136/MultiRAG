@@ -43,7 +43,7 @@ func TestQwenCatalogMetadataAndAliases(t *testing.T) {
 			t.Fatalf("catalog type aliases were not normalized: %q %v", model.Name, model.ModelTypes)
 		}
 	}
-	if qwen != 627 || deepSeek != 70 || len(pm.ListAllModels()) != 1124 {
+	if qwen != 627 || deepSeek != 70 || len(pm.ListAllModels()) != 2042 {
 		t.Fatalf("catalog models: Qwen=%d DeepSeek=%d total=%d", qwen, deepSeek, len(pm.ListAllModels()))
 	}
 	for _, tc := range []struct {
