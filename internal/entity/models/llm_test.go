@@ -6,6 +6,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"io"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -110,5 +111,44 @@ func TestEinoAdapterStreamTerminal(t *testing.T) {
 	}
 	if _, err := reader.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatal("terminal leaked", err)
+	}
+}
+
+func TestEinoAdapterHTTPReaderCloseCancelsRequest(t *testing.T) {
+	started, stopped := make(chan struct{}), make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			return
+		}
+		close(started)
+		select {
+		case <-r.Context().Done():
+			close(stopped)
+		case <-release:
+		}
+	}))
+
+	driver, err := NewModelFactory().CreateModelDriver("OpenAI", map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, key := "gpt-4o", "controlled"
+	adapter := NewEinoChatModel(NewChatModel(driver, &name, &APIConfig{APIKey: &key}), nil)
+	reader, err := adapter.Stream(context.Background(), []*schema.Message{{Role: schema.User, Content: "hello"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("provider HTTP did not start")
+	}
+	reader.Close()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider HTTP leaked after close")
 	}
 }
