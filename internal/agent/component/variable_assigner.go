@@ -39,7 +39,11 @@ package component
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
+	"math/big"
+	"strconv"
 	"strings"
 
 	"multirag/internal/agent/runtime"
@@ -177,6 +181,10 @@ func (v *VariableAssignerComponent) Invoke(ctx context.Context, inputs map[strin
 			errors = append(errors, fmt.Sprintf("variables[%d] %s: %s", i, ref, opErr))
 			continue
 		}
+		if err := validateNumericTree(newVal, 0); err != nil {
+			errors = append(errors, fmt.Sprintf("variables[%d] %s: ERROR:INVALID_NUMBER", i, ref))
+			continue
+		}
 		if err := writeVar(state, ref, newVal); err != nil {
 			return nil, fmt.Errorf("VariableAssigner: variables[%d] write %q: %w", i, ref, err)
 		}
@@ -220,6 +228,12 @@ func (v *VariableAssignerComponent) Outputs() map[string]string {
 // the caller treats the empty string opErr as success and the new value
 // as the value to write back.
 func operate(state *runtime.CanvasState, oldVal any, op string, param any) (any, string) {
+	if err := validateNumericTree(oldVal, 0); err != nil {
+		return nil, "ERROR:INVALID_NUMBER"
+	}
+	if err := validateNumericTree(param, 0); err != nil {
+		return nil, "ERROR:INVALID_NUMBER"
+	}
 	switch op {
 	case "overwrite":
 		// overwrite: new = canvas.get_variable_value(parameter).
@@ -250,7 +264,9 @@ func operate(state *runtime.CanvasState, oldVal any, op string, param any) (any,
 			return map[string]any{}, ""
 		case bool:
 			return false, ""
-		case int, int64, float64, float32:
+		case json.Number:
+			return json.Number("0"), ""
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 			return 0, ""
 		}
 		return nil, ""
@@ -337,36 +353,9 @@ func operate(state *runtime.CanvasState, oldVal any, op string, param any) (any,
 		}
 		return lst[:len(lst)-1], ""
 
-	case "+=":
-		pv := resolveParamValue(state, param)
-		if !isNumberish(oldVal) || !isNumberish(pv) {
-			return nil, "ERROR:VARIABLE_NOT_NUMBER or PARAMETER_NOT_NUMBER"
-		}
-		return toFloat64(oldVal) + toFloat64(pv), ""
+	case "+=", "-=", "*=", "/=":
+		return exactNumericOperation(oldVal, resolveParamValue(state, param), op)
 
-	case "-=":
-		pv := resolveParamValue(state, param)
-		if !isNumberish(oldVal) || !isNumberish(pv) {
-			return nil, "ERROR:VARIABLE_NOT_NUMBER or PARAMETER_NOT_NUMBER"
-		}
-		return toFloat64(oldVal) - toFloat64(pv), ""
-
-	case "*=":
-		pv := resolveParamValue(state, param)
-		if !isNumberish(oldVal) || !isNumberish(pv) {
-			return nil, "ERROR:VARIABLE_NOT_NUMBER or PARAMETER_NOT_NUMBER"
-		}
-		return toFloat64(oldVal) * toFloat64(pv), ""
-
-	case "/=":
-		pv := resolveParamValue(state, param)
-		if !isNumberish(oldVal) || !isNumberish(pv) {
-			return nil, "ERROR:VARIABLE_NOT_NUMBER or PARAMETER_NOT_NUMBER"
-		}
-		if toFloat64(pv) == 0 {
-			return nil, "ERROR:DIVIDE_BY_ZERO"
-		}
-		return toFloat64(oldVal) / toFloat64(pv), ""
 	}
 	return nil, "ERROR:UNKNOWN_OPERATOR"
 }
@@ -456,11 +445,10 @@ func compatibleElemType(a, b any) bool {
 }
 
 func goKind(v any) string {
+	if isNumberish(v) {
+		return "number"
+	}
 	switch v.(type) {
-	case int, int64, int32:
-		return "int"
-	case float64, float32:
-		return "float"
 	case string:
 		return "string"
 	case bool:
@@ -473,38 +461,183 @@ func goKind(v any) string {
 	return "unknown"
 }
 
-// isNumberish returns true for numeric values (int, float, including
-// JSON-decoded numbers). Booleans are explicitly excluded — Python's
-// numbers.Number is a superclass of int/float/complex/Decimal but
-// Python's isinstance(True, numbers.Number) is False; the spec matches
-// that.
-func isNumberish(v any) bool {
-	if _, ok := v.(bool); ok {
-		return false
-	}
+// isNumberType distinguishes numbers from booleans and numeric-looking strings.
+func isNumberType(v any) bool {
 	switch v.(type) {
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+	case json.Number, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 		return true
 	}
 	return false
 }
 
-// toFloat64 converts any numeric value to float64. Callers must guard
-// with isNumberish first.
-func toFloat64(v any) float64 {
-	switch x := v.(type) {
+// exactNumber preserves JSON decimal/integer value without a float64 roundtrip.
+// The literal/exponent limits bound allocations; finite float range guards
+// reject overflow/underflow while allowing exact integers beyond 2^53.
+func exactNumber(v any) (*big.Rat, error) {
+	var text string
+	switch n := v.(type) {
+	case json.Number:
+		text = n.String()
 	case int:
-		return float64(x)
-	case int64:
-		return float64(x)
+		text = strconv.FormatInt(int64(n), 10)
+	case int8:
+		text = strconv.FormatInt(int64(n), 10)
+	case int16:
+		text = strconv.FormatInt(int64(n), 10)
 	case int32:
-		return float64(x)
-	case float64:
-		return x
+		text = strconv.FormatInt(int64(n), 10)
+	case int64:
+		text = strconv.FormatInt(n, 10)
+	case uint:
+		text = strconv.FormatUint(uint64(n), 10)
+	case uint8:
+		text = strconv.FormatUint(uint64(n), 10)
+	case uint16:
+		text = strconv.FormatUint(uint64(n), 10)
+	case uint32:
+		text = strconv.FormatUint(uint64(n), 10)
+	case uint64:
+		text = strconv.FormatUint(n, 10)
 	case float32:
-		return float64(x)
+		text = strconv.FormatFloat(float64(n), 'g', -1, 32)
+	case float64:
+		text = strconv.FormatFloat(n, 'g', -1, 64)
+	default:
+		return nil, fmt.Errorf("not a number")
 	}
-	return 0
+	if len(text) == 0 || len(text) > 1024 || !json.Valid([]byte(text)) || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) {
+		return nil, fmt.Errorf("invalid numeric literal")
+	}
+	if at := strings.IndexAny(text, "eE"); at >= 0 {
+		exponent, err := strconv.Atoi(text[at+1:])
+		if err != nil || exponent < -1024 || exponent > 1024 {
+			return nil, fmt.Errorf("numeric exponent exceeds range")
+		}
+	}
+	finite, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(finite) || math.IsInf(finite, 0) {
+		return nil, fmt.Errorf("number exceeds finite range")
+	}
+	result, ok := new(big.Rat).SetString(text)
+	if !ok || (finite == 0 && result.Sign() != 0) {
+		return nil, fmt.Errorf("number underflows finite range")
+	}
+	return result, nil
+}
+
+func isNumberish(v any) bool { _, err := exactNumber(v); return err == nil }
+
+// validateNumericTree rejects invalid embedded numbers before a consumer can
+// hide them through string fallback, truthiness, sorting or a partial write.
+func validateNumericTree(v any, depth int) error {
+	if depth > 64 {
+		return fmt.Errorf("numeric container nesting exceeds limit")
+	}
+	if isNumberType(v) {
+		_, err := exactNumber(v)
+		return err
+	}
+	switch value := v.(type) {
+	case []any:
+		for _, child := range value {
+			if err := validateNumericTree(child, depth+1); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		for _, child := range value {
+			if err := validateNumericTree(child, depth+1); err != nil {
+				return err
+			}
+		}
+	case []map[string]any:
+		for _, child := range value {
+			if err := validateNumericTree(child, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// exactDecimal represents terminating decimal results as json.Number; a
+// non-terminating rational is rejected rather than rounded silently.
+func exactDecimal(value *big.Rat) (json.Number, error) {
+	if value.Num().BitLen() > 8192 || value.Denom().BitLen() > 8192 {
+		return "", fmt.Errorf("numeric result exceeds range")
+	}
+	finite, _ := value.Float64()
+	if math.IsInf(finite, 0) || math.IsNaN(finite) || (finite == 0 && value.Sign() != 0) {
+		return "", fmt.Errorf("numeric result exceeds finite range")
+	}
+	denominator := new(big.Int).Set(value.Denom())
+	remainder := new(big.Int)
+	powers := [2]int{}
+	for i, base := range []int64{2, 5} {
+		divisor := big.NewInt(base)
+		for {
+			quotient := new(big.Int)
+			quotient.QuoRem(denominator, divisor, remainder)
+			if remainder.Sign() != 0 {
+				break
+			}
+			denominator = quotient
+			powers[i]++
+		}
+	}
+	if denominator.Cmp(big.NewInt(1)) != 0 {
+		return "", fmt.Errorf("numeric result requires rounding")
+	}
+	text := value.FloatString(max(powers[0], powers[1]))
+	if strings.Contains(text, ".") {
+		text = strings.TrimRight(strings.TrimRight(text, "0"), ".")
+	}
+	if text == "-0" {
+		text = "0"
+	}
+	return json.Number(text), nil
+}
+
+func exactNumericOperation(left, right any, operator string) (any, string) {
+	if !isNumberType(left) || !isNumberType(right) {
+		return nil, "ERROR:VARIABLE_NOT_NUMBER or PARAMETER_NOT_NUMBER"
+	}
+	a, err := exactNumber(left)
+	if err != nil {
+		return nil, "ERROR:INVALID_NUMBER"
+	}
+	b, err := exactNumber(right)
+	if err != nil {
+		return nil, "ERROR:INVALID_NUMBER"
+	}
+	result := new(big.Rat)
+	switch operator {
+	case "+=":
+		result.Add(a, b)
+	case "-=":
+		result.Sub(a, b)
+	case "*=":
+		result.Mul(a, b)
+	case "/=":
+		if b.Sign() == 0 {
+			return nil, "ERROR:DIVIDE_BY_ZERO"
+		}
+		result.Quo(a, b)
+	}
+	number, err := exactDecimal(result)
+	if err != nil {
+		return nil, "ERROR:NUMERIC_PRECISION_OR_RANGE"
+	}
+	_, leftJSON := left.(json.Number)
+	_, rightJSON := right.(json.Number)
+	if leftJSON || rightJSON {
+		return number, ""
+	}
+	floating, exact := result.Float64()
+	if !exact {
+		return nil, "ERROR:NUMERIC_PRECISION_OR_RANGE"
+	}
+	return floating, ""
 }
 
 func init() {

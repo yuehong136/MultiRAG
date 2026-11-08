@@ -31,7 +31,7 @@ Go 服务在既有 Agent 读取、标签、版本、会话和上传接口之外�
 ```
 
 `version_id` 省略时执行当前 draft，提供时必须属于路径中的 Agent。
-执行接受有界的 v1 `components` DSL，保持节点 ID 和数值模型 ID；不做有损 v2 转换。`upstream` 与 `downstream` 必须互认，未知、重复及不一致的边会拒绝。
+执行接受有界的 v1 `components` DSL，保持节点 ID 和数值模型 ID；不做有损 v2 转换。空名称或首尾带空白的 `component_name` 会在工厂执行前拒绝。`upstream` 与 `downstream` 必须互认，未知、重复及不一致的边会拒绝。
 `user_id`、`state` 和内部字段不能通过 `inputs` 覆盖身份或引擎状态。
 会话 ID、`release`、OpenAI 兼容选项和 query-string 运行选项不属于此接口。
 
@@ -63,6 +63,8 @@ Redis 是公开执行的必需依赖。运行元数据、中断快照和取消�
 
 运行状态快照深拷贝嵌套值，checkpoint 保留大整数和 Sys/Env/Globals/Outputs。
 UserFillUp 通过 Eino 原生 interrupt/resume 恢复，已完成的前驱不会重跑。
+
+数值组件保留 `json.Number` 的整数/十进制精度，包括 checkpoint 恢复后的值。赋值运算对越界、下溢或非终止小数结果报告逐项 `errors`，不写入失败的目标值。列表索引必须为精确整数；排序和去重按实际数值比较。Excel 数字写入仅接受能按 15 个有效位安全往返的值，较大的数值标识应由调用方显式以字符串提供，否则明确拒绝。
 
 模型解析始终使用 Canvas owner 的 tenant，接受现有 numeric tenant model ID 或该 tenant
 的默认聊天模型。DSL 中的 driver、API key、base URL 不作为凭据来源。

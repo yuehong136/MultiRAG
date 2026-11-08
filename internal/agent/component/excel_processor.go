@@ -40,8 +40,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -241,6 +244,17 @@ func (e *ExcelProcessorComponent) doWrite(sheetName string, inputs map[string]an
 			grid = append(grid, row)
 		}
 	}
+	prepared := make([][]any, len(grid))
+	for r, row := range grid {
+		prepared[r] = make([]any, len(row))
+		for c, value := range row {
+			normalized, err := excelNumericCell(value)
+			if err != nil {
+				return nil, &ParamError{Field: fmt.Sprintf("output_data[%d][%d]", r, c), Reason: err.Error()}
+			}
+			prepared[r][c] = normalized
+		}
+	}
 	if sheetName == "" {
 		sheetName = defaultSheetName
 	}
@@ -264,7 +278,7 @@ func (e *ExcelProcessorComponent) doWrite(sheetName string, inputs map[string]an
 		}
 	}
 
-	for r, row := range grid {
+	for r, row := range prepared {
 		for c, cell := range row {
 			cellRef, _ := excelize.CoordinatesToCellName(c+1, r+1)
 			if err := f.SetCellValue(sheetName, cellRef, cell); err != nil {
@@ -291,6 +305,36 @@ func (e *ExcelProcessorComponent) doWrite(sheetName string, inputs map[string]an
 		"size":        len(out),
 		"bytes":       out,
 	}, nil
+}
+
+// excelNumericCell never leaves json.Number to SetCellValue's string fallback.
+// Spreadsheet numeric cells support at most 15 significant decimal digits;
+// callers must explicitly supply large identifiers as strings to retain them.
+func excelNumericCell(value any) (any, error) {
+	if !isNumberType(value) {
+		return value, nil
+	}
+	number, err := exactNumber(value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid or out-of-range spreadsheet number")
+	}
+	canonical, err := exactDecimal(number)
+	if err != nil {
+		return nil, fmt.Errorf("spreadsheet number requires rounding")
+	}
+	digits := strings.Trim(strings.ReplaceAll(strings.TrimPrefix(canonical.String(), "-"), ".", ""), "0")
+	if len(digits) > 15 {
+		return nil, fmt.Errorf("spreadsheet number exceeds 15 significant digits; use a string identifier")
+	}
+	floating, err := strconv.ParseFloat(canonical.String(), 64)
+	if err != nil || math.IsInf(floating, 0) || math.IsNaN(floating) {
+		return nil, fmt.Errorf("spreadsheet number exceeds finite range")
+	}
+	roundtrip, err := exactNumber(json.Number(strconv.FormatFloat(floating, 'g', -1, 64)))
+	if err != nil || roundtrip.Cmp(number) != 0 {
+		return nil, fmt.Errorf("spreadsheet conversion loses numeric precision")
+	}
+	return floating, nil
 }
 
 // doRead opens the workbook referenced by inputs.file_ref (or

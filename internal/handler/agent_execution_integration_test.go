@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -39,10 +41,18 @@ import (
 
 // The hook reserves every exact key before the actual public service writes it.
 // It never deletes shared Redis keys and does not replace business commands.
+type agentWireRunJournal interface {
+	Event(string, map[string]any)
+}
+
+type agentWireRedisReader interface {
+	Exists(context.Context, ...string) *redis.IntCmd
+}
+
 type agentWireRedisJournal struct {
 	mu   sync.Mutex
-	j    *testsupport.CaseJournal
-	read *redis.Client
+	j    agentWireRunJournal
+	read agentWireRedisReader
 	keys map[string]bool
 }
 
@@ -52,8 +62,7 @@ func (h *agentWireRedisJournal) ProcessPipelineHook(next redis.ProcessPipelineHo
 }
 func (h *agentWireRedisJournal) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
-		if cmd.Name() == "setnx" && len(cmd.Args()) > 1 {
-			key, _ := cmd.Args()[1].(string)
+		if key, claims := agentWireLockClaim(cmd); claims {
 			if strings.HasPrefix(key, "agent:execution:") && strings.HasSuffix(key, ":lock") {
 				id := strings.TrimSuffix(strings.TrimPrefix(key, "agent:execution:"), ":lock")
 				if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(id) {
@@ -61,7 +70,7 @@ func (h *agentWireRedisJournal) ProcessHook(next redis.ProcessHook) redis.Proces
 				}
 				h.mu.Lock()
 				if !h.keys[key] {
-					keys := []string{"agent:execution:" + id, "agent:execution:" + id + ":cancel", key, "agent:cp:" + id}
+					keys := agentWireRunKeys(id)
 					h.j.Event("reserve-public-agent-run-before-redis-write", map[string]any{"run_id": id, "keys": keys})
 					count, err := h.read.Exists(ctx, keys...).Result()
 					if err != nil || count != 0 {
@@ -195,6 +204,10 @@ func TestAgentExecutionHTTPPostgresRedis(t *testing.T) {
 			keys = append(keys, key)
 		}
 		hook.mu.Unlock()
+		sort.Strings(keys)
+		if len(keys) == 0 {
+			t.Error("public HTTP run did not register any Redis run keys")
+		}
 		ctx, done := context.WithTimeout(context.Background(), 5*time.Second)
 		defer done()
 		if len(keys) > 0 {
@@ -265,7 +278,15 @@ func TestAgentExecutionHTTPPostgresRedis(t *testing.T) {
 		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event) != nil {
 			t.Fatal("invalid SSE")
 		}
-		runID = event.RunID
+		if event.RunID == "" || !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(event.RunID) {
+			t.Fatal("invalid SSE run identity")
+		}
+		if runID == "" {
+			runID = event.RunID
+			j.Event("public-agent-http-run-observed", map[string]any{"canvas_id": id, "run_id": runID, "database": name, "owner_id": owner})
+		} else if runID != event.RunID {
+			t.Fatal("SSE run identity changed")
+		}
 		if event.Event == "message" {
 			messages++
 			if event.Data["content"] != "Echo wire" {
@@ -282,6 +303,11 @@ func TestAgentExecutionHTTPPostgresRedis(t *testing.T) {
 	if runID == "" || messages != 1 || !finished {
 		t.Fatalf("real HTTP SSE missing output: %s", raw)
 	}
+	registered, err := hook.registeredRunKeys(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Event("public-agent-http-run-reservations-verified", map[string]any{"canvas_id": id, "run_id": runID, "keys": registered})
 	persisted, err := redisRead.Get(t.Context(), "agent:execution:"+runID).Bytes()
 	if err != nil {
 		t.Fatal(err)
@@ -303,5 +329,170 @@ func TestAgentExecutionHTTPPostgresRedis(t *testing.T) {
 	}
 	if json.Unmarshal(raw, &rejected) != nil || rejected.Code != common.CodeArgumentError {
 		t.Fatalf("unsupported query: %s", raw)
+	}
+}
+
+// go-redis encodes a nonzero-TTL SetNX as SET key value [PX|EX ttl] NX.
+// Look only at command options; a value or expiry argument spelled NX does
+// not make an ordinary SET into a lock claim.
+func agentWireLockClaim(cmd redis.Cmder) (string, bool) {
+	args := cmd.Args()
+	if len(args) < 3 {
+		return "", false
+	}
+	key, ok := args[1].(string)
+	if !ok {
+		return "", false
+	}
+	switch strings.ToLower(cmd.Name()) {
+	case "setnx":
+		return key, len(args) == 3
+	case "set":
+		nx := false
+		for i := 3; i < len(args); i++ {
+			var option string
+			switch value := args[i].(type) {
+			case string:
+				option = value
+			case []byte:
+				option = string(value)
+			default:
+				return "", false
+			}
+			switch strings.ToUpper(option) {
+			case "NX":
+				if nx {
+					return "", false
+				}
+				nx = true
+			case "EX", "PX", "EXAT", "PXAT":
+				if i+1 >= len(args) {
+					return "", false
+				}
+				i++
+			case "KEEPTTL", "GET":
+			default:
+				return "", false
+			}
+		}
+		return key, nx
+	default:
+		return "", false
+	}
+}
+
+func agentWireRunKeys(runID string) []string {
+	return []string{"agent:execution:" + runID, "agent:execution:" + runID + ":cancel", "agent:execution:" + runID + ":lock", "agent:cp:" + runID}
+}
+
+func (h *agentWireRedisJournal) registeredRunKeys(runID string) ([]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	expected := agentWireRunKeys(runID)
+	for _, key := range expected {
+		if !h.keys[key] {
+			return nil, fmt.Errorf("public run %s has an unregistered key %s", runID, key)
+		}
+	}
+	if len(h.keys) < 4 {
+		return nil, fmt.Errorf("no complete public run key reservation")
+	}
+	return expected, nil
+}
+
+type agentWireFakeJournal struct{ events []map[string]any }
+
+func (j *agentWireFakeJournal) Event(event string, fields map[string]any) {
+	value := map[string]any{"event": event}
+	for key, item := range fields {
+		value[key] = item
+	}
+	j.events = append(j.events, value)
+}
+
+type agentWireFakeRedisReader struct {
+	calls int
+	keys  []string
+	count int64
+	err   error
+}
+
+func (r *agentWireFakeRedisReader) Exists(ctx context.Context, keys ...string) *redis.IntCmd {
+	r.calls++
+	r.keys = append([]string(nil), keys...)
+	result := redis.NewIntCmd(ctx, "exists")
+	result.SetVal(r.count)
+	result.SetErr(r.err)
+	return result
+}
+
+func TestAgentWireRedisJournalReservesActualSetNXBeforeNext(t *testing.T) {
+	const runID = "0123456789abcdef0123456789abcdef"
+	key := "agent:execution:" + runID + ":lock"
+	cases := []struct {
+		name    string
+		args    []any
+		reserve bool
+	}{
+		{"actual SET PX NX", []any{"set", key, "token", "px", int64((6 * time.Minute).Milliseconds()), "nx"}, true},
+		{"actual SET EX NX", []any{"SET", key, "token", "EX", int64(360), "NX"}, true},
+		{"SET NX before expiry", []any{"set", key, "token", "NX", "PX", int64(1000)}, true},
+		{"legacy SETNX", []any{"setnx", key, "token"}, true},
+		{"ordinary SET", []any{"set", key, "token", "PX", int64(1000)}, false},
+		{"NX value is not option", []any{"set", key, "NX"}, false},
+		{"NX expiry argument is not option", []any{"set", key, "token", "PX", "NX"}, false},
+		{"ordinary SET GET", []any{"set", key, "token", "GET"}, false},
+		{"XX is not NX", []any{"set", key, "token", "EX", int64(60), "XX"}, false},
+		{"unrelated namespace", []any{"set", "other:lock", "token", "NX"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			journal := &agentWireFakeJournal{}
+			read := &agentWireFakeRedisReader{}
+			hook := &agentWireRedisJournal{j: journal, read: read, keys: map[string]bool{}}
+			nextCalled := false
+			sentinel := errors.New("next sentinel")
+			next := func(_ context.Context, actual redis.Cmder) error {
+				nextCalled = true
+				if actual.Args()[1] != tc.args[1] {
+					t.Fatal("hook changed business command")
+				}
+				if tc.reserve {
+					if read.calls != 1 || len(journal.events) != 1 {
+						t.Fatalf("next reached before reservation/probe: %d %+v", read.calls, journal.events)
+					}
+					if journal.events[0]["event"] != "reserve-public-agent-run-before-redis-write" || journal.events[0]["run_id"] != runID {
+						t.Fatal("wrong reservation event")
+					}
+					if _, err := hook.registeredRunKeys(runID); err != nil {
+						t.Fatal(err)
+					}
+					expectedKeys := []string{"agent:execution:" + runID, "agent:execution:" + runID + ":cancel", "agent:execution:" + runID + ":lock", "agent:cp:" + runID}
+					registered, ok := journal.events[0]["keys"].([]string)
+					if !ok || strings.Join(registered, "|") != strings.Join(expectedKeys, "|") || strings.Join(read.keys, "|") != strings.Join(expectedKeys, "|") {
+						t.Fatalf("wrong four-key reservation/probe before next: registered=%v probed=%v", registered, read.keys)
+					}
+				} else if read.calls != 0 || len(journal.events) != 0 || len(hook.keys) != 0 {
+					t.Fatal("ordinary SET was incorrectly treated as run allocation")
+				}
+				return sentinel
+			}
+			err := hook.ProcessHook(next)(context.Background(), redis.NewStatusCmd(context.Background(), tc.args...))
+			if !nextCalled || !errors.Is(err, sentinel) {
+				t.Fatalf("next result not preserved: %v", err)
+			}
+		})
+	}
+}
+
+func TestAgentWireRedisJournalRefusesOccupiedRunBeforeNext(t *testing.T) {
+	const runID = "0123456789abcdef0123456789abcdef"
+	for _, read := range []*agentWireFakeRedisReader{{count: 1}, {err: errors.New("probe unavailable")}} {
+		hook := &agentWireRedisJournal{j: &agentWireFakeJournal{}, read: read, keys: map[string]bool{}}
+		nextCalled := false
+		err := hook.ProcessHook(func(context.Context, redis.Cmder) error { nextCalled = true; return nil })(context.Background(), redis.NewStatusCmd(context.Background(), "set", "agent:execution:"+runID+":lock", "token", "PX", int64(360000), "NX"))
+		if err == nil || nextCalled || len(hook.keys) != 0 {
+			t.Fatalf("failed reservation reached write: %v next=%v", err, nextCalled)
+		}
 	}
 }

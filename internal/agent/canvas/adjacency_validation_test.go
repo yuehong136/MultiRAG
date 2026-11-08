@@ -9,6 +9,28 @@ import (
 	"multirag/internal/agent/runtime"
 )
 
+func TestBuildWorkflowRejectsPaddedNamesBeforeFactories(t *testing.T) {
+	for _, name := range []string{" Switch ", " Categorize ", "\tSwitch\n", " UserFillUp ", " Loop ", " Message ", "\u00a0Switch\u00a0", " ", ""} {
+		t.Run(name, func(t *testing.T) {
+			original := runtime.DefaultFactory()
+			calls := 0
+			runtime.SetDefaultFactory(nil)
+			runtime.SetDefaultFactory(func(string, map[string]any) (runtime.Component, error) { calls++; return adjacencyComponent{}, nil })
+			t.Cleanup(func() { runtime.SetDefaultFactory(nil); runtime.SetDefaultFactory(original) })
+			graph := &Canvas{Components: map[string]CanvasComponent{
+				"node":  {Obj: CanvasComponentObj{ComponentName: name}, Downstream: []string{"child"}},
+				"child": {Obj: CanvasComponentObj{ComponentName: "Invoke"}, Upstream: []string{"node"}},
+			}}
+			if _, err := BuildWorkflow(context.Background(), graph); err == nil || !strings.Contains(err.Error(), "component_name") {
+				t.Fatalf("padded name accepted: %v", err)
+			}
+			if calls != 0 {
+				t.Fatalf("factories ran before name rejection: %d", calls)
+			}
+		})
+	}
+}
+
 func TestBuildWorkflowRejectsConditionalSelectionWithoutBranchRuntime(t *testing.T) {
 	for _, name := range []string{"Switch", "Categorize"} {
 		t.Run(name, func(t *testing.T) {

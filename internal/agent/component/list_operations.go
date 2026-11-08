@@ -38,6 +38,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"multirag/internal/agent/runtime"
@@ -65,7 +66,14 @@ func (p *listOperationsParam) Update(conf map[string]any) error {
 	if p.Operations == "" {
 		p.Operations = "nth"
 	}
-	p.N = toInt(conf["n"])
+	p.N = 0
+	if raw, present := conf["n"]; present {
+		value, err := toInt(raw)
+		if err != nil {
+			return &ParamError{Field: "n", Reason: "must be an exact in-range integer"}
+		}
+		p.N = value
+	}
 	if s, ok := conf["strict"].(bool); ok {
 		p.Strict = s
 	}
@@ -95,6 +103,9 @@ func (p *listOperationsParam) Check() error {
 			Reason: "must be one of: nth, head, tail, filter, sort, drop_duplicates",
 		}
 	}
+	if err := validateNumericTree(p.Filter, 0); err != nil {
+		return &ParamError{Field: "filter", Reason: "contains an invalid or out-of-range number"}
+	}
 	return nil
 }
 
@@ -110,22 +121,22 @@ func (p *listOperationsParam) AsDict() map[string]any {
 	}
 }
 
-// toInt coerces a value to int. Floats are truncated; strings parsed
-// via Atoi; everything else falls back to 0.
-func toInt(v any) int {
-	switch x := v.(type) {
-	case int:
-		return x
-	case int64:
-		return int(x)
-	case float64:
-		return int(x)
-	case string:
-		var n int
-		fmt.Sscanf(x, "%d", &n)
-		return n
+// toInt accepts exact integral JSON numbers and strict legacy integer strings.
+func toInt(value any) (int, error) {
+	if text, ok := value.(string); ok {
+		n, err := strconv.Atoi(text)
+		return n, err
 	}
-	return 0
+	number, err := exactNumber(value)
+	if err != nil || !number.IsInt() || !number.Num().IsInt64() {
+		return 0, fmt.Errorf("not an in-range integer")
+	}
+	n := number.Num().Int64()
+	converted := int(n)
+	if int64(converted) != n {
+		return 0, fmt.Errorf("integer overflow")
+	}
+	return converted, nil
 }
 
 // ListOperationsComponent implements the 6 list transforms.
@@ -175,6 +186,9 @@ func (l *ListOperationsComponent) Invoke(ctx context.Context, _ map[string]any) 
 		return nil, fmt.Errorf("ListOperations: input is not a list (got %T)", raw)
 	}
 
+	if err := validateNumericTree(items, 0); err != nil {
+		return nil, fmt.Errorf("ListOperations: invalid numeric input: %w", err)
+	}
 	if l.param.Strict && (l.param.Operations == "nth" || l.param.Operations == "head" || l.param.Operations == "tail") {
 		n := l.param.N
 		valid := n >= 1 && n <= len(items)
@@ -306,9 +320,21 @@ func (l *ListOperationsComponent) opTail(items []any) []any {
 // opFilter: keep items whose _norm(v) matches the filter rule.
 func (l *ListOperationsComponent) opFilter(items []any) []any {
 	op, _ := l.param.Filter["operator"].(string)
-	val, _ := l.param.Filter["value"].(string)
+	value := l.param.Filter["value"]
+	val := normValue(value)
 	out := make([]any, 0, len(items))
 	for _, item := range items {
+		if isNumberType(item) && isNumberType(value) && (op == "=" || op == "≠") {
+			left, lerr := exactNumber(item)
+			right, rerr := exactNumber(value)
+			if lerr == nil && rerr == nil {
+				equal := left.Cmp(right) == 0
+				if (op == "=" && equal) || (op == "≠" && !equal) {
+					out = append(out, item)
+				}
+				continue
+			}
+		}
 		if evalFilter(normValue(item), op, val) {
 			out = append(out, item)
 		}
@@ -407,6 +433,11 @@ func evalFilter(v, op, target string) bool {
 // value) pairs (sorted by key for determinism). Lists and slices
 // recurse element-wise.
 func hashableKey(v any) any {
+	if number, err := exactNumber(v); err == nil {
+		if canonical, err := exactDecimal(number); err == nil {
+			return canonical
+		}
+	}
 	switch x := v.(type) {
 	case map[string]any:
 		// Stable ordering matters: sort by key string.
@@ -440,41 +471,29 @@ func lessKey(a, b any) bool {
 	}
 	// Element-wise compare
 	for i := 0; i < len(as) && i < len(bs); i++ {
-		if lessScalar(as[i], bs[i]) {
+		if lessKey(as[i], bs[i]) {
 			return true
 		}
-		if lessScalar(bs[i], as[i]) {
+		if lessKey(bs[i], as[i]) {
 			return false
 		}
 	}
 	return len(as) < len(bs)
 }
 
-// lessScalar compares two scalar (or non-tuple) values. Numbers are
-// compared numerically; everything else via fmt.Sprintf.
+// lessScalar compares numbers exactly and places them before other scalar
+// types. Separating the two groups keeps mixed lists transitively ordered;
+// numeric-looking strings remain strings.
 func lessScalar(a, b any) bool {
-	af, aok := toFloat64OK(a)
-	bf, bok := toFloat64OK(b)
-	if aok && bok {
-		return af < bf
+	left, leftErr := exactNumber(a)
+	right, rightErr := exactNumber(b)
+	if leftErr == nil && rightErr == nil {
+		return left.Cmp(right) < 0
+	}
+	if (leftErr == nil) != (rightErr == nil) {
+		return leftErr == nil
 	}
 	return fmt.Sprintf("%v", a) < fmt.Sprintf("%v", b)
-}
-
-// toFloat64OK is a number-without-bool helper.
-func toFloat64OK(v any) (float64, bool) {
-	if _, isBool := v.(bool); isBool {
-		return 0, false
-	}
-	switch x := v.(type) {
-	case int:
-		return float64(x), true
-	case int64:
-		return float64(x), true
-	case float64:
-		return x, true
-	}
-	return 0, false
 }
 
 func init() {

@@ -255,6 +255,11 @@ func validateCanvasAdjacency(c *Canvas) (*Canvas, error) {
 	downstreamSets := make(map[string]map[string]bool, len(ids))
 	for _, id := range ids {
 		comp := c.Components[id]
+		// The registry trims names. Reject that implicit alias at the Canvas
+		// boundary so guards, native dispatch and factories see the same name.
+		if comp.Obj.ComponentName == "" || comp.Obj.ComponentName != strings.TrimSpace(comp.Obj.ComponentName) {
+			return nil, fmt.Errorf("canvas: component %q has empty component_name or surrounding whitespace", id)
+		}
 		upstreamSets[id] = make(map[string]bool, len(comp.Upstream))
 		downstreamSets[id] = make(map[string]bool, len(comp.Downstream))
 		for _, up := range comp.Upstream {

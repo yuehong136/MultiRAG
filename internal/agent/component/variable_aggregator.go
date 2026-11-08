@@ -215,7 +215,13 @@ func (v *VariableAggregatorComponent) Invoke(ctx context.Context, inputs map[str
 				continue
 			}
 			val, err := state.GetVar(ref)
-			if err != nil || !isTruthy(val) {
+			if err != nil {
+				continue
+			}
+			if err := validateNumericTree(val, 0); err != nil {
+				return nil, fmt.Errorf("VariableAggregator: invalid numeric value: %w", err)
+			}
+			if !isTruthy(val) {
 				continue
 			}
 			out[gname] = val
@@ -262,6 +268,10 @@ func (v *VariableAggregatorComponent) Outputs() map[string]string {
 // strings/slices/maps are false, zero numbers are false, false is
 // false, everything else is true.
 func isTruthy(v any) bool {
+	if isNumberType(v) {
+		number, err := exactNumber(v)
+		return err == nil && number.Sign() != 0
+	}
 	switch x := v.(type) {
 	case nil:
 		return false
@@ -273,12 +283,6 @@ func isTruthy(v any) bool {
 		return len(x) > 0
 	case map[string]any:
 		return len(x) > 0
-	case int:
-		return x != 0
-	case int64:
-		return x != 0
-	case float64:
-		return x != 0
 	}
 	return true
 }
