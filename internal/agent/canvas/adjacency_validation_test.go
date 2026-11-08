@@ -9,6 +9,28 @@ import (
 	"multirag/internal/agent/runtime"
 )
 
+func TestBuildWorkflowRejectsConditionalSelectionWithoutBranchRuntime(t *testing.T) {
+	for _, name := range []string{"Switch", "Categorize"} {
+		t.Run(name, func(t *testing.T) {
+			original := runtime.DefaultFactory()
+			calls := 0
+			runtime.SetDefaultFactory(nil)
+			runtime.SetDefaultFactory(func(string, map[string]any) (runtime.Component, error) { calls++; return adjacencyComponent{}, nil })
+			t.Cleanup(func() { runtime.SetDefaultFactory(nil); runtime.SetDefaultFactory(original) })
+			graph := &Canvas{Components: map[string]CanvasComponent{
+				"condition":   {Obj: CanvasComponentObj{ComponentName: name, Params: map[string]any{"default": ""}}, Downstream: []string{"side_effect"}},
+				"side_effect": {Obj: CanvasComponentObj{ComponentName: "Invoke"}, Upstream: []string{"condition"}},
+			}}
+			if _, err := BuildWorkflow(context.Background(), graph); !errors.Is(err, runtime.ErrNotImplemented) {
+				t.Fatalf("conditional selection must be unavailable: %v", err)
+			}
+			if calls != 0 {
+				t.Fatalf("factories ran before routing rejection: %d", calls)
+			}
+		})
+	}
+}
+
 // These cases must be rejected before factories can resolve models, construct
 // external clients, or allocate resources, regardless of map iteration order.
 func TestBuildWorkflowRejectsAmbiguousAdjacencyBeforeFactories(t *testing.T) {

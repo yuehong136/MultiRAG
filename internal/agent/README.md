@@ -71,7 +71,7 @@ UserFillUp 通过 Eino 原生 interrupt/resume 恢复，已完成的前驱不会
 
 ## 明确的能力边界
 
-引擎支持确定性 DAG、显式 Loop 和顶层 UserFillUp。通用循环、条件节点的多分支执行、
+引擎支持确定性 DAG、显式 Loop 和顶层 UserFillUp。通用循环、Switch/Categorize 控制流节点、
 Loop 内 UserFillUp 以及多个同时中断当前会拒绝，防止漏执行或执行错误分支。
 
 未实现的 Answer、Retrieval、TavilySearch、ExeSQL 组件和 Iteration 组件不会注册成空成功。

@@ -84,7 +84,9 @@ func BuildWorkflow(ctx context.Context, c *Canvas) (*compose.Workflow[map[string
 	// same reciprocal graph. A missing side of an edge is not shorthand.
 	c = validated
 	for id, comp := range c.Components {
-		if (strings.EqualFold(comp.Obj.ComponentName, "Switch") || strings.EqualFold(comp.Obj.ComponentName, "Categorize")) && len(comp.Downstream) > 1 {
+		// Their next-node selection is not consumed by this workflow yet.
+		// Even a single child could execute when no branch was selected.
+		if strings.EqualFold(comp.Obj.ComponentName, "Switch") || strings.EqualFold(comp.Obj.ComponentName, "Categorize") {
 			return nil, fmt.Errorf("canvas: conditional routing at %q: %w", id, runtime.ErrNotImplemented)
 		}
 	}
