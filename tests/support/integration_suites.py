@@ -91,6 +91,7 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_azure_storage_protocol.py",
         "test_blob_connector_fingerprint.py",
         "test_chat_session_compat.py",
+        "test_channel_managed_transports.py",
         "test_connector_deleted_snapshot.py",
         "test_connector_google_oauth_pkce.py",
         "test_dataset_async_management.py",
@@ -209,6 +210,9 @@ def required_services(paths: list[Path]) -> set[str]:
     for path in paths:
         if path.name in {"test_agent_lifecycle_source_contracts.py", "test_after4776_web_contracts.py"}:
             required.update(("postgresql", "redis", "minio"))
+            continue
+        if path.name == "test_channel_managed_transports.py":
+            required.update(("postgresql", "redis"))
             continue
         if path.name == "test_connector_task_controls.py":
             required.add("postgresql")
