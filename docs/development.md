@@ -88,7 +88,7 @@ Apple Silicon 的 `/opt/homebrew/lib/libpcre2-8.a` 或 Intel 的
 不要跨平台复用静态库；源码、依赖或工具链变化后重建 native 库，再重新链接 Go 消费者。
 
 Go 文件解析默认使用内置 OOXML 解析器。需要可选的 office_oxide 0.1.2 时，
-预先准备对应平台的头文件与动态库，再设置 `MULTIRAG_GO_BUILD_TAGS=office_oxide` 和
+预先准备对应平台的头文件与库，再设置 `MULTIRAG_GO_BUILD_TAGS=office_oxide` 和
 `OFFICE_OXIDE_PREFIX=/absolute/path/to/office_oxide` 执行 `./build.sh --go`。
 prefix 下需有 `include/office_oxide_c/office_oxide.h` 以及 `lib/liboffice_oxide.so`
 （macOS 为 `.a`，链接 Security/CoreFoundation 等系统库）。0.1.2 的 macOS 发布动态库

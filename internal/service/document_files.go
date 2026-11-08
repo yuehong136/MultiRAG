@@ -12,8 +12,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
-	"multirag/internal/cache"
 	"multirag/internal/dao"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/entity"
 	"multirag/internal/storage"
 	"multirag/internal/utility"
@@ -224,7 +224,7 @@ func (s *DocumentFileService) GetDocumentArtifact(ctx context.Context, userID, f
 	}
 	reader := s.bindingReader
 	if reader == nil {
-		redisClient := cache.Get()
+		redisClient := redisengine.Get()
 		if redisClient == nil {
 			return nil, ErrDocumentFileStorage
 		}

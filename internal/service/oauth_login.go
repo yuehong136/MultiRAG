@@ -9,7 +9,7 @@ import (
 	"errors"
 	"time"
 
-	"multirag/internal/cache"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/server"
 	"multirag/internal/utility/oauth"
 )
@@ -48,7 +48,7 @@ func oauthRandom() (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
-func (s *UserService) OAuthLoginInitiate(ctx context.Context, channel string, store *cache.RedisClient) (*OAuthLoginInit, error) {
+func (s *UserService) OAuthLoginInitiate(ctx context.Context, channel string, store *redisengine.RedisClient) (*OAuthLoginInit, error) {
 	cfg, err := oauthConfig(channel)
 	if err != nil {
 		return nil, err
@@ -85,7 +85,7 @@ func (s *UserService) OAuthLoginInitiate(ctx context.Context, channel string, st
 
 // OAuthCallback consumes state atomically before provider I/O. No account,
 // tenant or token is created: provider-subject binding is not available yet.
-func (s *UserService) OAuthCallback(ctx context.Context, channel, code, state, cookie string, store *cache.RedisClient) error {
+func (s *UserService) OAuthCallback(ctx context.Context, channel, code, state, cookie string, store *redisengine.RedisClient) error {
 	cfg, err := oauthConfig(channel)
 	if err != nil {
 		return err

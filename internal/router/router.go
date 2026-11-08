@@ -354,6 +354,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			v1.GET("/agents/:agent_id/sessions/:session_id", r.agentHandler.GetAgentSession)
 			v1.DELETE("/agents/:agent_id/sessions/:session_id", r.agentHandler.DeleteAgentSessionItem)
 			v1.POST("/agents/:agent_id/upload", r.agentHandler.UploadAgentFile)
+			RegisterAgentExecutionRoutes(v1, r.agentHandler)
 			v1.POST("/searchbots/related_questions", r.searchbotHandler.Handle)
 			v1.POST("/searchbots/retrieval_test", r.searchbotHandler.RetrievalTest)
 			v1.POST("/searchbots/ask", r.searchbotHandler.Ask)

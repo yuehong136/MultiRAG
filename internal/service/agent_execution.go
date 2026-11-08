@@ -19,9 +19,9 @@ import (
 	"github.com/redis/go-redis/v9"
 	"multirag/internal/agent/canvas"
 	"multirag/internal/agent/component"
-	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
 )
@@ -58,7 +58,7 @@ type agentRedisProvider func() (*redis.Client, error)
 type agentModelResolver func(context.Context, string, string) (model.ToolCallingChatModel, error)
 
 func agentRedisClient() (*redis.Client, error) {
-	if rc := cache.Get(); rc != nil && rc.GetClient() != nil {
+	if rc := redisengine.Get(); rc != nil && rc.GetClient() != nil {
 		return rc.GetClient(), nil
 	}
 	return nil, fmt.Errorf("Agent execution requires Redis.")

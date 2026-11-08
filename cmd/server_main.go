@@ -22,9 +22,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"multirag/internal/cache"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/handler"
 	"multirag/internal/router"
 	"multirag/internal/service"
@@ -113,10 +113,10 @@ func main() {
 	defer engine.Close()
 
 	// Initialize Redis cache
-	if err := cache.Init(&config.Redis); err != nil {
+	if err := redisengine.Init(&config.Redis); err != nil {
 		common.Fatal("Failed to initialize Redis", zap.Error(err))
 	}
-	defer cache.Close()
+	defer redisengine.Close()
 
 	if err := storage.InitStorageFactory(); err != nil {
 		common.Fatal("Failed to initialize storage factory", zap.Error(err))
@@ -124,7 +124,7 @@ func main() {
 
 	// Initialize server variables (runtime variables that can change during operation)
 	// This must be done after Cache is initialized
-	if err := server.InitVariables(cache.Get()); err != nil {
+	if err := server.InitVariables(redisengine.Get()); err != nil {
 		common.Warn("Failed to initialize server variables from Redis, using defaults", zap.String("error", err.Error()))
 	}
 
@@ -174,8 +174,8 @@ func startServer(config *server.Config) {
 	searchService := service.NewSearchService()
 	fileService := service.NewFileService()
 	memoryService := service.NewMemoryService()
-	taskService := service.NewTaskService(dao.DB, cache.Get().GetClient())
-	documentService.SetDocumentStopService(service.NewDocumentStopService(dao.DB, cache.Get().GetClient()))
+	taskService := service.NewTaskService(dao.DB, redisengine.Get().GetClient())
+	documentService.SetDocumentStopService(service.NewDocumentStopService(dao.DB, redisengine.Get().GetClient()))
 
 	// Initialize handler layer
 	authHandler := handler.NewAuthHandler()

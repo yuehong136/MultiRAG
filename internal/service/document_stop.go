@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"multirag/internal/cache"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/entity"
 
 	"github.com/google/uuid"
@@ -38,7 +38,7 @@ func (s *DocumentService) StopParseDocuments(ctx context.Context, datasetID, use
 	if s.stopping != nil {
 		return s.stopping.StopParseDocuments(ctx, datasetID, userID, ids)
 	}
-	client := cache.Get()
+	client := redisengine.Get()
 	var redisClient *redis.Client
 	if client != nil {
 		redisClient = client.GetClient()

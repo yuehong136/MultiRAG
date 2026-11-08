@@ -26,9 +26,9 @@ import (
 	"sort"
 	"strings"
 
-	"multirag/internal/cache"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/entity"
 	"multirag/internal/server"
 	"multirag/internal/storage"
@@ -181,7 +181,7 @@ func (s *DocumentService) DeleteDocuments(ctx context.Context, datasetID, userID
 	if s.deletion != nil {
 		return s.deletion.DeleteDocuments(ctx, datasetID, userID, ids, deleteAll)
 	}
-	client := cache.Get()
+	client := redisengine.Get()
 	if client == nil {
 		return 0, ErrDocumentDeleteRetryable
 	}

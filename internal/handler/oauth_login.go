@@ -2,7 +2,7 @@ package handler
 
 import (
 	"github.com/gin-gonic/gin"
-	"multirag/internal/cache"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/service"
 	"net/http"
 	"net/url"
@@ -24,7 +24,7 @@ func oauthErrorRedirect(c *gin.Context, err error) {
 
 // OAuthLogin starts protocol verification; platform account login is disabled.
 func (h *UserHandler) OAuthLogin(c *gin.Context) {
-	result, err := h.userService.OAuthLoginInitiate(c.Request.Context(), c.Param("channel"), cache.Get())
+	result, err := h.userService.OAuthLoginInitiate(c.Request.Context(), c.Param("channel"), redisengine.Get())
 	if err != nil {
 		oauthErrorRedirect(c, err)
 		return
@@ -40,5 +40,5 @@ func (h *UserHandler) OAuthCallback(c *gin.Context) {
 		oauthErrorRedirect(c, service.ErrOAuthInvalidState)
 		return
 	}
-	oauthErrorRedirect(c, h.userService.OAuthCallback(c.Request.Context(), c.Param("channel"), query.Get("code"), query.Get("state"), cookie, cache.Get()))
+	oauthErrorRedirect(c, h.userService.OAuthCallback(c.Request.Context(), c.Param("channel"), query.Get("code"), query.Get("state"), cookie, redisengine.Get()))
 }

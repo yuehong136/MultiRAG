@@ -29,7 +29,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"multirag/internal/cache"
+	redisengine "multirag/internal/engine/redis"
 )
 
 // checkpointKeyPrefix is the Redis key namespace for checkpoint payloads.
@@ -45,13 +45,13 @@ type RedisCheckPointStore struct {
 }
 
 // NewRedisCheckPointStore returns a store wired to the global Redis client
-// from internal/cache. Returns a non-nil store even when the cache is
+// from internal/engine/redis. Returns a non-nil store even when Redis is
 // uninitialized (client is nil); Get/Set/Delete will return an error in that
 // case rather than nil-deref, but the type stays usable for tests that
 // inject their own client via struct-literal construction.
 func NewRedisCheckPointStore(ttl time.Duration) *RedisCheckPointStore {
 	var client *redis.Client
-	if rc := cache.Get(); rc != nil {
+	if rc := redisengine.Get(); rc != nil {
 		client = rc.GetClient()
 	}
 	return &RedisCheckPointStore{client: client, ttl: ttl}

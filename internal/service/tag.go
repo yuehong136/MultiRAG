@@ -26,9 +26,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/engine/types"
 	"multirag/internal/entity"
 	"multirag/internal/service/nlp"
@@ -61,7 +61,7 @@ func GetTagsFromCache(kbIDs []string) (map[string]float64, error) {
 		return nil, nil
 	}
 
-	redisClient := cache.Get()
+	redisClient := redisengine.Get()
 	if redisClient == nil {
 		common.Warn("Redis client not available, skipping cache lookup")
 		return nil, nil
@@ -89,7 +89,7 @@ func SetTagsToCache(kbIDs []string, tags map[string]float64) error {
 		return nil
 	}
 
-	redisClient := cache.Get()
+	redisClient := redisengine.Get()
 	if redisClient == nil {
 		common.Warn("Redis client not available, skipping cache store")
 		return nil

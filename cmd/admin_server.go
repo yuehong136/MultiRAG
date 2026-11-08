@@ -16,10 +16,10 @@ import (
 	"go.uber.org/zap"
 
 	"multirag/internal/admin"
-	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/server"
 	"multirag/internal/utility"
 )
@@ -80,14 +80,14 @@ func main() {
 	defer engine.Close()
 
 	// Initialize Redis cache
-	if err := cache.Init(&cfg.Redis); err != nil {
+	if err := redisengine.Init(&cfg.Redis); err != nil {
 		common.Fatal("Failed to initialize Redis", zap.Error(err))
 	}
-	defer cache.Close()
+	defer redisengine.Close()
 
 	// Initialize server variables (runtime variables that can change during operation)
 	// This must be done after Cache is initialized
-	if err := server.InitVariables(cache.Get()); err != nil {
+	if err := server.InitVariables(redisengine.Get()); err != nil {
 		common.Warn("Failed to initialize server variables from Redis, using defaults", zap.String("error", err.Error()))
 	}
 

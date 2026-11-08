@@ -24,10 +24,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine/elasticsearch"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/entity"
 	"multirag/internal/server"
 	"multirag/internal/service"
@@ -1135,7 +1135,7 @@ func (s *Service) getMySQLStatus(name string) (map[string]interface{}, error) {
 func (s *Service) getRedisInfo(name string) (map[string]interface{}, error) {
 	startTime := time.Now()
 
-	redisClient := cache.Get()
+	redisClient := redisengine.Get()
 	if redisClient == nil {
 		return map[string]interface{}{
 			"service_name": name,

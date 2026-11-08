@@ -30,7 +30,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"multirag/internal/cache"
+	redisengine "multirag/internal/engine/redis"
 )
 
 // runKeyPrefix is the Redis Hash key namespace for run metadata.
@@ -62,7 +62,7 @@ type RunTracker struct {
 // construction.
 func NewRunTracker(ttl time.Duration) *RunTracker {
 	var client *redis.Client
-	if rc := cache.Get(); rc != nil {
+	if rc := redisengine.Get(); rc != nil {
 		client = rc.GetClient()
 	}
 	return &RunTracker{client: client, ttl: ttl}

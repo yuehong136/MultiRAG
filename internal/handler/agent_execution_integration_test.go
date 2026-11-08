@@ -28,9 +28,9 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/entity"
 	"multirag/internal/handler"
 	"multirag/internal/router"
@@ -188,11 +188,11 @@ func TestAgentExecutionHTTPPostgresRedis(t *testing.T) {
 	if err := db.Create(&entity.Tenant{ID: owner, Status: &status}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Init(&rc); err != nil {
+	if err := redisengine.Init(&rc); err != nil {
 		t.Fatal("required Redis unavailable")
 	}
-	client := cache.Get().GetClient()
-	t.Cleanup(func() { cache.Close() })
+	client := redisengine.Get().GetClient()
+	t.Cleanup(func() { redisengine.Close() })
 	redisRead := redis.NewClient(&redis.Options{Addr: net.JoinHostPort(rc.Host, fmt.Sprint(rc.Port)), Password: rc.Password, DB: rc.DB})
 	t.Cleanup(func() { redisRead.Close() })
 	hook := &agentWireRedisJournal{j: j, read: redisRead, keys: map[string]bool{}}

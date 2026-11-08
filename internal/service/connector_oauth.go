@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"multirag/internal/cache"
 	"multirag/internal/common"
+	redisengine "multirag/internal/engine/redis"
 )
 
 const (
@@ -214,7 +214,7 @@ func (s *ConnectorService) connectorOAuth() *ConnectorOAuthService {
 		return s.oauth
 	}
 	var store ConnectorOAuthStore
-	if client := cache.Get(); client != nil {
+	if client := redisengine.Get(); client != nil {
 		store = NewConnectorOAuthRedisStore(client.GetClient())
 	}
 	return NewConnectorOAuthService(store, ConnectorOAuthConfig{AuthorizeConnector: s.authorizeConnectorOAuth})

@@ -12,10 +12,10 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/entity"
 	"multirag/internal/storage"
 )
@@ -507,7 +507,7 @@ func (s *File2DocumentService) linkToDatasets(ctx context.Context, actor string,
 	sort.Slice(removals, func(i, j int) bool { return removals[i].ID < removals[j].ID })
 	deletion := s.deletion
 	if deletion == nil {
-		var redisClient = cache.Get()
+		var redisClient = redisengine.Get()
 		if redisClient == nil && len(removals) > 0 {
 			return errors.New("conversion retirement cache unavailable")
 		}

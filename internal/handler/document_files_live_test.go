@@ -30,10 +30,10 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/engine/types"
 	"multirag/internal/entity"
 	"multirag/internal/server"
@@ -267,20 +267,20 @@ func TestAfterAabDocumentFilesHTTPAndWeb(t *testing.T) {
 	redisKey := "multirag:sandbox_artifact:" + artifactFilename
 	binding, _ := json.Marshal(map[string]any{"owner_id": ids["owner"], "run_id": ids["run"], "session_id": nil})
 	journal.Event("reserve-HTTP-Redis-binding-before-write", map[string]any{"endpoint": external.Redis.Host, "database": external.Redis.DB, "key": redisKey, "owner": ids["owner"], "run": ids["run"], "session": nil, "binding_sha256": fmt.Sprintf("%x", sha256.Sum256(binding))})
-	if cache.Get() != nil {
+	if redisengine.Get() != nil {
 		t.Fatal("HTTP live test requires uninitialized private Redis client")
 	}
-	if err := cache.Init(&server.RedisConfig{Host: redisHost, Port: port, Password: external.Redis.Password, DB: external.Redis.DB}); err != nil {
+	if err := redisengine.Init(&server.RedisConfig{Host: redisHost, Port: port, Password: external.Redis.Password, DB: external.Redis.DB}); err != nil {
 		t.Fatal("HTTP Redis connection failed")
 	}
-	t.Cleanup(func() { _ = cache.Close() })
-	rc := cache.Get().GetClient()
+	t.Cleanup(func() { _ = redisengine.Close() })
+	rc := redisengine.Get().GetClient()
 	existing, err := rc.Exists(ctx, redisKey).Result()
 	if err != nil || existing != 0 {
 		t.Fatal("HTTP artifact Redis key must not preexist")
 	}
 	t.Cleanup(func() {
-		cache.Get().DeleteIfEqual(redisKey, string(binding))
+		redisengine.Get().DeleteIfEqual(redisKey, string(binding))
 		check := redis.NewClient(&redis.Options{Addr: external.Redis.Host, Username: external.Redis.Username, Password: external.Redis.Password, DB: external.Redis.DB})
 		defer check.Close()
 		n, err := check.Exists(context.Background(), redisKey).Result()

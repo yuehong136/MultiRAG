@@ -17,9 +17,9 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/entity"
 	"multirag/internal/server"
 	"multirag/internal/utility"
@@ -47,8 +47,8 @@ func (s *UserService) passwordRecovery() *PasswordRecoveryService {
 		return s.recovery
 	}
 	var client *redis.Client
-	if cache.Get() != nil {
-		client = cache.Get().GetClient()
+	if redisengine.Get() != nil {
+		client = redisengine.Get().GetClient()
 	}
 	var smtp common.SMTPConfig
 	if cfg := server.GetConfig(); cfg != nil {

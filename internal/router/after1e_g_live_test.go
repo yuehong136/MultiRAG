@@ -26,9 +26,9 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/entity"
 	"multirag/internal/handler"
 	"multirag/internal/server"
@@ -314,11 +314,11 @@ func TestAfter1eGMCPAndOAuth(t *testing.T) {
 		t.Fatal("owned Redis DB required")
 	}
 	j.Event("reserve-redis-database", map[string]any{"host": redisCfg.Host, "port": redisCfg.Port, "db": 15, "prefix": "oauth:state:", "requireEmpty": true})
-	if err := cache.Init(&redisCfg); err != nil {
+	if err := redisengine.Init(&redisCfg); err != nil {
 		t.Fatal("Redis connect")
 	}
-	store := cache.Get().GetClient()
-	t.Cleanup(func() { cache.Close() })
+	store := redisengine.Get().GetClient()
+	t.Cleanup(func() { redisengine.Close() })
 	if count, err := store.DBSize(ctx).Result(); err != nil || count != 0 {
 		t.Fatal("Redis database not empty")
 	}
@@ -490,7 +490,7 @@ func TestAfter1eGMCPAndOAuth(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := service.NewUserService().OAuthCallback(ctx, "test", "code", state, state, cache.Get())
+			err := service.NewUserService().OAuthCallback(ctx, "test", "code", state, state, redisengine.Get())
 			if err == service.ErrOAuthIdentityBindingRequired {
 				successes.Add(1)
 			} else if err != service.ErrOAuthInvalidState {

@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"multirag/internal/cache"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/server"
 	"time"
 )
@@ -42,13 +42,13 @@ func (s *SystemService) GetStatus(ctx context.Context) *StatusResponse {
 		db = cfg.Database.Driver
 	}
 	result := &StatusResponse{DocEngine: component("doc_engine", health.DocEngine, doc), Storage: component("storage", health.Storage, store), Database: component("db", health.DB, db), Redis: component("redis", health.Redis, "redis"), TaskExecutorHeartbeats: map[string][]map[string]any{}}
-	if cache.Get() == nil {
+	if redisengine.Get() == nil {
 		result.HeartbeatError = "Worker telemetry unavailable."
 		return result
 	}
 	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	rows, err := cache.Get().TaskExecutorHeartbeats(bounded)
+	rows, err := redisengine.Get().TaskExecutorHeartbeats(bounded)
 	if err != nil {
 		result.HeartbeatError = "Worker telemetry unavailable."
 		return result

@@ -20,10 +20,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
+	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/server"
 	"multirag/internal/storage"
 	"multirag/internal/utility"
@@ -99,10 +99,10 @@ func (s *SystemService) Healthz(ctx context.Context) (*HealthzResponse, bool) {
 				return db.PingContext(ctx)
 			},
 			"redis": func(ctx context.Context) error {
-				if cache.Get() == nil {
+				if redisengine.Get() == nil {
 					return errHealthUninitialized
 				}
-				return cache.Get().PingContext(ctx)
+				return redisengine.Get().PingContext(ctx)
 			},
 			"doc_engine": func(ctx context.Context) error { return documentEngineHealth(ctx, engine.Get()) },
 			"storage": func(ctx context.Context) error {
