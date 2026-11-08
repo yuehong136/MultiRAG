@@ -22,7 +22,7 @@ func (s richString) text() string {
 	}
 	return b.String()
 }
-func parseXLSX(a officeArchive) (*Result, error) {
+func parseXLSX(a *officeArchive) (*Result, error) {
 	var workbook struct {
 		XMLName xml.Name `xml:"workbook"`
 		Sheets  []struct {
@@ -41,12 +41,13 @@ func parseXLSX(a officeArchive) (*Result, error) {
 		XMLName xml.Name     `xml:"sst"`
 		Items   []richString `xml:"si"`
 	}
-	if a["xl/sharedStrings.xml"] != nil {
+	if a.files["xl/sharedStrings.xml"] != nil {
 		if err := a.decode("xl/sharedStrings.xml", &shared); err != nil {
 			return nil, err
 		}
 	}
-	var plain, markdown []string
+	var plain, markdown strings.Builder
+	sheetCount := 0
 	for _, sheet := range workbook.Sheets {
 		target, err := resolvePart(a, rels, sheet.ID, "xl", "worksheet")
 		if err != nil {
@@ -66,10 +67,30 @@ func parseXLSX(a officeArchive) (*Result, error) {
 		if err := a.decode(target, &content); err != nil {
 			return nil, err
 		}
-		var lines []string
-		for _, row := range content.Rows {
-			var cells []string
-			for _, cell := range row.Cells {
+		if sheetCount > 0 {
+			if err := a.emit(&plain, "\n\n"); err != nil {
+				return nil, err
+			}
+			if err := a.emit(&markdown, "\n\n"); err != nil {
+				return nil, err
+			}
+		}
+		if err := a.emit(&plain, sheet.Name, "\n"); err != nil {
+			return nil, err
+		}
+		if err := a.emit(&markdown, "## ", sheet.Name, "\n\n"); err != nil {
+			return nil, err
+		}
+		for rowIndex, row := range content.Rows {
+			if rowIndex > 0 {
+				if err := a.emit(&plain, "\n"); err != nil {
+					return nil, err
+				}
+				if err := a.emit(&markdown, "\n"); err != nil {
+					return nil, err
+				}
+			}
+			for cellIndex, cell := range row.Cells {
 				value := cell.Value
 				switch cell.Type {
 				case "s":
@@ -81,14 +102,23 @@ func parseXLSX(a officeArchive) (*Result, error) {
 				case "inlineStr":
 					value = cell.Inline.text()
 				}
-				// Include coordinates so sparse rows and formulas' cached values remain inspectable.
-				cells = append(cells, cell.Ref+"="+value)
+				if cellIndex > 0 {
+					if err := a.emit(&plain, "\t"); err != nil {
+						return nil, err
+					}
+					if err := a.emit(&markdown, "\t"); err != nil {
+						return nil, err
+					}
+				}
+				if err := a.emit(&plain, cell.Ref, "=", value); err != nil {
+					return nil, err
+				}
+				if err := a.emit(&markdown, cell.Ref, "=", value); err != nil {
+					return nil, err
+				}
 			}
-			lines = append(lines, strings.Join(cells, "\t"))
 		}
-		text := strings.Join(lines, "\n")
-		plain = append(plain, sheet.Name+"\n"+text)
-		markdown = append(markdown, "## "+sheet.Name+"\n\n"+text)
+		sheetCount++
 	}
-	return &Result{Text: strings.Join(plain, "\n\n"), Markdown: strings.Join(markdown, "\n\n")}, nil
+	return &Result{Text: plain.String(), Markdown: markdown.String()}, nil
 }

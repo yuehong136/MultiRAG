@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -19,7 +20,7 @@ type relationships struct {
 	Items   []relationship `xml:"Relationship"`
 }
 
-func resolvePart(a officeArchive, rels relationships, id, base, kind string) (string, error) {
+func resolvePart(a *officeArchive, rels relationships, id, base, kind string) (string, error) {
 	for _, r := range rels.Items {
 		if r.ID != id {
 			continue
@@ -31,14 +32,14 @@ func resolvePart(a officeArchive, rels relationships, id, base, kind string) (st
 		if strings.HasPrefix(r.Target, "/") {
 			target = strings.TrimPrefix(path.Clean(r.Target), "/")
 		}
-		if a[target] == nil {
+		if a.files[target] == nil {
 			return "", fmt.Errorf("missing %s relationship target", kind)
 		}
 		return target, nil
 	}
 	return "", fmt.Errorf("missing %s relationship %q", kind, id)
 }
-func parsePPTX(a officeArchive) (*Result, error) {
+func parsePPTX(a *officeArchive) (*Result, error) {
 	var presentation struct {
 		XMLName xml.Name `xml:"presentation"`
 		Slides  []struct {
@@ -52,7 +53,8 @@ func parsePPTX(a officeArchive) (*Result, error) {
 	if err := a.decode("ppt/_rels/presentation.xml.rels", &rels); err != nil {
 		return nil, err
 	}
-	var slides []string
+	var plain, markdown strings.Builder
+	count := 0
 	for _, s := range presentation.Slides {
 		name, err := resolvePart(a, rels, s.ID, "ppt", "slide")
 		if err != nil {
@@ -66,15 +68,30 @@ func parsePPTX(a officeArchive) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		slides = append(slides, text)
+		if count > 0 {
+			if err := a.emit(&plain, "\n\n"); err != nil {
+				return nil, err
+			}
+			if err := a.emit(&markdown, "\n\n---\n\n"); err != nil {
+				return nil, err
+			}
+		}
+		if err := a.emit(&plain, text); err != nil {
+			return nil, err
+		}
+		if err := a.emit(&markdown, text); err != nil {
+			return nil, err
+		}
+		count++
 	}
-	return &Result{Text: strings.Join(slides, "\n\n"), Markdown: strings.Join(slides, "\n\n---\n\n")}, nil
+	return &Result{Text: plain.String(), Markdown: markdown.String()}, nil
 }
 func drawingText(data []byte) (string, error) {
 	var lines []string
 	var b strings.Builder
 	inText := false
-	d := xml.NewDecoder(strings.NewReader(string(data)))
+	d := xml.NewDecoder(bytes.NewReader(data))
+	root := false
 	for {
 		token, err := d.Token()
 		if err != nil {
@@ -85,6 +102,12 @@ func drawingText(data []byte) (string, error) {
 		}
 		switch t := token.(type) {
 		case xml.StartElement:
+			if !root {
+				if t.Name.Local != "sld" {
+					return "", fmt.Errorf("invalid PPTX slide root %q", t.Name.Local)
+				}
+				root = true
+			}
 			if t.Name.Local == "t" {
 				inText = true
 			}
@@ -104,6 +127,9 @@ func drawingText(data []byte) (string, error) {
 				b.Reset()
 			}
 		}
+	}
+	if !root {
+		return "", fmt.Errorf("missing PPTX slide root")
 	}
 	return strings.Join(lines, "\n"), nil
 }

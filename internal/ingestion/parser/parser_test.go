@@ -81,3 +81,55 @@ func TestParserFailsClosed(t *testing.T) {
 		t.Fatal("expanded ZIP limit ignored")
 	}
 }
+
+func slideFixture(t *testing.T, slide string, count int) []byte {
+	t.Helper()
+	var ids strings.Builder
+	for range count {
+		ids.WriteString(`<p:sldId r:id="s"/>`)
+	}
+	return officeFixture(t, map[string]string{
+		"ppt/presentation.xml":            `<p:presentation xmlns:p="p" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst>` + ids.String() + `</p:sldIdLst></p:presentation>`,
+		"ppt/_rels/presentation.xml.rels": `<Relationships><Relationship Id="s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/shared.xml"/></Relationships>`,
+		"ppt/slides/shared.xml":           slide,
+	})
+}
+func TestPPTXRejectsWrongSlideRoot(t *testing.T) {
+	testsupport.NewCase(t)
+	if result, err := Parse("bad.pptx", slideFixture(t, `<bogus/>`, 1), map[string]string{"lib_type": Builtin}); err == nil || result != nil {
+		t.Fatal("wrong slide root returned success")
+	}
+}
+func TestOfficeRepeatedPartsHaveCumulativeBudget(t *testing.T) {
+	testsupport.NewCase(t)
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{"reads.pptx", slideFixture(t, `<sld><!--`+strings.Repeat("x", 1<<20)+`--></sld>`, 65)},
+		{"output.pptx", slideFixture(t, `<sld><p><t>`+strings.Repeat("x", 1<<20)+`</t></p></sld>`, 33)},
+	}
+	var cells strings.Builder
+	for range 33 {
+		cells.WriteString(`<c t="s"><v>0</v></c>`)
+	}
+	cases = append(cases, struct {
+		name string
+		data []byte
+	}{"strings.xlsx", officeFixture(t, map[string]string{
+		"xl/workbook.xml":            `<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet" r:id="s"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet.xml"/></Relationships>`,
+		"xl/worksheets/sheet.xml":    `<worksheet><sheetData><row>` + cells.String() + `</row></sheetData></worksheet>`,
+		"xl/sharedStrings.xml":       `<sst><si><t>` + strings.Repeat("x", 1<<20) + `</t></si></sst>`,
+	})})
+	for _, c := range cases {
+		if result, err := Parse(c.name, c.data, map[string]string{"lib_type": Builtin}); err == nil || result != nil {
+			t.Errorf("%s amplified output/read returned success", c.name)
+		}
+	}
+	// Repeated references remain legal when their total work is within budget.
+	result, err := Parse("small.pptx", slideFixture(t, `<sld><p><t>hello</t></p></sld>`, 2), map[string]string{"lib_type": Builtin})
+	if err != nil || result.Text != "hello\n\nhello" {
+		t.Fatal(result, err)
+	}
+}

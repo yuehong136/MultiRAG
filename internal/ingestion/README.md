@@ -31,7 +31,9 @@ worksheet values in XLSX (shared/inline strings, coordinates and cached formula
 values). It does not calculate formulas, recognize images, preserve Office
 layout or reproduce rich text formatting. Blank content in a valid document can
 produce empty text. Malformed archives and unavailable parts fail explicitly.
-Input is capped at 32 MiB; builtin ZIP expansion at 64 MiB and 4096 entries.
+Input is capped at 32 MiB; builtin ZIP expansion, cumulative part reads and
+combined Text/Markdown output each at 64 MiB, with at most 4096 ZIP entries.
+Repeated part and shared-string references remain valid within those budgets.
 
 `office_oxide` delegates Office extraction to the pinned native binding. Build
 with `-tags office_oxide` and the header/library prefix selected in `build.sh`.
@@ -40,3 +42,12 @@ Markdown failures are errors. DOC/PPT/XLS support depends on the native library
 and the actual input, and must be validated with real files. This package does
 not supply a PDF parser, OCR, image extraction, or a remote-provider fallback.
 Only the selected backend runs; unknown configuration keys are errors.
+
+Native verification requires a registered fixture directory containing
+`sample.doc`, `sample.docx`, `sample.xls`, `sample.xlsx`, `sample.ppt` and
+`sample.pptx`, passed as `MULTIRAG_OFFICE_FIXTURES`. Run
+`go test -tags office_oxide ./internal/ingestion/parser` with the selected
+header/static-library flags. Those files are test inputs, not production data.
+On macOS, use the release static archive: the tested v0.1.2 dynamic library
+contains an absolute build-machine install name. The build entry point selects
+the prepared static archive without rewriting the library or global caches.

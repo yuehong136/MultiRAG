@@ -39,6 +39,9 @@ func Parse(filename string, data []byte, config map[string]string) (*Result, err
 	format := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
 	switch backend {
 	case Builtin:
+		if format != "docx" && format != "pptx" && format != "xlsx" {
+			return nil, fmt.Errorf("%w: builtin %s", ErrUnsupported, format)
+		}
 		archive, err := openOfficeArchive(data)
 		if err != nil {
 			return nil, err

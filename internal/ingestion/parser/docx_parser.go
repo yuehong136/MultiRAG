@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func parseDOCX(a officeArchive) (*Result, error) {
+func parseDOCX(a *officeArchive) (*Result, error) {
 	data, err := a.read("word/document.xml")
 	if err != nil {
 		return nil, err
@@ -20,7 +20,8 @@ func parseDOCX(a officeArchive) (*Result, error) {
 		return nil, fmt.Errorf("decode DOCX document: %w", err)
 	}
 	d := xml.NewDecoder(bytes.NewReader(data))
-	var lines []string
+	var plain, markdown strings.Builder
+	count := 0
 	var paragraph strings.Builder
 	inText := false
 	root, body := false, false
@@ -55,7 +56,21 @@ func parseDOCX(a officeArchive) (*Result, error) {
 			case "t":
 				inText = false
 			case "p":
-				lines = append(lines, paragraph.String())
+				if count > 0 {
+					if err := a.emit(&plain, "\n"); err != nil {
+						return nil, err
+					}
+					if err := a.emit(&markdown, "\n\n"); err != nil {
+						return nil, err
+					}
+				}
+				if err := a.emit(&plain, paragraph.String()); err != nil {
+					return nil, err
+				}
+				if err := a.emit(&markdown, paragraph.String()); err != nil {
+					return nil, err
+				}
+				count++
 				paragraph.Reset()
 			}
 		}
@@ -63,6 +78,5 @@ func parseDOCX(a officeArchive) (*Result, error) {
 	if !root || !body {
 		return nil, fmt.Errorf("DOCX requires document body")
 	}
-	text := strings.Join(lines, "\n")
-	return &Result{Text: text, Markdown: strings.Join(lines, "\n\n")}, nil
+	return &Result{Text: plain.String(), Markdown: markdown.String()}, nil
 }

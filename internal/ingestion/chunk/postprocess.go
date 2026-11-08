@@ -209,7 +209,7 @@ func (o *PostprocessOperator) String() string {
 	}
 	if c.Overlap != nil {
 		enabled := c.Overlap.Enabled == nil || *c.Overlap.Enabled
-		fmt.Fprintf(&b, "  overlap: enabled=%t unit=%s default=%d\n", enabled, c.Overlap.Unit, c.Overlap.Default.Size)
+		fmt.Fprintf(&b, "  overlap: enabled=%t unit=%s default=%d default_unit=%s\n", enabled, c.Overlap.Unit, c.Overlap.Default.Size, c.Overlap.Default.Unit)
 		for _, condition := range c.Overlap.Conditions {
 			fmt.Fprintf(&b, "    %s: %s -> size=%d unit=%s\n", condition.Name, condition.expression.String(), condition.Then.Size, condition.Then.Unit)
 		}

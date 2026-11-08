@@ -25,7 +25,7 @@ import (
 )
 
 /*
- DSL reference — see comment block above for the full JSON structure.
+ DSL reference — see README.md for the JSON structure.
 
  Pipeline stages:
    1. "preprocess"  → chunk.PreprocessOperator

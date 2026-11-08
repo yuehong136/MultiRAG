@@ -92,3 +92,16 @@ func TestOverlapConditionFailureAndDisabled(t *testing.T) {
 		}
 	}
 }
+
+func TestExplainShowsOverlapUnitOverride(t *testing.T) {
+	testsupport.NewCase(t)
+	e := NewChunkEngine()
+	p, err := e.Compile(`{"pipeline":[{"operator":"split"},{"operator":"postprocess","overlap":{"unit":"char","default":{"size":1,"unit":"sentence"}}}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explanation, err := e.Explain(p)
+	if err != nil || !strings.Contains(explanation, "default_unit=sentence") {
+		t.Fatal(explanation, err)
+	}
+}
