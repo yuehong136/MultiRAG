@@ -1,12 +1,16 @@
 package handler
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -249,5 +253,118 @@ func TestAfter10bbeAskStrictDTOAndFailureEnvelope(t *testing.T) {
 		} else if strings.Contains(raw, `"data":true`) || strings.Contains(raw, `"final":true`) {
 			t.Fatal("failed Ask ended successfully", raw)
 		}
+	}
+}
+
+func askHTTPRouter(asker askService, authenticated bool) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	if authenticated {
+		router.Use(func(c *gin.Context) { c.Set("user", &entity.User{ID: "actor"}) })
+	}
+	router.POST("/api/v1/searchbots/ask", NewSearchbotHandlerWithAsk(nil, nil, asker).Ask)
+	return router
+}
+
+func TestAskSSEDeadlineFirstFrameAndCloseHTTP(t *testing.T) {
+	next := make(chan struct{})
+	fake := &after10bbeAsk{run: func(ctx context.Context, actor string, req *service.AskRequest, send func(service.AnswerFrame) error) error {
+		// Preparation may exceed WriteTimeout before the first model frame.
+		select {
+		case <-time.After(150 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if err := send(service.AnswerFrame{Answer: "first"}); err != nil {
+			return err
+		}
+		select {
+		case <-next:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return send(service.AnswerFrame{Answer: "second", Final: true})
+	}}
+	server := streamingHTTPServer(t, askHTTPRouter(fake, true), 40*time.Millisecond)
+	response, err := server.Client().Post(server.URL+"/api/v1/searchbots/ask", "application/json", strings.NewReader(`{"question":"q","kb_ids":["kb"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	first, err := reader.ReadString('\n')
+	if err != nil || !strings.Contains(first, `"answer":"first"`) || response.Header.Get("Content-Type") != "text/event-stream" || response.Header.Get("X-Accel-Buffering") != "no" {
+		t.Fatalf("first frame/headers: %q %v %v", first, response.Header, err)
+	}
+	close(next) // Proves the first frame reached the client before service completion.
+	rest, err := io.ReadAll(reader)
+	if err != nil || !strings.Contains(string(rest), `"answer":"second"`) || !strings.Contains(string(rest), `"data":true`) {
+		t.Fatalf("stream did not terminate successfully: %q %v", rest, err)
+	}
+}
+
+func TestAskSSECancellationHTTP(t *testing.T) {
+	stopped := make(chan struct{})
+	fake := &after10bbeAsk{run: func(ctx context.Context, actor string, req *service.AskRequest, send func(service.AnswerFrame) error) error {
+		defer close(stopped)
+		if err := send(service.AnswerFrame{Answer: "partial"}); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	server := streamingHTTPServer(t, askHTTPRouter(fake, true), 40*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/api/v1/searchbots/ask", strings.NewReader(`{"question":"q","kb_ids":["kb"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(resp.Body)
+	first, err := reader.ReadString('\n')
+	if err != nil || !strings.Contains(first, "partial") {
+		t.Fatalf("no flushed first frame: %q %v", first, err)
+	}
+	cancel()
+	resp.Body.Close()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("client cancellation did not stop Ask service")
+	}
+}
+
+func TestAskSSEPreparationErrorsStayJSONHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		authenticated bool
+		err           error
+		code          common.ErrorCode
+	}{
+		{"unauthenticated", false, nil, common.CodeUnauthorized},
+		{"resource-denied", true, service.ErrDatasetAccessDenied, common.CodeForbidden},
+		{"prepare-failed", true, errors.New("private-provider-body"), common.CodeServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &after10bbeAsk{run: func(context.Context, string, *service.AskRequest, func(service.AnswerFrame) error) error {
+				return tc.err
+			}}
+			server := streamingHTTPServer(t, askHTTPRouter(fake, tc.authenticated), 40*time.Millisecond)
+			resp, err := server.Client().Post(server.URL+"/api/v1/searchbots/ask", "application/json", strings.NewReader(`{"question":"q","kb_ids":["kb"]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			raw, err := io.ReadAll(resp.Body)
+			var payload struct{ Code common.ErrorCode }
+			if err != nil || json.Unmarshal(raw, &payload) != nil || payload.Code != tc.code || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") || strings.Contains(string(raw), "private-provider-body") {
+				t.Fatalf("pre-stream error changed contract: %s %v %v", raw, resp.Header, err)
+			}
+		})
 	}
 }

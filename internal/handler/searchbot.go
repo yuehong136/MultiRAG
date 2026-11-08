@@ -230,6 +230,7 @@ func (h *SearchbotHandler) Ask(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": common.CodeOperatingError, "data": nil, "message": "Ask is unavailable"})
 		return
 	}
+	disableWriteDeadlineForSSE(c)
 	ctx := c.Request.Context()
 	write := func(value any, code common.ErrorCode, message string) error {
 		if err := ctx.Err(); err != nil {

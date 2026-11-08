@@ -287,6 +287,7 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 	// Call service
 	if req.Stream != nil && *req.Stream {
 		// Streaming response
+		disableWriteDeadlineForSSE(c)
 		sender := func(data string) error {
 			if err := c.Request.Context().Err(); err != nil {
 				return err
