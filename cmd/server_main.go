@@ -166,7 +166,7 @@ func startServer(config *server.Config) {
 	modelProviderService := service.NewModelProviderService()
 	chunkService := service.NewChunkServiceWithModels(modelProviderService)
 	askService := service.NewAskService(chunkService, modelProviderService)
-	tenantService := service.NewTenantService()
+	tenantService := service.NewTenantServiceWithModels(modelProviderService)
 	chatService := service.NewChatService()
 	chatSessionService := service.NewChatSessionServiceWithModels(modelProviderService, chunkService)
 	systemService := service.NewSystemService()
@@ -210,6 +210,7 @@ func startServer(config *server.Config) {
 	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, kbHandler, chunkHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, providerHandler, taskHandler)
 	r.SetSearchbotHandler(searchbotHandler)
 	r.SetModelHandler(handler.NewModelHandler(modelProviderService))
+	r.SetFileCommitHandler(handler.NewFileCommitHandler(service.NewFileCommitService()))
 	r.SetPluginHandler(pluginHandler)
 	r.SetDifyRetrievalHandler(difyHandler)
 

@@ -40,6 +40,7 @@ type Router struct {
 	mcpHandler           *handler.MCPHandler
 	searchHandler        *handler.SearchHandler
 	fileHandler          *handler.FileHandler
+	fileCommitHandler    *handler.FileCommitHandler
 	memoryHandler        *handler.MemoryHandler
 	modelHandler         *handler.ModelHandler
 	providerHandler      *handler.ProviderHandler
@@ -94,6 +95,11 @@ func (r *Router) SetModelHandler(modelHandler *handler.ModelHandler) {
 	r.modelHandler = modelHandler
 }
 
+// SetFileCommitHandler binds the snapshot service used by authenticated routes.
+func (r *Router) SetFileCommitHandler(fileCommitHandler *handler.FileCommitHandler) {
+	r.fileCommitHandler = fileCommitHandler
+}
+
 // SetSearchbotHandler binds the model service shared by the server's handlers.
 func (r *Router) SetSearchbotHandler(searchbotHandler *handler.SearchbotHandler) {
 	r.searchbotHandler = searchbotHandler
@@ -139,6 +145,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 	}
 	if r.agentHandler == nil {
 		r.agentHandler = handler.NewAgentHandler(service.NewAgentService())
+	}
+	if r.fileCommitHandler == nil {
+		r.fileCommitHandler = handler.NewFileCommitHandler(service.NewFileCommitService())
 	}
 	if r.searchbotHandler == nil {
 		models := service.NewModelProviderService()
@@ -313,7 +322,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 				provider.GET("/:provider_name/instances", r.providerHandler.ListProviderInstances)
 				provider.GET("/:provider_name/instances/:instance_name", r.providerHandler.ShowProviderInstance)
 				provider.GET("/:provider_name/instances/:instance_name/balance", r.providerHandler.ShowInstanceBalance)
-				provider.GET("/:provider_name/connection", r.providerHandler.CheckConnection)
+				provider.POST("/:provider_name/connection", r.providerHandler.CheckConnection)
 				provider.GET("/:provider_name/instances/:instance_name/connection", r.providerHandler.CheckProviderConnection)
 				provider.GET("/:provider_name/instances/:instance_name/tasks", r.providerHandler.ListTasks)
 				provider.GET("/:provider_name/instances/:instance_name/tasks/:task_id", r.providerHandler.ShowTask)
@@ -356,8 +365,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 
 			models := v1.Group("/models")
 			{
-				models.GET("", r.tenantHandler.GetModels)
-				models.PATCH("", r.tenantHandler.SetModels)
+				models.GET("", r.providerHandler.ListTenantModels)
+				models.GET("/default", r.tenantHandler.GetModels)
+				models.PATCH("/default", r.tenantHandler.SetModels)
 			}
 
 			// File routes (RESTful, aligned with Python /api/v1/files)
@@ -372,6 +382,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 				files.GET("/:id/parent", r.fileHandler.GetParentFolder)
 				files.GET("/:id", r.fileHandler.Download)
 			}
+			handler.RegisterFileCommitRoutes(v1, r.fileCommitHandler)
 
 			// Chat routes (RESTful, aligned with Python /api/v1/chats)
 			chats := v1.Group("/chats")

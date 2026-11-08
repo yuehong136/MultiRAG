@@ -103,6 +103,8 @@ func InitDB() error {
 		&entity.UserTenant{},
 		&entity.File{},
 		&entity.File2Document{},
+		&entity.FileCommit{},
+		&entity.FileCommitItem{},
 		&entity.TenantLLM{},
 		&entity.Chat{},
 		&entity.ChatSession{},
