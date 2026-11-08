@@ -13,18 +13,13 @@ func parseDOCX(a *officeArchive) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	var envelope struct {
-		XMLName xml.Name `xml:"document"`
-	}
-	if err := xml.Unmarshal(data, &envelope); err != nil {
-		return nil, fmt.Errorf("decode DOCX document: %w", err)
-	}
 	d := xml.NewDecoder(bytes.NewReader(data))
 	var plain, markdown strings.Builder
 	count := 0
 	var paragraph strings.Builder
 	inText := false
-	root, body := false, false
+	root := documentRoot{expected: "document"}
+	body := false
 	for {
 		token, err := d.Token()
 		if err == io.EOF {
@@ -33,11 +28,12 @@ func parseDOCX(a *officeArchive) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode DOCX: %w", err)
 		}
+		if err := root.observe(token); err != nil {
+			return nil, err
+		}
 		switch t := token.(type) {
 		case xml.StartElement:
 			switch t.Name.Local {
-			case "document":
-				root = true
 			case "body":
 				body = true
 			case "t":
@@ -75,7 +71,10 @@ func parseDOCX(a *officeArchive) (*Result, error) {
 			}
 		}
 	}
-	if !root || !body {
+	if err := root.complete(); err != nil {
+		return nil, err
+	}
+	if !body {
 		return nil, fmt.Errorf("DOCX requires document body")
 	}
 	return &Result{Text: plain.String(), Markdown: markdown.String()}, nil

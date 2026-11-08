@@ -91,7 +91,7 @@ func drawingText(data []byte) (string, error) {
 	var b strings.Builder
 	inText := false
 	d := xml.NewDecoder(bytes.NewReader(data))
-	root := false
+	root := documentRoot{expected: "sld"}
 	for {
 		token, err := d.Token()
 		if err != nil {
@@ -100,14 +100,11 @@ func drawingText(data []byte) (string, error) {
 			}
 			return "", err
 		}
+		if err := root.observe(token); err != nil {
+			return "", err
+		}
 		switch t := token.(type) {
 		case xml.StartElement:
-			if !root {
-				if t.Name.Local != "sld" {
-					return "", fmt.Errorf("invalid PPTX slide root %q", t.Name.Local)
-				}
-				root = true
-			}
 			if t.Name.Local == "t" {
 				inText = true
 			}
@@ -128,8 +125,8 @@ func drawingText(data []byte) (string, error) {
 			}
 		}
 	}
-	if !root {
-		return "", fmt.Errorf("missing PPTX slide root")
+	if err := root.complete(); err != nil {
+		return "", err
 	}
 	return strings.Join(lines, "\n"), nil
 }

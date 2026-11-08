@@ -51,3 +51,8 @@ header/static-library flags. Those files are test inputs, not production data.
 On macOS, use the release static archive: the tested v0.1.2 dynamic library
 contains an absolute build-machine install name. The build entry point selects
 the prepared static archive without rewriting the library or global caches.
+
+Native extraction performs allocations inside the external library before Go can
+check the returned Text/Markdown size. The result-size limit is not a hard
+native peak-memory bound; compressed Office inputs also receive archive-size
+preflight validation, but native internals are not sandboxed by this package.

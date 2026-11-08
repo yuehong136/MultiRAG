@@ -133,3 +133,28 @@ func TestOfficeRepeatedPartsHaveCumulativeBudget(t *testing.T) {
 		t.Fatal(result, err)
 	}
 }
+
+func TestPPTXRejectsTrailingRootAndOutsideText(t *testing.T) {
+	testsupport.NewCase(t)
+	for _, slide := range []string{`<sld/><bogus><p><t>x</t></p></bogus>`, `<sld/>outside`, `outside<sld/>`} {
+		if result, err := Parse("bad.pptx", slideFixture(t, slide, 1), map[string]string{"lib_type": Builtin}); err == nil || result != nil {
+			t.Errorf("invalid complete slide succeeded: %s", slide)
+		}
+	}
+	result, err := Parse("valid.pptx", slideFixture(t, " \n<!--before--><p:sld xmlns:p=\"urn:slides\"><p:p><p:t>hello</p:t></p:p></p:sld>\n<!--after-->", 1), map[string]string{"lib_type": Builtin})
+	if err != nil || result.Text != "hello" {
+		t.Fatal("valid namespace/comment/whitespace rejected", result, err)
+	}
+}
+
+func TestOfficePartsRequireSingleRoot(t *testing.T) {
+	testsupport.NewCase(t)
+	data := officeFixture(t, map[string]string{"word/document.xml": `<document><body/></document><bogus><p><t>x</t></p></bogus>`})
+	if result, err := Parse("bad.docx", data, map[string]string{"lib_type": Builtin}); err == nil || result != nil {
+		t.Fatal("second DOCX root accepted")
+	}
+	data = officeFixture(t, map[string]string{"xl/workbook.xml": " \n" + `<workbook/><bogus/>`})
+	if result, err := Parse("bad.xlsx", data, map[string]string{"lib_type": Builtin}); err == nil || result != nil {
+		t.Fatal("second workbook root accepted")
+	}
+}

@@ -74,8 +74,33 @@ func (a *officeArchive) decode(name string, v any) error {
 	if err != nil {
 		return err
 	}
-	if err := xml.Unmarshal(data, v); err != nil {
-		return fmt.Errorf("decode %s: %w", name, err)
+	d := xml.NewDecoder(bytes.NewReader(data))
+	decoded := false
+	for {
+		token, err := d.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("decode %s: %w", name, err)
+		}
+		switch t := token.(type) {
+		case xml.StartElement:
+			if decoded {
+				return fmt.Errorf("multiple XML roots in %s", name)
+			}
+			if err := d.DecodeElement(v, &t); err != nil {
+				return fmt.Errorf("decode %s: %w", name, err)
+			}
+			decoded = true
+		case xml.CharData:
+			if strings.Trim(string(t), " \t\r\n") != "" {
+				return fmt.Errorf("text outside XML root in %s", name)
+			}
+		}
+	}
+	if !decoded {
+		return fmt.Errorf("missing XML root in %s", name)
 	}
 	return nil
 }
@@ -92,6 +117,44 @@ func (a *officeArchive) emit(destination *strings.Builder, pieces ...string) err
 	a.outputRemaining -= total
 	for _, piece := range pieces {
 		destination.WriteString(piece)
+	}
+	return nil
+}
+
+// documentRoot validates one complete XML document while a caller reads tokens.
+// Decoder.Token itself permits multiple top-level elements.
+type documentRoot struct {
+	expected string
+	depth    int
+	started  bool
+	finished bool
+}
+
+func (r *documentRoot) observe(token xml.Token) error {
+	switch t := token.(type) {
+	case xml.StartElement:
+		if r.depth == 0 {
+			if r.started || t.Name.Local != r.expected {
+				return fmt.Errorf("expected a single %s root", r.expected)
+			}
+			r.started = true
+		}
+		r.depth++
+	case xml.EndElement:
+		r.depth--
+		if r.depth == 0 {
+			r.finished = true
+		}
+	case xml.CharData:
+		if r.depth == 0 && strings.Trim(string(t), " \t\r\n") != "" {
+			return fmt.Errorf("text outside %s root", r.expected)
+		}
+	}
+	return nil
+}
+func (r *documentRoot) complete() error {
+	if !r.started || !r.finished || r.depth != 0 {
+		return fmt.Errorf("incomplete %s document", r.expected)
 	}
 	return nil
 }
