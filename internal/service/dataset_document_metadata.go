@@ -24,7 +24,7 @@ func (s *DatasetsService) UpdateDocumentMetadataConfig(ctx context.Context, user
 	if userID == "" {
 		return nil, common.CodeAuthenticationError, errors.New("No authorization.")
 	}
-	id, err := normalizeDatasetUUID1(strings.TrimSpace(datasetID))
+	id, err := normalizeDatasetID(strings.TrimSpace(datasetID))
 	if err != nil || strings.TrimSpace(documentID) == "" {
 		return nil, common.CodeArgumentError, errors.New("Invalid dataset or document ID.")
 	}

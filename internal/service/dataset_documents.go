@@ -24,7 +24,7 @@ type DatasetDocuments struct {
 // ListDatasetDocuments applies the current private/team read policy before reading document rows.
 // Configured metadata engines are read once per page; standalone SQL mode reads the document field.
 func (s *DocumentService) ListDatasetDocuments(ctx context.Context, id, user string, page, pageSize int, keywords string, emptyMetadata bool) (*DatasetDocuments, common.ErrorCode, error) {
-	id, err := normalizeDatasetUUID1(strings.TrimSpace(id))
+	id, err := normalizeDatasetID(strings.TrimSpace(id))
 	if err != nil {
 		return nil, common.CodeBadRequest, err
 	}

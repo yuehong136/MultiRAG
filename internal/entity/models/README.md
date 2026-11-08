@@ -158,3 +158,13 @@ JWT routing, instance endpoints/credentials, typed metadata, denial, timeout,
 cancellation and independently unchanged SQL state. `MULTIRAG_DISCOVERY_CLI` adds a
 source-built CLI consumer; provider HTTP is controlled. Case journals record exact
 resources before allocation and independent cleanup readback.
+
+
+Eino callers use `NewEinoChatModel` with a service-authorized `ChatModel`.
+Generation and streaming copy request context and options, preserve explicit
+zero values and reasoning, and reject model overrides that would bypass the
+binding. Nonempty tools and unsupported Eino message forms return
+`ErrUnsupportedCapability`. Closing a stream reader cancels its provider request,
+including a provider stalled before its first delta; callers must close readers.
+Catalog capability labels do not establish driver support or live supplier
+compatibility. Inference checks the binding type and implemented driver surface.

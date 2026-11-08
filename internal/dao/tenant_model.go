@@ -70,3 +70,12 @@ func (dao *TenantModelDAO) GetModelsByInstanceID(instanceID string) ([]*entity.T
 	}
 	return models, nil
 }
+
+func (d *TenantModelDAO) GetModelsByProviderIDsAndInstanceIDsWithContext(ctx context.Context, providers, instances []string) ([]*entity.TenantModel, error) {
+	rows := []*entity.TenantModel{}
+	if len(providers) == 0 || len(instances) == 0 {
+		return rows, nil
+	}
+	err := DB.WithContext(ctx).Where("provider_id IN ? AND instance_id IN ?", providers, instances).Order("model_name, id").Find(&rows).Error
+	return rows, err
+}

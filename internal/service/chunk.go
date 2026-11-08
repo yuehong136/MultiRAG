@@ -600,7 +600,7 @@ func (s *ChunkService) Get(ctx context.Context, req *GetChunkRequest, userID str
 	if req == nil || strings.TrimSpace(req.ChunkID) == "" || strings.TrimSpace(req.DocumentID) == "" || strings.TrimSpace(req.DatasetID) == "" {
 		return nil, ErrInvalidChunkScope
 	}
-	datasetID, err := normalizeDatasetUUID1(req.DatasetID)
+	datasetID, err := normalizeDatasetID(req.DatasetID)
 	if err != nil {
 		return nil, ErrInvalidChunkScope
 	}

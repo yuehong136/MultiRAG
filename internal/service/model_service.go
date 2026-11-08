@@ -29,6 +29,7 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	modelModule "multirag/internal/entity/models"
+	"multirag/internal/utility"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -106,10 +107,7 @@ func (m *ModelProviderService) AddModelProvider(providerName, userID string) (co
 
 	tenantID := tenants[0].TenantID
 
-	providerID, err := generateUUID1Hex()
-	if err != nil {
-		return common.CodeServerError, errors.New("fail to get UUID")
-	}
+	providerID := utility.GenerateToken()
 
 	tenantModelProvider := &entity.TenantModelProvider{
 		ID:           providerID,
@@ -154,9 +152,15 @@ func (m *ModelProviderService) ListProvidersOfTenant(userID string) ([]map[strin
 		return nil, common.CodeServerError, err
 	}
 
-	var result []map[string]interface{}
+	result := []map[string]interface{}{}
 	for _, providerName := range providerNames {
-		provider, err := dao.GetModelProviderManager().GetProviderByName(providerName)
+		if m.providerManager == nil {
+			return nil, common.CodeServerError, errors.New("provider catalog unavailable")
+		}
+		if isExcludedTenantProvider(providerName) || m.providerManager.FindProvider(providerName) == nil {
+			continue
+		}
+		provider, err := m.providerManager.GetProviderByName(providerName)
 		if err != nil {
 			return nil, common.CodeServerError, err
 		}
@@ -234,7 +238,7 @@ func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName
 	if strings.TrimSpace(instanceName) == "" || strings.Contains(instanceName, "@") {
 		return common.CodeBadRequest, fmt.Errorf("invalid instance name")
 	}
-	if strings.TrimSpace(apiKey) == "" && !strings.EqualFold(providerName, "vllm") && !strings.EqualFold(providerName, "ollama") && !strings.EqualFold(providerName, "LM-Studio") && !strings.EqualFold(providerName, "LocalAI") && !strings.EqualFold(providerName, "Xinference") && !strings.EqualFold(providerName, "mineru_local") && !strings.EqualFold(providerName, "PaddleOCR_Local") && !strings.EqualFold(providerName, "ModelScope") {
+	if strings.TrimSpace(apiKey) == "" && !providerAllowsEmptyModelKey(providerName) {
 		return common.CodeBadRequest, fmt.Errorf("API key is required")
 	}
 
@@ -256,10 +260,7 @@ func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName
 		return common.CodeServerError, err
 	}
 
-	instanceID, err := generateUUID1Hex()
-	if err != nil {
-		return common.CodeServerError, errors.New("fail to get UUID")
-	}
+	instanceID := utility.GenerateToken()
 	baseURL := ""
 	if len(baseURLs) > 0 {
 		baseURL = baseURLs[0]
@@ -314,20 +315,20 @@ func (m *ModelProviderService) ListProviderInstances(providerName, userID string
 		return nil, common.CodeServerError, err
 	}
 
-	var result []map[string]interface{}
+	result := []map[string]interface{}{}
 	for _, instance := range instances {
 		region, err := decodeModelInstanceRegion(instance.Extra)
 		if err != nil {
 			return nil, common.CodeServerError, err
 		}
 		result = append(result, map[string]interface{}{
-			"id":           instance.ID,
-			"instanceName": instance.InstanceName,
-			"providerID":   instance.ProviderID,
-			"apiKey":       instance.APIKey,
-			"status":       instance.Status,
-			"region":       region,
-			"extra":        instance.Extra,
+			"id":            instance.ID,
+			"instance_name": instance.InstanceName,
+			"provider_id":   instance.ProviderID,
+			"has_api_key":   instance.APIKey != "",
+			"status":        instance.Status,
+			"region":        region,
+			"extra":         instance.Extra,
 		})
 	}
 
@@ -364,12 +365,12 @@ func (m *ModelProviderService) ShowProviderInstance(providerName, instanceName, 
 	}
 
 	result := map[string]interface{}{
-		"id":           instance.ID,
-		"instanceName": instance.InstanceName,
-		"providerID":   instance.ProviderID,
-		"status":       instance.Status,
-		"region":       region,
-		"extra":        instance.Extra,
+		"id":            instance.ID,
+		"instance_name": instance.InstanceName,
+		"provider_id":   instance.ProviderID,
+		"status":        instance.Status,
+		"region":        region,
+		"extra":         instance.Extra,
 	}
 
 	return result, common.CodeSuccess, nil
@@ -561,10 +562,7 @@ func (m *ModelProviderService) UpdateModelStatus(providerName, instanceName, mod
 		if active {
 			return nil
 		}
-		id, err := generateUUID1Hex()
-		if err != nil {
-			return err
-		}
+		id := utility.GenerateToken()
 		return tx.Create(&entity.TenantModel{ID: id, ProviderID: provider.ID, InstanceID: instance.ID, ModelName: modelName, ModelType: schema.ModelTypes[0], Status: status}).Error
 	})
 }
@@ -875,7 +873,7 @@ func (m *ModelProviderService) bindLegacyModelConfig(ctx context.Context, name s
 	} else if !modelTypeMatches(*legacy.ModelType, modelType) {
 		return nil, "", nil, fmt.Errorf("model type mismatch")
 	}
-	if legacy.APIKey == nil || *legacy.APIKey == "" {
+	if (legacy.APIKey == nil || *legacy.APIKey == "") && !providerAllowsEmptyModelKey(providerInfo.Name) {
 		return nil, "", nil, fmt.Errorf("model API key is missing")
 	}
 	urls := providerInfo.URL
@@ -889,7 +887,11 @@ func (m *ModelProviderService) bindLegacyModelConfig(ctx context.Context, name s
 	if strings.TrimSpace(urls["default"]) == "" && !strings.EqualFold(providerInfo.Name, "Bedrock") {
 		return nil, "", nil, fmt.Errorf("model base URL is missing")
 	}
-	driver, err := modelModule.NewModelFactory().CreateModelDriver(providerInfo.Name, urls, providerInfo.URLSuffix)
+	var factory modelModule.DriverFactory = modelModule.NewModelFactory()
+	if m.driverFactory != nil {
+		factory = m.driverFactory
+	}
+	driver, err := factory.CreateModelDriver(providerInfo.Name, urls, providerInfo.URLSuffix)
 	if err == nil && len(identities) > 0 && identities[0] != nil {
 		*identities[0], err = resolvedEmbeddingIdentity(driver, providerInfo.Name, name, urls["default"], "default", &modelModule.APIConfig{Context: ctx, APIKey: legacy.APIKey})
 		if err != nil {

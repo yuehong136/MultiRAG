@@ -117,7 +117,7 @@ mode follows its existing automatic semicolon behavior.
 ### Dataset chunks and metadata
 
 User-mode chunk reads and updates require the dataset and document identity.
-Dataset references may be UUID1 IDs or exact, unambiguous names. Statements use
+Dataset references may be historical UUIDv1 or random UUIDv4 IDs or exact, unambiguous names. Statements use
 a terminating semicolon; single-command mode adds one when omitted.
 
 ```sql
@@ -523,3 +523,40 @@ the end returns an empty array. Negative, overflowing, repeated, empty or malfor
 parameters fail explicitly. Detail uses `/api/v1/all-models/detail?model_name=...`;
 URL-encode names, including aliases containing slashes. Admin consumers use the
 same paths beneath `/api/v1/admin`. No GET request body is required.
+
+### Numeric model bindings and local ingestion
+
+Inference accepts either a saved positive `tenant_llm` integer ID or the existing
+`model@instance@provider` reference. IDs remain integers through JSON encoding;
+UUID entity IDs are not model binding IDs. The Go service authorizes the owning
+active tenant and model type before using saved credentials or endpoints.
+
+```sql
+CHAT WITH '101' MESSAGE 'hello';
+EMBED TEXT 'hello' WITH '102' DIMENSION 0;
+SET DEFAULT LLM '101';
+LIST DEFAULT MODELS;
+```
+
+Default selection uses `/api/v1/models/default`; the GET response has
+`data.models`. Name selection clears an earlier numeric default for the same
+capability. `/all-models` remains the static catalog, while `/models` lists the
+current tenant's numeric bindings and enabled provider-instance models. Catalog
+rows without a stored numeric binding retain their name reference.
+
+Local transformations require user mode and work without a login or HTTP server:
+
+```sql
+PARSE FILE 'document.docx';
+PARSE FILE 'document.xlsx' WITH 'parser.json';
+CHUNK 'document.txt' WITH 'pipeline.json';
+EXPLAIN CHUNK 'document.txt' WITH 'pipeline.json';
+```
+
+Parser configuration is a JSON string map, for example `{"lib_type":"builtin"}`.
+The default builtin backend extracts DOCX, PPTX and XLSX content. An explicitly
+selected `office_oxide` backend requires its native build. Unsupported formats or
+configuration return an error. `EXPLAIN` compiles the DSL without reading the
+input document. Input documents are bounded at 32 MiB and DSL/config files at
+1 MiB. Results use the selected output formatter. Provider parsing uses the
+separate `PARSE WITH '<model reference or numeric ID>' FILE/URL ...` form.

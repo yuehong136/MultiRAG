@@ -28,8 +28,6 @@ func TestLocalIngestionCommandsFailClosed(t *testing.T) {
 	// These commands need a local ingestion engine. They must not silently use
 	// the provider task API or return a successful placeholder response.
 	for _, input := range []string{
-		`CHUNK 'document.txt' WITH 'options.json';`,
-		`EXPLAIN CHUNK 'document.txt' WITH 'options.json';`,
 		`PARSE FILE 'document.pdf' VISION 'vision' CHAT 'chat' ASR 'asr' OCR 'ocr' EMBED 'embed' DOC_PARSE 'parser';`,
 		`PARSE FILE 'document.pdf' IN DATASET 'knowledge';`,
 	} {

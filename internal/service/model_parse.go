@@ -20,6 +20,9 @@ func (m *ModelProviderService) ParseFile(provider, instance, name, user string, 
 	if err != nil {
 		return nil, code, err
 	}
+	if resolved.ModelName != "" {
+		name = resolved.ModelName
+	}
 	defer cancel()
 	parser, ok := driver.(models.FileParser)
 	if !ok {

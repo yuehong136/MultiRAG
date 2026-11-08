@@ -75,8 +75,12 @@ type ChatConfig struct {
 type APIConfig struct {
 	// Context carries request cancellation; nil uses a bounded background context.
 	Context context.Context
-	APIKey  *string
-	Region  *string
+	// ModelID selects an authorized numeric tenant_llm binding in the service.
+	ModelID *int64 `json:"-"`
+	// ModelName is populated by service resolution, never by a provider response.
+	ModelName string `json:"-"`
+	APIKey    *string
+	Region    *string
 }
 
 // EmbeddingConfig distinguishes retrieval queries from stored documents.

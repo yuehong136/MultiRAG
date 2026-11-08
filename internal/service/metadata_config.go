@@ -190,7 +190,7 @@ func readMetadataParserConfig(tx *gorm.DB, id string) (entity.JSONMap, error) {
 }
 
 func (s *DatasetsService) GetMetadataConfig(ctx context.Context, id, userID string) (map[string]any, common.ErrorCode, error) {
-	id, err := normalizeDatasetUUID1(strings.TrimSpace(id))
+	id, err := normalizeDatasetID(strings.TrimSpace(id))
 	if err != nil {
 		return nil, common.CodeArgumentError, errors.New("Invalid dataset ID.")
 	}
@@ -216,7 +216,7 @@ func (s *DatasetsService) GetMetadataConfig(ctx context.Context, id, userID stri
 }
 
 func (s *DatasetsService) UpdateMetadataConfig(ctx context.Context, id, userID string, req MetadataConfigRequest) (map[string]any, common.ErrorCode, error) {
-	id, err := normalizeDatasetUUID1(strings.TrimSpace(id))
+	id, err := normalizeDatasetID(strings.TrimSpace(id))
 	if err != nil {
 		return nil, common.CodeArgumentError, errors.New("Invalid dataset ID.")
 	}

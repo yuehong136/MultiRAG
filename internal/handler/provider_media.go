@@ -6,15 +6,17 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"multirag/internal/common"
+	"multirag/internal/entity"
 	"multirag/internal/entity/models"
 	"net/http"
 	"slices"
 )
 
 type mediaIdentity struct {
-	ProviderName string `json:"provider_name" binding:"required"`
-	InstanceName string `json:"instance_name" binding:"required"`
-	ModelName    string `json:"model_name" binding:"required"`
+	ModelID      *int64 `json:"model_id"`
+	ProviderName string `json:"provider_name"`
+	InstanceName string `json:"instance_name"`
+	ModelName    string `json:"model_name"`
 }
 type TranscribeAudioRequest struct {
 	mediaIdentity
@@ -75,6 +77,7 @@ func writeMediaEvent(c *gin.Context, event string, data any) error {
 	return nil
 }
 func mediaStream(c *gin.Context, run func(func(any) error) (common.ErrorCode, error)) {
+	disableWriteDeadlineForSSE(c)
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Writer.WriteHeader(http.StatusOK)
@@ -98,12 +101,16 @@ func (h *ProviderHandler) TranscribeAudio(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if err := validateModelSelection(req.ModelID, req.ProviderName, req.InstanceName, req.ModelName); err != nil {
+		jsonError(c, common.CodeBadRequest, err.Error())
+		return
+	}
 	audio, err := models.DecodeMediaData(req.File)
 	if err != nil {
 		jsonError(c, common.CodeBadRequest, err.Error())
 		return
 	}
-	api := &models.APIConfig{Context: c.Request.Context()}
+	api := &models.APIConfig{Context: c.Request.Context(), ModelID: req.ModelID}
 	config := &models.ASRConfig{}
 	if req.ASRConfig != nil {
 		*config = *req.ASRConfig
@@ -130,6 +137,10 @@ func (h *ProviderHandler) TranscribeAudio(c *gin.Context) {
 		config.Language = req.Language
 	}
 	if req.Stream {
+		if code, err := h.modelProviderService.ValidateUserInferenceSelection(req.ProviderName, req.InstanceName, req.ModelName, user, entity.ModelTypeSpeech2Text, api); err != nil {
+			jsonError(c, code, "media model unavailable")
+			return
+		}
 		mediaStream(c, func(send func(any) error) (common.ErrorCode, error) {
 			return h.modelProviderService.TranscribeAudioStream(req.ProviderName, req.InstanceName, req.ModelName, user, audio, api, config, func(r *models.ASRResponse) error { return send(r) })
 		})
@@ -148,7 +159,11 @@ func (h *ProviderHandler) AudioSpeech(c *gin.Context) {
 	if !ok {
 		return
 	}
-	api := &models.APIConfig{Context: c.Request.Context()}
+	if err := validateModelSelection(req.ModelID, req.ProviderName, req.InstanceName, req.ModelName); err != nil {
+		jsonError(c, common.CodeBadRequest, err.Error())
+		return
+	}
+	api := &models.APIConfig{Context: c.Request.Context(), ModelID: req.ModelID}
 	config := &models.TTSConfig{}
 	if req.TTSConfig != nil {
 		*config = *req.TTSConfig
@@ -168,6 +183,10 @@ func (h *ProviderHandler) AudioSpeech(c *gin.Context) {
 		config.Voice = req.Voice
 	}
 	if req.Stream {
+		if code, err := h.modelProviderService.ValidateUserInferenceSelection(req.ProviderName, req.InstanceName, req.ModelName, user, entity.ModelTypeTTS, api); err != nil {
+			jsonError(c, code, "media model unavailable")
+			return
+		}
 		mediaStream(c, func(send func(any) error) (common.ErrorCode, error) {
 			return h.modelProviderService.AudioSpeechStream(req.ProviderName, req.InstanceName, req.ModelName, user, req.Text, api, config, func(r *models.TTSResponse) error { return send(r) })
 		})
@@ -186,6 +205,10 @@ func (h *ProviderHandler) OCRFile(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if err := validateModelSelection(req.ModelID, req.ProviderName, req.InstanceName, req.ModelName); err != nil {
+		jsonError(c, common.CodeBadRequest, err.Error())
+		return
+	}
 	if (req.Content == nil) == (req.URL == nil) {
 		jsonError(c, common.CodeBadRequest, "provide content or URL, exclusively")
 		return
@@ -193,7 +216,7 @@ func (h *ProviderHandler) OCRFile(c *gin.Context) {
 	var data *models.OCRResponse
 	var code common.ErrorCode
 	var err error
-	api := &models.APIConfig{Context: c.Request.Context()}
+	api := &models.APIConfig{Context: c.Request.Context(), ModelID: req.ModelID}
 	config := &models.OCRConfig{Language: req.Language}
 	if req.URL != nil {
 		data, code, err = h.modelProviderService.OCRURL(req.ProviderName, req.InstanceName, req.ModelName, user, *req.URL, api, config)

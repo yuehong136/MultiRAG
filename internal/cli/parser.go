@@ -141,6 +141,8 @@ func (p *Parser) parseAdminCommand() (*Command, error) {
 // parseUserCommand dispatches user-mode commands.
 func (p *Parser) parseUserCommand() (*Command, error) {
 	switch p.curToken.Type {
+	case TokenChunk, TokenExplain:
+		return p.parseLocalChunkCommand()
 	case TokenLogin:
 		return p.parseLoginUser()
 	case TokenLogout:
@@ -232,7 +234,7 @@ func (p *Parser) expectSemicolon() error {
 }
 
 func isKeyword(tokenType int) bool {
-	return tokenType >= TokenLogin && tokenType <= TokenRetrieve
+	return tokenType >= TokenLogin && tokenType <= TokenExplain
 }
 
 // Helper functions for parsing

@@ -36,8 +36,8 @@ func TestDefaultModelCommandsUseModelsEndpoint(t *testing.T) {
 		body   map[string]interface{}
 	}
 	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/models" {
-			t.Errorf("path = %q, want /api/v1/models", r.URL.Path)
+		if r.URL.Path != "/api/v1/models/default" {
+			t.Errorf("path = %q, want /api/v1/models/default", r.URL.Path)
 		}
 		entry := struct {
 			method string
@@ -50,7 +50,7 @@ func TestDefaultModelCommandsUseModelsEndpoint(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
-			_, _ = w.Write([]byte(`{"code":0,"data":[{"model_type":"llm"}],"message":"success"}`))
+			_, _ = w.Write([]byte(`{"code":0,"data":{"models":[{"model_type":"llm"}]},"message":"success"}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"code":0,"message":"success"}`))

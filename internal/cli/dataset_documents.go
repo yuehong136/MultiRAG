@@ -33,8 +33,8 @@ func (r *ListDocumentsResponse) PrintOut() {
 
 func (c *MultiRAGClient) documentDatasetID(reference string) (string, error) {
 	if id, err := uuid.Parse(reference); err == nil {
-		if id.Version() != 1 {
-			return "", fmt.Errorf("dataset ID must be UUID1")
+		if id.Version() != 1 && id.Version() != 4 {
+			return "", fmt.Errorf("dataset ID must be UUIDv1 or UUIDv4")
 		}
 		return strings.ReplaceAll(id.String(), "-", ""), nil
 	}
@@ -66,7 +66,7 @@ func (c *MultiRAGClient) documentDatasetID(reference string) (string, error) {
 				return "", fmt.Errorf("dataset name is ambiguous; use its ID")
 			}
 			id, err := uuid.Parse(dataset.ID)
-			if err != nil || id.Version() != 1 {
+			if err != nil || (id.Version() != 1 && id.Version() != 4) {
 				return "", fmt.Errorf("invalid resolved dataset ID")
 			}
 			match = strings.ReplaceAll(id.String(), "-", "")

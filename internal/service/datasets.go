@@ -21,14 +21,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"strings"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
+	"multirag/internal/utility"
 )
 
 var ErrDatasetAccessDenied = errors.New("dataset is not accessible")
@@ -114,7 +115,7 @@ type CreateDatasetRequest struct {
 func (s *DatasetsService) ListDatasets(id, name string, page, pageSize int, orderby string, desc bool, keywords string, ownerIDs []string, parserID, userID string) ([]map[string]interface{}, int64, common.ErrorCode, error) {
 	id = strings.TrimSpace(id)
 	if id != "" {
-		normalizedID, err := normalizeDatasetUUID1(id)
+		normalizedID, err := normalizeDatasetID(id)
 		if err != nil {
 			return nil, 0, common.CodeDataError, err
 		}
@@ -393,10 +394,7 @@ func (s *DatasetsService) CreateDataset(req *CreateDatasetRequest, tenantID stri
 		embdID = embeddingModel
 	}
 
-	kbID, err := generateUUID1Hex()
-	if err != nil {
-		return nil, common.CodeServerError, errors.New("Internal server error")
-	}
+	kbID := utility.GenerateToken()
 
 	status := string(entity.StatusValid)
 	// Deduplicate name within tenant
@@ -448,9 +446,9 @@ func (s *DatasetsService) DeleteDatasets(ids []string, deleteAll bool, tenantID 
 	normalizedIDs := make([]string, 0, len(ids))
 	seenIDs := make(map[string]struct{}, len(ids))
 
-	// Canonicalize ids once so every downstream DAO call sees the same UUID1 hex format.
+	// Canonicalize ids once so every downstream DAO call sees the same 32-character hex format.
 	for _, id := range ids {
-		normalizedID, err := normalizeDatasetUUID1(strings.TrimSpace(id))
+		normalizedID, err := normalizeDatasetID(strings.TrimSpace(id))
 		if err != nil {
 			return nil, common.CodeDataError, err
 		}
@@ -525,7 +523,7 @@ func (s *DatasetsService) DeleteDatasets(ids []string, deleteAll bool, tenantID 
 
 // GetDataset returns a readable dataset, its document size and public connector metadata.
 func (s *DatasetsService) GetDataset(ctx context.Context, datasetID, userID string) (map[string]interface{}, common.ErrorCode, error) {
-	datasetID, err := normalizeDatasetUUID1(strings.TrimSpace(datasetID))
+	datasetID, err := normalizeDatasetID(strings.TrimSpace(datasetID))
 	if err != nil {
 		return nil, common.CodeDataError, err
 	}
@@ -685,13 +683,13 @@ func validateDatasetParserConfigSize(parserConfig map[string]interface{}) error 
 	return nil
 }
 
-func normalizeDatasetUUID1(id string) (string, error) {
+func normalizeDatasetID(id string) (string, error) {
 	parsedUUID, err := uuid.Parse(id)
 	if err != nil {
-		return "", errors.New("Invalid UUID1 format")
+		return "", errors.New("Invalid dataset ID")
 	}
-	if parsedUUID.Version() != 1 {
-		return "", errors.New("Must be a UUID1 format")
+	if parsedUUID.Version() != 1 && parsedUUID.Version() != 4 {
+		return "", errors.New("Dataset ID must use a historical UUIDv1 or random UUIDv4")
 	}
 	return strings.ReplaceAll(parsedUUID.String(), "-", ""), nil
 }
@@ -735,14 +733,6 @@ func (s *DatasetsService) verifyEmbeddingAvailability(embdID string, tenantID st
 	}
 
 	return false, fmt.Sprintf("Unauthorized model: <%s>", embdID)
-}
-
-func generateUUID1Hex() (string, error) {
-	generatedUUID, err := uuid.NewUUID()
-	if err != nil {
-		return "", err
-	}
-	return strings.ReplaceAll(generatedUUID.String(), "-", ""), nil
 }
 
 func applyAutoMetadataConfig(parserConfig map[string]interface{}, config *AutoMetadataConfig) map[string]interface{} {

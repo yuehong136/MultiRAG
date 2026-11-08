@@ -19,16 +19,10 @@ func (c *MultiRAGClient) ModelInference(cmd *Command, rerank bool) (ResponseIf, 
 	if name == "" && c.CurrentModel != nil {
 		name = c.CurrentModel.Model + "@" + c.CurrentModel.Instance + "@" + c.CurrentModel.Provider
 	}
-	parts := strings.Split(name, "@")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("model must be model@instance@provider")
+	payload, err := modelSelectionPayload(name)
+	if err != nil {
+		return nil, err
 	}
-	for _, part := range parts {
-		if strings.TrimSpace(part) == "" {
-			return nil, fmt.Errorf("empty model identifier")
-		}
-	}
-	payload := map[string]any{"model_name": parts[0], "instance_name": parts[1], "provider_name": parts[2]}
 	path, field, option := "/embeddings", "texts", "dimension"
 	if rerank {
 		path, field, option = "/rerank", "documents", "top_n"

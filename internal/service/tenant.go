@@ -32,6 +32,7 @@ import (
 
 // TenantService tenant service
 type TenantService struct {
+	modelProvider    *ModelProviderService
 	tenantDAO        *dao.TenantDAO
 	userTenantDAO    *dao.UserTenantDAO
 	modelProviderDAO *dao.TenantModelProviderDAO
@@ -306,6 +307,7 @@ func (s *TenantService) InsertMetadataFromFile(ctx context.Context, tenantID, fi
 
 // ModelItem describes one tenant default-model selection.
 type ModelItem struct {
+	ModelID       *int64  `json:"model_id,omitempty"`
 	ModelProvider *string `json:"model_provider"`
 	ModelInstance *string `json:"model_instance"`
 	ModelName     *string `json:"model_name"`
@@ -353,7 +355,7 @@ func (s *TenantService) GetModelInfo(tenantID, defaultModel, modelType string) (
 	if err != nil {
 		return nil, nil, nil, false, err
 	}
-	_, _, _, err = NewModelProviderService().getModelConfig(tenantID, defaultModel, typ)
+	_, _, _, err = s.tenantModels().getModelConfig(tenantID, defaultModel, typ)
 	if errors.Is(err, errModelDisabled) || errors.Is(err, errModelInstanceDisabled) {
 		return &provider, &instance, &name, false, nil
 	}
@@ -405,7 +407,7 @@ func (s *TenantService) checkModelAvailable(tenantID, providerName, instanceName
 	if err != nil {
 		return err
 	}
-	_, _, _, err = NewModelProviderService().getModelConfig(tenantID, modelName+"@"+instanceName+"@"+providerName, typ)
+	_, _, _, err = s.tenantModels().getModelConfig(tenantID, modelName+"@"+instanceName+"@"+providerName, typ)
 	return err
 }
 
@@ -438,5 +440,20 @@ func (s *TenantService) SetTenantDefaultModels(userID, modelProvider, modelInsta
 	}
 
 	defaultModel := fmt.Sprintf("%s@%s@%s", modelName, modelInstance, modelProvider)
-	return s.tenantDAO.Update(ownedTenant.TenantID, map[string]interface{}{modelColumn: defaultModel})
+	numericColumns := map[string]string{"chat": "tenant_llm_id", "embedding": "tenant_embd_id", "rerank": "tenant_rerank_id", "asr": "tenant_asr_id", "image2text": "tenant_img2txt_id", "tts": "tenant_tts_id"}
+	return s.tenantDAO.Update(ownedTenant.TenantID, map[string]interface{}{modelColumn: defaultModel, numericColumns[modelType]: nil})
+}
+
+// NewTenantServiceWithModels shares the authorized catalog and driver factory with
+// inference when an application supplies an explicit model service.
+func NewTenantServiceWithModels(models *ModelProviderService) *TenantService {
+	s := NewTenantService()
+	s.modelProvider = models
+	return s
+}
+func (s *TenantService) tenantModels() *ModelProviderService {
+	if s.modelProvider != nil {
+		return s.modelProvider
+	}
+	return NewModelProviderService()
 }

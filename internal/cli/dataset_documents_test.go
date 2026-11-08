@@ -52,13 +52,13 @@ func TestDatasetDocumentNameResolution(t *testing.T) {
 	if _, err := c.documentDatasetID("knowledge name"); err == nil {
 		t.Fatal("ambiguous dataset name accepted")
 	}
-	for _, id := range []string{"9e235004-bd89-11f1-9fca-acde48001122", "9e235004bd8911f19fcaacde48001122"} {
+	for _, id := range []string{"9e235004-bd89-11f1-9fca-acde48001122", "9e235004bd8911f19fcaacde48001122", "9e235004-bd89-41f1-9fca-acde48001122"} {
 		if _, err := c.documentDatasetID(id); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := c.documentDatasetID("9e235004-bd89-41f1-9fca-acde48001122"); err == nil {
-		t.Fatal("non-UUID1 accepted")
+	if _, err := c.documentDatasetID("9e235004-bd89-71f1-9fca-acde48001122"); err == nil {
+		t.Fatal("unsupported dataset ID version accepted")
 	}
 }
 

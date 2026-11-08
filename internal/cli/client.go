@@ -265,6 +265,10 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.MediaCommand(cmd, "ocr")
 	case "list_dataset_documents":
 		return c.ListDatasetDocuments(cmd)
+	case "user_chunk_command", "user_explain_chunk_command":
+		return c.LocalChunkCommand(cmd)
+	case "user_parse_local_file_command":
+		return c.LocalParseCommand(cmd)
 	case "parse_file_user_command":
 		return c.ParseFileCommand(cmd)
 	case "list_tasks_user_command":

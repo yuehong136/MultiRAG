@@ -17,6 +17,7 @@
 package dao
 
 import (
+	"context"
 	"multirag/internal/entity"
 )
 
@@ -63,4 +64,13 @@ func (dao *TenantModelInstanceDAO) GetByID(id string) (*entity.TenantModelInstan
 func (dao *TenantModelInstanceDAO) DeleteByProviderIDAndInstanceName(providerID, instanceName string) (int64, error) {
 	result := DB.Unscoped().Where("provider_id = ? and instance_name = ?", providerID, instanceName).Delete(&entity.TenantModelInstance{})
 	return result.RowsAffected, result.Error
+}
+
+func (d *TenantModelInstanceDAO) GetByProviderIDsWithContext(ctx context.Context, ids []string) ([]*entity.TenantModelInstance, error) {
+	rows := []*entity.TenantModelInstance{}
+	if len(ids) == 0 {
+		return rows, nil
+	}
+	err := DB.WithContext(ctx).Where("provider_id IN ? AND status = ?", ids, "active").Order("instance_name, id").Find(&rows).Error
+	return rows, err
 }

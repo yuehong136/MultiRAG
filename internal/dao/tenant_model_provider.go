@@ -17,6 +17,7 @@
 package dao
 
 import (
+	"context"
 	"multirag/internal/entity"
 )
 
@@ -71,4 +72,10 @@ func (dao *TenantModelProviderDAO) ListByID(id string) ([]string, error) {
 		Where("tenant_id = ?", id).
 		Pluck("provider_name", &providerNames).Error
 	return providerNames, err
+}
+
+func (d *TenantModelProviderDAO) GetByTenantIDWithContext(ctx context.Context, tenant string) ([]*entity.TenantModelProvider, error) {
+	rows := []*entity.TenantModelProvider{}
+	err := DB.WithContext(ctx).Where("tenant_id = ?", tenant).Order("provider_name, id").Find(&rows).Error
+	return rows, err
 }

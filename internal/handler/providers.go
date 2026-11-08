@@ -609,9 +609,10 @@ func (h *ProviderHandler) EnableOrDisableModel(c *gin.Context) {
 }
 
 type ChatToModelRequest struct {
-	ProviderName string           `json:"provider_name" binding:"required"`
-	InstanceName string           `json:"instance_name" binding:"required"`
-	ModelName    string           `json:"model_name" binding:"required"`
+	ModelID      *int64           `json:"model_id"`
+	ProviderName string           `json:"provider_name"`
+	InstanceName string           `json:"instance_name"`
+	ModelName    string           `json:"model_name"`
 	Message      *string          `json:"message"`
 	Messages     []models.Message `json:"messages"`
 	Stream       *bool            `json:"stream"`
@@ -622,7 +623,7 @@ type ChatToModelRequest struct {
 
 func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 	var req ChatToModelRequest
-	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ProviderName) == "" || strings.TrimSpace(req.InstanceName) == "" || strings.TrimSpace(req.ModelName) == "" {
+	if err := c.ShouldBindJSON(&req); err != nil || validateModelSelection(req.ModelID, req.ProviderName, req.InstanceName, req.ModelName) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    common.CodeBadRequest,
 			"message": "Provider, instance, model and message are required",
@@ -634,7 +635,6 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "message": err.Error()})
 		return
 	}
-	providerName, instanceName := req.ProviderName, req.InstanceName
 
 	user, code, message := GetUser(c)
 	if code != common.CodeSuccess {
@@ -647,7 +647,7 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 		req.Verbosity = nil
 	}
 
-	apiConfig := models.APIConfig{Context: c.Request.Context()}
+	apiConfig := models.APIConfig{Context: c.Request.Context(), ModelID: req.ModelID}
 	chatConfig := models.ChatConfig{
 		Thinking:  req.Thinking,
 		Stream:    req.Stream,
@@ -656,8 +656,14 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 		Verbosity: req.Verbosity,
 	}
 
+	bound, errorCode, err := h.modelProviderService.PrepareUserChatModel(req.ProviderName, req.InstanceName, req.ModelName, user.ID, &apiConfig, &chatConfig)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": errorCode, "message": "Model request failed"})
+		return
+	}
 	// Check if it's a stream request
 	if req.Stream != nil && *req.Stream {
+		disableWriteDeadlineForSSE(c)
 		// Set SSE headers
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
@@ -698,9 +704,9 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 		}
 
 		// Stream response using sender function (best performance, no channel)
-		errorCode, err := h.modelProviderService.ChatToModelStreamWithMessages(providerName, instanceName, req.ModelName, user.ID, messages, &apiConfig, &chatConfig, sender)
+		err := bound.ChatStreamlyWithMessages(messages, nil, sender)
 
-		if errorCode != common.CodeSuccess || err != nil {
+		if err != nil {
 			c.SSEvent("error", "Model stream failed")
 			c.Writer.Flush()
 		}
@@ -708,10 +714,10 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 	}
 
 	// Non-stream response
-	response, errorCode, err := h.modelProviderService.ChatToModelWithMessages(providerName, instanceName, req.ModelName, user.ID, messages, &apiConfig, &chatConfig)
-	if err != nil || errorCode != common.CodeSuccess {
+	response, err := bound.ChatWithMessages(messages, nil)
+	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
-			"code":    errorCode,
+			"code":    common.CodeServerError,
 			"message": "Model request failed",
 		})
 		return

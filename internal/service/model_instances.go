@@ -15,6 +15,7 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
+	"multirag/internal/utility"
 )
 
 var (
@@ -74,7 +75,7 @@ func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModel
 	if strings.TrimSpace(baseURL) == "" && !strings.EqualFold(provider.Name, "Bedrock") {
 		return nil, nil, fmt.Errorf("model base URL is missing")
 	}
-	if instance.APIKey == "" && !strings.EqualFold(provider.Name, "vllm") && !strings.EqualFold(provider.Name, "ollama") && !strings.EqualFold(provider.Name, "LM-Studio") && !strings.EqualFold(provider.Name, "LocalAI") && !strings.EqualFold(provider.Name, "Xinference") && !strings.EqualFold(provider.Name, "mineru_local") && !strings.EqualFold(provider.Name, "PaddleOCR_Local") && !strings.EqualFold(provider.Name, "ModelScope") {
+	if instance.APIKey == "" && !providerAllowsEmptyModelKey(provider.Name) {
 		return nil, nil, fmt.Errorf("model API key is missing")
 	}
 	var factory models.DriverFactory = models.NewModelFactory()
@@ -197,10 +198,7 @@ func (m *ModelProviderService) AddModels(ctx context.Context, providerName, inst
 		if err != nil {
 			return common.CodeServerError, err
 		}
-		id, err := generateUUID1Hex()
-		if err != nil {
-			return common.CodeServerError, err
-		}
+		id := utility.GenerateToken()
 		modelsToCreate = append(modelsToCreate, entity.TenantModel{ID: id, ModelName: request.ModelName, ModelType: types[0], Status: "active", Extra: string(extra)})
 	}
 	err := dao.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -287,6 +285,28 @@ func (m *ModelProviderService) instanceModelDefinitionWithContext(ctx context.Co
 	return model, nil
 }
 func (m *ModelProviderService) userInstanceChatModel(providerName, instanceName, modelName, userID string, apiConfig *models.APIConfig, config *models.ChatConfig) (*models.ChatModel, common.ErrorCode, error) {
+	if apiConfig != nil && apiConfig.ModelID != nil {
+		if providerName != "" || instanceName != "" || modelName != "" || *apiConfig.ModelID <= 0 {
+			return nil, common.CodeBadRequest, fmt.Errorf("select a positive model_id exclusively")
+		}
+		tenantID, err := activeOwnedModelTenant(mediaContext(apiConfig), userID)
+		if err != nil {
+			return nil, common.CodeNotFound, err
+		}
+		bound, err := m.GetChatModelByIDWithContext(mediaContext(apiConfig), tenantID, *apiConfig.ModelID)
+		if err != nil {
+			return nil, common.CodeNotFound, err
+		}
+		if config != nil {
+			selected := *config
+			selected.ModelClass = bound.ModelConfig.ModelClass
+			if selected.Thinking == nil {
+				selected.Thinking = bound.ModelConfig.Thinking
+			}
+			bound.ModelConfig = selected
+		}
+		return bound, common.CodeSuccess, nil
+	}
 	for _, part := range []string{providerName, instanceName, modelName} {
 		if strings.TrimSpace(part) == "" || strings.Contains(part, "@") {
 			return nil, common.CodeBadRequest, fmt.Errorf("invalid model identifier")
@@ -299,7 +319,7 @@ func (m *ModelProviderService) userInstanceChatModel(providerName, instanceName,
 	if len(tenants) == 0 {
 		return nil, common.CodeNotFound, fmt.Errorf("user has no tenants")
 	}
-	bound, err := m.GetChatModel(tenants[0].TenantID, modelName+"@"+instanceName+"@"+providerName)
+	bound, err := m.GetChatModelWithContext(mediaContext(apiConfig), tenants[0].TenantID, modelName+"@"+instanceName+"@"+providerName)
 	if err != nil {
 		return nil, common.CodeDataError, err
 	}
@@ -369,4 +389,9 @@ func normalizeCustomModelTypes(primary string, declared []string) ([]string, err
 		}
 	}
 	return result, nil
+}
+
+// PrepareUserChatModel resolves tenant authorization and credentials without provider IO.
+func (m *ModelProviderService) PrepareUserChatModel(provider, instance, name, user string, api *models.APIConfig, config *models.ChatConfig) (*models.ChatModel, common.ErrorCode, error) {
+	return m.userInstanceChatModel(provider, instance, name, user, api, config)
 }

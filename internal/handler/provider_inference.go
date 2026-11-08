@@ -8,9 +8,10 @@ import (
 )
 
 type EmbedTextRequest struct {
-	ProviderName string   `json:"provider_name" binding:"required"`
-	InstanceName string   `json:"instance_name" binding:"required"`
-	ModelName    string   `json:"model_name" binding:"required"`
+	ModelID      *int64   `json:"model_id"`
+	ProviderName string   `json:"provider_name"`
+	InstanceName string   `json:"instance_name"`
+	ModelName    string   `json:"model_name"`
 	Texts        []string `json:"texts" binding:"required,min=1"`
 	Dimension    int      `json:"dimension" binding:"gte=0"`
 }
@@ -22,11 +23,11 @@ func (h *ProviderHandler) EmbedText(c *gin.Context) {
 		return
 	}
 	var req EmbedTextRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil || validateModelSelection(req.ModelID, req.ProviderName, req.InstanceName, req.ModelName) != nil {
 		jsonError(c, common.CodeBadRequest, "Invalid embedding request")
 		return
 	}
-	response, code, err := h.modelProviderService.EmbedText(req.ProviderName, req.InstanceName, req.ModelName, user.ID, req.Texts, &models.APIConfig{Context: c.Request.Context()}, &models.EmbeddingConfig{Dimension: req.Dimension})
+	response, code, err := h.modelProviderService.EmbedText(req.ProviderName, req.InstanceName, req.ModelName, user.ID, req.Texts, &models.APIConfig{Context: c.Request.Context(), ModelID: req.ModelID}, &models.EmbeddingConfig{Dimension: req.Dimension})
 	if err != nil {
 		jsonError(c, code, "Unable to embed texts")
 		return
@@ -35,9 +36,10 @@ func (h *ProviderHandler) EmbedText(c *gin.Context) {
 }
 
 type RerankDocumentRequest struct {
-	ProviderName string   `json:"provider_name" binding:"required"`
-	InstanceName string   `json:"instance_name" binding:"required"`
-	ModelName    string   `json:"model_name" binding:"required"`
+	ModelID      *int64   `json:"model_id"`
+	ProviderName string   `json:"provider_name"`
+	InstanceName string   `json:"instance_name"`
+	ModelName    string   `json:"model_name"`
 	Query        string   `json:"query" binding:"required"`
 	Documents    []string `json:"documents" binding:"required,min=1"`
 	TopN         int      `json:"top_n" binding:"gte=0"`
@@ -50,11 +52,11 @@ func (h *ProviderHandler) RerankDocument(c *gin.Context) {
 		return
 	}
 	var req RerankDocumentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil || validateModelSelection(req.ModelID, req.ProviderName, req.InstanceName, req.ModelName) != nil {
 		jsonError(c, common.CodeBadRequest, "Invalid rerank request")
 		return
 	}
-	response, code, err := h.modelProviderService.RerankDocument(req.ProviderName, req.InstanceName, req.ModelName, user.ID, req.Query, req.Documents, &models.APIConfig{Context: c.Request.Context()}, &models.RerankConfig{TopN: req.TopN})
+	response, code, err := h.modelProviderService.RerankDocument(req.ProviderName, req.InstanceName, req.ModelName, user.ID, req.Query, req.Documents, &models.APIConfig{Context: c.Request.Context(), ModelID: req.ModelID}, &models.RerankConfig{TopN: req.TopN})
 	if err != nil {
 		jsonError(c, code, "Unable to rerank documents")
 		return

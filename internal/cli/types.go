@@ -171,6 +171,7 @@ const (
 	TokenHost
 	TokenConfig
 	TokenRetrieve
+	TokenExplain
 
 	// Literals
 	TokenIdentifier

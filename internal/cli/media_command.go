@@ -38,16 +38,10 @@ func (c *MultiRAGClient) MediaCommand(cmd *Command, kind string) (ResponseIf, er
 	if name == "" && c.CurrentModel != nil {
 		name = c.CurrentModel.Model + "@" + c.CurrentModel.Instance + "@" + c.CurrentModel.Provider
 	}
-	parts := strings.Split(name, "@")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("model must be model@instance@provider")
+	payload, err := modelSelectionPayload(name)
+	if err != nil {
+		return nil, err
 	}
-	for _, p := range parts {
-		if strings.TrimSpace(p) == "" {
-			return nil, fmt.Errorf("empty model identifier")
-		}
-	}
-	payload := map[string]any{"model_name": parts[0], "instance_name": parts[1], "provider_name": parts[2]}
 	path := "/audio/transcriptions"
 	params := map[string]any{}
 	if raw, ok := cmd.Params["param_str"].(string); ok {
@@ -130,7 +124,7 @@ func (c *MultiRAGClient) MediaCommand(cmd *Command, kind string) (ResponseIf, er
 			return nil, err
 		}
 		if kind == "tts" {
-			return finishSpeechOutput(result, cmd, parts[0], speechConfig)
+			return finishSpeechOutput(result, cmd, name, speechConfig)
 		}
 		return result, nil
 	}
@@ -158,7 +152,7 @@ func (c *MultiRAGClient) MediaCommand(cmd *Command, kind string) (ResponseIf, er
 	}
 	result := &CommonDataResponse{Code: 0, Data: row}
 	if kind == "tts" {
-		return finishSpeechOutput(result, cmd, parts[0], speechConfig)
+		return finishSpeechOutput(result, cmd, name, speechConfig)
 	}
 	return result, nil
 }

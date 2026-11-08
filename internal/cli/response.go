@@ -17,6 +17,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 )
@@ -276,4 +277,45 @@ func (r *MessageResponse) PrintOut() {
 		return
 	}
 	fmt.Println(r.Message)
+}
+
+// DefaultModelsResponse keeps the typed default envelope separate from inventories.
+type DefaultModelsResponse struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		Models []map[string]any `json:"models"`
+	} `json:"data"`
+	Duration     float64
+	outputFormat OutputFormat
+}
+
+func (r *DefaultModelsResponse) Type() string                        { return "default_models" }
+func (r *DefaultModelsResponse) TimeCost() float64                   { return r.Duration }
+func (r *DefaultModelsResponse) SetOutputFormat(format OutputFormat) { r.outputFormat = format }
+func (r *DefaultModelsResponse) PrintOut()                           { PrintTableSimpleByFormat(r.Data.Models, r.outputFormat) }
+
+func (r *DefaultModelsResponse) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Code    *int   `json:"code"`
+		Message string `json:"message"`
+		Data    *struct {
+			Models *[]map[string]any `json:"models"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.Code == nil {
+		return fmt.Errorf("missing default-model response code")
+	}
+	r.Code, r.Message = *wire.Code, wire.Message
+	if r.Code != 0 {
+		return nil
+	}
+	if wire.Data == nil || wire.Data.Models == nil {
+		return fmt.Errorf("missing default-model inventory")
+	}
+	r.Data.Models = *wire.Data.Models
+	return nil
 }

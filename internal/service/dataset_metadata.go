@@ -21,7 +21,7 @@ func (s *DatasetsService) FlattenMetadata(ctx context.Context, ids []string, use
 	seen := map[string]bool{}
 	datasets := []*entity.Knowledgebase{}
 	for _, raw := range ids {
-		id, err := normalizeDatasetUUID1(strings.TrimSpace(raw))
+		id, err := normalizeDatasetID(strings.TrimSpace(raw))
 		if err != nil || seen[id] {
 			return nil, common.CodeDataError, fmt.Errorf("distinct valid dataset IDs are required")
 		}

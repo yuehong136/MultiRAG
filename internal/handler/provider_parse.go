@@ -18,6 +18,10 @@ func (h *ProviderHandler) ParseFile(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if err := validateModelSelection(req.ModelID, req.ProviderName, req.InstanceName, req.ModelName); err != nil {
+		jsonError(c, common.CodeBadRequest, err.Error())
+		return
+	}
 	if (req.Content == nil) == (req.URL == nil) {
 		jsonError(c, common.CodeBadRequest, "provide content or URL exclusively")
 		return
@@ -34,7 +38,7 @@ func (h *ProviderHandler) ParseFile(c *gin.Context) {
 	} else {
 		documentURL = *req.URL
 	}
-	result, code, err := h.modelProviderService.ParseFile(req.ProviderName, req.InstanceName, req.ModelName, user, content, documentURL, &models.APIConfig{Context: c.Request.Context()})
+	result, code, err := h.modelProviderService.ParseFile(req.ProviderName, req.InstanceName, req.ModelName, user, content, documentURL, &models.APIConfig{Context: c.Request.Context(), ModelID: req.ModelID})
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return

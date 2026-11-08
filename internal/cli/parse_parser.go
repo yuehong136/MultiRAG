@@ -18,6 +18,9 @@ func (p *Parser) finishParseCommand() error {
 }
 
 func (p *Parser) parseFileCommand() (*Command, error) {
+	if p.curToken.Type == TokenFile {
+		return p.parseLocalFileCommand()
+	}
 	cmd := NewCommand("parse_file_user_command")
 	if p.curToken.Type == TokenWith {
 		p.nextToken()
@@ -25,14 +28,8 @@ func (p *Parser) parseFileCommand() (*Command, error) {
 		if err != nil {
 			return nil, err
 		}
-		parts := strings.Split(name, "@")
-		if len(parts) != 3 {
-			return nil, fmt.Errorf("model must be model@instance@provider")
-		}
-		for _, part := range parts {
-			if strings.TrimSpace(part) == "" {
-				return nil, fmt.Errorf("empty model identifier")
-			}
+		if _, err := modelSelectionPayload(name); err != nil {
+			return nil, err
 		}
 		cmd.Params["composite_model_name"] = name
 		p.nextToken()

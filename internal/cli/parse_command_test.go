@@ -14,7 +14,7 @@ func TestParseAndProviderTaskSyntax(t *testing.T) {
 	for input, kind := range map[string]string{
 		"PARSE WITH 'MinerU2.5@one@Gitee' FILE 'document.pdf';":                 "parse_file_user_command",
 		"PARSE WITH 'MinerU2.5@one@Gitee' URL 'https://files.invalid/doc.pdf';": "parse_file_user_command",
-		"PARSE FILE 'document.pdf';":                                            "parse_file_user_command",
+		"PARSE FILE 'document.pdf';":                                            "user_parse_local_file_command",
 		"LIST 'one@Gitee' TASKS;":                                               "list_tasks_user_command",
 		"SHOW 'one@Gitee' TASK 'job-1';":                                        "show_task_user_command",
 	} {

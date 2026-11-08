@@ -18,6 +18,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -47,7 +48,7 @@ func (h *TenantHandler) GetModels(c *gin.Context) {
 		return
 	}
 
-	defaultModels, err := h.tenantService.ListTenantDefaultModels(user.ID)
+	defaultModels, err := h.tenantService.ListTenantDefaultModelsWithContext(c.Request.Context(), user.ID)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeExceptionError,
@@ -57,26 +58,22 @@ func (h *TenantHandler) GetModels(c *gin.Context) {
 		return
 	}
 	if defaultModels == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    common.CodeDataError,
-			"message": "No default models",
-			"data":    nil,
-		})
-		return
+		defaultModels = []service.ModelItem{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    common.CodeSuccess,
 		"message": "success",
-		"data":    defaultModels,
+		"data":    gin.H{"models": defaultModels},
 	})
 }
 
 // SetModelRequest is the payload used to select a tenant default model.
 type SetModelRequest struct {
-	ModelProvider string `json:"model_provider" binding:"required"`
-	ModelInstance string `json:"model_instance" binding:"required"`
-	ModelName     string `json:"model_name" binding:"required"`
+	ModelID       *int64 `json:"model_id"`
+	ModelProvider string `json:"model_provider"`
+	ModelInstance string `json:"model_instance"`
+	ModelName     string `json:"model_name"`
 	ModelType     string `json:"model_type" binding:"required"`
 }
 
@@ -98,12 +95,22 @@ func (h *TenantHandler) SetModels(c *gin.Context) {
 		return
 	}
 
-	if err := h.tenantService.SetTenantDefaultModels(user.ID, req.ModelProvider, req.ModelInstance, req.ModelName, req.ModelType); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    common.CodeExceptionError,
-			"message": err.Error(),
-			"data":    false,
-		})
+	var err error
+	if req.ModelID != nil {
+		if e := validateModelSelection(req.ModelID, req.ModelProvider, req.ModelInstance, req.ModelName); e != nil {
+			jsonError(c, common.CodeBadRequest, e.Error())
+			return
+		}
+		err = h.tenantService.SetTenantDefaultModelByID(c.Request.Context(), user.ID, req.ModelType, *req.ModelID)
+	} else {
+		if strings.TrimSpace(req.ModelProvider) == "" || strings.TrimSpace(req.ModelInstance) == "" || strings.TrimSpace(req.ModelName) == "" {
+			jsonError(c, common.CodeBadRequest, "model selection required")
+			return
+		}
+		err = h.tenantService.SetTenantDefaultModels(user.ID, req.ModelProvider, req.ModelInstance, req.ModelName, req.ModelType)
+	}
+	if err != nil {
+		jsonError(c, common.CodeDataError, "default model unavailable")
 		return
 	}
 

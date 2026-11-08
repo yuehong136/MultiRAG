@@ -747,6 +747,17 @@ func (p *Parser) parseSetDefault() (*Command, error) {
 		return nil, err
 	}
 	p.nextToken()
+	if p.curToken.Type == TokenSemicolon || p.curToken.Type == TokenEOF {
+		if _, err := modelSelectionPayload(modelProvider); err != nil {
+			return nil, err
+		}
+		cmd := NewCommand("set_default_model")
+		cmd.Params["model_type"], cmd.Params["model_selector"] = modelType, modelProvider
+		if err := p.expectSemicolon(); err != nil {
+			return nil, err
+		}
+		return cmd, nil
+	}
 	modelInstance, err := p.parseQuotedString()
 	if err != nil {
 		return nil, err

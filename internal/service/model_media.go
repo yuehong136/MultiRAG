@@ -31,7 +31,7 @@ func (m *ModelProviderService) mediaModel(provider, instance, name, user string,
 		cancel()
 		return nil, nil, nil, common.CodeServerError, err
 	}
-	driver, resolved, code, err := m.userInferenceModel(provider, instance, name, user, typ, &models.APIConfig{Context: ctx})
+	driver, resolved, code, err := m.userInferenceModel(provider, instance, name, user, typ, &models.APIConfig{Context: ctx, ModelID: modelIDFromConfig(api)})
 	if err != nil {
 		cancel()
 		return nil, nil, nil, code, err
@@ -62,6 +62,9 @@ func (m *ModelProviderService) TranscribeAudio(provider, instance, name, user st
 	driver, resolved, cancel, code, err := m.mediaModel(provider, instance, name, user, entity.ModelTypeSpeech2Text, api)
 	if err != nil {
 		return nil, code, err
+	}
+	if resolved.ModelName != "" {
+		name = resolved.ModelName
 	}
 	defer cancel()
 	capability, ok := driver.(models.ASRDriver)
@@ -95,6 +98,9 @@ func (m *ModelProviderService) AudioSpeech(provider, instance, name, user, text 
 	driver, resolved, cancel, code, err := m.mediaModel(provider, instance, name, user, entity.ModelTypeTTS, api)
 	if err != nil {
 		return nil, code, err
+	}
+	if resolved.ModelName != "" {
+		name = resolved.ModelName
 	}
 	defer cancel()
 	capability, ok := driver.(models.TTSDriver)
@@ -149,6 +155,9 @@ func (m *ModelProviderService) ocrInput(provider, instance, name, user string, c
 	if err != nil {
 		return nil, code, err
 	}
+	if resolved.ModelName != "" {
+		name = resolved.ModelName
+	}
 	defer cancel()
 
 	cfg := models.OCRConfig{}
@@ -195,6 +204,9 @@ func (m *ModelProviderService) TranscribeAudioStream(provider, instance, name, u
 	driver, resolved, cancel, code, err := m.mediaModel(provider, instance, name, user, entity.ModelTypeSpeech2Text, api)
 	if err != nil {
 		return code, err
+	}
+	if resolved.ModelName != "" {
+		name = resolved.ModelName
 	}
 	defer cancel()
 	capability, ok := driver.(models.ASRStreamDriver)
@@ -253,6 +265,9 @@ func (m *ModelProviderService) AudioSpeechStream(provider, instance, name, user,
 	driver, resolved, cancel, code, err := m.mediaModel(provider, instance, name, user, entity.ModelTypeTTS, api)
 	if err != nil {
 		return code, err
+	}
+	if resolved.ModelName != "" {
+		name = resolved.ModelName
 	}
 	defer cancel()
 	capability, ok := driver.(models.TTSStreamDriver)

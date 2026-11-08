@@ -1152,19 +1152,15 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
-	var providerName, instanceName, modelName string
-	if compositeModelName, ok := cmd.Params["model_name"].(string); ok && compositeModelName != "" {
-		names := strings.Split(compositeModelName, "@")
-		if len(names) != 3 {
-			return nil, fmt.Errorf("model name must be in format 'model@instance@provider'")
-		}
-		modelName, instanceName, providerName = names[0], names[1], names[2]
+	var selection string
+	if raw, ok := cmd.Params["model_name"].(string); ok && raw != "" {
+		selection = raw
 	} else if c.CurrentModel != nil {
-		providerName = c.CurrentModel.Provider
-		instanceName = c.CurrentModel.Instance
-		modelName = c.CurrentModel.Model
-	} else {
-		return nil, fmt.Errorf("model name not provided and no current model set. Use 'use model' command first")
+		selection = c.CurrentModel.Model + "@" + c.CurrentModel.Instance + "@" + c.CurrentModel.Provider
+	}
+	payload, err := modelSelectionPayload(selection)
+	if err != nil {
+		return nil, err
 	}
 
 	message, _ := cmd.Params["message"].(string)
@@ -1181,14 +1177,8 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 		return nil, err
 	}
 	url := "/chat/completions"
-	payload := map[string]interface{}{
-		"provider_name": providerName,
-		"instance_name": instanceName,
-		"model_name":    modelName,
-		"messages":      messages,
-		"stream":        stream,
-		"thinking":      thinking,
-	}
+	payload["messages"], payload["stream"], payload["thinking"] = messages, stream, thinking
+
 	if thinking {
 		payload["effort"] = effort
 		payload["verbosity"] = verbosity

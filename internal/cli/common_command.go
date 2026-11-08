@@ -379,26 +379,32 @@ func (c *MultiRAGClient) SetDefaultModel(cmd *Command) (ResponseIf, error) {
 	if !ok {
 		return nil, fmt.Errorf("model_type not provided")
 	}
-	modelProvider, ok := cmd.Params["model_provider"].(string)
-	if !ok {
-		return nil, fmt.Errorf("model_provider not provided")
-	}
-	modelInstance, ok := cmd.Params["model_instance"].(string)
-	if !ok {
-		return nil, fmt.Errorf("model_instance not provided")
-	}
-	modelName, ok := cmd.Params["model_name"].(string)
-	if !ok {
-		return nil, fmt.Errorf("model_name not provided")
+	payload := map[string]any{"model_type": modelType}
+	if raw, ok := cmd.Params["model_selector"].(string); ok {
+		selected, err := modelSelectionPayload(raw)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range selected {
+			if k == "provider_name" {
+				k = "model_provider"
+			}
+			if k == "instance_name" {
+				k = "model_instance"
+			}
+			payload[k] = v
+		}
+	} else {
+		for _, k := range []string{"model_provider", "model_instance", "model_name"} {
+			value, ok := cmd.Params[k].(string)
+			if !ok || value == "" {
+				return nil, fmt.Errorf("%s not provided", k)
+			}
+			payload[k] = value
+		}
 	}
 
-	payload := map[string]interface{}{
-		"model_type":     modelType,
-		"model_provider": modelProvider,
-		"model_instance": modelInstance,
-		"model_name":     modelName,
-	}
-	resp, err := c.HTTPClient.Request("PATCH", "/models", "web", nil, payload)
+	resp, err := c.HTTPClient.Request("PATCH", "/models/default", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to set default model: %w", err)
 	}
@@ -418,7 +424,7 @@ func (c *MultiRAGClient) SetDefaultModel(cmd *Command) (ResponseIf, error) {
 }
 
 func (c *MultiRAGClient) ListDefaultModels(cmd *Command) (ResponseIf, error) {
-	resp, err := c.HTTPClient.Request("GET", "/models", "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/models/default", "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list default models: %w", err)
 	}
@@ -426,7 +432,7 @@ func (c *MultiRAGClient) ListDefaultModels(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("failed to list default models: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
 	}
 
-	var result CommonResponse
+	var result DefaultModelsResponse
 	if err = json.Unmarshal(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("failed to list default models: invalid JSON (%w)", err)
 	}
