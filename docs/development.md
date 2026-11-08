@@ -91,7 +91,8 @@ Go 文件解析默认使用内置 OOXML 解析器。需要可选的 office_oxide
 预先准备对应平台的头文件与动态库，再设置 `MULTIRAG_GO_BUILD_TAGS=office_oxide` 和
 `OFFICE_OXIDE_PREFIX=/absolute/path/to/office_oxide` 执行 `./build.sh --go`。
 prefix 下需有 `include/office_oxide_c/office_oxide.h` 以及 `lib/liboffice_oxide.so`
-（macOS 为 `.dylib`）；脚本只消费这些资源，缺失时直接失败。
+（macOS 为 `.a`，链接 Security/CoreFoundation 等系统库）。0.1.2 的 macOS 发布动态库
+带构建机绝对安装路径，脚本使用同包静态库；缺失所需资源时直接失败。
 
 ### 构建三个入口
 

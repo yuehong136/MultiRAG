@@ -61,7 +61,7 @@ configure_office_oxide() {
     local prefix="${OFFICE_OXIDE_PREFIX:-}"
     local library
     case "$(uname -s)" in
-        Darwin) library="liboffice_oxide.dylib" ;;
+        Darwin) library="liboffice_oxide.a" ;;
         Linux) library="liboffice_oxide.so" ;;
         *) echo "office_oxide is not supported on this platform" >&2; return 1 ;;
     esac
@@ -70,7 +70,12 @@ configure_office_oxide() {
         return 1
     fi
     export CGO_CFLAGS="${CGO_CFLAGS:+$CGO_CFLAGS }-I$prefix/include/office_oxide_c"
-    export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-L$prefix/lib -loffice_oxide -Wl,-rpath,$prefix/lib"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        # The 0.1.2 dylib records its release runner's absolute install_name.
+        export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }$prefix/lib/$library -framework Security -framework CoreFoundation -liconv -lpthread -lm"
+    else
+        export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-L$prefix/lib -loffice_oxide -Wl,-rpath,$prefix/lib"
+    fi
 }
 
 # Build C++ static library

@@ -37,3 +37,27 @@ def test_go_launcher_returns_child_failure_and_stops_sibling(tmp_path: Path, fir
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
         journal.event("process-cleanup-readback", pid=pid, absent=True)
+
+
+@pytest.mark.parametrize("platform,library", [("Darwin", "liboffice_oxide.a"), ("Linux", "liboffice_oxide.so")])
+def test_optional_office_build_uses_prepared_platform_library(tmp_path: Path, platform: str, library: str) -> None:
+    """A flag/config check; native parser execution is covered separately."""
+    prefix = tmp_path / "office"
+    (prefix / "include/office_oxide_c").mkdir(parents=True)
+    (prefix / "lib").mkdir()
+    (prefix / "include/office_oxide_c/office_oxide.h").touch()
+    (prefix / "lib" / library).touch()
+    build = Path(__file__).resolve().parents[2] / "build.sh"
+    command = [
+        "bash",
+        "-c",
+        f'source {shlex.quote(str(build))}\nuname() {{ echo {platform}; }}\nMULTIRAG_GO_BUILD_TAGS=office_oxide\nOFFICE_OXIDE_PREFIX={shlex.quote(str(prefix))}\nconfigure_office_oxide\necho "$CGO_CFLAGS"\necho "$CGO_LDFLAGS"',
+    ]
+    result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, check=True, timeout=5)
+    assert f"-I{prefix}/include/office_oxide_c" in result.stdout
+    if platform == "Darwin":
+        assert str(prefix / "lib" / library) in result.stdout
+        assert "-framework Security -framework CoreFoundation -liconv" in result.stdout
+        assert "-loffice_oxide" not in result.stdout
+    else:
+        assert f"-L{prefix}/lib -loffice_oxide -Wl,-rpath,{prefix}/lib" in result.stdout
