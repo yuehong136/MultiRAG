@@ -216,7 +216,7 @@ def required_services(paths: list[Path]) -> set[str]:
         if path.name == "test_channel_managed_transports.py":
             required.update(("postgresql", "redis"))
             continue
-        if path.name == "test_file_commits.py":
+        if path.name in {"test_file_commits.py", "file_commit_go_acceptance.py"}:
             required.update(("postgresql", "minio"))
             continue
         if path.name == "test_connector_task_controls.py":
