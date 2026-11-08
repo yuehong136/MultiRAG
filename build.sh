@@ -53,6 +53,26 @@ check_go_deps() {
     echo "✓ Required tools are available"
 }
 
+configure_office_oxide() {
+    case ",${MULTIRAG_GO_BUILD_TAGS// /,}," in
+        *,office_oxide,*) ;;
+        *) return 0 ;;
+    esac
+    local prefix="${OFFICE_OXIDE_PREFIX:-}"
+    local library
+    case "$(uname -s)" in
+        Darwin) library="liboffice_oxide.dylib" ;;
+        Linux) library="liboffice_oxide.so" ;;
+        *) echo "office_oxide is not supported on this platform" >&2; return 1 ;;
+    esac
+    if [ -z "$prefix" ] || [ ! -f "$prefix/include/office_oxide_c/office_oxide.h" ] || [ ! -f "$prefix/lib/$library" ]; then
+        echo "Set OFFICE_OXIDE_PREFIX to a prepared office_oxide 0.1.2 installation for the office_oxide build tag." >&2
+        return 1
+    fi
+    export CGO_CFLAGS="${CGO_CFLAGS:+$CGO_CFLAGS }-I$prefix/include/office_oxide_c"
+    export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-L$prefix/lib -loffice_oxide -Wl,-rpath,$prefix/lib"
+}
+
 # Build C++ static library
 build_cpp() {
     print_section "Building C++ static library"
@@ -79,6 +99,9 @@ build_go() {
     print_section "Building Go services and CLI"
     
     cd "$PROJECT_ROOT"
+
+    MULTIRAG_GO_BUILD_TAGS="${MULTIRAG_GO_BUILD_TAGS:-}"
+    configure_office_oxide
     
     # Check if C++ library exists
     if [ ! -f "$BUILD_DIR/librag_tokenizer_c_api.a" ]; then
@@ -98,9 +121,9 @@ build_go() {
     
     mkdir -p "$PROJECT_ROOT/bin"
     echo "Building Go binaries: $MultiRAG_SERVER_BINARY, $ADMIN_SERVER_BINARY, and $MULTIRAG_CLI_BINARY"
-    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -o "$MultiRAG_SERVER_BINARY" ./cmd/server_main.go
-    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -o "$ADMIN_SERVER_BINARY" ./cmd/admin_server.go
-    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -o "$MULTIRAG_CLI_BINARY" ./cmd/multirag_cli.go
+    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -tags "$MULTIRAG_GO_BUILD_TAGS" -o "$MultiRAG_SERVER_BINARY" ./cmd/server_main.go
+    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -tags "$MULTIRAG_GO_BUILD_TAGS" -o "$ADMIN_SERVER_BINARY" ./cmd/admin_server.go
+    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -tags "$MULTIRAG_GO_BUILD_TAGS" -o "$MULTIRAG_CLI_BINARY" ./cmd/multirag_cli.go
 
     if [ ! -f "$MultiRAG_SERVER_BINARY" ]; then
         echo -e "${RED}Error: Failed to build MultiRAG server binary${NC}"
@@ -136,23 +159,38 @@ clean() {
 
 # Run the server
 run() {
-    if [ ! -f "$ADMIN_SERVER_BINARY" ]; then
+    if [ ! -x "$ADMIN_SERVER_BINARY" ] || [ ! -x "$MultiRAG_SERVER_BINARY" ]; then
         echo -e "${RED}Error: Binary not found. Build first with --all or --go${NC}"
         exit 1
     fi
 
+    cd "$PROJECT_ROOT"
+    local admin_pid api_pid ended status=0
+    cleanup_servers() {
+        kill "$admin_pid" "$api_pid" 2>/dev/null || true
+        wait "$admin_pid" 2>/dev/null || true
+        wait "$api_pid" 2>/dev/null || true
+    }
     print_section "Starting ADMIN server"
-    cd "$PROJECT_ROOT"
-    ./admin_server
-
-    if [ ! -f "$MultiRAG_SERVER_BINARY" ]; then
-        echo -e "${RED}Error: Binary not found. Build first with --all or --go${NC}"
-        exit 1
-    fi
-    
+    "$ADMIN_SERVER_BINARY" &
+    admin_pid=$!
     print_section "Starting server"
-    cd "$PROJECT_ROOT"
-    ./server_main
+    "$MultiRAG_SERVER_BINARY" &
+    api_pid=$!
+    trap cleanup_servers EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    while kill -0 "$admin_pid" 2>/dev/null && kill -0 "$api_pid" 2>/dev/null; do
+        sleep 0.1
+    done
+    ended="$api_pid"
+    if ! kill -0 "$admin_pid" 2>/dev/null; then
+        ended="$admin_pid"
+    fi
+    wait "$ended" || status=$?
+    cleanup_servers
+    trap - EXIT INT TERM
+    return "$status"
 }
 
 # Show help
@@ -182,6 +220,7 @@ DEPENDENCIES:
     - go >= 1.25 (see go.mod and the pinned CI toolchain)
     - g++ with C++17/23 support
     - libpcre2-dev
+    - optional office_oxide 0.1.2: MULTIRAG_GO_BUILD_TAGS=office_oxide and OFFICE_OXIDE_PREFIX
 EOF
 }
 
@@ -225,4 +264,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

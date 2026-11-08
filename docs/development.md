@@ -87,6 +87,12 @@ Apple Silicon 的 `/opt/homebrew/lib/libpcre2-8.a` 或 Intel 的
 `/usr/local/lib/libpcre2-8.a`；自定义 PCRE2 路径还需与 CGO 声明一致。
 不要跨平台复用静态库；源码、依赖或工具链变化后重建 native 库，再重新链接 Go 消费者。
 
+Go 文件解析默认使用内置 OOXML 解析器。需要可选的 office_oxide 0.1.2 时，
+预先准备对应平台的头文件与动态库，再设置 `MULTIRAG_GO_BUILD_TAGS=office_oxide` 和
+`OFFICE_OXIDE_PREFIX=/absolute/path/to/office_oxide` 执行 `./build.sh --go`。
+prefix 下需有 `include/office_oxide_c/office_oxide.h` 以及 `lib/liboffice_oxide.so`
+（macOS 为 `.dylib`）；脚本只消费这些资源，缺失时直接失败。
+
 ### 构建三个入口
 
 在依赖已就绪的 Linux 或 macOS 环境中，首次构建：
@@ -121,6 +127,9 @@ CGO_ENABLED=1 go build -o /absolute/path/to/owned-bin/multirag_cli ./cmd/multira
 
 `./build.sh --clean` 删除当前 checkout 的三个 binary 和 native 构建目录。
 仅在确认它们属于本任务时执行，避免清理共享工作目录中的他人产物。
+
+`./build.sh --run` 构建后从 `bin/` 同时启动 API 与管理服务；任一进程退出时，
+脚本停止并等待另一个自有子进程，返回先退出进程的状态。启动就绪仍需检查服务端点。
 
 ### 本地服务与 CLI
 
