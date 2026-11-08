@@ -29,6 +29,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	"gorm.io/gorm"
@@ -41,6 +42,9 @@ import (
 type AgentService struct {
 	canvasDAO     *dao.UserCanvasDAO
 	userTenantDAO *dao.UserTenantDAO
+	runClient     agentRedisProvider
+	modelResolver agentModelResolver
+	runID         func() string
 }
 
 // NewAgentService create agent service
@@ -48,6 +52,9 @@ func NewAgentService() *AgentService {
 	return &AgentService{
 		canvasDAO:     dao.NewUserCanvasDAO(),
 		userTenantDAO: dao.NewUserTenantDAO(),
+		runClient:     agentRedisClient,
+		modelResolver: resolveAgentModel,
+		runID:         func() string { return strings.ReplaceAll(uuid.NewString(), "-", "") },
 	}
 }
 
