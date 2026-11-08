@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -90,7 +89,7 @@ func drawingText(data []byte) (string, error) {
 	var lines []string
 	var b strings.Builder
 	inText := false
-	d := xml.NewDecoder(bytes.NewReader(data))
+	d := newOfficeXMLDecoder(data)
 	root := documentRoot{expected: "sld"}
 	for {
 		token, err := d.Token()

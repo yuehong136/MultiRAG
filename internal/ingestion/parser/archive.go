@@ -74,7 +74,7 @@ func (a *officeArchive) decode(name string, v any) error {
 	if err != nil {
 		return err
 	}
-	d := xml.NewDecoder(bytes.NewReader(data))
+	d := newOfficeXMLDecoder(data)
 	decoded := false
 	for {
 		token, err := d.Token()
@@ -157,4 +157,10 @@ func (r *documentRoot) complete() error {
 		return fmt.Errorf("incomplete %s document", r.expected)
 	}
 	return nil
+}
+
+// XML permits a UTF-8 BOM only at the start of the part. Do not relax the
+// root/outside-text validation or strip BOMs appearing inside/after a document.
+func newOfficeXMLDecoder(data []byte) *xml.Decoder {
+	return xml.NewDecoder(bytes.NewReader(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})))
 }

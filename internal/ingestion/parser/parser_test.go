@@ -158,3 +158,31 @@ func TestOfficePartsRequireSingleRoot(t *testing.T) {
 		t.Fatal("second workbook root accepted")
 	}
 }
+
+func TestOfficeXMLAcceptsLeadingUTF8BOM(t *testing.T) {
+	testsupport.NewCase(t)
+	bom := "\xef\xbb\xbf"
+	cases := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"bom.docx", officeFixture(t, map[string]string{"word/document.xml": bom + `<document><body><p><t>hello</t></p></body></document>`}), "hello"},
+		{"bom.pptx", slideFixture(t, bom+`<sld><p><t>hello</t></p></sld>`, 1), "hello"},
+		{"bom.xlsx", officeFixture(t, map[string]string{
+			"xl/workbook.xml":            bom + `<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet" r:id="s"/></sheets></workbook>`,
+			"xl/_rels/workbook.xml.rels": bom + `<Relationships><Relationship Id="s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet.xml"/></Relationships>`,
+			"xl/worksheets/sheet.xml":    bom + `<worksheet><sheetData><row><c r="A1" t="inlineStr"><is><t>hello</t></is></c></row></sheetData></worksheet>`,
+		}), "Sheet\nA1=hello"},
+	}
+	for _, c := range cases {
+		result, err := Parse(c.name, c.data, map[string]string{"lib_type": Builtin})
+		if err != nil || result.Text != c.want {
+			t.Errorf("%s BOM rejected: %#v %v", c.name, result, err)
+		}
+	}
+	// A BOM after the root is not XML whitespace and remains invalid.
+	if result, err := Parse("outside.pptx", slideFixture(t, `<sld/>`+bom, 1), map[string]string{"lib_type": Builtin}); err == nil || result != nil {
+		t.Fatal("non-leading BOM treated as XML whitespace")
+	}
+}

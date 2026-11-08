@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -13,7 +12,7 @@ func parseDOCX(a *officeArchive) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := xml.NewDecoder(bytes.NewReader(data))
+	d := newOfficeXMLDecoder(data)
 	var plain, markdown strings.Builder
 	count := 0
 	var paragraph strings.Builder
