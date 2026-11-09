@@ -17,12 +17,8 @@
 package dao
 
 import (
-	"errors"
-	"strings"
-
-	"gorm.io/gorm"
-
 	"multirag/internal/entity"
+	"strings"
 )
 
 // SearchDAO search data access object
@@ -41,16 +37,16 @@ func (dao *SearchDAO) ListByTenantIDs(tenantIDs []string, userID string, page, p
 	// Build query with join to user table for nickname and avatar
 	query := DB.Model(&entity.Search{}).
 		Select(`
-			t_ai_search.*,
-			t_ai_users.nickname,
-			t_ai_users.avatar as tenant_avatar
+			search.*,
+			user.nickname,
+			user.avatar as tenant_avatar
 		`).
-		Joins("LEFT JOIN t_ai_users ON t_ai_search.tenant_id = t_ai_users.id").
-		Where("(t_ai_search.tenant_id IN ? OR t_ai_search.tenant_id = ?) AND t_ai_search.status = ?", tenantIDs, userID, "1")
+		Joins("LEFT JOIN user ON search.tenant_id = user.id").
+		Where("(search.tenant_id IN ? OR search.tenant_id = ?) AND search.status = ?", tenantIDs, userID, "1")
 
 	// Apply keyword filter
 	if keywords != "" {
-		query = query.Where("LOWER(t_ai_search.name) LIKE ?", "%"+strings.ToLower(keywords)+"%")
+		query = query.Where("LOWER(search.name) LIKE ?", "%"+strings.ToLower(keywords)+"%")
 	}
 
 	// Apply ordering
@@ -87,20 +83,20 @@ func (dao *SearchDAO) ListByOwnerIDs(ownerIDs []string, userID string, orderby s
 	// Build query with join to user table
 	query := DB.Model(&entity.Search{}).
 		Select(`
-			t_ai_search.*,
-			t_ai_users.nickname,
-			t_ai_users.avatar as tenant_avatar
+			search.*,
+			user.nickname,
+			user.avatar as tenant_avatar
 		`).
-		Joins("LEFT JOIN t_ai_users ON t_ai_search.tenant_id = t_ai_users.id").
-		Where("(t_ai_search.tenant_id IN ? OR t_ai_search.tenant_id = ?) AND t_ai_search.status = ?", ownerIDs, userID, "1")
+		Joins("LEFT JOIN user ON search.tenant_id = user.id").
+		Where("(search.tenant_id IN ? OR search.tenant_id = ?) AND search.status = ?", ownerIDs, userID, "1")
 
 	// Apply keyword filter
 	if keywords != "" {
-		query = query.Where("LOWER(t_ai_search.name) LIKE ?", "%"+strings.ToLower(keywords)+"%")
+		query = query.Where("LOWER(search.name) LIKE ?", "%"+strings.ToLower(keywords)+"%")
 	}
 
 	// Filter by owner IDs (additional filter to ensure tenant_id is in ownerIDs)
-	query = query.Where("t_ai_search.tenant_id IN ?", ownerIDs)
+	query = query.Where("search.tenant_id IN ?", ownerIDs)
 
 	// Apply ordering
 	orderDirection := "ASC"
@@ -158,18 +154,11 @@ func (dao *SearchDAO) DeleteByID(id string) error {
 
 // Accessible4Deletion checks if a search can be deleted by a specific user
 // Reference: Python search_service.py::accessible4deletion
-// Returns true if the search exists, is valid, and was created by the user;
-// a missing row means "not authorized" (false, nil), only real DB failures return an error
+// Returns true if the search exists, is valid, and was created by the user
 func (dao *SearchDAO) Accessible4Deletion(searchID string, userID string) (bool, error) {
 	var search entity.Search
 	err := DB.Where("id = ? AND created_by = ? AND status = ?", searchID, userID, "1").First(&search).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
+	return err == nil, err
 }
 
 // GetByTenantIDAndID gets search by tenant ID and search ID

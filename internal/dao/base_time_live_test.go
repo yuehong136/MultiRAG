@@ -3,18 +3,13 @@ package dao
 import (
 	"database/sql"
 	"errors"
-	"net/url"
-	"os"
-	"strings"
+	"gorm.io/gorm"
+
 	"testing"
 	"time"
 
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 	"multirag/internal/entity"
-
-	"github.com/google/uuid"
+	"multirag/internal/testsupport/scratch"
 )
 
 type timeProbe struct {
@@ -32,70 +27,43 @@ type timeRow struct {
 }
 
 // Exercises actual GORM callbacks with independent SQL readback in an owned database.
-func TestBaseModelTimeScratchPostgres(t *testing.T) {
-	dsn := os.Getenv("MULTIRAG_GO_TIME_DSN")
-	if dsn == "" {
-		if os.Getenv("REQUIRE_SERVICES") == "1" {
-			t.Fatal("MULTIRAG_GO_TIME_DSN must name an owned scratch database")
-		}
-		t.Skip("requires owned time scratch PostgreSQL")
-	}
-	parsed, err := url.Parse(dsn)
-	if err != nil || !strings.HasPrefix(strings.TrimPrefix(parsed.Path, "/"), "multirag_after1c_a_time") {
-		t.Fatal("unowned scratch database")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal("connect scratch PostgreSQL")
-	}
-	pool, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := pool.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	readback, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := readback.Close(); err != nil {
-			t.Error(err)
-		}
-	})
+func TestBaseModelTimeScratchMySQL(t *testing.T) {
+	f := scratch.New(t)
+	db, readback := f.DB, f.Read
 	previous := DB
 	DB = db
 	t.Cleanup(func() { DB = previous })
 	// Start from the pre-hook settings shape with populated historical values.
-	if _, err := readback.Exec(`CREATE TABLE IF NOT EXISTS t_ai_system_settings (
+	if _, err := readback.Exec(`CREATE TABLE IF NOT EXISTS system_settings (
 		name varchar(128) PRIMARY KEY, source varchar(32) NOT NULL,
 		data_type varchar(32) NOT NULL, value text NOT NULL,
-		create_time bigint, create_date timestamptz, update_time bigint, update_date timestamptz);
-		INSERT INTO t_ai_system_settings(name,source,data_type,value,create_time,update_time)
+		create_time bigint, create_date datetime(0), update_time bigint, update_date datetime(0))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readback.Exec(`INSERT INTO system_settings(name,source,data_type,value,create_time,update_time)
 		VALUES ('legacy','old','string','retained',1700000000,1700000000123)
-		ON CONFLICT(name) DO UPDATE SET create_time=1700000000,update_time=1700000000123`); err != nil {
+		`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.AutoMigrate(&timeProbe{}, &entity.SystemSettings{}); err != nil {
 		t.Fatal(err)
 	}
 	var legacyCreate, legacyUpdate int64
-	if err := readback.QueryRow("SELECT create_time,update_time FROM t_ai_system_settings WHERE name='legacy'").Scan(&legacyCreate, &legacyUpdate); err != nil {
+	if err := readback.QueryRow("SELECT create_time,update_time FROM system_settings WHERE name='legacy'").Scan(&legacyCreate, &legacyUpdate); err != nil {
 		t.Fatal(err)
 	}
 	if legacyCreate != 1700000000 || legacyUpdate != 1700000000123 {
 		t.Fatal("migration rewrote historical timestamps")
 	}
-	if err := db.Exec("TRUNCATE t_ai_time_probe, t_ai_system_settings").Error; err != nil {
-		t.Fatal(err)
+	for _, table := range []string{"t_ai_time_probe", "system_settings"} {
+		if err := db.Exec("DELETE FROM " + table).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 	read := func(id string) timeRow {
 		t.Helper()
 		var row timeRow
-		if err := readback.QueryRow("SELECT name,create_time,update_time,create_date,update_date FROM t_ai_time_probe WHERE id=$1", id).Scan(&row.name, &row.create, &row.update, &row.created, &row.updated); err != nil {
+		if err := readback.QueryRow("SELECT name,create_time,update_time,create_date,update_date FROM t_ai_time_probe WHERE id=?", id).Scan(&row.name, &row.create, &row.update, &row.created, &row.updated); err != nil {
 			t.Fatal(err)
 		}
 		return row
@@ -125,7 +93,7 @@ func TestBaseModelTimeScratchPostgres(t *testing.T) {
 	}
 	reset := func() time.Time {
 		t.Helper()
-		if _, err := readback.Exec("UPDATE t_ai_time_probe SET update_time=0,update_date=$1 WHERE id=$2", time.Unix(0, 0), record.ID); err != nil {
+		if _, err := readback.Exec("UPDATE t_ai_time_probe SET update_time=0,update_date=? WHERE id=?", time.Unix(0, 0), record.ID); err != nil {
 			t.Fatal(err)
 		}
 		return time.Now()
@@ -265,7 +233,7 @@ func TestBaseModelTimeScratchPostgres(t *testing.T) {
 		var value, source, typ string
 		check := func() {
 			t.Helper()
-			if err := readback.QueryRow("SELECT value,source,data_type,create_time,update_time,create_date,update_date FROM t_ai_system_settings WHERE name='owned'").Scan(&value, &source, &typ, &create, &update, &created, &updated); err != nil {
+			if err := readback.QueryRow("SELECT value,source,data_type,create_time,update_time,create_date,update_date FROM system_settings WHERE name='owned'").Scan(&value, &source, &typ, &create, &update, &created, &updated); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -288,67 +256,12 @@ func TestBaseModelTimeScratchPostgres(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := readback.QueryRow("SELECT value,source,data_type,create_time,update_time,create_date,update_date FROM t_ai_system_settings WHERE name='tx'").Scan(&value, &source, &typ, &create, &update, &created, &updated); err != nil {
+		if err := readback.QueryRow("SELECT value,source,data_type,create_time,update_time,create_date,update_date FROM system_settings WHERE name='tx'").Scan(&value, &source, &typ, &create, &update, &created, &updated); err != nil {
 			t.Fatal(err)
 		}
 		if value != "y" || source != "updated" || typ != "number" {
 			t.Fatal("transaction settings lost")
 		}
 		checkNow(sql.NullInt64{Int64: update, Valid: true}, sql.NullTime{Time: updated, Valid: true}, before)
-	})
-	t.Run("private-skill-schema", func(t *testing.T) {
-		if err := MigrateSkillCore(db); err != nil {
-			t.Fatal(err)
-		}
-		for _, table := range []string{"t_ai_go_skill_spaces", "t_ai_go_skill_search_configs"} {
-			var typ string
-			if err := readback.QueryRow("SELECT data_type FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 AND column_name='update_time'", table).Scan(&typ); err != nil {
-				t.Fatal(err)
-			}
-			if typ != "timestamp with time zone" {
-				t.Fatal("private time.Time schema changed", typ)
-			}
-		}
-		spaceID := strings.ReplaceAll(uuid.NewString(), "-", "")
-		space := &entity.SkillSpace{ID: spaceID, TenantID: spaceID, FolderID: "folder", Name: "private", CoreState: entity.JSONMap{"retained": true}}
-		if err := NewSkillSpaceDAO().Create(space); err != nil {
-			t.Fatal(err)
-		}
-		before := time.Now()
-		if err := NewSkillSpaceDAO().UpdateByID(space.ID, map[string]any{"description": "updated"}); err != nil {
-			t.Fatal(err)
-		}
-		var stamp time.Time
-		var state string
-		if err := readback.QueryRow("SELECT update_time, core_state::text FROM t_ai_go_skill_spaces WHERE id=$1", space.ID).Scan(&stamp, &state); err != nil {
-			t.Fatal(err)
-		}
-		if stamp.Before(before.Truncate(time.Microsecond)) || !strings.Contains(state, "retained") {
-			t.Fatal("private timestamp/state lost")
-		}
-		config, err := NewSkillSearchConfigDAO().CreateWithTenantSpace(space.TenantID, space.ID, "embedding")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := NewSkillSearchConfigDAO().Update(config.ID, map[string]any{"top_k": 7}); err != nil {
-			t.Fatal(err)
-		}
-		var topK int
-		if err := readback.QueryRow("SELECT top_k,update_time FROM t_ai_go_skill_search_configs WHERE id=$1", config.ID).Scan(&topK, &stamp); err != nil {
-			t.Fatal(err)
-		}
-		if topK != 7 || stamp.IsZero() {
-			t.Fatal("private config time lost")
-		}
-		if err := MigrateSkillCore(db); err != nil {
-			t.Fatal(err)
-		}
-		var leaked int
-		if err := readback.QueryRow("SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name IN ('skill_spaces','skill_search_configs','t_ai_skill_spaces')").Scan(&leaked); err != nil {
-			t.Fatal(err)
-		}
-		if leaked != 0 {
-			t.Fatal("private tables lost namespace isolation")
-		}
 	})
 }

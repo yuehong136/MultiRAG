@@ -18,15 +18,11 @@ package admin
 
 import (
 	"github.com/gin-gonic/gin"
-
-	"multirag/internal/handler"
-	"multirag/internal/service"
 )
 
 // Router admin router
 type Router struct {
-	handler      *Handler
-	modelHandler *handler.ModelHandler
+	handler *Handler
 }
 
 // NewRouter create admin router
@@ -34,11 +30,6 @@ func NewRouter(handler *Handler) *Router {
 	return &Router{
 		handler: handler,
 	}
-}
-
-// SetModelHandler binds the static catalog shared by the server and consumers.
-func (r *Router) SetModelHandler(models *handler.ModelHandler) {
-	r.modelHandler = models
 }
 
 // Setup setup routes
@@ -55,17 +46,18 @@ func (r *Router) Setup(engine *gin.Engine) {
 
 		admin.POST("/reports", r.handler.Reports)
 
+		//admin.POST("/ingestion/tasks", r.handler.StartIngestionTask)
+		//admin.DELETE("/ingestion", r.handler.CancelIngestionTask) // cancel ingestion
+		//admin.GET("/ingestion/tasks", r.handler.ListIngestionTasks)
+
 		// Protected routes
 		protected := admin.Group("")
 		protected.Use(r.handler.AuthMiddleware())
 		{
-			// Logout requires the auth middleware to populate the user context.
+
 			protected.POST("/logout", r.handler.Logout)
 			// Auth
 			protected.GET("/auth", r.handler.AuthCheck)
-
-			// Ingestion tasks are visible only through the admin auth middleware.
-			protected.GET("/tasks", r.handler.ListTasks)
 
 			// User management
 			protected.GET("/users", r.handler.ListUsers)
@@ -79,7 +71,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			protected.GET("/users/:username/datasets", r.handler.GetUserDatasets)
 			protected.GET("/users/:username/agents", r.handler.GetUserAgents)
 
-			// API Tokens (/keys is an alias of /tokens, aligned with ragflow naming)
+			// API Keys
 			protected.GET("/users/:username/keys", r.handler.ListUserAPITokens)
 			protected.GET("/users/:username/tokens", r.handler.ListUserAPITokens)
 			protected.POST("/users/:username/keys", r.handler.GenerateUserAPIToken)
@@ -138,14 +130,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 			protected.GET("/log_level", r.handler.GetLogLevel)
 			protected.PUT("/log_level", r.handler.SetLogLevel)
 
-			modelHandler := r.modelHandler
-			if modelHandler == nil {
-				modelHandler = handler.NewModelHandler(service.NewModelProviderService())
-			}
-			protected.GET("/all-models", modelHandler.ListAllModels)
-			protected.GET("/all-models/detail", modelHandler.ShowModel)
-
-			// provider pool route group
 			provider := protected.Group("/providers")
 			{
 				provider.GET("/", r.handler.ListProviders)
@@ -153,6 +137,20 @@ func (r *Router) Setup(engine *gin.Engine) {
 				provider.GET("/:provider_name/models", r.handler.ListModels)
 				provider.GET("/:provider_name/models/:model_name", r.handler.ShowModel)
 			}
+
+			queue := protected.Group("/queue")
+			{
+				queue.GET("/", r.handler.ShowMessageQueue)
+				queue.POST("/messages", r.handler.PublishMessageToQueue)
+				queue.GET("/messages", r.handler.ListMessagesFromQueue)
+				queue.PUT("/messages", r.handler.PullMessageFromQueue)
+			}
+
+			protected.GET("/ingestors", r.handler.ListIngestors)
+			protected.DELETE("/ingestors", r.handler.ShutdownIngestor)
+			protected.DELETE("/ingestion/tasks", r.handler.RemoveIngestionTasks)
+			protected.PUT("/ingestion/tasks", r.handler.StopIngestionTasks)
+			protected.GET("/ingestion/tasks", r.handler.ListIngestionTasks)
 		}
 	}
 

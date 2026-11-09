@@ -18,9 +18,8 @@ package dao
 
 import (
 	"fmt"
-	"strings"
-
 	"multirag/internal/entity"
+	"strings"
 )
 
 // ChatDAO chat data access object
@@ -58,21 +57,21 @@ func (dao *ChatDAO) ListByTenantIDs(tenantIDs []string, userID string, page, pag
 	// Build query with join to user table for nickname and avatar
 	query := DB.Model(&entity.Chat{}).
 		Select(`
-			t_ai_dialogs.*,
-			t_ai_users.nickname,
-			t_ai_users.avatar as tenant_avatar
+			dialog.*,
+			user.nickname,
+			user.avatar as tenant_avatar
 		`).
-		Joins("LEFT JOIN t_ai_users ON t_ai_dialogs.tenant_id = t_ai_users.id")
+		Joins("LEFT JOIN user ON dialog.tenant_id = user.id")
 
 	if len(tenantIDs) > 0 {
-		query = query.Where("(t_ai_dialogs.tenant_id IN ? OR t_ai_dialogs.tenant_id = ?) AND t_ai_dialogs.status = ?", tenantIDs, userID, "1")
+		query = query.Where("(dialog.tenant_id IN ? OR dialog.tenant_id = ?) AND dialog.status = ?", tenantIDs, userID, "1")
 	} else {
-		query = query.Where("t_ai_dialogs.tenant_id = ? AND t_ai_dialogs.status = ?", userID, "1")
+		query = query.Where("dialog.tenant_id = ? AND dialog.status = ?", userID, "1")
 	}
 
 	// Apply keyword filter
 	if keywords != "" {
-		query = query.Where("LOWER(t_ai_dialogs.name) LIKE ?", "%"+strings.ToLower(keywords)+"%")
+		query = query.Where("LOWER(dialog.name) LIKE ?", "%"+strings.ToLower(keywords)+"%")
 	}
 
 	// Apply ordering
@@ -109,20 +108,20 @@ func (dao *ChatDAO) ListByOwnerIDs(ownerIDs []string, userID string, orderby str
 	// Build query with join to user table
 	query := DB.Model(&entity.Chat{}).
 		Select(`
-			t_ai_dialogs.*,
-			t_ai_users.nickname,
-			t_ai_users.avatar as tenant_avatar
+			dialog.*,
+			user.nickname,
+			user.avatar as tenant_avatar
 		`).
-		Joins("LEFT JOIN t_ai_users ON t_ai_dialogs.tenant_id = t_ai_users.id").
-		Where("(t_ai_dialogs.tenant_id IN ? OR t_ai_dialogs.tenant_id = ?) AND t_ai_dialogs.status = ?", ownerIDs, userID, "1")
+		Joins("LEFT JOIN user ON dialog.tenant_id = user.id").
+		Where("(dialog.tenant_id IN ? OR dialog.tenant_id = ?) AND dialog.status = ?", ownerIDs, userID, "1")
 
 	// Apply keyword filter
 	if keywords != "" {
-		query = query.Where("LOWER(t_ai_dialogs.name) LIKE ?", "%"+strings.ToLower(keywords)+"%")
+		query = query.Where("LOWER(dialog.name) LIKE ?", "%"+strings.ToLower(keywords)+"%")
 	}
 
 	// Filter by owner IDs (additional filter to ensure tenant_id is in ownerIDs)
-	query = query.Where("t_ai_dialogs.tenant_id IN ?", ownerIDs)
+	query = query.Where("dialog.tenant_id IN ?", ownerIDs)
 
 	// Apply ordering
 	orderDirection := "ASC"

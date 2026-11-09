@@ -17,51 +17,8 @@
 package dao
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"multirag/internal/entity"
 )
-
-// GetByDocumentIDAndDatasetID locks and reloads the current parser configuration.
-// tx must be the caller's context-bearing transaction, retained until commit.
-func (dao *DocumentDAO) GetByDocumentIDAndDatasetID(tx *gorm.DB, documentID, datasetID string) (*entity.Document, error) {
-	var document entity.Document
-	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND kb_id = ? AND status = ?", documentID, datasetID, "1").Take(&document).Error
-	if err != nil {
-		return nil, err
-	}
-	// The legacy JSONMap scanner uses float64. Decode from the locked row with
-	// UseNumber before a merge so existing IDs and template defaults stay exact.
-	var raw []byte
-	if err := tx.Model(&entity.Document{}).Select("parser_config").Where("id = ? AND kb_id = ?", documentID, datasetID).Row().Scan(&raw); err != nil {
-		return nil, err
-	}
-	document.ParserConfig = entity.JSONMap{}
-	if len(raw) > 0 && string(raw) != "null" {
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		if err := decoder.Decode(&document.ParserConfig); err != nil {
-			return nil, err
-		}
-	}
-	return &document, nil
-}
-
-// UpdateStatus requires an existing row in the authorized dataset.
-func (dao *DocumentDAO) UpdateStatus(tx *gorm.DB, id, datasetID, status string) error {
-	result := tx.Model(&entity.Document{}).Where("id = ? AND kb_id = ?", id, datasetID).Update("status", status)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return fmt.Errorf("document unavailable during status update")
-	}
-	return nil
-}
 
 // DocumentDAO document data access object
 type DocumentDAO struct{}
@@ -84,17 +41,6 @@ func (dao *DocumentDAO) GetByID(id string) (*entity.Document, error) {
 		return nil, err
 	}
 	return &document, nil
-}
-
-// GetByIDs checks SQL parent existence for retrieval, including disabled rows.
-// No status predicate: availability is enforced by the existing index filters.
-func (dao *DocumentDAO) GetByIDs(ctx context.Context, ids []string) ([]*entity.Document, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	var documents []*entity.Document
-	err := DB.WithContext(ctx).Select("id", "kb_id").Where("id IN ?", ids).Find(&documents).Error
-	return documents, err
 }
 
 // GetByAuthorID get documents by author ID
@@ -121,9 +67,10 @@ func (dao *DocumentDAO) UpdateByID(id string, updates map[string]interface{}) er
 	return DB.Model(&entity.Document{}).Where("id = ?", id).Updates(updates).Error
 }
 
-// Delete delete document
-func (dao *DocumentDAO) Delete(id string) error {
-	return DB.Delete(&entity.Document{}, "id = ?", id).Error
+// Delete hard-deletes document by ID. Returns rows affected.
+func (dao *DocumentDAO) Delete(id string) (int64, error) {
+	result := DB.Where("id = ?", id).Delete(&entity.Document{})
+	return result.RowsAffected, result.Error
 }
 
 // List list documents
@@ -140,15 +87,25 @@ func (dao *DocumentDAO) List(offset, limit int) ([]*entity.Document, int64, erro
 }
 
 // ListByKBID list documents by knowledge base ID
-func (dao *DocumentDAO) ListByKBID(kbID string, offset, limit int) ([]*entity.Document, int64, error) {
-	var documents []*entity.Document
+func (dao *DocumentDAO) ListByKBID(kbID string, offset, limit int) ([]*entity.DocumentListItem, int64, error) {
+	var documents []*entity.DocumentListItem
 	var total int64
 
 	if err := DB.Model(&entity.Document{}).Where("kb_id = ?", kbID).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	err := DB.Where("kb_id = ?", kbID).Offset(offset).Limit(limit).Find(&documents).Error
+	err := DB.Table("document").
+		Select(`document.*, user_canvas.title as pipeline_name, user.nickname`).
+		Joins("JOIN file2document ON file2document.document_id = document.id").
+		Joins("JOIN file ON file.id = file2document.file_id").
+		Joins("LEFT JOIN user_canvas ON document.pipeline_id = user_canvas.id").
+		Joins("LEFT JOIN user ON document.created_by = user.id").
+		Where("document.kb_id = ?", kbID).
+		Order("document.create_time DESC").
+		Offset(offset).
+		Limit(limit).
+		Scan(&documents).Error
 	return documents, total, err
 }
 
@@ -176,6 +133,26 @@ func (dao *DocumentDAO) GetAllDocIDsByKBIDs(kbIDs []string) ([]map[string]string
 	return result, nil
 }
 
+// GetByIDs retrieves documents by multiple IDs
+func (dao *DocumentDAO) GetByIDs(ids []string) ([]*entity.Document, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var documents []*entity.Document
+	err := DB.Where("id IN ?", ids).Find(&documents).Error
+	if err != nil {
+		return nil, err
+	}
+	return documents, nil
+}
+
+// GetByDocumentIDAndDatasetID retrieves a document by document ID and dataset/KB ID.
+func (dao *DocumentDAO) GetByDocumentIDAndDatasetID(documentID, datasetID string) (*entity.Document, error) {
+	var document entity.Document
+	err := DB.Where("id = ? AND kb_id = ?", documentID, datasetID).First(&document).Error
+	return &document, err
+}
+
 // CountByTenantID counts documents by tenant ID
 func (dao *DocumentDAO) CountByTenantID(tenantID string) (int64, error) {
 	var count int64
@@ -183,18 +160,19 @@ func (dao *DocumentDAO) CountByTenantID(tenantID string) (int64, error) {
 	return count, err
 }
 
-// SumSizeByDatasetID returns the total document size, including an empty dataset.
-func (dao *DocumentDAO) SumSizeByDatasetID(ctx context.Context, datasetID string) (int64, error) {
+// SumSizeByDatasetID returns the total document size for a dataset.
+func (dao *DocumentDAO) SumSizeByDatasetID(datasetID string) (int64, error) {
 	var total int64
-	err := DB.WithContext(ctx).Model(&entity.Document{}).
-		Select("COALESCE(SUM(size), 0)").Where("kb_id = ?", datasetID).
+	err := DB.Model(&entity.Document{}).
+		Select("COALESCE(SUM(size), 0)").
+		Where("kb_id = ?", datasetID).
 		Scan(&total).Error
 	return total, err
 }
 
 // GetParsingStatusByKBID aggregates document parsing status counts for a
 // dataset, mirroring DocumentService.get_parsing_status_by_kb_ids in Python.
-func (dao *DocumentDAO) GetParsingStatusByKBID(ctx context.Context, kbID string) (map[string]int64, error) {
+func (dao *DocumentDAO) GetParsingStatusByKBID(kbID string) (map[string]int64, error) {
 	result := map[string]int64{
 		"unstart_count": 0,
 		"running_count": 0,
@@ -207,7 +185,7 @@ func (dao *DocumentDAO) GetParsingStatusByKBID(ctx context.Context, kbID string)
 		Run *string `gorm:"column:run"`
 		Cnt int64   `gorm:"column:cnt"`
 	}
-	err := DB.WithContext(ctx).Model(&entity.Document{}).
+	err := DB.Model(&entity.Document{}).
 		Select("run, COUNT(id) as cnt").
 		Where("kb_id = ?", kbID).
 		Group("run").

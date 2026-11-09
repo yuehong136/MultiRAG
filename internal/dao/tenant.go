@@ -33,9 +33,9 @@ func (dao *TenantDAO) GetJoinedTenantsByUserID(userID string) ([]*TenantWithRole
 	var results []*TenantWithRole
 
 	err := DB.Model(&entity.Tenant{}).
-		Select("t_ai_tenants.id as tenant_id, t_ai_tenants.name, t_ai_tenants.llm_id, t_ai_tenants.embd_id, t_ai_tenants.asr_id, t_ai_tenants.img2txt_id, t_ai_user_tenants.role").
-		Joins("INNER JOIN t_ai_user_tenants ON t_ai_user_tenants.tenant_id = t_ai_tenants.id").
-		Where("t_ai_user_tenants.user_id = ? AND t_ai_user_tenants.status = ? AND t_ai_user_tenants.role IN ? AND t_ai_tenants.status = ?", userID, "1", []string{"normal", "admin"}, "1").
+		Select("tenant.id as tenant_id, tenant.name, tenant.llm_id, tenant.embd_id, tenant.asr_id, tenant.img2txt_id, user_tenant.role").
+		Joins("INNER JOIN user_tenant ON user_tenant.tenant_id = tenant.id").
+		Where("user_tenant.user_id = ? AND user_tenant.status = ? AND user_tenant.role = ? AND tenant.status = ?", userID, "1", "normal", "1").
 		Scan(&results).Error
 
 	return results, err
@@ -62,6 +62,7 @@ type TenantInfo struct {
 	ASRID     string  `gorm:"column:asr_id" json:"asr_id"`
 	Img2TxtID string  `gorm:"column:img2txt_id" json:"img2txt_id"`
 	TTSID     *string `gorm:"column:tts_id" json:"tts_id,omitempty"`
+	OCRID     *string `gorm:"column:ocr_id" json:"ocr_id,omitempty"`
 	ParserIDs string  `gorm:"column:parser_ids" json:"parser_ids"`
 	Role      string  `gorm:"column:role" json:"role"`
 }
@@ -71,9 +72,9 @@ func (dao *TenantDAO) GetInfoByUserID(userID string) ([]*TenantInfo, error) {
 	var results []*TenantInfo
 
 	err := DB.Model(&entity.Tenant{}).
-		Select("t_ai_tenants.id as tenant_id, t_ai_tenants.name, t_ai_tenants.llm_id, t_ai_tenants.embd_id, t_ai_tenants.rerank_id, t_ai_tenants.asr_id, t_ai_tenants.img2txt_id, t_ai_tenants.tts_id, t_ai_tenants.parser_ids, t_ai_user_tenants.role").
-		Joins("INNER JOIN t_ai_user_tenants ON t_ai_user_tenants.tenant_id = t_ai_tenants.id").
-		Where("t_ai_user_tenants.user_id = ? AND t_ai_user_tenants.status = ? AND t_ai_user_tenants.role = ? AND t_ai_tenants.status = ?", userID, "1", "owner", "1").
+		Select("tenant.id as tenant_id, tenant.name, tenant.llm_id, tenant.embd_id, tenant.rerank_id, tenant.asr_id, tenant.img2txt_id, tenant.tts_id, tenant.ocr_id, tenant.parser_ids, user_tenant.role").
+		Joins("INNER JOIN user_tenant ON user_tenant.tenant_id = tenant.id").
+		Where("user_tenant.user_id = ? AND user_tenant.status = ? AND user_tenant.role = ? AND tenant.status = ?", userID, "1", "owner", "1").
 		Scan(&results).Error
 
 	return results, err

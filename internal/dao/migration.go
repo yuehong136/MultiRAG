@@ -24,36 +24,28 @@ import (
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // RunMigrations runs all manual database migrations
 // These are migrations that cannot be handled by AutoMigrate alone
 func RunMigrations(db *gorm.DB) error {
-	// Check if t_ai_tenant_llms table has composite primary key and migrate to ID primary key
+	// Check if tenant_llm table has composite primary key and migrate to ID primary key
 	if err := migrateTenantLLMPrimaryKey(db); err != nil {
-		return fmt.Errorf("failed to migrate t_ai_tenant_llms primary key: %w", err)
+		return fmt.Errorf("failed to migrate tenant_llm primary key: %w", err)
 	}
 
 	// Rename columns (correct typos)
-	if err := renameColumnIfExists(db, "t_ai_tasks", "process_duation", "process_duration"); err != nil {
-		return fmt.Errorf("failed to rename t_ai_tasks.process_duation: %w", err)
+	if err := renameColumnIfExists(db, "task", "process_duation", "process_duration"); err != nil {
+		return fmt.Errorf("failed to rename task.process_duation: %w", err)
 	}
-	if err := renameColumnIfExists(db, "t_ai_documents", "process_duation", "process_duration"); err != nil {
-		return fmt.Errorf("failed to rename t_ai_documents.process_duation: %w", err)
-	}
-	if err := renameColumnIfExists(db, "t_ai_evaluation_cases", "metadata", "case_metadata"); err != nil {
-		return fmt.Errorf("failed to rename t_ai_evaluation_cases.metadata: %w", err)
-	}
-	if err := renameColumnIfExists(db, "t_ai_evaluation_runs", "status", "run_status"); err != nil {
-		return fmt.Errorf("failed to rename t_ai_evaluation_runs.status: %w", err)
+	if err := renameColumnIfExists(db, "document", "process_duation", "process_duration"); err != nil {
+		return fmt.Errorf("failed to rename document.process_duation: %w", err)
 	}
 
-	// Add unique index on t_ai_users.email
+	// Add unique index on user.email
 	if err := migrateAddUniqueEmail(db); err != nil {
-		return fmt.Errorf("failed to add unique index on t_ai_users.email: %w", err)
-	}
-	if err := migrateModelInstanceCredentials(db); err != nil {
-		return fmt.Errorf("failed to migrate model instance credentials: %w", err)
+		return fmt.Errorf("failed to add unique index on user.email: %w", err)
 	}
 
 	// Modify column types that AutoMigrate may not handle correctly
@@ -61,92 +53,49 @@ func RunMigrations(db *gorm.DB) error {
 		return fmt.Errorf("failed to modify column types: %w", err)
 	}
 
+	// Create skill search tables
+	if err := migrateSkillSearchTables(db); err != nil {
+		return fmt.Errorf("failed to migrate skill search tables: %w", err)
+	}
+
+	// Create skill space tables
+	if err := migrateSkillSpaceTables(db); err != nil {
+		return fmt.Errorf("failed to migrate skill space tables: %w", err)
+	}
+
 	common.Info("All manual migrations completed successfully")
 	return nil
 }
 
-// Credentials may be shared across tenants and endpoint instances. Identity is
-// the provider-scoped instance name; install that constraint before retiring keys.
-func migrateModelInstanceCredentials(db *gorm.DB) error {
-	model := &entity.TenantModelInstance{}
-	if !db.Migrator().HasTable(model) {
-		return nil
-	}
-	var duplicateGroups int64
-	if err := db.Raw("SELECT count(*) FROM (SELECT provider_id,instance_name FROM tenant_model_instance GROUP BY provider_id,instance_name HAVING count(*) > 1) AS duplicates").Scan(&duplicateGroups).Error; err != nil {
-		return err
-	}
-	if duplicateGroups != 0 {
-		return fmt.Errorf("duplicate model instance names within provider; resolve existing identities before migration")
-	}
-	index := "idx_tenant_model_instance_provider_name"
-	if !db.Migrator().HasIndex(model, index) {
-		if err := db.Exec("CREATE UNIQUE INDEX idx_tenant_model_instance_provider_name ON tenant_model_instance (provider_id,instance_name)").Error; err != nil {
-			return err
-		}
-	}
-	for _, legacy := range []string{"idx_tenant_model_instance_api_key_nonempty", "idx_tenant_model_instance_api_key"} {
-		if db.Migrator().HasIndex(model, legacy) {
-			if err := db.Migrator().DropIndex(model, legacy); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// migrateTenantLLMPrimaryKey migrates t_ai_tenant_llms from composite primary key to ID primary key
+// migrateTenantLLMPrimaryKey migrates tenant_llm from composite primary key to ID primary key
 // This corresponds to Python's update_tenant_llm_to_id_primary_key function
 func migrateTenantLLMPrimaryKey(db *gorm.DB) error {
-	// Check if t_ai_tenant_llms table exists
-	if !db.Migrator().HasTable("t_ai_tenant_llms") {
+	// Check if tenant_llm table exists
+	if !db.Migrator().HasTable("tenant_llm") {
 		return nil
 	}
 
 	// Check if 'id' column already exists using raw SQL
 	var idColumnExists int64
-	if IsPostgres() {
-		err := db.Raw(`
-			SELECT COUNT(*) FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name = 't_ai_tenant_llms' AND column_name = 'id'
-		`).Scan(&idColumnExists).Error
-		if err != nil {
-			return err
-		}
-	} else {
-		err := db.Raw(`
-			SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_NAME = 't_ai_tenant_llms' AND COLUMN_NAME = 'id'
-		`).Scan(&idColumnExists).Error
-		if err != nil {
-			return err
-		}
+	err := db.Raw(`
+		SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tenant_llm' AND COLUMN_NAME = 'id'
+	`).Scan(&idColumnExists).Error
+	if err != nil {
+		return err
 	}
 
 	if idColumnExists > 0 {
 		// Check if id is already a primary key with auto_increment
 		var count int64
-		if IsPostgres() {
-			err := db.Raw(`
-				SELECT COUNT(*) FROM information_schema.columns
-				WHERE table_schema = current_schema()
-				AND table_name = 't_ai_tenant_llms'
-				AND column_name = 'id'
-				AND column_default LIKE 'nextval%'
-			`).Scan(&count).Error
-			if err != nil {
-				return err
-			}
-		} else {
-			err := db.Raw(`
-				SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-				WHERE TABLE_NAME = 't_ai_tenant_llms'
-				AND COLUMN_NAME = 'id'
-				AND EXTRA LIKE '%auto_increment%'
-			`).Scan(&count).Error
-			if err != nil {
-				return err
-			}
+		err := db.Raw(`
+			SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tenant_llm'
+			AND COLUMN_NAME = 'id'
+			AND EXTRA LIKE '%auto_increment%'
+		`).Scan(&count).Error
+		if err != nil {
+			return err
 		}
 		if count > 0 {
 			// Already migrated
@@ -154,135 +103,75 @@ func migrateTenantLLMPrimaryKey(db *gorm.DB) error {
 		}
 	}
 
-	common.Info("Migrating t_ai_tenant_llms to use ID primary key...")
+	common.Info("Migrating tenant_llm to use ID primary key...")
 
 	// Start transaction
 	return db.Transaction(func(tx *gorm.DB) error {
 		// Check for temp_id column and drop it if exists
 		var tempIdExists int64
-		if IsPostgres() {
-			tx.Raw(`SELECT COUNT(*) FROM information_schema.columns
-				WHERE table_schema = current_schema() AND table_name = 't_ai_tenant_llms' AND column_name = 'temp_id'`).Scan(&tempIdExists)
-		} else {
-			tx.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-				WHERE TABLE_NAME = 't_ai_tenant_llms' AND COLUMN_NAME = 'temp_id'`).Scan(&tempIdExists)
+		if err := tx.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tenant_llm' AND COLUMN_NAME = 'temp_id'`).Scan(&tempIdExists).Error; err != nil {
+			return err
 		}
 		if tempIdExists > 0 {
-			if err := tx.Exec("ALTER TABLE t_ai_tenant_llms DROP COLUMN temp_id").Error; err != nil {
-				common.Warn("Failed to drop temp_id column", zap.Error(err))
+			if err := tx.Exec("ALTER TABLE tenant_llm DROP COLUMN temp_id").Error; err != nil {
+				return fmt.Errorf("Failed to drop temp_id column: %w", err)
 			}
+		}
+
+		var primaryColumns int64
+		if err := tx.Raw("SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tenant_llm' AND INDEX_NAME='PRIMARY'").Scan(&primaryColumns).Error; err != nil {
+			return err
+		}
+		dropPrimary := ""
+		if primaryColumns > 0 {
+			dropPrimary = "DROP PRIMARY KEY, "
 		}
 
 		// Check if there's already an 'id' column
-		if IsPostgres() {
-			// Drop existing composite primary key constraint first
-			if err := tx.Exec(`
-				ALTER TABLE t_ai_tenant_llms DROP CONSTRAINT IF EXISTS t_ai_tenant_llms_pkey
-			`).Error; err != nil {
-				common.Warn("Failed to drop existing primary key constraint", zap.Error(err))
-			}
-
-			if idColumnExists > 0 {
-				// Check id column data type: if varchar, must drop and recreate
-				var idDataType string
-				tx.Raw(`
-					SELECT data_type FROM information_schema.columns
-					WHERE table_schema = current_schema() AND table_name = 't_ai_tenant_llms' AND column_name = 'id'
-				`).Scan(&idDataType)
-
-				if idDataType == "bigint" || idDataType == "integer" {
-					// Integer id exists, just add identity and primary key
-					if err := tx.Exec(`
-						ALTER TABLE t_ai_tenant_llms
-						ALTER COLUMN id SET NOT NULL,
-						ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY,
-						ADD PRIMARY KEY (id)
-					`).Error; err != nil {
-						return fmt.Errorf("failed to modify id column to identity: %w", err)
-					}
-				} else {
-					// id is varchar or other type, drop and recreate as BIGSERIAL
-					if err := tx.Exec(`ALTER TABLE t_ai_tenant_llms DROP COLUMN id`).Error; err != nil {
-						return fmt.Errorf("failed to drop varchar id column: %w", err)
-					}
-					if err := tx.Exec(`ALTER TABLE t_ai_tenant_llms ADD COLUMN id BIGSERIAL PRIMARY KEY`).Error; err != nil {
-						return fmt.Errorf("failed to add id column as BIGSERIAL: %w", err)
-					}
-				}
-			} else {
-				// Add id column as BIGSERIAL primary key
-				if err := tx.Exec(`
-					ALTER TABLE t_ai_tenant_llms ADD COLUMN id BIGSERIAL PRIMARY KEY
-				`).Error; err != nil {
-					return fmt.Errorf("failed to add id column: %w", err)
-				}
+		if idColumnExists > 0 {
+			// Modify existing id column to be auto_increment primary key
+			if err := tx.Exec("ALTER TABLE tenant_llm " + dropPrimary + "MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY").Error; err != nil {
+				return fmt.Errorf("failed to modify id column: %w", err)
 			}
 		} else {
-			if idColumnExists > 0 {
-				// Modify existing id column to be auto_increment primary key
-				if err := tx.Exec(`
-					ALTER TABLE t_ai_tenant_llms
-					MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY
-				`).Error; err != nil {
-					return fmt.Errorf("failed to modify id column: %w", err)
-				}
-			} else {
-				// Add id column as auto_increment primary key
-				if err := tx.Exec(`
-					ALTER TABLE t_ai_tenant_llms
-					ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST
-				`).Error; err != nil {
-					return fmt.Errorf("failed to add id column: %w", err)
-				}
+			// Add id column as auto_increment primary key
+			if err := tx.Exec("ALTER TABLE tenant_llm " + dropPrimary + "ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST").Error; err != nil {
+				return fmt.Errorf("failed to add id column: %w", err)
 			}
 		}
 
 		// Add unique index on (tenant_id, llm_factory, llm_name)
 		var idxExists int64
-		if IsPostgres() {
-			tx.Raw(`SELECT COUNT(*) FROM pg_indexes
-				WHERE schemaname = current_schema() AND tablename = 't_ai_tenant_llms' AND indexname = 'idx_tenant_llm_unique'`).Scan(&idxExists)
-		} else {
-			tx.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-				WHERE TABLE_NAME = 't_ai_tenant_llms' AND INDEX_NAME = 'idx_tenant_llm_unique'`).Scan(&idxExists)
+		if err := tx.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tenant_llm' AND INDEX_NAME = 'idx_tenant_llm_unique'`).Scan(&idxExists).Error; err != nil {
+			return err
 		}
 		if idxExists == 0 {
-			if IsPostgres() {
-				if err := tx.Exec(`
-					CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_llm_unique
-					ON t_ai_tenant_llms (tenant_id, llm_factory, llm_name)
-				`).Error; err != nil {
-					common.Warn("Failed to add unique index idx_tenant_llm_unique", zap.Error(err))
-				}
-			} else {
-				if err := tx.Exec(`
-					ALTER TABLE t_ai_tenant_llms
-					ADD UNIQUE INDEX idx_tenant_llm_unique (tenant_id, llm_factory, llm_name)
-				`).Error; err != nil {
-					common.Warn("Failed to add unique index idx_tenant_llm_unique", zap.Error(err))
-				}
+			if err := tx.Exec(`
+				ALTER TABLE tenant_llm
+				ADD UNIQUE INDEX idx_tenant_llm_unique (tenant_id, llm_factory, llm_name)
+			`).Error; err != nil {
+				return fmt.Errorf("Failed to add unique index idx_tenant_llm_unique: %w", err)
 			}
 		}
 
-		common.Info("t_ai_tenant_llms primary key migration completed")
+		common.Info("tenant_llm primary key migration completed")
 		return nil
 	})
 }
 
-// migrateAddUniqueEmail adds unique index on t_ai_users.email
+// migrateAddUniqueEmail adds unique index on user.email
 func migrateAddUniqueEmail(db *gorm.DB) error {
-	if !db.Migrator().HasTable("t_ai_users") {
+	if !db.Migrator().HasTable("user") {
 		return nil
 	}
 
 	// Check if unique index already exists using raw SQL
 	var count int64
-	if IsPostgres() {
-		db.Raw(`SELECT COUNT(*) FROM pg_indexes
-			WHERE schemaname = current_schema() AND tablename = 't_ai_users' AND indexname = 'idx_user_email_unique'`).Scan(&count)
-	} else {
-		db.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-			WHERE TABLE_NAME = 't_ai_users' AND INDEX_NAME = 'idx_user_email_unique'`).Scan(&count)
+	if err := db.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user' AND INDEX_NAME = 'idx_user_email_unique'`).Scan(&count).Error; err != nil {
+		return err
 	}
 	if count > 0 {
 		return nil
@@ -290,51 +179,29 @@ func migrateAddUniqueEmail(db *gorm.DB) error {
 
 	// Check if there's a duplicate email issue first
 	var duplicateCount int64
-	if IsPostgres() {
-		err := db.Raw(`
-			SELECT COUNT(*) FROM (
-				SELECT email FROM t_ai_users GROUP BY email HAVING COUNT(*) > 1
-			) AS duplicates
-		`).Scan(&duplicateCount).Error
-		if err != nil {
-			return err
-		}
-	} else {
-		err := db.Raw(`
-			SELECT COUNT(*) FROM (
-				SELECT email FROM t_ai_users GROUP BY email HAVING COUNT(*) > 1
-			) AS duplicates
-		`).Scan(&duplicateCount).Error
-		if err != nil {
-			return err
-		}
+	err := db.Raw(`
+		SELECT COUNT(*) FROM (
+			SELECT email FROM user GROUP BY email HAVING COUNT(*) > 1
+		) AS duplicates
+	`).Scan(&duplicateCount).Error
+	if err != nil {
+		return err
 	}
 
 	if duplicateCount > 0 {
-		common.Warn("Found duplicate emails in t_ai_users table, cannot add unique index", zap.Int64("count", duplicateCount))
-		return nil
+		return fmt.Errorf("duplicate emails prevent unique index: %d duplicate groups", duplicateCount)
 	}
 
-	common.Info("Adding unique index on t_ai_users.email...")
-	if IsPostgres() {
-		if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_email_unique ON t_ai_users (email)`).Error; err != nil {
-			errStr := err.Error()
-			if strings.Contains(errStr, "already exists") {
-				common.Info("Index already exists, skipping", zap.String("error", errStr))
-				return nil
-			}
-			return fmt.Errorf("failed to add unique index on email: %w", err)
+	common.Info("Adding unique index on user.email...")
+	if err = db.Exec(`ALTER TABLE user ADD UNIQUE INDEX idx_user_email_unique (email)`).Error; err != nil {
+
+		// Check if error is MySQL duplicate index error (Error 1061)
+		errStr := err.Error()
+		if strings.Contains(errStr, "Error 1061") && strings.Contains(errStr, "Duplicate key name") {
+			common.Info("Index already exists, skipping", zap.String("error", errStr))
+			return nil
 		}
-	} else {
-		if err := db.Exec(`ALTER TABLE t_ai_users ADD UNIQUE INDEX idx_user_email_unique (email)`).Error; err != nil {
-			// Check if error is MySQL duplicate index error (Error 1061)
-			errStr := err.Error()
-			if strings.Contains(errStr, "Error 1061") && strings.Contains(errStr, "Duplicate key name") {
-				common.Info("Index already exists, skipping", zap.String("error", errStr))
-				return nil
-			}
-			return fmt.Errorf("failed to add unique index on email: %w", err)
-		}
+		return fmt.Errorf("failed to add unique index on email: %w", err)
 	}
 
 	return nil
@@ -343,300 +210,85 @@ func migrateAddUniqueEmail(db *gorm.DB) error {
 // modifyColumnTypes modifies column types that need explicit ALTER statements
 func modifyColumnTypes(db *gorm.DB) error {
 	// Helper function to check if column exists
-	columnExists := func(table, column string) bool {
+	columnExists := func(table, column string) (bool, error) {
 		var count int64
-		if IsPostgres() {
-			db.Raw(`SELECT COUNT(*) FROM information_schema.columns
-				WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`, table, column).Scan(&count)
-		} else {
-			db.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-				WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`, table, column).Scan(&count)
+		if err := db.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, table, column).Scan(&count).Error; err != nil {
+			return false, err
 		}
-		return count > 0
+		return count > 0, nil
 	}
 
-	columnType := func(table, column string) string {
-		var dataType string
-		if IsPostgres() {
-			db.Raw(`SELECT data_type FROM information_schema.columns
-				WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`, table, column).Scan(&dataType)
-		} else {
-			db.Raw(`SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
-				WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`, table, column).Scan(&dataType)
-		}
-		return strings.ToLower(dataType)
-	}
-
-	ensureJSONColumn := func(table, column, defaultJSON string, notNull bool) {
-		if !db.Migrator().HasTable(table) || !columnExists(table, column) {
-			return
-		}
-
-		if IsPostgres() {
-			targetDefault := "NULL"
-			if defaultJSON != "" {
-				targetDefault = fmt.Sprintf("'%s'::jsonb", defaultJSON)
-			}
-
-			if columnType(table, column) != "jsonb" {
-				usingExpr := fmt.Sprintf(`
-					CASE
-						WHEN %[1]s IS NULL OR BTRIM(%[1]s::text) = '' THEN %[2]s
-						ELSE %[1]s::jsonb
-					END
-				`, column, targetDefault)
-				if err := db.Exec(fmt.Sprintf(`
-					ALTER TABLE %s
-					ALTER COLUMN %s TYPE JSONB
-					USING %s
-				`, table, column, usingExpr)).Error; err != nil {
-					common.Warn(fmt.Sprintf("Failed to modify %s.%s to JSONB", table, column), zap.Error(err))
-				}
-			}
-
-			if defaultJSON != "" {
-				if err := db.Exec(fmt.Sprintf(`
-					ALTER TABLE %s
-					ALTER COLUMN %s SET DEFAULT '%s'::jsonb
-				`, table, column, defaultJSON)).Error; err != nil {
-					common.Warn(fmt.Sprintf("Failed to set %s.%s default", table, column), zap.Error(err))
-				}
-				if err := db.Exec(fmt.Sprintf(`
-					UPDATE %s
-					SET %s = '%s'::jsonb
-					WHERE %s IS NULL
-				`, table, column, defaultJSON, column)).Error; err != nil {
-					common.Warn(fmt.Sprintf("Failed to backfill %s.%s nulls", table, column), zap.Error(err))
-				}
-			}
-
-			if notNull {
-				if err := db.Exec(fmt.Sprintf(`
-					ALTER TABLE %s
-					ALTER COLUMN %s SET NOT NULL
-				`, table, column)).Error; err != nil {
-					common.Warn(fmt.Sprintf("Failed to set %s.%s not null", table, column), zap.Error(err))
-				}
-			} else {
-				if err := db.Exec(fmt.Sprintf(`
-					ALTER TABLE %s
-					ALTER COLUMN %s DROP NOT NULL
-				`, table, column)).Error; err != nil {
-					common.Warn(fmt.Sprintf("Failed to drop %s.%s not null", table, column), zap.Error(err))
-				}
-			}
-			return
-		}
-
-		if defaultJSON != "" {
-			if err := db.Exec(fmt.Sprintf(`
-				UPDATE %s
-				SET %s = ?
-				WHERE %s IS NULL OR TRIM(CAST(%s AS CHAR)) = ''
-			`, table, column, column, column), defaultJSON).Error; err != nil {
-				common.Warn(fmt.Sprintf("Failed to backfill %s.%s nulls", table, column), zap.Error(err))
-			}
-		}
-
-		nullability := "NULL"
-		if notNull {
-			nullability = "NOT NULL"
-		}
-		if err := db.Exec(fmt.Sprintf(`
-			ALTER TABLE %s
-			MODIFY COLUMN %s JSON %s
-		`, table, column, nullability)).Error; err != nil {
-			common.Warn(fmt.Sprintf("Failed to modify %s.%s to JSON", table, column), zap.Error(err))
+	// dialog.top_k: ensure it's INTEGER with default 1024
+	if exists, err := columnExists("dialog", "top_k"); err != nil {
+		return err
+	} else if db.Migrator().HasTable("dialog") && exists {
+		if err := db.Exec(`ALTER TABLE dialog MODIFY COLUMN top_k BIGINT NOT NULL DEFAULT 1024`).Error; err != nil {
+			return fmt.Errorf("Failed to modify dialog.top_k: %w", err)
 		}
 	}
 
-	addJSONColumnIfMissing := func(table, column, defaultJSON string, notNull bool) {
-		if !db.Migrator().HasTable(table) || columnExists(table, column) {
-			return
+	// tenant_llm.api_key: ensure it's TEXT type
+	if exists, err := columnExists("tenant_llm", "api_key"); err != nil {
+		return err
+	} else if db.Migrator().HasTable("tenant_llm") && exists {
+		if err := db.Exec(`ALTER TABLE tenant_llm MODIFY COLUMN api_key LONGTEXT`).Error; err != nil {
+			return fmt.Errorf("Failed to modify tenant_llm.api_key: %w", err)
 		}
+	}
 
-		nullability := "NULL"
-		if notNull {
-			nullability = "NOT NULL"
+	// api_token.dialog_id: ensure it's varchar(32)
+	if exists, err := columnExists("api_token", "dialog_id"); err != nil {
+		return err
+	} else if db.Migrator().HasTable("api_token") && exists {
+		if err := db.Exec(`ALTER TABLE api_token MODIFY COLUMN dialog_id VARCHAR(32)`).Error; err != nil {
+			return fmt.Errorf("Failed to modify api_token.dialog_id: %w", err)
 		}
+	}
 
-		if IsPostgres() {
-			if err := db.Exec(fmt.Sprintf(`
-				ALTER TABLE %s
-				ADD COLUMN IF NOT EXISTS %s JSONB
-			`, table, column)).Error; err != nil {
-				common.Warn(fmt.Sprintf("Failed to add %s.%s", table, column), zap.Error(err))
-				return
+	// canvas_template.title and description: ensure they're LONGTEXT type (same as Python JSONField)
+	// Note: Python's JSONField uses null=True with application-level default, not database DEFAULT
+	if db.Migrator().HasTable("canvas_template") {
+		if exists, err := columnExists("canvas_template", "title"); err != nil {
+			return err
+		} else if exists {
+			if err := db.Exec(`ALTER TABLE canvas_template MODIFY COLUMN title LONGTEXT NULL`).Error; err != nil {
+				return fmt.Errorf("Failed to modify canvas_template.title: %w", err)
 			}
-			if defaultJSON != "" {
-				if err := db.Exec(fmt.Sprintf(`
-					ALTER TABLE %s
-					ALTER COLUMN %s SET DEFAULT '%s'::jsonb
-				`, table, column, defaultJSON)).Error; err != nil {
-					common.Warn(fmt.Sprintf("Failed to set %s.%s default", table, column), zap.Error(err))
-				}
-				if err := db.Exec(fmt.Sprintf(`
-					UPDATE %s
-					SET %s = '%s'::jsonb
-					WHERE %s IS NULL
-				`, table, column, defaultJSON, column)).Error; err != nil {
-					common.Warn(fmt.Sprintf("Failed to backfill %s.%s", table, column), zap.Error(err))
-				}
-			}
-			if notNull {
-				if err := db.Exec(fmt.Sprintf(`
-					ALTER TABLE %s
-					ALTER COLUMN %s SET NOT NULL
-				`, table, column)).Error; err != nil {
-					common.Warn(fmt.Sprintf("Failed to set %s.%s not null", table, column), zap.Error(err))
-				}
-			}
-			return
 		}
-
-		if err := db.Exec(fmt.Sprintf(`
-			ALTER TABLE %s
-			ADD COLUMN %s JSON %s
-		`, table, column, nullability)).Error; err != nil {
-			common.Warn(fmt.Sprintf("Failed to add %s.%s", table, column), zap.Error(err))
-			return
-		}
-		if defaultJSON != "" {
-			if err := db.Exec(fmt.Sprintf(`
-				UPDATE %s
-				SET %s = ?
-				WHERE %s IS NULL
-			`, table, column, column), defaultJSON).Error; err != nil {
-				common.Warn(fmt.Sprintf("Failed to backfill %s.%s", table, column), zap.Error(err))
+		if exists, err := columnExists("canvas_template", "description"); err != nil {
+			return err
+		} else if exists {
+			if err := db.Exec(`ALTER TABLE canvas_template MODIFY COLUMN description LONGTEXT NULL`).Error; err != nil {
+				return fmt.Errorf("Failed to modify canvas_template.description: %w", err)
 			}
 		}
 	}
 
-	// t_ai_dialogs.top_k: ensure it's INTEGER with default 1024
-	if db.Migrator().HasTable("t_ai_dialogs") && columnExists("t_ai_dialogs", "top_k") {
-		if IsPostgres() {
-			if err := db.Exec(`ALTER TABLE t_ai_dialogs ALTER COLUMN top_k TYPE BIGINT`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_dialogs.top_k type", zap.Error(err))
-			}
-			if err := db.Exec(`ALTER TABLE t_ai_dialogs ALTER COLUMN top_k SET DEFAULT 1024`).Error; err != nil {
-				common.Warn("Failed to set t_ai_dialogs.top_k default", zap.Error(err))
-			}
-			if err := db.Exec(`ALTER TABLE t_ai_dialogs ALTER COLUMN top_k SET NOT NULL`).Error; err != nil {
-				common.Warn("Failed to set t_ai_dialogs.top_k not null", zap.Error(err))
-			}
-		} else {
-			if err := db.Exec(`ALTER TABLE t_ai_dialogs MODIFY COLUMN top_k BIGINT NOT NULL DEFAULT 1024`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_dialogs.top_k", zap.Error(err))
-			}
+	// system_settings.value: ensure it's LONGTEXT
+	if exists, err := columnExists("system_settings", "value"); err != nil {
+		return err
+	} else if db.Migrator().HasTable("system_settings") && exists {
+		if err := db.Exec(`ALTER TABLE system_settings MODIFY COLUMN value LONGTEXT NOT NULL`).Error; err != nil {
+			return fmt.Errorf("Failed to modify system_settings.value: %w", err)
 		}
 	}
 
-	// t_ai_tenant_llms.api_key: ensure it's TEXT type
-	if db.Migrator().HasTable("t_ai_tenant_llms") && columnExists("t_ai_tenant_llms", "api_key") {
-		if IsPostgres() {
-			if err := db.Exec(`ALTER TABLE t_ai_tenant_llms ALTER COLUMN api_key TYPE TEXT`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_tenant_llms.api_key", zap.Error(err))
-			}
-		} else {
-			if err := db.Exec(`ALTER TABLE t_ai_tenant_llms MODIFY COLUMN api_key LONGTEXT`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_tenant_llms.api_key", zap.Error(err))
-			}
+	// knowledgebase.raptor_task_finish_at: ensure it's DateTime
+	if exists, err := columnExists("knowledgebase", "raptor_task_finish_at"); err != nil {
+		return err
+	} else if db.Migrator().HasTable("knowledgebase") && exists {
+		if err := db.Exec(`ALTER TABLE knowledgebase MODIFY COLUMN raptor_task_finish_at DATETIME`).Error; err != nil {
+			return fmt.Errorf("Failed to modify knowledgebase.raptor_task_finish_at: %w", err)
 		}
 	}
 
-	// t_ai_api_tokens.dialog_id: ensure it's varchar(32)
-	if db.Migrator().HasTable("t_ai_api_tokens") && columnExists("t_ai_api_tokens", "dialog_id") {
-		if IsPostgres() {
-			if err := db.Exec(`ALTER TABLE t_ai_api_tokens ALTER COLUMN dialog_id TYPE VARCHAR(32)`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_api_tokens.dialog_id", zap.Error(err))
-			}
-		} else {
-			if err := db.Exec(`ALTER TABLE t_ai_api_tokens MODIFY COLUMN dialog_id VARCHAR(32)`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_api_tokens.dialog_id", zap.Error(err))
-			}
-		}
-	}
-
-	// t_ai_documents.parser_config/meta_fields: keep JSON columns aligned with Python backend
-	addJSONColumnIfMissing("t_ai_dialogs", "search_mode", "", false)
-	ensureJSONColumn("t_ai_dialogs", "llm_setting", `{"temperature":0.1,"top_p":0.3,"frequency_penalty":0.7,"presence_penalty":0.4,"max_tokens":512}`, true)
-	ensureJSONColumn("t_ai_dialogs", "prompt_config", `{"system":"","prologue":"Hi! I'm your assistant. What can I do for you?","parameters":[],"empty_response":"Sorry! No relevant content was found in the knowledge base!"}`, true)
-	ensureJSONColumn("t_ai_dialogs", "meta_data_filter", `{}`, false)
-	ensureJSONColumn("t_ai_dialogs", "kb_ids", `[]`, true)
-	ensureJSONColumn("t_ai_dialogs", "search_mode", "", false)
-
-	ensureJSONColumn("t_ai_conversations", "message", "", false)
-	ensureJSONColumn("t_ai_conversations", "reference", `[]`, false)
-
-	ensureJSONColumn("t_ai_api4conversations", "message", "", false)
-	ensureJSONColumn("t_ai_api4conversations", "reference", `[]`, false)
-	ensureJSONColumn("t_ai_api4conversations", "dsl", `{}`, false)
-
-	ensureJSONColumn("t_ai_documents", "parser_config", `{}`, true)
-	ensureJSONColumn("t_ai_documents", "meta_fields", `{}`, true)
-
-	ensureJSONColumn("t_ai_user_canvases", "dsl", `{}`, false)
-	ensureJSONColumn("t_ai_canvas_templates", "title", `{}`, false)
-	ensureJSONColumn("t_ai_canvas_templates", "description", `{}`, false)
-	ensureJSONColumn("t_ai_canvas_templates", "dsl", `{}`, false)
-	ensureJSONColumn("t_ai_user_canvas_version", "dsl", `{}`, false)
-
-	ensureJSONColumn("t_ai_mcp_server", "variables", `{}`, false)
-	ensureJSONColumn("t_ai_mcp_server", "headers", `{}`, false)
-
-	ensureJSONColumn("t_ai_search", "search_config", `{}`, true)
-	ensureJSONColumn("t_pipeline_operation_log", "dsl", `{}`, false)
-	ensureJSONColumn("t_ai_connectors", "config", `{}`, true)
-
-	ensureJSONColumn("t_ai_evaluation_datasets", "kb_ids", `[]`, true)
-	ensureJSONColumn("t_ai_evaluation_cases", "relevant_doc_ids", "", false)
-	ensureJSONColumn("t_ai_evaluation_cases", "relevant_chunk_ids", "", false)
-	ensureJSONColumn("t_ai_evaluation_cases", "case_metadata", "", false)
-	ensureJSONColumn("t_ai_evaluation_runs", "config_snapshot", `{}`, true)
-	ensureJSONColumn("t_ai_evaluation_runs", "metrics_summary", "", false)
-	ensureJSONColumn("t_ai_evaluation_results", "retrieved_chunks", `[]`, true)
-	ensureJSONColumn("t_ai_evaluation_results", "metrics", `{}`, true)
-	ensureJSONColumn("t_ai_evaluation_results", "token_usage", "", false)
-
-	// t_ai_system_settings.value: ensure it's TEXT
-	if db.Migrator().HasTable("t_ai_system_settings") && columnExists("t_ai_system_settings", "value") {
-		if IsPostgres() {
-			if err := db.Exec(`ALTER TABLE t_ai_system_settings ALTER COLUMN value TYPE TEXT`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_system_settings.value", zap.Error(err))
-			}
-			if err := db.Exec(`ALTER TABLE t_ai_system_settings ALTER COLUMN value SET NOT NULL`).Error; err != nil {
-				common.Warn("Failed to set t_ai_system_settings.value not null", zap.Error(err))
-			}
-		} else {
-			if err := db.Exec(`ALTER TABLE t_ai_system_settings MODIFY COLUMN value LONGTEXT NOT NULL`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_system_settings.value", zap.Error(err))
-			}
-		}
-	}
-
-	// t_ai_knowledgebases.raptor_task_finish_at: ensure it's DateTime/Timestamp
-	if db.Migrator().HasTable("t_ai_knowledgebases") && columnExists("t_ai_knowledgebases", "raptor_task_finish_at") {
-		if IsPostgres() {
-			if err := db.Exec(`ALTER TABLE t_ai_knowledgebases ALTER COLUMN raptor_task_finish_at TYPE TIMESTAMP`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_knowledgebases.raptor_task_finish_at", zap.Error(err))
-			}
-		} else {
-			if err := db.Exec(`ALTER TABLE t_ai_knowledgebases MODIFY COLUMN raptor_task_finish_at DATETIME`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_knowledgebases.raptor_task_finish_at", zap.Error(err))
-			}
-		}
-	}
-
-	// t_ai_knowledgebases.mindmap_task_finish_at: ensure it's DateTime/Timestamp
-	if db.Migrator().HasTable("t_ai_knowledgebases") && columnExists("t_ai_knowledgebases", "mindmap_task_finish_at") {
-		if IsPostgres() {
-			if err := db.Exec(`ALTER TABLE t_ai_knowledgebases ALTER COLUMN mindmap_task_finish_at TYPE TIMESTAMP`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_knowledgebases.mindmap_task_finish_at", zap.Error(err))
-			}
-		} else {
-			if err := db.Exec(`ALTER TABLE t_ai_knowledgebases MODIFY COLUMN mindmap_task_finish_at DATETIME`).Error; err != nil {
-				common.Warn("Failed to modify t_ai_knowledgebases.mindmap_task_finish_at", zap.Error(err))
-			}
+	// knowledgebase.mindmap_task_finish_at: ensure it's DateTime
+	if exists, err := columnExists("knowledgebase", "mindmap_task_finish_at"); err != nil {
+		return err
+	} else if db.Migrator().HasTable("knowledgebase") && exists {
+		if err := db.Exec(`ALTER TABLE knowledgebase MODIFY COLUMN mindmap_task_finish_at DATETIME`).Error; err != nil {
+			return fmt.Errorf("Failed to modify knowledgebase.mindmap_task_finish_at: %w", err)
 		}
 	}
 
@@ -650,38 +302,39 @@ func renameColumnIfExists(db *gorm.DB, tableName, oldName, newName string) error
 	}
 
 	// Helper to check if column exists
-	columnExists := func(column string) bool {
+	columnExists := func(column string) (bool, error) {
 		var count int64
-		if IsPostgres() {
-			db.Raw(`SELECT COUNT(*) FROM information_schema.columns
-				WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`, tableName, column).Scan(&count)
-		} else {
-			db.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-				WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`, tableName, column).Scan(&count)
+		if err := db.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, tableName, column).Scan(&count).Error; err != nil {
+			return false, err
 		}
-		return count > 0
+		return count > 0, nil
 	}
 
 	// Check if old column exists
-	if !columnExists(oldName) {
+	if exists, err := columnExists(oldName); err != nil {
+		return err
+	} else if !exists {
 		return nil
 	}
 
 	// Check if new column already exists
-	if columnExists(newName) {
+	if exists, err := columnExists(newName); err != nil {
+		return err
+	} else if exists {
 		// Both exist, drop the old one
 		common.Warn("Both old and new columns exist, dropping old one",
 			zap.String("table", tableName),
 			zap.String("oldColumn", oldName),
 			zap.String("newColumn", newName))
-		return db.Migrator().DropColumn(tableName, oldName)
+		return db.Exec("ALTER TABLE ? DROP COLUMN ?", clause.Table{Name: tableName}, clause.Column{Name: oldName}).Error
 	}
 
 	common.Info("Renaming column",
 		zap.String("table", tableName),
 		zap.String("oldColumn", oldName),
 		zap.String("newColumn", newName))
-	return db.Migrator().RenameColumn(tableName, oldName, newName)
+	return db.Exec("ALTER TABLE ? RENAME COLUMN ? TO ?", clause.Table{Name: tableName}, clause.Column{Name: oldName}, clause.Column{Name: newName}).Error
 }
 
 // addColumnIfNotExists adds a column if it doesn't exist
@@ -692,12 +345,9 @@ func addColumnIfNotExists(db *gorm.DB, tableName, columnName, columnDef string) 
 
 	// Check if column exists using raw SQL
 	var count int64
-	if IsPostgres() {
-		db.Raw(`SELECT COUNT(*) FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`, tableName, columnName).Scan(&count)
-	} else {
-		db.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`, tableName, columnName).Scan(&count)
+	if err := db.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, tableName, columnName).Scan(&count).Error; err != nil {
+		return err
 	}
 	if count > 0 {
 		return nil
@@ -708,4 +358,184 @@ func addColumnIfNotExists(db *gorm.DB, tableName, columnName, columnDef string) 
 		zap.String("column", columnName))
 	sql := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, columnName, columnDef)
 	return db.Exec(sql).Error
+}
+
+// migrateSkillSearchTables creates skill search related tables
+func migrateSkillSearchTables(db *gorm.DB) error {
+	// Create skill_search_configs table only
+	if !db.Migrator().HasTable("skill_search_configs") {
+		common.Info("Creating skill_search_configs table...")
+		sql := `
+		CREATE TABLE IF NOT EXISTS skill_search_configs (
+			id VARCHAR(32) PRIMARY KEY,
+			tenant_id VARCHAR(32) NOT NULL,
+			space_id VARCHAR(128) NOT NULL DEFAULT 'default',
+			embd_id VARCHAR(128) NOT NULL,
+			vector_similarity_weight FLOAT DEFAULT 0.3,
+			similarity_threshold FLOAT DEFAULT 0.2,
+			field_config JSON,
+			rerank_id VARCHAR(128),
+			tenant_rerank_id BIGINT,
+			top_k BIGINT DEFAULT 10,
+			index_version VARCHAR(32) DEFAULT '1.0.0',
+			status VARCHAR(1) DEFAULT '1',
+			create_time BIGINT,
+			create_date DATETIME,
+			update_time BIGINT,
+			update_date DATETIME,
+			INDEX idx_tenant_id (tenant_id),
+			INDEX idx_space_id (space_id),
+			UNIQUE INDEX idx_tenant_space_embd (tenant_id, space_id, embd_id)
+		)
+		`
+		if err := db.Exec(sql).Error; err != nil {
+			common.Warn("Failed to create skill_search_configs table with MySQL dialect, trying generic", zap.Error(err))
+			if err := db.AutoMigrate(&entity.SkillSearchConfig{}); err != nil {
+				return err
+			}
+			// AutoMigrate doesn't create unique indexes, so create them explicitly
+			common.Info("Creating unique indexes for skill_search_configs...")
+			if err := db.Exec(`ALTER TABLE skill_search_configs ADD UNIQUE INDEX idx_tenant_space_embd (tenant_id, space_id, embd_id)`).Error; err != nil {
+				return fmt.Errorf("failed to create unique index idx_tenant_space_embd: %w", err)
+			}
+		}
+	} else {
+		// Add space_id for existing installations.
+		if err := addColumnIfNotExists(db, "skill_search_configs", "space_id", "VARCHAR(128) NOT NULL DEFAULT 'default'"); err != nil {
+			return fmt.Errorf("failed to add space_id column to skill_search_configs: %w", err)
+		}
+		if err := addColumnIfNotExists(db, "skill_search_configs", "create_date", "DATETIME"); err != nil {
+			return fmt.Errorf("failed to add create_date column to skill_search_configs: %w", err)
+		}
+		if err := addColumnIfNotExists(db, "skill_search_configs", "update_date", "DATETIME"); err != nil {
+			return fmt.Errorf("failed to add update_date column to skill_search_configs: %w", err)
+		}
+		if err := db.Exec(`ALTER TABLE skill_search_configs MODIFY COLUMN update_time BIGINT`).Error; err != nil {
+			return fmt.Errorf("Failed to modify skill_search_configs.update_time: %w", err)
+		}
+
+		// Drop legacy unique index (tenant_id, embd_id) to allow per-space configs.
+		var legacyIndexExists int64
+		if err := db.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'skill_search_configs' AND INDEX_NAME = 'idx_tenant_embd'`).Scan(&legacyIndexExists).Error; err != nil {
+			return err
+		}
+		if legacyIndexExists > 0 {
+			common.Info("Dropping legacy unique index idx_tenant_embd from skill_search_configs...")
+			if err := db.Exec(`ALTER TABLE skill_search_configs DROP INDEX idx_tenant_embd`).Error; err != nil {
+				return fmt.Errorf("failed to drop legacy unique index idx_tenant_embd: %w", err)
+			}
+		}
+
+		// Table exists, check if unique index exists
+		var indexExists int64
+		if err := db.Raw(`SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'skill_search_configs' AND INDEX_NAME = 'idx_tenant_space_embd'`).Scan(&indexExists).Error; err != nil {
+			return err
+		}
+		if indexExists == 0 {
+			common.Info("Adding unique index idx_tenant_space_embd to skill_search_configs...")
+			if err := db.Exec(`ALTER TABLE skill_search_configs
+				ADD UNIQUE INDEX idx_tenant_space_embd (tenant_id, space_id, embd_id)`).Error; err != nil {
+				return fmt.Errorf("failed to add unique index idx_tenant_space_embd: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// migrateSkillSpaceTables creates skill space related tables
+func migrateSkillSpaceTables(db *gorm.DB) error {
+	if !db.Migrator().HasTable("skill_spaces") {
+		common.Info("Creating skill_spaces table...")
+		sql := `
+		CREATE TABLE IF NOT EXISTS skill_spaces (
+			id VARCHAR(32) PRIMARY KEY,
+			tenant_id VARCHAR(32) NOT NULL,
+			name VARCHAR(128) NOT NULL,
+			folder_id VARCHAR(32) NOT NULL,
+			description TEXT,
+			embd_id VARCHAR(128),
+			rerank_id VARCHAR(128),
+			top_k INT DEFAULT 10,
+			status VARCHAR(1) DEFAULT '1',
+			create_time BIGINT,
+			create_date DATETIME,
+			update_time BIGINT,
+			update_date DATETIME,
+			INDEX idx_tenant_id (tenant_id),
+			UNIQUE INDEX idx_tenant_name_status (tenant_id, name, status)
+		)
+		`
+		if err := db.Exec(sql).Error; err != nil {
+			common.Warn("Failed to create skill_spaces table with MySQL dialect, trying generic", zap.Error(err))
+			// Try with AutoMigrate as fallback
+			if err := db.AutoMigrate(&entity.SkillSpace{}); err != nil {
+				return err
+			}
+			// AutoMigrate doesn't create unique indexes, so create them explicitly
+			common.Info("Creating unique indexes for skill_spaces...")
+			if err := db.Exec(`ALTER TABLE skill_spaces ADD UNIQUE INDEX idx_tenant_name_status (tenant_id, name, status)`).Error; err != nil {
+				return fmt.Errorf("failed to create unique index idx_tenant_name_status: %w", err)
+			}
+		}
+	} else {
+		// Migrate existing table: add status column first, then update index
+		if err := addColumnIfNotExists(db, "skill_spaces", "status", "VARCHAR(1) NOT NULL DEFAULT '1'"); err != nil {
+			return fmt.Errorf("failed to add status column to skill_spaces: %w", err)
+		}
+		if err := addColumnIfNotExists(db, "skill_spaces", "create_date", "DATETIME"); err != nil {
+			return fmt.Errorf("failed to add create_date column to skill_spaces: %w", err)
+		}
+		if err := addColumnIfNotExists(db, "skill_spaces", "update_date", "DATETIME"); err != nil {
+			return fmt.Errorf("failed to add update_date column to skill_spaces: %w", err)
+		}
+		if err := db.Exec(`ALTER TABLE skill_spaces MODIFY COLUMN update_time BIGINT`).Error; err != nil {
+			return fmt.Errorf("Failed to modify skill_spaces.update_time: %w", err)
+		}
+		// Migrate index after status column exists
+		if err := migrateSkillSpaceIndex(db); err != nil {
+			return fmt.Errorf("failed to migrate skill_space index: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// migrateSkillSpaceIndex migrates the unique index to include status
+func migrateSkillSpaceIndex(db *gorm.DB) error {
+	// Check if old index exists and drop it
+	var oldIndexExists int64
+	if err := db.Raw(`
+		SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'skill_spaces' AND INDEX_NAME = 'idx_tenant_name'
+	`).Scan(&oldIndexExists).Error; err != nil {
+		return err
+	}
+
+	if oldIndexExists > 0 {
+		common.Info("Dropping old idx_tenant_name index from skill_spaces...")
+		if err := db.Exec(`DROP INDEX idx_tenant_name ON skill_spaces`).Error; err != nil {
+			return fmt.Errorf("failed to drop old index idx_tenant_name: %w", err)
+		}
+	}
+
+	// Check if new index exists
+	var newIndexExists int64
+	if err := db.Raw(`
+		SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'skill_spaces' AND INDEX_NAME = 'idx_tenant_name_status'
+	`).Scan(&newIndexExists).Error; err != nil {
+		return err
+	}
+
+	if newIndexExists == 0 {
+		common.Info("Creating new idx_tenant_name_status index on skill_spaces...")
+		if err := db.Exec(`CREATE UNIQUE INDEX idx_tenant_name_status ON skill_spaces(tenant_id, name, status)`).Error; err != nil {
+			return fmt.Errorf("failed to create unique index idx_tenant_name_status: %w", err)
+		}
+	}
+
+	return nil
 }

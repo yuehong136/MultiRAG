@@ -18,6 +18,8 @@ package dao
 
 import (
 	"context"
+	"fmt"
+
 	"multirag/internal/entity"
 )
 
@@ -56,8 +58,13 @@ func (dao *UserTenantDAO) Delete(id string) error {
 
 // GetByUserID get user tenant relationships by user ID
 func (dao *UserTenantDAO) GetByUserID(userID string) ([]*entity.UserTenant, error) {
+	return dao.GetByUserIDWithContext(context.Background(), userID)
+}
+
+// GetByUserIDWithContext gets active user tenant relationships by user ID with context.
+func (dao *UserTenantDAO) GetByUserIDWithContext(ctx context.Context, userID string) ([]*entity.UserTenant, error) {
 	var relations []*entity.UserTenant
-	err := DB.Where("user_id = ? AND status = ?", userID, "1").Find(&relations).Error
+	err := DB.WithContext(ctx).Where("user_id = ? AND status = ?", userID, "1").Find(&relations).Error
 	return relations, err
 }
 
@@ -73,7 +80,7 @@ func (dao *UserTenantDAO) GetTenantIDsByUserID(userID string) ([]string, error) 
 	var tenantIDs []string
 	err := DB.Model(&entity.UserTenant{}).
 		Select("tenant_id").
-		Where("user_id = ? AND status = ? AND role IN ?", userID, "1", []string{"owner", "admin", "normal"}).
+		Where("user_id = ? AND status = ? AND role IN ?", userID, "1", []string{"owner", "normal", "admin"}).
 		Pluck("tenant_id", &tenantIDs).Error
 	return tenantIDs, err
 }
@@ -115,13 +122,45 @@ type TenantInfoByUserID struct {
 	UpdateDate string `json:"update_date"`
 }
 
+// TenantMemberItem holds user details for a tenant member listing.
+type TenantMemberItem struct {
+	ID              string `json:"id"`
+	UserID          string `json:"user_id"`
+	Role            string `json:"role"`
+	Status          string `json:"status"`
+	Nickname        string `json:"nickname"`
+	Email           string `json:"email"`
+	Avatar          string `json:"avatar"`
+	IsAuthenticated bool   `json:"is_authenticated"`
+	IsActive        string `json:"is_active"`
+	IsAnonymous     bool   `json:"is_anonymous"`
+	IsSuperuser     bool   `json:"is_superuser"`
+	UpdateDate      string `json:"update_date"`
+}
+
+// GetMembersByTenantID returns all non-owner members of a tenant with user details.
+// update_date is formatted as "2006-01-02T15:04:05" (no timezone) to match the Python API.
+func (dao *UserTenantDAO) GetMembersByTenantID(tenantID string) ([]*TenantMemberItem, error) {
+	var results []*TenantMemberItem
+	err := DB.Table("user_tenant").
+		Select("user_tenant.id, user_tenant.user_id, user_tenant.role, user_tenant.status, "+
+			"user.nickname, user.email, user.avatar, user.is_authenticated, "+
+			"user.status AS is_active, user.is_anonymous, user.is_superuser, "+
+			"DATE_FORMAT(user.update_date, '%Y-%m-%dT%H:%i:%s') AS update_date").
+		Joins("JOIN user ON user_tenant.user_id = user.id").
+		Where("user_tenant.tenant_id = ? AND user_tenant.status = ? AND user_tenant.role != ?",
+			tenantID, "1", "owner").
+		Scan(&results).Error
+	return results, err
+}
+
 // GetTenantsByUserID get tenants by user ID with user details
 func (dao *UserTenantDAO) GetTenantsByUserID(userID string) ([]*TenantInfoByUserID, error) {
 	var results []*TenantInfoByUserID
-	err := DB.Table("t_ai_user_tenants").
-		Select("t_ai_user_tenants.tenant_id, t_ai_user_tenants.role, t_ai_users.nickname, t_ai_users.email, t_ai_users.avatar, t_ai_users.update_date").
-		Joins("JOIN t_ai_users ON t_ai_user_tenants.tenant_id = t_ai_users.id AND t_ai_user_tenants.user_id = ? AND t_ai_user_tenants.status = ?", userID, "1").
-		Where("t_ai_user_tenants.status = ?", "1").
+	err := DB.Table("user_tenant").
+		Select("user_tenant.tenant_id, user_tenant.role, user.nickname, user.email, user.avatar, user.update_date").
+		Joins("JOIN user ON user_tenant.tenant_id = user.id AND user_tenant.user_id = ? AND user_tenant.status = ?", userID, "1").
+		Where("user_tenant.status = ?", "1").
 		Scan(&results).Error
 	return results, err
 }
@@ -145,13 +184,24 @@ func (dao *UserTenantDAO) GetByUserIDAll(userID string) ([]*entity.UserTenant, e
 	return relations, err
 }
 
-// GetActiveByUserID returns accepted resource memberships; invitations remain in GetByUserID for presentation.
-func (dao *UserTenantDAO) GetActiveByUserID(userID string) ([]*entity.UserTenant, error) {
-	return dao.GetActiveByUserIDWithContext(context.Background(), userID)
+// DeleteByUserAndTenant hard-deletes the join record for a specific user+tenant pair.
+func (dao *UserTenantDAO) DeleteByUserAndTenant(userID, tenantID string) error {
+	return DB.Unscoped().
+		Where("user_id = ? AND tenant_id = ?", userID, tenantID).
+		Delete(&entity.UserTenant{}).Error
 }
 
-func (dao *UserTenantDAO) GetActiveByUserIDWithContext(ctx context.Context, userID string) ([]*entity.UserTenant, error) {
-	rows := []*entity.UserTenant{}
-	err := DB.WithContext(ctx).Where("user_id = ? AND status = ? AND role IN ?", userID, "1", []string{"owner", "admin", "normal"}).Find(&rows).Error
-	return rows, err
+// UpdateRoleByUserAndTenant updates the role for a specific user+tenant pair.
+// Returns an error if no matching row was found.
+func (dao *UserTenantDAO) UpdateRoleByUserAndTenant(userID, tenantID, role string) error {
+	result := DB.Model(&entity.UserTenant{}).
+		Where("user_id = ? AND tenant_id = ? AND status = ?", userID, tenantID, "1").
+		Update("role", role)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("no active membership found for user %s in tenant %s", userID, tenantID)
+	}
+	return nil
 }
