@@ -245,7 +245,7 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 			w.WriteHeader(404)
 		}
 	}))
-	pm, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	pm, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 		provider.URL = map[string]string{"default": upstream.URL + "/" + strings.ToLower(providerName) + "/one", "other": upstream.URL + "/" + strings.ToLower(providerName) + "/two"}
 		provider.URLSuffix.Models = "models"
 		provider.URLSuffix.Embedding = "embeddings"
-		provider.Models = append(provider.Models, &entity.Model{Name: "namespace/raw", ModelTypes: []string{"embedding"}, ModelTypeMap: map[string]bool{"embedding": true}})
+		provider.Models = append(provider.Models, &models.Model{Name: "namespace/raw", ModelTypes: []string{"embedding"}, ModelTypeMap: map[string]bool{"embedding": true}})
 		providerID := strings.ToLower(providerName)
 		if err = db.Create(&entity.TenantModelProvider{ID: providerID, ProviderName: providerName, TenantID: "owner-tenant"}).Error; err != nil {
 			t.Fatal(err)
@@ -342,7 +342,7 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 			status, body := request(provider, instance, "owner")
 			var response struct {
 				Code int                     `json:"code"`
-				Data []entity.SupportedModel `json:"data"`
+				Data []models.SupportedModel `json:"data"`
 			}
 			if status != 200 || json.Unmarshal(body, &response) != nil || response.Code != 0 || len(response.Data) != 3 {
 				t.Fatalf("inventory status/code/cardinality: %d %s", status, body)

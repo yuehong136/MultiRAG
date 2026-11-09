@@ -53,7 +53,7 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 		t.Fatal("independent readback failed")
 	}
 	defer readback.Close()
-	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Capability mismatch stays an explicit failure without model-name heuristics.
-	provider.Models = append(provider.Models, &entity.Model{Name: "vision-only", ModelTypes: []string{"image2text"}})
+	provider.Models = append(provider.Models, &models.Model{Name: "vision-only", ModelTypes: []string{"image2text"}})
 	if _, err := svc.modelProviderService.GetChatModel("session-tenant", "vision-only@fixture@Moonshot"); err != nil {
 		t.Fatalf("vision chat capability rejected: %v", err)
 	}

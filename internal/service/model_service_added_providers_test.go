@@ -20,7 +20,7 @@ import (
 // Load the real catalogs, resolve two independent service instances, and run
 // the bound chat/vector consumers against authenticated HTTP provider fixtures.
 func TestAddedProviderCatalogBoundConsumersHTTP(t *testing.T) {
-	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

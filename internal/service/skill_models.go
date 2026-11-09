@@ -59,12 +59,12 @@ func (p *SkillModelProvider) GetEmbeddingModel(tenant, ref string) (*skillEmbedd
 	}
 	row := rows[0]
 	manager := dao.GetModelProviderManager()
-	var provider *entity.Provider
+	var provider *models.Provider
 	if manager != nil {
 		provider = manager.FindProvider(row.LLMFactory)
 	}
 	if provider == nil && strings.EqualFold(row.LLMFactory, "OpenAI-API-Compatible") {
-		provider = &entity.Provider{Name: row.LLMFactory, URL: map[string]string{}, URLSuffix: models.URLSuffix{Embedding: "embeddings"}}
+		provider = &models.Provider{Name: row.LLMFactory, URL: map[string]string{}, URLSuffix: models.URLSuffix{Embedding: "embeddings"}}
 	}
 	if provider == nil {
 		return nil, fmt.Errorf("MODEL_DRIVER_UNAVAILABLE")

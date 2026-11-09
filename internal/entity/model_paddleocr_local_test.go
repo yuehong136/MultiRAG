@@ -8,7 +8,7 @@ import (
 )
 
 func TestPaddleOCRLocalCatalogRequiresTenantEndpoint(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal("real catalog failed to load", err)
 	}

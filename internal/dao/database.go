@@ -17,6 +17,8 @@
 package dao
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"errors"
 	"fmt"
 	"net"
@@ -41,7 +43,7 @@ import (
 )
 
 var DB *gorm.DB
-var modelProviderManager *entity.ProviderManager
+var modelProviderManager *modelModule.ProviderManager
 
 // InitDB initialize database connection
 func InitDB() error {
@@ -153,7 +155,7 @@ func InitDB() error {
 
 	common.Info("Database connected and migrated successfully")
 
-	modelProviderManager, err = entity.NewProviderManager(filepath.Join(utility.GetProjectBaseDirectory(), "configs", "models"))
+	modelProviderManager, err = modelModule.NewProviderManager(filepath.Join(utility.GetProjectBaseDirectory(), "configs", "models"))
 	if err != nil {
 		return fmt.Errorf("failed to load model providers: %w", err)
 	}
@@ -183,7 +185,7 @@ func GetDB() *gorm.DB {
 }
 
 // GetModelProviderManager get model provider manager instance
-func GetModelProviderManager() *entity.ProviderManager {
+func GetModelProviderManager() *modelModule.ProviderManager {
 	return modelProviderManager
 }
 

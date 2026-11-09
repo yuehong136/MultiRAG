@@ -23,7 +23,7 @@ func (f *discoveryRejectedRegionFactory) CreateModelDriver(name string, urls map
 }
 
 func TestVolcEngineAliyunDiscoveryInstanceIsolationHTTP(t *testing.T) {
-	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestVolcEngineAliyunDiscoveryInstanceIsolationHTTP(t *testing.T) {
 			}))
 			defer server.Close()
 			urls := map[string]string{"default": server.URL + "/default/", "singapore": server.URL + "/singapore/"}
-			provider := &entity.Provider{Name: name, URL: urls, URLSuffix: catalog.URLSuffix, ModelDriver: catalog.ModelDriver}
+			provider := &models.Provider{Name: name, URL: urls, URLSuffix: catalog.URLSuffix, ModelDriver: catalog.ModelDriver}
 			// Unknown regions without an explicit endpoint fail before factory or
 			// network access; discovery must not silently fall back to default.
 			invalidRegion, err := encodeProviderInstanceExtra("unknown", "")

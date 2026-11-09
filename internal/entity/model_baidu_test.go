@@ -15,8 +15,8 @@ func TestBaiduCatalogRegistration(t *testing.T) {
 	// contracts still have to resolve by name, with thinking opted in per model.
 	requireCatalogModels(t, manager, "Baidu", []catalogModelContract{
 		{"deepseek-v3.2", []string{"chat"}, nil},
-		{"deepseek-v4-flash", []string{"chat"}, &ModelThinking{DefaultValue: true, ClearThinking: true}},
-		{"deepseek-v4-pro", []string{"chat"}, &ModelThinking{DefaultValue: true, ClearThinking: true}},
+		{"deepseek-v4-flash", []string{"chat"}, &models.ModelThinking{DefaultValue: true, ClearThinking: true}},
+		{"deepseek-v4-pro", []string{"chat"}, &models.ModelThinking{DefaultValue: true, ClearThinking: true}},
 		{"ernie-5.0", []string{"vision"}, nil},
 		{"embedding-v1", []string{"embedding"}, nil},
 		{"qwen3-reranker-4b", []string{"rerank"}, nil},

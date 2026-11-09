@@ -38,6 +38,7 @@ func TestLocalIngestionCLIExecutesActualContent(t *testing.T) {
 	}
 	text := write("source.txt", []byte("one\n\n二"))
 	dsl := write("pipeline.json", []byte(`{"pipeline":[{"operator":"split","strategy":"paragraph"}]}`))
+	repeated := write("repeated.json", []byte(`{"pipeline":[{"operator":"preprocess"},{"operator":"preprocess"},{"operator":"split","strategy":"paragraph"},{"operator":"split","strategy":"char"}]}`))
 	bad := write("bad.json", []byte(`{"pipeline":[{"operator":"split","typo":true}]}`))
 	cfg := write("config.json", []byte(`{"lib_type":"builtin"}`))
 	var buffer bytes.Buffer
@@ -51,7 +52,7 @@ func TestLocalIngestionCLIExecutesActualContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := write("source.docx", buffer.Bytes())
-	commands := []string{"CHUNK '" + text + "' WITH '" + dsl + "';", "EXPLAIN CHUNK 'missing.txt' WITH '" + dsl + "';", "PARSE FILE '" + doc + "' WITH '" + cfg + "';"}
+	commands := []string{"CHUNK '" + text + "' WITH '" + dsl + "';", "EXPLAIN CHUNK 'missing.txt' WITH '" + dsl + "';", "PARSE FILE '" + doc + "' WITH '" + cfg + "';", "CHUNK '" + text + "' WITH '" + repeated + "';"}
 	client := NewMultiRAGClient("user")
 	client.HTTPClient.client.Transport = &registryTransport{}
 	for i, input := range commands {
@@ -79,6 +80,11 @@ func TestLocalIngestionCLIExecutesActualContent(t *testing.T) {
 		case 2:
 			if !strings.Contains(result.(*CommonDataResponse).Data["text"].(string), "Actual Office text") {
 				t.Fatal(result)
+			}
+		case 3:
+			rows := result.(*CommonResponse).Data
+			if len(rows) <= 2 || rows[len(rows)-1]["content"] != "二" {
+				t.Fatal("declared stages were not executed", rows)
 			}
 		}
 		binary := os.Getenv("MULTIRAG_M_CLI")

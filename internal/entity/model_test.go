@@ -1,6 +1,8 @@
 package entity
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,7 +15,7 @@ func TestProviderModelClassWithoutHyphen(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "provider.json"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewProviderManager(directory)
+	manager, err := modelModule.NewProviderManager(directory)
 	if err != nil {
 		t.Fatalf("NewProviderManager() error = %v", err)
 	}
@@ -24,7 +26,7 @@ func TestProviderModelClassWithoutHyphen(t *testing.T) {
 }
 
 func TestProviderModelsKeepInitializedTypeMaps(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatalf("NewProviderManager() error = %v", err)
 	}
@@ -47,7 +49,7 @@ func TestProviderModelsKeepInitializedTypeMaps(t *testing.T) {
 }
 
 func TestProviderModelsResolveThinkingFeatures(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatalf("NewProviderManager() error = %v", err)
 	}
@@ -87,7 +89,7 @@ func TestProviderModelsResolveThinkingFeatures(t *testing.T) {
 // SHOW BALANCE 依赖 provider 配置里的 balance suffix：Moonshot 的驱动早已实现
 // Balance()，但在补上这份配置之前 FindProvider 返回 nil，命令直接 404。
 func TestMoonshotProviderSupportsBalanceLookup(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatalf("NewProviderManager() error = %v", err)
 	}
@@ -116,7 +118,7 @@ func TestMoonshotProviderSupportsBalanceLookup(t *testing.T) {
 }
 
 func TestDeepSeekProviderIsConfigured(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatalf("NewProviderManager() error = %v", err)
 	}
@@ -142,7 +144,7 @@ func TestDeepSeekProviderIsConfigured(t *testing.T) {
 }
 
 func TestGiteeAndSiliconFlowProvidersAreConfigured(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatalf("NewProviderManager() error = %v", err)
 	}
@@ -166,7 +168,7 @@ func TestGiteeAndSiliconFlowProvidersAreConfigured(t *testing.T) {
 }
 
 func TestAliyunProviderIsConfigured(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatalf("NewProviderManager() error = %v", err)
 	}
@@ -193,7 +195,7 @@ func TestAliyunProviderIsConfigured(t *testing.T) {
 }
 
 func TestMinimaxProviderIsConfigured(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatalf("NewProviderManager() error = %v", err)
 	}
@@ -219,7 +221,7 @@ func TestMinimaxProviderIsConfigured(t *testing.T) {
 }
 
 func TestModelLevelThinkingAndGoogleFactory(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +275,7 @@ func TestExplicitModelThinkingTakesPrecedenceOverLegacyProviderDefaults(t *testi
 	if err := os.WriteFile(filepath.Join(directory, "google.json"), []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewProviderManager(directory)
+	manager, err := modelModule.NewProviderManager(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +286,7 @@ func TestExplicitModelThinkingTakesPrecedenceOverLegacyProviderDefaults(t *testi
 }
 
 func TestVolcEngineModelThinkingDefaults(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +299,7 @@ func TestVolcEngineModelThinkingDefaults(t *testing.T) {
 // Provider selection uses provider.Name. Hosted and local OCR identities remain
 // separate throughout catalog loading and factory construction.
 func TestProviderFixCatalogRoutingAndCapabilities(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +341,7 @@ func TestProviderFixCatalogRoutingAndCapabilities(t *testing.T) {
 }
 
 func TestReplicateCatalogCapabilities(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +387,7 @@ func TestReplicateCatalogCapabilities(t *testing.T) {
 }
 
 func TestSiliconFlowFourProCatalogModels(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

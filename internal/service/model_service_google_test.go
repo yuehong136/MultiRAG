@@ -1,13 +1,12 @@
 package service
 
 import (
-	"multirag/internal/entity"
 	"multirag/internal/entity/models"
 	"testing"
 )
 
 func TestModelChatDefaultsPreserveExplicitThinking(t *testing.T) {
-	model := &entity.Model{Thinking: &entity.ModelThinking{DefaultValue: true}}
+	model := &models.Model{Thinking: &models.ModelThinking{DefaultValue: true}}
 	config := &models.ChatConfig{}
 	applyModelChatDefaults(model, config)
 	if config.Thinking == nil || !*config.Thinking {

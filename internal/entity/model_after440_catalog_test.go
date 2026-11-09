@@ -7,7 +7,7 @@ import (
 )
 
 func TestAfter440ProviderCatalogCapabilities(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

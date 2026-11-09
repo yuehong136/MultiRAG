@@ -205,7 +205,7 @@ func (s *SearchbotService) legacyChatModel(ctx context.Context, tenantID string,
 		provider = s.provider.providerManager.FindProvider("Gitee")
 	}
 	if provider == nil && strings.EqualFold(row.LLMFactory, "OpenAI-API-Compatible") {
-		provider = &entity.Provider{Name: row.LLMFactory, URLSuffix: models.URLSuffix{Chat: "chat/completions"}}
+		provider = &models.Provider{Name: row.LLMFactory, URLSuffix: models.URLSuffix{Chat: "chat/completions"}}
 	}
 	if provider == nil || row.APIKey == nil || strings.TrimSpace(*row.APIKey) == "" || row.MaxTokens < 0 {
 		return nil, errors.New("selected chat model configuration is unavailable")

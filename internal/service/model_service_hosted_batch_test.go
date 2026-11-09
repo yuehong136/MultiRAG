@@ -74,7 +74,7 @@ func TestHostedProviderBindingScratchPostgres(t *testing.T) {
 		t.Fatal("readback connect")
 	}
 	defer readback.Close()
-	manager, e := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, e := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if e != nil {
 		t.Fatal(e)
 	}

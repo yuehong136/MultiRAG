@@ -1,6 +1,8 @@
 package router
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"bytes"
 	"context"
 	"database/sql"
@@ -192,7 +194,7 @@ func TestAfter33GManagementHTTPAndSQL(t *testing.T) {
 		}
 		fmt.Fprint(w, `{"data":[{"id":"controlled-model"}]}`)
 	}))
-	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal("catalog load")
 	}

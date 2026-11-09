@@ -1,12 +1,14 @@
 package entity
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"path/filepath"
 	"testing"
 )
 
 func TestAfter2836ProviderCatalogCapabilities(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"encoding/json"
 	"math"
 	"net/http"
@@ -48,7 +50,7 @@ func TestCatalogCLIHTTP(t *testing.T) {
 	if stored, err := os.ReadFile(path); err != nil || string(stored) != string(raw) {
 		t.Fatal("fixture readback failed")
 	}
-	manager := &entity.ProviderManager{}
+	manager := &modelModule.ProviderManager{}
 	if err := manager.LoadAllModels(path); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +140,7 @@ func TestCatalogCLIHTTP(t *testing.T) {
 	if _, _, err := models.ListAllModels(math.MaxInt, 2); err == nil {
 		t.Fatal("service accepted overflow")
 	}
-	empty := service.NewModelProviderServiceWithCatalog(&entity.ProviderManager{}, nil)
+	empty := service.NewModelProviderServiceWithCatalog(&modelModule.ProviderManager{}, nil)
 	list, total, err := empty.ListAllModels(0, 0)
 	if err != nil || total != 0 || list == nil || len(list) != 0 {
 		t.Fatal("empty catalog must return []/0")

@@ -213,7 +213,7 @@ func TestAfter10bbeAskChatRAGJWTSQL(t *testing.T) {
 	if prompt, selected, err := service.BuildKnowledgePrompt(huge, 1); err != nil || prompt != "" || len(selected) != 0 {
 		t.Fatal("native budget admitted partial oversized knowledge", err)
 	}
-	catalog, err := entity.NewProviderManager("configs/models")
+	catalog, err := models.NewProviderManager("configs/models")
 	if err != nil {
 		t.Fatal(err)
 	}

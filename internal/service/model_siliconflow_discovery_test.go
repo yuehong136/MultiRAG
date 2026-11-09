@@ -1,6 +1,8 @@
 package service_test
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -44,7 +46,7 @@ func TestSiliconFlowDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 	if catalogRoot == "" {
 		catalogRoot = filepath.Join("..", "..", "configs")
 	}
-	pm, err := entity.NewProviderManager(filepath.Join(catalogRoot, "models"))
+	pm, err := modelModule.NewProviderManager(filepath.Join(catalogRoot, "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,14 +63,14 @@ func TestSiliconFlowDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 		t.Fatal("known model metadata unavailable")
 	}
 	expected[0].Name += "@owner"
-	var zero entity.Model
+	var zero modelModule.Model
 	if err := json.Unmarshal([]byte(`{"name":"controlled-zero","max_tokens":0,"max_dimension":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}}`), &zero); err != nil {
 		t.Fatal(err)
 	}
 	provider.Models = append(provider.Models, &zero)
 	zeroRow := pm.DescribeSupportedModels("SiliconFlow", []string{zero.Name})[0]
 	zeroRow.Name += "@owner"
-	expected = append(expected, entity.SupportedModel{Name: "unknown@owner"}, zeroRow)
+	expected = append(expected, modelModule.SupportedModel{Name: "unknown@owner"}, zeroRow)
 	var mode atomic.Int32
 	var calls atomic.Int32
 	upstream := deepSeekDiscoveryServer(t, j, "siliconflow-provider", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +150,7 @@ func TestSiliconFlowDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 		t.Fatalf("unexpected CLI response %T", result)
 	}
 	encoded, err := json.Marshal(response.Data)
-	var discovered []entity.SupportedModel
+	var discovered []modelModule.SupportedModel
 	if err != nil || json.Unmarshal(encoded, &discovered) != nil || !reflect.DeepEqual(discovered, expected) {
 		t.Fatal("REST/CLI changed metadata or discovery IDs", string(encoded))
 	}

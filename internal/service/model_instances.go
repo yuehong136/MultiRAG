@@ -57,7 +57,7 @@ func encodeProviderInstanceExtra(region, baseURL string) (string, error) {
 	raw, err = json.Marshal(extra)
 	return string(raw), err
 }
-func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModelInstance, factories ...models.DriverFactory) (models.ModelDriver, *models.APIConfig, error) {
+func instanceModelDriver(provider *models.Provider, instance *entity.TenantModelInstance, factories ...models.DriverFactory) (models.ModelDriver, *models.APIConfig, error) {
 	if provider == nil || instance == nil {
 		return nil, nil, fmt.Errorf("provider not found")
 	}
@@ -250,11 +250,11 @@ func (m *ModelProviderService) AddModels(ctx context.Context, providerName, inst
 	}
 	return common.CodeSuccess, nil
 }
-func (m *ModelProviderService) instanceModelDefinition(provider *entity.Provider, providerID, instanceID, name string) (*entity.Model, error) {
+func (m *ModelProviderService) instanceModelDefinition(provider *models.Provider, providerID, instanceID, name string) (*models.Model, error) {
 	return m.instanceModelDefinitionWithContext(context.Background(), provider, providerID, instanceID, name)
 }
 
-func (m *ModelProviderService) instanceModelDefinitionWithContext(ctx context.Context, provider *entity.Provider, providerID, instanceID, name string) (*entity.Model, error) {
+func (m *ModelProviderService) instanceModelDefinitionWithContext(ctx context.Context, provider *models.Provider, providerID, instanceID, name string) (*models.Model, error) {
 	stored, err := m.modelDAO.GetModelByProviderIDAndInstanceIDAndModelNameWithContext(ctx, providerID, instanceID, name)
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -278,9 +278,9 @@ func (m *ModelProviderService) instanceModelDefinitionWithContext(ctx context.Co
 		return nil, err
 	}
 	class := provider.Class
-	model := &entity.Model{Name: name, MaxTokens: extra.MaxTokens, ModelTypes: types, Class: &class}
+	model := &models.Model{Name: name, MaxTokens: extra.MaxTokens, ModelTypes: types, Class: &class}
 	if extra.Thinking != nil {
-		model.Thinking = &entity.ModelThinking{DefaultValue: *extra.Thinking}
+		model.Thinking = &models.ModelThinking{DefaultValue: *extra.Thinking}
 	}
 	return model, nil
 }

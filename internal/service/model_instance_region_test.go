@@ -20,7 +20,7 @@ func (f *instanceRegionFactory) CreateModelDriver(name string, urls map[string]s
 }
 
 func TestInstanceModelDriverRejectsUnknownRegionBeforeConstruction(t *testing.T) {
-	provider := &entity.Provider{Name: "vllm", URL: map[string]string{"default": "https://default.invalid/v1", "eu": "https://eu.invalid/v1"}}
+	provider := &models.Provider{Name: "vllm", URL: map[string]string{"default": "https://default.invalid/v1", "eu": "https://eu.invalid/v1"}}
 	for _, region := range []string{"unknown", "US", "missing"} {
 		t.Run(region, func(t *testing.T) {
 			raw, err := encodeProviderInstanceExtra(region, "")
@@ -38,7 +38,7 @@ func TestInstanceModelDriverRejectsUnknownRegionBeforeConstruction(t *testing.T)
 
 func TestInstanceModelDriverUsesSelectedRegionOrExplicitEndpoint(t *testing.T) {
 	original := map[string]string{"default": "https://default.invalid/v1", "eu": "https://eu.invalid/v1"}
-	provider := &entity.Provider{Name: "vllm", URL: original}
+	provider := &models.Provider{Name: "vllm", URL: original}
 	for _, test := range []struct {
 		name, region, override, wantURL, wantRegion string
 	}{

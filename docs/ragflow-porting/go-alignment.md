@@ -1,6 +1,7 @@
 # Go 结构与合同收敛
 
-本专项的基线是 `1f154bea3e60b378caecb3b2fdf9e1e672ca7f3d`。生产后端仍使用
+本专项的基线是 `1f154bea3e60b378caecb3b2fdf9e1e672ca7f3d`，冻结对齐目标是
+`fcebcebe1e0e798b42c18e5593747cd20eb4c757`。生产后端仍使用
 Python；Go 尚未部署，本次收敛不保留旧 Go API、别名、包装器或旧数据布局的兼容承诺。
 不切换生产队列，不迁移 Python 数据，不 push 或部署。
 
@@ -21,9 +22,9 @@ Python；Go 尚未部署，本次收敛不保留旧 Go API、别名、包装器�
 | --- | --- | --- | --- | --- |
 | GOA-00 全树和历史审计 | 建立逐路径、逐提交及全部删除足迹账本；逐模块比较活动合同与原结构 | 全部 Go、native、构建、配置、文档和跨仓调用 | 语义处置、删除去向、例外来源；计数只用于查漏 | 结构盘点完成，语义审计进行中 |
 | GOA-01 启动、配置与 SQL | 将 Go 配置和数据库初始化收敛到独立 MySQL 环境；去掉 PostgreSQL 分支；迁移 DAO、schema 与状态字段 | `internal/server`、`internal/dao`、`internal/entity`、各 cmd；Python 配置/数据库只读查界 | scratch MySQL 建表、事务提交与失败读回；确认不读取生产 Python 配置 | 待实施 |
-| GOA-02 模型 | 模型定义回归对应目录；typed `ListModels` 和公共转换下沉到 driver；统一 messages 流接口；实例构造、媒体接口、provider 身份及配置一致；删除旧包装/投影 | 全部 provider、service、handler、agent 和 CLI；不得用旧测试阻挡签名迁移 | 受控 provider、元数据/索引向量、取消和错误；真实 HTTP/CLI 与 SQL 读回 | 待实施 |
+| GOA-02 模型 | 模型定义回归对应目录；typed `ListModels` 和公共转换下沉到 driver；统一 messages 流接口；实例构造、媒体接口、provider 身份及配置一致；删除旧包装/投影 | 全部 provider、service、handler、agent 和 CLI；不得用旧测试阻挡签名迁移 | 受控 provider、元数据/索引向量、取消和错误；真实 HTTP/CLI 与 SQL 读回 | 部分实现：messages 与定义目录已收敛，其余未完成 |
 | GOA-03 解析和 native | 默认 Office native，补齐对应文件和 PDF；移除内置解析替代路线；native 构建和字典与实际平台一致 | C++ binding、tokenizer、parser、deepdoc、CLI | 各真实格式、失败/空内容边界、native 编译链接、真实 CLI | 待实施 |
-| GOA-04 ingestion / 队列 | 补齐 ingestion task/tasklet 与日志、控制面 API、NATS、独立 worker；DSL 去掉本地额外 stage 限制；逐项标记执行器占位 | GOA-01、GOA-03；engine、DAO、admin、router、CLI、worker | 真 NATS 传输、ACK/NAK、故障重投、取消/停止/删除、独立 SQL 读回；模拟执行不能报成功 | 待实施 |
+| GOA-04 ingestion / 队列 | 补齐 ingestion task/tasklet 与日志、控制面 API、NATS、独立 worker；DSL 去掉本地额外 stage 限制；逐项标记执行器占位 | GOA-01、GOA-03；engine、DAO、admin、router、CLI、worker | 真 NATS 传输、ACK/NAK、故障重投、取消/停止/删除、独立 SQL 读回；模拟执行不能报成功 | 部分实现：ChunkPlan 合同已调整；worker/队列未完成 |
 | GOA-05 Agent | 文件/函数和 DSL 结构收敛；补 session 创建；恢复 create/publish/run 参数与默认值；占位组件与真实 CRUD 分开处理 | GOA-01、GOA-02；canvas、组件、runtime、handler/router、SQL 与对象存储 | Create→publish→run/version→session HTTP/SQL；故障副作用、取消和 DSL 合法例 | 待实施 |
 | GOA-06 检索与存储 | engine 接口、实现文件、过滤/排序和存储生命周期收敛；删除没有目标合同依据的分支；必要缺陷修复逐项保留在原位置 | GOA-01、GOA-02；service/handler/CLI | 隔离索引/SQL/对象存储的实际读写、删除失败与重试、租户隔离 | 待实施 |
 | GOA-07 API / CLI / admin | 按对应文件合并本地拆分；同步路由、请求、响应、命令语法、heartbeat、OAuth、skill 和消息合同；删除旧 facade/fallback | GOA-01—06；真实消费者逐项迁移 | 注册路由鉴权、真实 CLI/HTTP、admin/worker 联动及失败读回 | 待实施 |
@@ -64,8 +65,33 @@ channel 入口及三项 service 包装，全部 Go 引用同步迁移。模型�
 全包测试编译发现跨包测试 driver 和绑定模型的旧签名，修复后对 service、KG 与 handler
 执行定向 race（`0f818a8659ff4e2ca4b091cf1b4973e9.output`）。该命令运行 generation、
 searchbot 和 pipeline 测试；handler 仅完成编译，不表示 SQL/HTTP live 已验收。
-typed inventory、模型定义归位、factory、配置/provider 身份和其余模型结构仍未完成，
+typed inventory、factory、配置/provider 身份和其余模型结构仍未完成，
 不能将本步记为 GOA-02 全部对齐。
+
+随后模型定义迁至 `internal/entity/models/model.go`，删除旧文件；DAO、service、CLI、
+skills 和测试直接引用新位置，没有导出别名。访问内部目录索引的回归移至对应的
+`internal/entity/models/model_test.go`。该步仅恢复定义目录，loader、字段类型和 inventory
+结构仍须继续收敛。模型包 race 在 `1763846df83e40a085a880ad99552481.output` 中通过；
+同次 entity 测试因旧位置访问私有字段编译失败，迁移测试后 entity race
+`452c2c0dd7b3439ca1220211921724c2.output` 与单项 metadata race
+`68aa64ee72c14e46b99f4b416c02708e.output` 均通过。
+
+当前工作组合的 `go build ./internal/...`、`go vet ./internal/...` 及现有三个独立入口构建
+通过，报告为 `7d724a92e0af4caf92603c67a6f33ac8.output`，完整输入摘要为
+`catalog-build-inputs.json`。C++ 源码未变化，借用的同平台 native 库及源码一致性见
+`native-borrow.json`，这不是重建或新 native 能力的验收。设置实际新构建的
+`MULTIRAG_M_CLI` 与 `REQUIRE_SERVICES=1` 执行本地 ingestion 消费者，实际子进程运行
+四个命令，包含重复且超过三个 stage 的 pipeline；
+`b15434e50cb346fd8eaa0b08da862346.output` 通过。该命令的 Office fixture 显式选用当前
+builtin，不能称为目标默认 native 路线已完成。目标 ingestor 入口仍缺失，现有三个入口
+通过不代表全部目标入口通过。
+
+历史删除索引已用 `--no-renames` 补齐旧路径，包含 88 个曾删除/搬迁路径；85 个在目标
+仍不存在，其中 22 个在初始本地树仍有对应路径；本次定义目录归位后剩余 21 个，逐项去向在
+`historical-deletion-disposition.json` 与 `deletion-moves.json`。已有 HTTP fixture 中仍有
+未逐例登记的旧测试资源，当前仅有 runner 进程/临时目录和部分 case 的登记证据，
+不能声明整个专项资源协议通过。最终组合的 SQL/NATS、native、全范围 race 与资源独立清理
+均未完成；task cache 和构建产物保留给后续专项验证，所有已结束 runner 的退出和清理记录保留。
 
 主树 28 项既有 WIP 已留存快照，专项在独立 worktree 实施。所有本专项提交仅暂存已核归属
 路径；串行合并本地 main 前重查主树。测试经 `scripts/run_registered.py`，资源先登记、后创建，

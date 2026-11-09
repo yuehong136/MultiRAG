@@ -64,7 +64,7 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err := db.AutoMigrate(&entity.TenantModelProvider{}, &entity.TenantModelInstance{}, &entity.TenantModel{}, &entity.TenantLLM{}, &entity.Tenant{}); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

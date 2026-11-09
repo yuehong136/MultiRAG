@@ -317,7 +317,7 @@ func TestGoogleProviderLiveHTTPAndSQL(t *testing.T) {
 		t.Fatalf("service lost callback error: %v %v", code, err)
 	}
 	// A configured slash-valued model must persist under its complete name.
-	google.Models = append(google.Models, &entity.Model{Name: "models/slash-fixture", ModelTypes: []string{"chat"}})
+	google.Models = append(google.Models, &models.Model{Name: "models/slash-fixture", ModelTypes: []string{"chat"}})
 	_, body = request("PATCH", path+"/models/models/slash-fixture", map[string]any{"status": "disabled"})
 	assertSuccess(body)
 	var slashCount int

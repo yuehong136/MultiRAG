@@ -1,6 +1,8 @@
 package entity
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,7 +10,7 @@ import (
 )
 
 func TestXinferenceCatalogAndFactory(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +32,7 @@ func TestXinferenceDynamicURLDoesNotRelaxHostedCatalog(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(directory, "provider.json"), []byte(`{"name":"`+name+`","models":[]}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			manager, err := NewProviderManager(directory)
+			manager, err := modelModule.NewProviderManager(directory)
 			if name == "OpenAI" {
 				if err == nil || !strings.Contains(err.Error(), "has no default URL") {
 					t.Fatal("hosted provider without an endpoint must still fail", manager, err)

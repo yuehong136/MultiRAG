@@ -1,6 +1,8 @@
 package entity
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -13,7 +15,7 @@ func TestProviderModelClassPrecedence(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "provider.json"), []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewProviderManager(directory)
+	manager, err := modelModule.NewProviderManager(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +35,7 @@ func TestProviderModelClassPrecedence(t *testing.T) {
 
 func TestConfiguredModelClassesKeepCapabilities(t *testing.T) {
 	directory := filepath.Join("..", "..", "configs", "models")
-	manager, err := NewProviderManager(directory)
+	manager, err := modelModule.NewProviderManager(directory)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,8 @@
 package entity
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -18,7 +20,7 @@ func TestSupportedModelMetadataPresenceAndIsolation(t *testing.T) {
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
-	pm := &ProviderManager{}
+	pm := &modelModule.ProviderManager{}
 	if err := pm.LoadAllModels(path); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +58,7 @@ func TestSupportedMetadataTypedDecodeAndFailedPublication(t *testing.T) {
 	journal := testsupport.NewCase(t)
 	path := filepath.Join(t.TempDir(), "catalog.json")
 	journal.Event("reserve-catalog", map[string]any{"path": path})
-	pm := &ProviderManager{}
+	pm := &modelModule.ProviderManager{}
 	if err := os.WriteFile(path, []byte(`[{"name":"kept","max_tokens":0}]`), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -78,11 +80,11 @@ func TestSupportedMetadataTypedDecodeAndFailedPublication(t *testing.T) {
 }
 
 func TestSupportedMetadataProviderFallback(t *testing.T) {
-	var model Model
+	var model modelModule.Model
 	if err := json.Unmarshal([]byte(`{"name":"provider-only","max_tokens":0,"model_types":[]}`), &model); err != nil {
 		t.Fatal(err)
 	}
-	pm := &ProviderManager{Providers: []Provider{{Name: "Gitee", Models: []*Model{&model}}}}
+	pm := &modelModule.ProviderManager{Providers: []modelModule.Provider{{Name: "Gitee", Models: []*modelModule.Model{&model}}}}
 	rows := pm.DescribeSupportedModels("Gitee", []string{"unknown-alias", "provider-only"})
 	if rows[0].MaxTokens != nil || rows[0].ModelTypes != nil || rows[1].MaxTokens == nil || *rows[1].MaxTokens != 0 || rows[1].ModelTypes == nil || len(*rows[1].ModelTypes) != 0 {
 		t.Fatalf("provider fallback: %#v", rows)

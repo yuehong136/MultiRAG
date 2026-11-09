@@ -46,7 +46,7 @@ func NewModelProviderServiceWithFactory(factory modelModule.DriverFactory) *Mode
 }
 
 // NewModelProviderServiceWithCatalog binds a catalog and request-local driver factory.
-func NewModelProviderServiceWithCatalog(catalog *entity.ProviderManager, factory modelModule.DriverFactory) *ModelProviderService {
+func NewModelProviderServiceWithCatalog(catalog *modelModule.ProviderManager, factory modelModule.DriverFactory) *ModelProviderService {
 	return &ModelProviderService{
 		providerManager:      catalog,
 		driverFactory:        factory,
@@ -61,7 +61,7 @@ func NewModelProviderServiceWithCatalog(catalog *entity.ProviderManager, factory
 
 type ModelProviderService struct {
 	driverFactory        modelModule.DriverFactory
-	providerManager      *entity.ProviderManager
+	providerManager      *modelModule.ProviderManager
 	modelProviderDAO     *dao.TenantModelProviderDAO
 	modelInstanceDAO     *dao.TenantModelInstanceDAO
 	modelDAO             *dao.TenantModelDAO
@@ -190,7 +190,7 @@ func (m *ModelProviderService) DeleteModelProvider(providerName, userID string) 
 
 // ListSupportedModelsWithContext keeps SQL ownership checks and remote discovery
 // in the request's cancellation scope. No inventory result is persisted.
-func (m *ModelProviderService) ListSupportedModelsWithContext(ctx context.Context, providerName, instanceName, userID string) ([]entity.SupportedModel, error) {
+func (m *ModelProviderService) ListSupportedModelsWithContext(ctx context.Context, providerName, instanceName, userID string) ([]modelModule.SupportedModel, error) {
 	if ctx == nil {
 		return nil, errors.New("request context is required")
 	}
@@ -586,7 +586,7 @@ func (m *ModelProviderService) ChatToModelWithMessages(providerName, instanceNam
 }
 
 // applyModelChatDefaults respects explicit false and uses the selected model's defaults.
-func applyModelChatDefaults(model *entity.Model, config *modelModule.ChatConfig) {
+func applyModelChatDefaults(model *modelModule.Model, config *modelModule.ChatConfig) {
 	config.ModelClass = model.Class
 	if config.Thinking == nil && model.Thinking != nil {
 		value := model.Thinking.DefaultValue
@@ -747,7 +747,7 @@ func (m *ModelProviderService) getModelConfigWithIdentity(ctx context.Context, t
 		providerInfo = m.providerManager.FindProvider("Gitee")
 	}
 	if providerInfo == nil && strings.EqualFold(providerName, "OpenAI-API-Compatible") {
-		providerInfo = &entity.Provider{Name: providerName, URL: map[string]string{}, URLSuffix: modelModule.URLSuffix{Embedding: "embeddings"}}
+		providerInfo = &modelModule.Provider{Name: providerName, URL: map[string]string{}, URLSuffix: modelModule.URLSuffix{Embedding: "embeddings"}}
 	}
 	if providerInfo == nil {
 		return nil, "", nil, fmt.Errorf("provider %s not found", providerName)
@@ -812,7 +812,7 @@ func (m *ModelProviderService) getModelConfigWithIdentity(ctx context.Context, t
 // getLegacyModelConfig keeps old tenant credentials usable while removing the
 // duplicate provider implementation. Only a missing provider/default instance
 // can select this path; database failures and disabled models remain errors.
-func (m *ModelProviderService) getLegacyModelConfigWithContext(ctx context.Context, tenantID, providerName, name string, modelType entity.ModelType, providerInfo *entity.Provider, identities ...*EmbeddingModelIdentity) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
+func (m *ModelProviderService) getLegacyModelConfigWithContext(ctx context.Context, tenantID, providerName, name string, modelType entity.ModelType, providerInfo *modelModule.Provider, identities ...*EmbeddingModelIdentity) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
 	var legacy entity.TenantLLM
 	err := dao.DB.WithContext(ctx).Where("tenant_id = ? AND llm_factory = ? AND llm_name = ?", tenantID, providerName, name).First(&legacy).Error
 	if err != nil {
@@ -823,7 +823,7 @@ func (m *ModelProviderService) getLegacyModelConfigWithContext(ctx context.Conte
 
 // A numeric TenantLLM selector binds this exact row; it must never be re-resolved
 // through a modern same-name provider instance.
-func (m *ModelProviderService) bindLegacyModelConfig(ctx context.Context, name string, modelType entity.ModelType, providerInfo *entity.Provider, legacy *entity.TenantLLM, identities ...*EmbeddingModelIdentity) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
+func (m *ModelProviderService) bindLegacyModelConfig(ctx context.Context, name string, modelType entity.ModelType, providerInfo *modelModule.Provider, legacy *entity.TenantLLM, identities ...*EmbeddingModelIdentity) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
 	if legacy.Status != "1" {
 		return nil, "", nil, errModelDisabled
 	}
@@ -989,7 +989,7 @@ func (m *ModelProviderService) getModelConfigByID(ctx context.Context, tenantID 
 		provider = m.providerManager.FindProvider("Gitee")
 	}
 	if provider == nil && strings.EqualFold(binding.LLMFactory, "OpenAI-API-Compatible") {
-		provider = &entity.Provider{Name: binding.LLMFactory, URL: map[string]string{}, URLSuffix: modelModule.URLSuffix{Embedding: "embeddings"}}
+		provider = &modelModule.Provider{Name: binding.LLMFactory, URL: map[string]string{}, URLSuffix: modelModule.URLSuffix{Embedding: "embeddings"}}
 	}
 	if provider == nil {
 		return nil, "", nil, fmt.Errorf("model provider unavailable")
@@ -1054,7 +1054,7 @@ func tenantDefaultBindingID(tenant *entity.Tenant, modelType entity.ModelType) *
 
 // ListAllModels returns static metadata and its total, without consulting tenant state.
 // Pages are zero based; size zero requests the complete catalog.
-func (m *ModelProviderService) ListAllModels(page, size int) ([]*entity.Model, int, error) {
+func (m *ModelProviderService) ListAllModels(page, size int) ([]*modelModule.Model, int, error) {
 	if page < 0 || size < 0 || (size == 0 && page != 0) || (size > 0 && page > math.MaxInt/size) {
 		return nil, 0, fmt.Errorf("invalid catalog pagination")
 	}
@@ -1065,13 +1065,13 @@ func (m *ModelProviderService) ListAllModels(page, size int) ([]*entity.Model, i
 	total := len(all)
 	if size == 0 {
 		if all == nil {
-			all = []*entity.Model{}
+			all = []*modelModule.Model{}
 		}
 		return all, total, nil
 	}
 	// Check before multiplication so arbitrarily large pages cannot wrap.
 	if total == 0 || page > (total-1)/size {
-		return []*entity.Model{}, total, nil
+		return []*modelModule.Model{}, total, nil
 	}
 	start := page * size
 	end := total
@@ -1081,7 +1081,7 @@ func (m *ModelProviderService) ListAllModels(page, size int) ([]*entity.Model, i
 	return all[start:end], total, nil
 }
 
-func (m *ModelProviderService) ShowModel(name string) (*entity.Model, error) {
+func (m *ModelProviderService) ShowModel(name string) (*modelModule.Model, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("model name required")
 	}

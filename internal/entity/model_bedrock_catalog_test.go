@@ -8,7 +8,7 @@ import (
 )
 
 func TestRegionalBedrockCatalogLoadsWithoutFakeURL(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestRegionalBedrockCatalogLoadsWithoutFakeURL(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "futurmix.json"), []byte(`{"name":"FuturMix","models":[]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewProviderManager(directory); err == nil {
+	if _, err := models.NewProviderManager(directory); err == nil {
 		t.Fatal("unrelated missing endpoint accepted")
 	}
 }

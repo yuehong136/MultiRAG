@@ -1,6 +1,8 @@
 package handler_test
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"context"
 	"encoding/json"
 	"fmt"
@@ -75,7 +77,7 @@ func TestSkillCoreLiveServer(t *testing.T) {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	auth := skills.New(db, nil, nil, nil)
-	models := &skills.LegacyModels{DB: db, Providers: &entity.ProviderManager{}}
+	models := &skills.LegacyModels{DB: db, Providers: &modelModule.ProviderManager{}}
 	stop, e := handler.AttachSkillCore(r, config, auth.Authenticate, func(ctx context.Context, tenant string) (any, error) { return models.List(ctx, tenant) }, &coreFaultStore{blobs, filepath.Join(filepath.Dir(path), "fail-delete")})
 	if e != nil {
 		t.Fatal(e)

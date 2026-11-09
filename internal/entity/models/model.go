@@ -14,14 +14,13 @@
 //  limitations under the License.
 //
 
-package entity
+package models
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
-	"multirag/internal/entity/models"
 	"os"
 	"path/filepath"
 	"slices"
@@ -149,7 +148,7 @@ type ThinkingConfig struct {
 	SupportedModels []string `json:"supported_models"`
 }
 
-// ProviderFeatures describes capabilities shared by selected provider models.
+// ProviderFeatures describes capabilities shared by selected provider
 type ProviderFeatures struct {
 	Thinking      *ThinkingConfig      `json:"thinking,omitempty"`
 	ClearThinking *ThinkingClearConfig `json:"clear_thinking,omitempty"`
@@ -281,11 +280,11 @@ type Provider struct {
 	Name        string            `json:"name"`
 	Tags        string            `json:"tags"`
 	URL         map[string]string `json:"url"`
-	URLSuffix   models.URLSuffix  `json:"url_suffix"`
+	URLSuffix   URLSuffix         `json:"url_suffix"`
 	Models      []*Model          `json:"models"`
 	Features    ProviderFeatures  `json:"features"`
 	Class       string            `json:"class,omitempty"` // Default model family for this provider.
-	ModelDriver models.ModelDriver
+	ModelDriver ModelDriver
 }
 
 // ProviderManager manages provider and model operations
@@ -312,7 +311,7 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 		return nil, fmt.Errorf("error reading directory %s: %w", dirPath, err)
 	}
 
-	modelFactory := models.NewModelFactory()
+	modelFactory := NewModelFactory()
 
 	// Iterate through all files
 	for _, file := range files {
@@ -359,7 +358,7 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 				modelClass = *model.Class
 			}
 			if modelClass == "" {
-				modelClass = models.ModelClassFromName(model.Name)
+				modelClass = ModelClassFromName(model.Name)
 			}
 			modelClass = strings.ToLower(modelClass)
 			model.Class = &modelClass

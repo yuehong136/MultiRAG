@@ -208,7 +208,7 @@ func TestAfteraabModelBindingsSQLHTTP(t *testing.T) {
 		t.Fatal("independent SQL Builtin binding readback failed")
 	}
 	journal.Event("independent-binding-readback", map[string]any{"tenant": owner, "numeric_binding_id": builtin.ID, "name": storedName, "capability": storedType, "status": storedStatus})
-	catalog := &entity.ProviderManager{Providers: []entity.Provider{
+	catalog := &models.ProviderManager{Providers: []models.Provider{
 		{Name: providerName, URL: map[string]string{"default": server.URL}, URLSuffix: models.URLSuffix{Embedding: "embeddings"}},
 		{Name: legacyProviderName, URL: map[string]string{"default": server.URL}, URLSuffix: models.URLSuffix{Embedding: "embeddings"}},
 	}}

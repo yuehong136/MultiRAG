@@ -1,6 +1,8 @@
 package handler
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"bufio"
 	"context"
 	"database/sql"
@@ -131,7 +133,7 @@ func TestChatSessionSSEDeadlineScratchPostgres(t *testing.T) {
 		}
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\" second\"}}]}\n\ndata: [DONE]\n\n")
 	}), 0)
-	catalog, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	catalog, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

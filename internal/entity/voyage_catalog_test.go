@@ -8,7 +8,7 @@ import (
 )
 
 func TestVoyageCatalogAndFactory(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -16,7 +16,7 @@ func TestVoyageCatalogAndFactory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var p Provider
+	var p models.Provider
 	for _, candidate := range manager.Providers {
 		if candidate.Name == "Voyage AI" {
 			p = candidate

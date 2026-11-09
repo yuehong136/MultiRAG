@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"multirag/internal/entity"
 	"multirag/internal/entity/models"
 	"multirag/internal/testsupport"
 )
@@ -48,7 +47,7 @@ func TestVolcEngineAliyunSupportedModelsCLIHTTP(t *testing.T) {
 				_, err := os.Stat(catalogPath)
 				journal.Event("catalog-cleanup-readback", map[string]any{"path": catalogPath, "absent": os.IsNotExist(err)})
 			})
-			catalog := &entity.ProviderManager{}
+			catalog := &models.ProviderManager{}
 			if err := catalog.LoadAllModels(catalogPath); err != nil {
 				t.Fatal(err)
 			}

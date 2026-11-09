@@ -1,6 +1,8 @@
 package skills
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"context"
 	"encoding/json"
 	"net"
@@ -16,7 +18,7 @@ import (
 	"gorm.io/gorm"
 	gormlog "gorm.io/gorm/logger"
 	"multirag/internal/dao"
-	"multirag/internal/entity"
+
 	"multirag/internal/server"
 )
 
@@ -66,7 +68,7 @@ func TestSkillsLiveServer(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s := New(db, blobs, index, &LegacyModels{DB: db, Providers: &entity.ProviderManager{}})
+	s := New(db, blobs, index, &LegacyModels{DB: db, Providers: &modelModule.ProviderManager{}})
 	if e = s.Ready(ctx); e != nil {
 		t.Fatal(e)
 	}

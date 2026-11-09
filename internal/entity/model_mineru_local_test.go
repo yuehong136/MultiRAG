@@ -7,7 +7,7 @@ import (
 )
 
 func TestMinerULocalCatalogLoadsWithoutGlobalEndpoint(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal("real catalog directory failed to load", err)
 	}

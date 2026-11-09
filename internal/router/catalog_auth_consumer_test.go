@@ -1,6 +1,8 @@
 package router_test
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -154,7 +156,7 @@ func TestCatalogActualAuthHTTPAndSQL(t *testing.T) {
 		t.Fatal("signing variables")
 	}
 	catalogPath := writePrivate("catalog.json", []byte(`[{"name":"canonical","alias":["组织/a+b?"],"max_tokens":0,"model_types":["embedding"]}]`))
-	manager := &entity.ProviderManager{}
+	manager := &modelModule.ProviderManager{}
 	if err := manager.LoadAllModels(filepath.Join("..", "..", "configs", "all_models.json")); err != nil {
 		t.Fatal("shipped catalog load", err)
 	}

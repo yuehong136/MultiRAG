@@ -42,7 +42,7 @@ func TestLocalConnectionInstanceIsolationHTTP(t *testing.T) {
 			defer server.Close()
 			urls := map[string]string{"default": server.URL + "/catalog"}
 			catalog, _ := models.NewModelFactory().CreateModelDriver(name, urls, models.URLSuffix{Models: "models"})
-			provider := &entity.Provider{Name: name, URL: urls, URLSuffix: models.URLSuffix{Models: "models"}, ModelDriver: catalog}
+			provider := &models.Provider{Name: name, URL: urls, URLSuffix: models.URLSuffix{Models: "models"}, ModelDriver: catalog}
 			var group sync.WaitGroup
 			for _, id := range []string{"catalog", "one", "two"} {
 				group.Go(func() {

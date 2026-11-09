@@ -74,7 +74,7 @@ func TestAfter67SearchScopeSQLHTTP(t *testing.T) {
 		t.Fatal("scratch schema failed")
 	}
 	t.Chdir(filepath.Join("..", ".."))
-	catalog, err := entity.NewProviderManager(filepath.Join("configs", "models"))
+	catalog, err := models.NewProviderManager(filepath.Join("configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

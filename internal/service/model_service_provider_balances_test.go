@@ -1,6 +1,8 @@
 package service
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +15,7 @@ import (
 
 func testProviderBalanceInstances(t *testing.T, providerName, suffix, body string, want map[string]interface{}) {
 	t.Helper()
-	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

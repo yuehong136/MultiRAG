@@ -16,7 +16,7 @@ import (
 
 // Exercise real catalog loading and the service's instance constructor together.
 func TestBaiduOpenAICatalogBoundCapabilitiesHTTP(t *testing.T) {
-	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

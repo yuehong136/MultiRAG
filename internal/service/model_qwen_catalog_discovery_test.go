@@ -1,6 +1,8 @@
 package service_test
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -40,7 +42,7 @@ func TestExpandedCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 	if err := db.AutoMigrate(&entity.UserTenant{}, &entity.TenantModelProvider{}, &entity.TenantModelInstance{}, &entity.TenantModel{}); err != nil {
 		t.Fatal("scratch schema creation failed")
 	}
-	pm, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	pm, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +50,7 @@ func TestExpandedCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ids []string
-	var expected []entity.SupportedModel
+	var expected []modelModule.SupportedModel
 	seen := map[string]bool{}
 	count := 0
 	for _, model := range pm.ListAllModels() {
@@ -61,7 +63,7 @@ func TestExpandedCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 				seen[rawID] = true
 				ids = append(ids, rawID)
 				types := append([]string{}, model.ModelTypes...)
-				row := entity.SupportedModel{Name: rawID, MaxDimension: model.MaxDimension, ModelTypes: &types, Thinking: model.Thinking}
+				row := modelModule.SupportedModel{Name: rawID, MaxDimension: model.MaxDimension, ModelTypes: &types, Thinking: model.Thinking}
 				if model.Dimensions != nil {
 					row.Dimensions = &model.Dimensions
 				}
@@ -77,7 +79,7 @@ func TestExpandedCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 		t.Fatalf("catalog entries = %d, want 1124", count)
 	}
 	ids = append(ids, "unknown-provider-qwen")
-	expected = append(expected, entity.SupportedModel{Name: "unknown-provider-qwen"})
+	expected = append(expected, modelModule.SupportedModel{Name: "unknown-provider-qwen"})
 	var fail atomic.Bool
 	var calls atomic.Int32
 	upstream := deepSeekDiscoveryServer(t, j, "qwen-inventory", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -204,7 +206,7 @@ func TestExpandedCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 				t.Fatalf("unexpected CLI response %T", result)
 			}
 			encoded, err := json.Marshal(response.Data)
-			var discovered []entity.SupportedModel
+			var discovered []modelModule.SupportedModel
 			if err != nil || json.Unmarshal(encoded, &discovered) != nil || !reflect.DeepEqual(discovered, expected) {
 				t.Fatal("handler/CLI lost metadata or changed inventory identity")
 			}

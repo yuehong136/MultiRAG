@@ -1,6 +1,8 @@
 package service_test
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -136,7 +138,7 @@ func TestDeepSeekCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 	if err := db.AutoMigrate(&entity.UserTenant{}, &entity.TenantModelProvider{}, &entity.TenantModelInstance{}, &entity.TenantModel{}); err != nil {
 		t.Fatal("scratch schema creation failed")
 	}
-	pm, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	pm, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +146,7 @@ func TestDeepSeekCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ids []string
-	var expected []entity.SupportedModel
+	var expected []modelModule.SupportedModel
 	seen := map[string]bool{}
 	models := 0
 	for _, model := range pm.ListAllModels() {
@@ -160,7 +162,7 @@ func TestDeepSeekCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 				seen[rawID] = true
 				ids = append(ids, rawID)
 				tokens, types := model.MaxTokens, append([]string{}, model.ModelTypes...)
-				expected = append(expected, entity.SupportedModel{Name: rawID, MaxTokens: &tokens, ModelTypes: &types, Thinking: model.Thinking})
+				expected = append(expected, modelModule.SupportedModel{Name: rawID, MaxTokens: &tokens, ModelTypes: &types, Thinking: model.Thinking})
 			}
 		}
 	}
@@ -168,7 +170,7 @@ func TestDeepSeekCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 		t.Fatalf("DeepSeek catalog entries = %d, want 70", models)
 	}
 	ids = append(ids, "unknown-provider-model")
-	expected = append(expected, entity.SupportedModel{Name: "unknown-provider-model"})
+	expected = append(expected, modelModule.SupportedModel{Name: "unknown-provider-model"})
 	var fail atomic.Bool
 	var calls atomic.Int32
 	upstream := deepSeekDiscoveryServer(t, j, "gitee", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -253,7 +255,7 @@ func TestDeepSeekCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 		t.Fatalf("unexpected CLI response %T", result)
 	}
 	encoded, err := json.Marshal(response.Data)
-	var discovered []entity.SupportedModel
+	var discovered []modelModule.SupportedModel
 	if err != nil || json.Unmarshal(encoded, &discovered) != nil || !reflect.DeepEqual(discovered, expected) {
 		t.Fatal("handler/CLI lost metadata or changed inventory identity")
 	}

@@ -1,6 +1,8 @@
 package entity
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,7 +11,7 @@ import (
 
 func TestAfter7ddStrictSuffix(t *testing.T) {
 	for _, suffix := range []string{`{"embedding":"embed","asr":"stt"}`, `null`, `{}`, `{"embeddings":"embed"}`, `[]`, `"chat"`} {
-		var p Provider
+		var p modelModule.Provider
 		err := json.Unmarshal([]byte(`{"name":"x","extension":true,"url_suffix":`+suffix+`}`), &p)
 		valid := suffix == `null` || suffix == `{}` || suffix == `{"embedding":"embed","asr":"stt"}`
 		if (err == nil) != valid {
@@ -26,7 +28,7 @@ func TestAfter7ddCatalogLookupAtomic(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var pm ProviderManager
+	var pm modelModule.ProviderManager
 	if _, err := pm.GetModelByNameOrAlias("missing"); err == nil {
 		t.Fatal("empty lookup")
 	}
@@ -64,13 +66,13 @@ func TestAfter7ddManagerRejectsUnknownSuffixBeforePublish(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"name":"DeepSeek","url":{"default":"https://example.invalid"},"extension":true,"url_suffix":{"embeddings":"bad"},"models":[]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if manager, err := NewProviderManager(dir); err == nil || manager != nil {
+	if manager, err := modelModule.NewProviderManager(dir); err == nil || manager != nil {
 		t.Fatal(manager, err)
 	}
 	if err := os.WriteFile(path, []byte(`{"name":"DeepSeek","url":{"default":"https://example.invalid"},"extension":true,"url_suffix":{"embedding":"embed"},"models":[]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewProviderManager(dir); err != nil {
+	if _, err := modelModule.NewProviderManager(dir); err != nil {
 		t.Fatal("provider extensions rejected", err)
 	}
 }
@@ -81,11 +83,11 @@ func TestAfter7ddCatalogReturnsIndependentMetadata(t *testing.T) {
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
-	var pm ProviderManager
+	var pm modelModule.ProviderManager
 	if err := pm.LoadAllModels(path); err != nil {
 		t.Fatal(err)
 	}
-	mutate := func(m *Model) {
+	mutate := func(m *modelModule.Model) {
 		m.Name = "changed"
 		m.Alias[0] = "bad"
 		m.ModelTypes[0] = "bad"
@@ -109,7 +111,7 @@ func TestAfter7ddCatalogReturnsIndependentMetadata(t *testing.T) {
 
 func TestAfter7ddStrictSuffixCaseAliases(t *testing.T) {
 	for _, key := range []string{"url_suffix", "URL_SUFFIX", "Url_Suffix"} {
-		var provider Provider
+		var provider modelModule.Provider
 		err := json.Unmarshal([]byte(`{"name":"DeepSeek","`+key+`":{"embeddings":"typo"}}`), &provider)
 		if err == nil {
 			t.Fatalf("case alias %s bypassed strict suffix validation", key)

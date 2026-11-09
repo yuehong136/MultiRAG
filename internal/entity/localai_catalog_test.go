@@ -1,12 +1,14 @@
 package entity
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"path/filepath"
 	"testing"
 )
 
 func TestLocalAICatalogAndFactory(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -14,7 +16,7 @@ func TestLocalAICatalogAndFactory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var provider Provider
+	var provider modelModule.Provider
 	for _, candidate := range manager.Providers {
 		if candidate.Name == "LocalAI" {
 			provider = candidate

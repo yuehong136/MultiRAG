@@ -12,7 +12,7 @@ import (
 )
 
 func TestJinaCatalogBoundChatHTTP(t *testing.T) {
-	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

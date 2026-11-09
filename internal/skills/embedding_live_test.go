@@ -1,6 +1,8 @@
 package skills
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -69,7 +71,7 @@ func TestLegacyEmbeddingScratchPostgres(t *testing.T) {
 	if err := db.Create(&row).Error; err != nil {
 		t.Fatal(err)
 	}
-	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

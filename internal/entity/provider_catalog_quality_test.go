@@ -13,19 +13,19 @@ import (
 type catalogModelContract struct {
 	name       string
 	modelTypes []string
-	thinking   *ModelThinking
+	thinking   *models.ModelThinking
 }
 
-func newCatalogManager(t *testing.T) *ProviderManager {
+func newCatalogManager(t *testing.T) *models.ProviderManager {
 	t.Helper()
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return manager
 }
 
-func requireCatalogProvider(t *testing.T, manager *ProviderManager, name string, driver models.ModelDriver, suffix models.URLSuffix) {
+func requireCatalogProvider(t *testing.T, manager *models.ProviderManager, name string, driver models.ModelDriver, suffix models.URLSuffix) {
 	t.Helper()
 	provider := manager.FindProvider(strings.ToLower(name))
 	if provider == nil || provider.ModelDriver == nil {
@@ -44,7 +44,7 @@ func requireCatalogProvider(t *testing.T, manager *ProviderManager, name string,
 
 // These are named compatibility anchors, not a snapshot of every model offered
 // by a supplier. New entries are covered by the metadata quality checks below.
-func requireCatalogModels(t *testing.T, manager *ProviderManager, provider string, contracts []catalogModelContract) {
+func requireCatalogModels(t *testing.T, manager *models.ProviderManager, provider string, contracts []catalogModelContract) {
 	t.Helper()
 	listed, err := manager.ListModels(provider)
 	if err != nil {

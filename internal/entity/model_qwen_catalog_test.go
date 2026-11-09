@@ -1,6 +1,8 @@
 package entity
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"encoding/json"
 	"path/filepath"
 	"reflect"
@@ -10,7 +12,7 @@ import (
 )
 
 func TestQwenCatalogMetadataAndAliases(t *testing.T) {
-	pm := &ProviderManager{}
+	pm := &modelModule.ProviderManager{}
 	if err := pm.LoadAllModels(filepath.Join("..", "..", "configs", "all_models.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +83,7 @@ func TestQwenCatalogMetadataAndAliases(t *testing.T) {
 }
 
 func TestQwenCatalogDiscoveryIdentityAndCopies(t *testing.T) {
-	pm := &ProviderManager{}
+	pm := &modelModule.ProviderManager{}
 	if err := pm.LoadAllModels(filepath.Join("..", "..", "configs", "all_models.json")); err != nil {
 		t.Fatal(err)
 	}

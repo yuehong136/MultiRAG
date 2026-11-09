@@ -13,7 +13,7 @@ import (
 // LegacyModels binds the exact Python tenant model row. It never resolves by name again.
 type LegacyModels struct {
 	DB        *gorm.DB
-	Providers *entity.ProviderManager
+	Providers *models.ProviderManager
 }
 
 func (m *LegacyModels) bind(ctx context.Context, tenant string, id int64, typ string) (entity.TenantLLM, models.ModelDriver, *models.APIConfig, error) {
@@ -30,7 +30,7 @@ func (m *LegacyModels) bind(ctx context.Context, tenant string, id int64, typ st
 	}
 	p := m.Providers.FindProvider(row.LLMFactory)
 	if p == nil && (strings.EqualFold(row.LLMFactory, "OpenAI-API-Compatible") || strings.EqualFold(row.LLMFactory, "vllm")) {
-		p = &entity.Provider{Name: row.LLMFactory, URL: map[string]string{}, URLSuffix: models.URLSuffix{Embedding: "embeddings", Rerank: "rerank"}}
+		p = &models.Provider{Name: row.LLMFactory, URL: map[string]string{}, URLSuffix: models.URLSuffix{Embedding: "embeddings", Rerank: "rerank"}}
 	}
 	if p == nil {
 		return row, nil, nil, fault(503, "MODEL_DRIVER_UNAVAILABLE")

@@ -1,6 +1,8 @@
 package entity
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -30,7 +32,7 @@ func TestCatalogCaseInsensitiveLookupAndAtomicCollisions(t *testing.T) {
 		}
 	}
 	write(`[{"name":"DeepSeek-Canonical","alias":["deepseek-ai/DeepSeek-Alias"],"max_tokens":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}}]`)
-	pm := &ProviderManager{}
+	pm := &modelModule.ProviderManager{}
 	if err := pm.LoadAllModels(path); err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +71,7 @@ func TestCatalogCaseInsensitiveLookupAndAtomicCollisions(t *testing.T) {
 }
 
 func TestDeepSeekCatalogMetadataAndAliases(t *testing.T) {
-	pm := &ProviderManager{}
+	pm := &modelModule.ProviderManager{}
 	if err := pm.LoadAllModels(filepath.Join("..", "..", "configs", "all_models.json")); err != nil {
 		t.Fatal(err)
 	}

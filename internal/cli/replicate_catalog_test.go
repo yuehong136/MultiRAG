@@ -1,17 +1,17 @@
 package cli
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"encoding/json"
 	"net/http"
 	"path/filepath"
 	"reflect"
 	"testing"
-
-	"multirag/internal/entity"
 )
 
 func TestReplicateCatalogCLIHTTP(t *testing.T) {
-	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	manager, err := modelModule.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
 	if err != nil {
 		t.Fatal(err)
 	}

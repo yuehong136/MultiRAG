@@ -1,6 +1,8 @@
 package router
 
 import (
+	modelModule "multirag/internal/entity/models"
+
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -171,7 +173,7 @@ func TestAfter22SharedRouterJWTSQLObjects(t *testing.T) {
 	baseURL := vendor.URL + "/v1"
 	create(&entity.TenantLLM{ID: 1001, TenantID: owner, LLMFactory: "OpenAI", LLMName: &modelName, ModelType: &modelType, APIKey: &credential, APIBase: &baseURL, Status: active})
 	create(&entity.TenantLLM{ID: 1002, TenantID: foreign, LLMFactory: "OpenAI", LLMName: &modelName, ModelType: &modelType, APIKey: &credential, APIBase: &baseURL, Status: active})
-	catalog, err := entity.NewProviderManager(filepath.Join("configs", "models"))
+	catalog, err := modelModule.NewProviderManager(filepath.Join("configs", "models"))
 	if err != nil || catalog.FindProvider("OpenAI") == nil {
 		t.Fatal("load actual OpenAI provider catalog")
 	}

@@ -22,7 +22,7 @@ func TestProviderInstanceExtraAndDriverIsolation(t *testing.T) {
 		}
 	}
 	original := map[string]string{"default": "http://catalog.invalid/v1"}
-	provider := &entity.Provider{Name: "vllm", URL: original, URLSuffix: models.URLSuffix{Chat: "chat/completions"}}
+	provider := &models.Provider{Name: "vllm", URL: original, URLSuffix: models.URLSuffix{Chat: "chat/completions"}}
 	for _, address := range []string{"http://one.invalid/v1", "http://two.invalid/v1"} {
 		raw, err := encodeProviderInstanceExtra("", " "+address+" ")
 		if err != nil {
@@ -94,7 +94,7 @@ func TestCustomModelMultipleCapabilities(t *testing.T) {
 }
 
 func TestLocalAIInstanceWithoutKey(t *testing.T) {
-	provider := &entity.Provider{Name: "LocalAI", URLSuffix: models.URLSuffix{Models: "models"}}
+	provider := &models.Provider{Name: "LocalAI", URLSuffix: models.URLSuffix{Models: "models"}}
 	for _, base := range []string{"http://one.invalid/v1", "http://two.invalid/v1"} {
 		raw, err := encodeProviderInstanceExtra("", base)
 		if err != nil {
@@ -114,7 +114,7 @@ func TestLocalAIInstanceWithoutKey(t *testing.T) {
 }
 
 func TestMinerULocalInstanceWithoutKey(t *testing.T) {
-	provider := &entity.Provider{Name: "mineru_local", URLSuffix: models.URLSuffix{DocumentParse: "file_parse", Task: "tasks"}}
+	provider := &models.Provider{Name: "mineru_local", URLSuffix: models.URLSuffix{DocumentParse: "file_parse", Task: "tasks"}}
 	for _, base := range []string{"http://one.invalid", "http://two.invalid"} {
 		raw, err := encodeProviderInstanceExtra("", base)
 		if err != nil {
@@ -134,7 +134,7 @@ func TestMinerULocalInstanceWithoutKey(t *testing.T) {
 }
 
 func TestPaddleOCRLocalInstanceWithoutKey(t *testing.T) {
-	provider := &entity.Provider{Name: "PaddleOCR_Local", URLSuffix: models.URLSuffix{OCR: "layout-parsing"}}
+	provider := &models.Provider{Name: "PaddleOCR_Local", URLSuffix: models.URLSuffix{OCR: "layout-parsing"}}
 	for _, base := range []string{"http://one.invalid", "http://two.invalid"} {
 		raw, err := encodeProviderInstanceExtra("office", base)
 		if err != nil {

@@ -14,9 +14,9 @@ func TestOpenRouterAndVolcEngineCatalogContracts(t *testing.T) {
 	// Only the named reasoning chat models opt in to thinking. TTS must remain
 	// visible as TTS without becoming a chat model or inheriting thinking defaults.
 	requireCatalogModels(t, manager, "OpenRouter", []catalogModelContract{
-		{"google/gemma-4-31b-it", []string{"chat"}, &ModelThinking{DefaultValue: true, ClearThinking: true}},
-		{"minimax/minimax-m2.5", []string{"chat"}, &ModelThinking{DefaultValue: true, ClearThinking: true}},
-		{"tencent/hy3-preview", []string{"chat"}, &ModelThinking{DefaultValue: true, ClearThinking: true}},
+		{"google/gemma-4-31b-it", []string{"chat"}, &models.ModelThinking{DefaultValue: true, ClearThinking: true}},
+		{"minimax/minimax-m2.5", []string{"chat"}, &models.ModelThinking{DefaultValue: true, ClearThinking: true}},
+		{"tencent/hy3-preview", []string{"chat"}, &models.ModelThinking{DefaultValue: true, ClearThinking: true}},
 		{"openai/gpt-audio-mini", []string{"tts"}, nil},
 		{"openai/whisper-large-v3", []string{"asr"}, nil},
 	})
@@ -24,7 +24,7 @@ func TestOpenRouterAndVolcEngineCatalogContracts(t *testing.T) {
 		Chat: "chat/completions", Files: "files", Models: "models", Embedding: "embeddings/multimodal",
 	})
 	requireCatalogModels(t, manager, "VolcEngine", []catalogModelContract{
-		{"doubao-seed-2-0-pro-260215", []string{"chat"}, &ModelThinking{DefaultValue: true, ClearThinking: true}},
+		{"doubao-seed-2-0-pro-260215", []string{"chat"}, &models.ModelThinking{DefaultValue: true, ClearThinking: true}},
 		{"doubao-embedding-vision-250615", []string{"embedding"}, nil},
 		{"doubao-embedding-vision-251215", []string{"embedding"}, nil},
 	})
