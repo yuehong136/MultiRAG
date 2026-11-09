@@ -237,7 +237,7 @@ func (e *ExeSQLTool) InvokableRun(ctx context.Context, argumentsInJSON string, _
 		return exesqlErrorResult(err), err
 	}
 	if !e.trustedDialer {
-		_, ip, err := ResolveAndValidateContext(ctx, "http://"+net.JoinHostPort(conn.Host, strconv.Itoa(conn.Port)))
+		_, ip, err := ResolveAndValidate(ctx, "http://"+net.JoinHostPort(conn.Host, strconv.Itoa(conn.Port)))
 		if err != nil {
 			return exesqlErrorResult(err), err
 		}

@@ -20,12 +20,10 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/mail"
 	"net/smtp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -60,7 +58,7 @@ type emailEnvelope struct {
 // RFC 822 message and submits it via the stdlib net/smtp client. All
 // authentication modes supported by net/smtp.Auth are available
 // (PLAIN, LOGIN, CRAM-MD5) by selecting the appropriate creds.
-type EmailTool struct{ resolve Resolver }
+type EmailTool struct{}
 
 // NewEmailTool returns an EmailTool. There is no shared HTTPHelper
 // (SMTP is not HTTP), so the constructor is the simplest possible.
@@ -134,8 +132,9 @@ func buildEmailMessage(from string, to []string, subject, body string) []byte {
 	return []byte(b.String())
 }
 
-// InvokableRun validates envelope headers, resolves and pins the SMTP host,
-// and sends through a context-owned connection with explicit TLS policy.
+// InvokableRun sends the email. We delegate to smtp.SendMail which
+// handles EHLO, STARTTLS, and AUTH transparently when an *smtp.Auth is
+// supplied; with nil auth it sends unauthenticated.
 func (e *EmailTool) InvokableRun(ctx context.Context, argsJSON string, _ ...tool.Option) (string, error) {
 	var p emailParams
 	if err := json.Unmarshal([]byte(argsJSON), &p); err != nil {
@@ -146,32 +145,67 @@ func (e *EmailTool) InvokableRun(ctx context.Context, argsJSON string, _ ...tool
 		return emailErrJSON(err), err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	rawURL := "http://" + net.JoinHostPort(p.SMTPHost, strconv.Itoa(p.SMTPPort))
-	var ip net.IP
-	var resolveErr error
-	if e.resolve != nil {
-		_, ip, resolveErr = e.resolve(rawURL)
-	} else {
-		_, ip, resolveErr = ResolveAndValidateContext(ctx, rawURL)
+	addr := fmt.Sprintf("%s:%d", p.SMTPHost, p.SMTPPort)
+	msg := buildEmailMessage(p.FromAddr, p.ToAddrs, p.Subject, p.Body)
+
+	var auth smtp.Auth
+	if p.Username != "" {
+		auth = smtp.PlainAuth("", p.Username, p.Password, p.SMTPHost)
 	}
-	if resolveErr != nil {
-		return emailErrJSON(resolveErr), resolveErr
+
+	conn, err := (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return emailErrJSON(err), err
 	}
-	if err := sendSMTP(ctx, p, net.JoinHostPort(ip.String(), strconv.Itoa(p.SMTPPort))); err != nil {
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	client, err := smtp.NewClient(conn, p.SMTPHost)
+	if err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		} else if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
-			// The socket deadline and context timer share the deadline but
-			// their notifications can race. Preserve the context contract
-			// when the network timeout reaches that exact deadline first.
-			var networkError net.Error
-			if errors.As(err, &networkError) && networkError.Timeout() {
-				err = context.DeadlineExceeded
+			err = context.DeadlineExceeded
+		}
+		return emailErrJSON(err), err
+	}
+	defer client.Close()
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		err = client.StartTLS(&tls.Config{ServerName: p.SMTPHost, MinVersion: tls.VersionTLS12})
+	}
+	if err == nil && auth != nil {
+		err = client.Auth(auth)
+	}
+	if err == nil {
+		err = client.Mail(p.FromAddr)
+	}
+	for _, recipient := range p.ToAddrs {
+		if err == nil {
+			err = client.Rcpt(recipient)
+		}
+	}
+	if err == nil {
+		writer, werr := client.Data()
+		err = werr
+		if err == nil {
+			_, err = writer.Write(msg)
+			cerr := writer.Close()
+			if err == nil {
+				err = cerr
 			}
 		}
-		return emailErrJSON(fmt.Errorf("email: send: %w", err)), fmt.Errorf("email: send: %w", err)
+	}
+	if err == nil {
+		err = client.Quit()
+	}
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		return emailErrJSON(err), err
 	}
 
 	return emailJSON(emailEnvelope{OK: true}), nil
@@ -222,70 +256,3 @@ func emailJSON(env emailEnvelope) string {
 func emailErrJSON(err error) string {
 	return emailJSON(emailEnvelope{Error: err.Error()})
 }
-
-// sendSMTP owns one connection and closes it when context cancellation interrupts
-// a greeting, TLS handshake, authentication, or DATA write.
-func sendSMTP(ctx context.Context, p emailParams, addr string) error {
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	rawConn := conn
-	stop := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
-	defer stop()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	}
-	if p.SMTPPort == 465 {
-		secure := tls.Client(conn, &tls.Config{ServerName: p.SMTPHost, MinVersion: tls.VersionTLS12})
-		if err = secure.HandshakeContext(ctx); err != nil {
-			return err
-		}
-		conn = secure
-	}
-	client, err := smtp.NewClient(conn, p.SMTPHost)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	if p.SMTPPort != 465 {
-		if ok, _ := client.Extension("STARTTLS"); ok {
-			if err = client.StartTLS(&tls.Config{ServerName: p.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
-				return err
-			}
-		}
-	}
-	if p.Username != "" {
-		if _, ok := client.TLSConnectionState(); !ok {
-			return fmt.Errorf("SMTP authentication requires TLS")
-		}
-		if err = client.Auth(smtp.PlainAuth("", p.Username, p.Password, p.SMTPHost)); err != nil {
-			return err
-		}
-	}
-	if err = client.Mail(p.FromAddr); err != nil {
-		return err
-	}
-	for _, to := range p.ToAddrs {
-		if err = client.Rcpt(to); err != nil {
-			return err
-		}
-	}
-	writer, err := client.Data()
-	if err != nil {
-		return err
-	}
-	if _, err = writer.Write(buildEmailMessage(p.FromAddr, p.ToAddrs, p.Subject, p.Body)); err != nil {
-		_ = writer.Close()
-		return err
-	}
-	if err = writer.Close(); err != nil {
-		return err
-	}
-	return client.Quit()
-}
-
-// WithResolver enables an explicitly trusted SMTP deployment configured by the
-// operator. The default rejects private networks and pins the resolved address.
-func (e *EmailTool) WithResolver(resolve Resolver) *EmailTool { e.resolve = resolve; return e }

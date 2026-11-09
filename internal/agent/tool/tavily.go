@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -100,16 +101,13 @@ func NewTavilyToolWithEnvKey(h *HTTPHelper, envKey func() string) *TavilyTool {
 	if envKey == nil {
 		envKey = defaultTavilyEnvKey
 	}
-	if h == nil {
-		h = NewHTTPHelper()
-	}
 	return &TavilyTool{helper: h, envKey: envKey}
 }
 
 // defaultTavilyEnvKey is the production env-key resolver. Pulled out
 // as a named function (not a var) so tests cannot accidentally
 // mutate it via package-var assignment.
-func defaultTavilyEnvKey() string { return "" }
+func defaultTavilyEnvKey() string { return os.Getenv("TAVILY_API_KEY") }
 
 // Info returns the tool's metadata for the chat model.
 func (t *TavilyTool) Info(_ context.Context) (*schema.ToolInfo, error) {
@@ -124,7 +122,7 @@ func (t *TavilyTool) Info(_ context.Context) (*schema.ToolInfo, error) {
 			},
 			"api_key": {
 				Type:     schema.String,
-				Desc:     "Tavily API key. Required unless credentials are injected by the authorized caller.",
+				Desc:     "Tavily API key. Falls back to TAVILY_API_KEY env var.",
 				Required: false,
 			},
 			"max_results": {
@@ -170,8 +168,8 @@ func (t *TavilyTool) InvokableRun(ctx context.Context, argsJSON string, _ ...too
 		apiKey = t.envKey()
 	}
 	if apiKey == "" {
-		return tavilyErrJSON(fmt.Errorf("tavily: api_key is required")),
-			fmt.Errorf("tavily: api_key is required")
+		return tavilyErrJSON(fmt.Errorf("tavily: api_key is required (or set TAVILY_API_KEY)")),
+			fmt.Errorf("tavily: api_key is required (or set TAVILY_API_KEY)")
 	}
 
 	body, _ := json.Marshal(tavilyRequestBody{

@@ -32,9 +32,13 @@ func TestInvoke_RequestAndResponse(t *testing.T) {
 	for _, method := range []string{"GET", "POST", "PUT", "DELETE"} {
 		t.Run(method, func(t *testing.T) {
 			called := false
-			execute := httpExecutor(func(ctx context.Context, verb, target, body, contentType string, headers map[string]string) (*http.Response, error) {
+			execute := componentRoundTripper(func(r *http.Request) (*http.Response, error) {
+				ctx, verb, target, contentType := r.Context(), r.Method, r.URL.String(), r.Header.Get("Content-Type")
+				raw, _ := io.ReadAll(r.Body)
+				body := string(raw)
+				headers := map[string]string{"Authorization": r.Header.Get("Authorization")}
 				called = true
-				if verb != method || target != "https://public.example/path" || body != "payload" || headers["Authorization"] != "token" {
+				if verb != method || target != "https://8.8.8.8/path" || body != "payload" || headers["Authorization"] != "token" {
 					t.Fatalf("request mismatch %s %s %s %v", verb, target, body, headers)
 				}
 				if _, ok := ctx.Deadline(); !ok {
@@ -45,9 +49,12 @@ func TestInvoke_RequestAndResponse(t *testing.T) {
 				}
 				return response(201, "body"), nil
 			})
-			ctx := context.WithValue(context.Background(), httpExecutorKey{}, execute)
+			previous := http.DefaultTransport
+			http.DefaultTransport = execute
+			t.Cleanup(func() { http.DefaultTransport = previous })
+			ctx := context.Background()
 			c, _ := NewInvokeComponent(nil)
-			out, err := c.Invoke(ctx, map[string]any{"method": method, "url": "https://public.example/path", "body": "payload", "headers": map[string]any{"Authorization": "token"}})
+			out, err := c.Invoke(ctx, map[string]any{"method": method, "url": "https://8.8.8.8/path", "body": "payload", "headers": map[string]any{"Authorization": "token"}})
 			if err != nil || !called || out["body"] != "body" || out["status"] != 201 {
 				t.Fatalf("result %v,%v", out, err)
 			}
@@ -65,7 +72,7 @@ func TestInvoke_RejectsUnsafeInputs(t *testing.T) {
 		{"method": "GET", "url": "http://127.0.0.1"},
 		{"method": "GET", "url": "http://169.254.169.254/latest/meta-data"},
 		{"method": "GET", "url": "file:///etc/passwd"},
-		{"method": "GET", "url": "https://example.com", "proxy": "http://localhost:8080"},
+		{"method": "GET", "url": "https://8.8.8.8", "proxy": "http://localhost:8080"},
 	} {
 		if out, err := c.Invoke(context.Background(), input); err == nil || out != nil {
 			t.Fatalf("unsafe input succeeded %v -> %v,%v", input, out, err)
@@ -75,10 +82,17 @@ func TestInvoke_RejectsUnsafeInputs(t *testing.T) {
 func TestInvoke_PropagatesHTTPFailure(t *testing.T) {
 	c, _ := NewInvokeComponent(nil)
 	expected := errors.New("transport failed")
-	ctx := context.WithValue(context.Background(), httpExecutorKey{}, httpExecutor(func(context.Context, string, string, string, string, map[string]string) (*http.Response, error) {
+	ctx := context.Background()
+	previous := http.DefaultTransport
+	http.DefaultTransport = componentRoundTripper(func(*http.Request) (*http.Response, error) {
 		return nil, expected
-	}))
-	if _, err := c.Invoke(ctx, map[string]any{"method": "GET", "url": "https://example.com"}); !errors.Is(err, expected) {
+	})
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	if _, err := c.Invoke(ctx, map[string]any{"method": "GET", "url": "https://8.8.8.8"}); !errors.Is(err, expected) {
 		t.Fatal(err)
 	}
 }
+
+type componentRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f componentRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

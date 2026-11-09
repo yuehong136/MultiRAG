@@ -1,4 +1,40 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
+// cycle_wrap.go contains cycle detection and the frozen synthetic-loop entry
+// points. Generic cycles are unavailable: unrolling them once loses their
+// conversational and control-flow semantics. Explicit Loop macros use the real
+// builder in loop_subgraph.go.
+
 package canvas
+
+import (
+	"context"
+	"fmt"
+
+	"multirag/internal/agent/runtime"
+	"multirag/internal/agent/workflowx"
+
+	"github.com/cloudwego/eino/compose"
+)
+
+// syntheticLoopKey is the cpn_id used for the synthetic Loop node
+// that wraps a cyclic canvas. Using a reserved key avoids
+// collisions with any user-defined cpn_id.
+const syntheticLoopKey = "__synthetic_loop__"
 
 // hasCycle reports whether the canvas's Downstream / Upstream edges
 // form at least one cycle (a self-edge, or a non-trivial strongly
@@ -77,4 +113,36 @@ func hasCycle(c *Canvas) bool {
 		}
 	}
 	return false
+}
+
+// buildSyntheticLoop rejects synthetic one-pass execution of cyclic graphs.
+func buildSyntheticLoop(ctx context.Context, c *Canvas) (*loopExpansion, error) {
+	return nil, fmt.Errorf("canvas: synthetic cyclic execution: %w", runtime.ErrNotImplemented)
+}
+
+// alwaysQuitOption is a tiny helper: callers that need a one-iteration
+// loop pass it as the LoopOption set so the workflowx cap matches
+// shouldQuit's first-iteration behaviour.
+func alwaysQuitOption() workflowx.LoopOption {
+	return workflowx.WithLoopMaxIterations(1)
+}
+
+// compileSyntheticLoop rejects synthetic one-pass execution of cyclic graphs.
+func compileSyntheticLoop(
+	ctx context.Context,
+	wf *compose.Workflow[map[string]any, map[string]any],
+	exp *loopExpansion,
+) (*compose.WorkflowNode, error) {
+	return nil, fmt.Errorf("canvas: synthetic cyclic execution: %w", runtime.ErrNotImplemented)
+}
+
+// buildSubWorkflowBreakCycles rejects synthetic one-pass execution of cyclic graphs.
+func buildSubWorkflowBreakCycles(
+	ctx context.Context,
+	c *Canvas,
+	members map[string]bool,
+	loopID string,
+	initValues map[string]initVarSpec,
+) (*compose.Workflow[map[string]any, map[string]any], error) {
+	return nil, fmt.Errorf("canvas: synthetic cyclic execution: %w", runtime.ErrNotImplemented)
 }

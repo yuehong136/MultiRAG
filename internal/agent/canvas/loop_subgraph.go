@@ -84,11 +84,6 @@ func buildLoopExpansion(ctx context.Context, c *Canvas, loopID string) (*loopExp
 	loopComp := c.Components[loopID]
 
 	members := collectDescendants(c, loopID)
-	for id := range members {
-		if strings.EqualFold(c.Components[id].Obj.ComponentName, "UserFillUp") {
-			return nil, fmt.Errorf("canvas: UserFillUp inside Loop %q: checkpointed shared-state resume is not supported", loopID)
-		}
-	}
 
 	initValues, err := resolveInitialVariables(loopComp.Obj.Params)
 	if err != nil {
@@ -303,7 +298,7 @@ func buildSubWorkflow(
 		if hasDownstream[cpnID] {
 			continue
 		}
-		sub.End().AddInput(cpnID, compose.ToField(cpnID))
+		sub.End().AddInput(cpnID)
 		hasEnd = true
 	}
 	if !hasEnd {
@@ -750,12 +745,6 @@ func readMaxLoopCount(params map[string]any) int {
 		return 0
 	}
 	switch x := v.(type) {
-	case json.Number:
-		count, err := x.Int64()
-		if err == nil && int64(int(count)) == count {
-			return int(count)
-		}
-		return 0
 	case int:
 		return x
 	case int64:

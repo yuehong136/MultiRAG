@@ -169,7 +169,7 @@ func (c *LoopComponent) Outputs() map[string]string {
 // silently dropped by the eino graph, because LoopComponent is not
 // registered as an eino node when the macro expansion fires.
 func (c *LoopComponent) Invoke(_ context.Context, _ map[string]any) (map[string]any, error) {
-	return nil, fmt.Errorf("LoopComponent: invoke through the canvas engine: %w", ErrNotImplemented)
+	return nil, fmt.Errorf("LoopComponent: invoke through canvas compiler: %w", ErrNotImplemented)
 }
 
 // Stream mirrors Invoke and emits an empty map as a single chunk.

@@ -142,8 +142,8 @@ func TestPubMed_ParseESummary(t *testing.T) {
 	if esummaryHits != 1 {
 		t.Errorf("esummary calls = %d, want 1", esummaryHits)
 	}
-	if !strings.Contains(lastUA, "ragflow") {
-		t.Errorf("User-Agent = %q, want to contain ragflow", lastUA)
+	if !strings.Contains(lastUA, "multirag") {
+		t.Errorf("User-Agent = %q, want to contain multirag", lastUA)
 	}
 
 	var env pubmedEnvelope

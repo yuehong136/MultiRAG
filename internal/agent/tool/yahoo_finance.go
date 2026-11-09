@@ -156,10 +156,6 @@ func (y *YahooFinanceTool) InvokableRun(ctx context.Context, argsJSON string, _ 
 		return yahooFinanceErrJSON(fmt.Errorf("yahoo_finance: decode response: %w", err)),
 			fmt.Errorf("yahoo_finance: decode response: %w", err)
 	}
-	if raw.QuoteResponse.Error != nil {
-		err := fmt.Errorf("yahoo_finance: upstream reported an error")
-		return yahooFinanceErrJSON(err), err
-	}
 	return yahooFinanceJSON(yahooFinanceEnvelope{Results: raw.QuoteResponse.Result}), nil
 }
 

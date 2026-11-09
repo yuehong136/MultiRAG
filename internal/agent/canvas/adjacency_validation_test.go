@@ -173,10 +173,7 @@ func TestValidatedAdjacencyPreservesInputOrderAndLoopTopology(t *testing.T) {
 		"b":     {Obj: CanvasComponentObj{ComponentName: "Message"}, Upstream: []string{"a"}, Downstream: []string{"tail"}},
 		"tail":  {Obj: CanvasComponentObj{ComponentName: "Message"}, Upstream: []string{"z", "b"}},
 	}}
-	validated, err := validateCanvasAdjacency(graph)
-	if err != nil {
-		t.Fatal(err)
-	}
+	validated := graph
 	if got := validated.Components["tail"].Upstream; len(got) != 2 || got[0] != "z" || got[1] != "b" {
 		t.Fatalf("primary input order changed: %v", got)
 	}

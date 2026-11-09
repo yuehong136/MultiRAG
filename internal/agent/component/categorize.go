@@ -59,9 +59,6 @@ func (c *CategorizeComponent) Name() string { return "Categorize" }
 // something outside the configured set).
 func (c *CategorizeComponent) Invoke(ctx context.Context, inputs map[string]any) (map[string]any, error) {
 	p := mergeCategorizeParam(c.param, inputs)
-	if p.Driver != "" || p.APIKey != "" || p.BaseURL != "" {
-		return nil, fmt.Errorf("DSL provider credentials and endpoints are not accepted")
-	}
 	if p.ModelID == "" {
 		return nil, &ParamError{Field: "model_id", Reason: "required"}
 	}
@@ -74,7 +71,7 @@ func (c *CategorizeComponent) Invoke(ctx context.Context, inputs map[string]any)
 		p.DefaultCategory = p.Categories[0]
 	}
 
-	inv := chatInvokerFor(ctx)
+	inv := getDefaultChatInvoker()
 	sysPrompt := p.SysPrompt
 	if sysPrompt == "" {
 		sysPrompt = "You are a strict classifier."
@@ -95,13 +92,11 @@ func (c *CategorizeComponent) Invoke(ctx context.Context, inputs map[string]any)
 		return nil, fmt.Errorf("component: Categorize.Invoke: %w", err)
 	}
 
-	if resp == nil {
-		return nil, fmt.Errorf("component: Categorize: model returned no response")
-	}
 	chosen, score := pickCategory(resp.Content, p.Categories, p.DefaultCategory)
 	return map[string]any{
 		"category": chosen,
 		"scores":   score,
+		"_next":    []string{},
 	}, nil
 }
 

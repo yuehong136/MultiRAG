@@ -25,11 +25,10 @@ package canvas
 import (
 	"context"
 	"errors"
+	redis2 "multirag/internal/engine/redis"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-
-	redisengine "multirag/internal/engine/redis"
 )
 
 // cancelKeySuffix is appended to the task id to form the Redis key.
@@ -47,9 +46,9 @@ const RequestCancelTTL = 24 * time.Hour
 
 // cancelClientFn resolves the Redis client for cancel operations. It is
 // a package-level variable so tests can override it with a miniredis
-// client (the production path goes through redisengine.Get()).
+// client (the production path goes through cache.Get()).
 var cancelClientFn = func() (*redis.Client, error) {
-	rc := redisengine.Get()
+	rc := redis2.Get()
 	if rc == nil {
 		return nil, errors.New("cancel: redis cache not initialized")
 	}

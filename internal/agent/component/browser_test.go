@@ -19,6 +19,7 @@ package component
 import (
 	"context"
 	"errors"
+	"multirag/internal/agent/runtime"
 	"net/http"
 	"testing"
 
@@ -26,30 +27,26 @@ import (
 )
 
 func TestBrowser_FetchAndSummarize(t *testing.T) {
-	c, err := NewBrowserComponent(map[string]any{"url": "https://public.example/page", "model_id": "42", "prompt": "Summarize"})
+	c, err := NewBrowserComponent(map[string]any{"url": "https://8.8.8.8/page", "model_id": "42", "prompt": "Summarize"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	state := canvas.NewCanvasState("run-browser", "task-browser")
 	ctx := canvas.WithState(context.Background(), state)
-	ctx = context.WithValue(ctx, httpExecutorKey{}, httpExecutor(func(ctx context.Context, method, target, body, contentType string, headers map[string]string) (*http.Response, error) {
-		if method != "GET" || target != "https://public.example/page" {
+	previous := http.DefaultTransport
+	http.DefaultTransport = componentRoundTripper(func(r *http.Request) (*http.Response, error) {
+		method, target := r.Method, r.URL.String()
+		if method != "GET" || target != "https://8.8.8.8/page" {
 			t.Fatal(method, target)
 		}
 		return response(200, "source page"), nil
-	}))
-	invoker := &stubInvoker{resp: &ChatInvokeResponse{Content: "summary"}}
-	ctx = WithChatInvoker(ctx, invoker)
+	})
+	t.Cleanup(func() { http.DefaultTransport = previous })
 	out, err := c.Invoke(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, runtime.ErrNotImplemented) || out != nil {
+		t.Fatalf("summarization falsely succeeded: %v %v", out, err)
 	}
-	if out["content"] != "summary" || out["size"] != len("source page") {
-		t.Fatal(out)
-	}
-	if invoker.calls != 1 || invoker.captured.ModelName != "42" || invoker.captured.Messages[1].Content != "source page" {
-		t.Fatalf("model not actually called: %+v", invoker.captured)
-	}
+
 }
 func TestBrowser_RejectsPrivateURL(t *testing.T) {
 	c, _ := NewBrowserComponent(nil)
@@ -62,10 +59,12 @@ func TestBrowser_HTTPFailure(t *testing.T) {
 	c, _ := NewBrowserComponent(nil)
 	ctx := canvas.WithState(context.Background(), canvas.NewCanvasState("failed", "failed"))
 	expected := errors.New("timeout")
-	ctx = context.WithValue(ctx, httpExecutorKey{}, httpExecutor(func(context.Context, string, string, string, string, map[string]string) (*http.Response, error) {
+	previous := http.DefaultTransport
+	http.DefaultTransport = componentRoundTripper(func(*http.Request) (*http.Response, error) {
 		return nil, expected
-	}))
-	if _, err := c.Invoke(ctx, map[string]any{"url": "https://public.example"}); !errors.Is(err, expected) {
+	})
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	if _, err := c.Invoke(ctx, map[string]any{"url": "https://8.8.8.8"}); !errors.Is(err, expected) {
 		t.Fatal(err)
 	}
 }
@@ -79,5 +78,25 @@ func TestBrowser_MissingURL(t *testing.T) {
 func TestBrowser_ParamCheck(t *testing.T) {
 	if _, err := NewBrowserComponent(map[string]any{"timeout": -1}); err == nil {
 		t.Fatal("negative timeout accepted")
+	}
+}
+
+func TestBrowser_FetchReturnsRealContent(t *testing.T) {
+	previous := http.DefaultTransport
+	http.DefaultTransport = componentRoundTripper(func(request *http.Request) (*http.Response, error) {
+		if request.Method != "GET" || request.URL.String() != "https://8.8.8.8/content" {
+			t.Fatal(request.Method, request.URL)
+		}
+		return response(200, "actual content"), nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	node, err := NewBrowserComponent(map[string]any{"url": "https://8.8.8.8/content"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := canvas.WithState(context.Background(), canvas.NewCanvasState("fetch", "fetch"))
+	out, err := node.Invoke(ctx, nil)
+	if err != nil || out["content"] != "actual content" || out["size"] != len("actual content") || out["status"] != 200 {
+		t.Fatal(out, err)
 	}
 }

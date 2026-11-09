@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -112,7 +113,7 @@ func NewHTTPHelper() *HTTPHelper {
 		client: &http.Client{
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 			Timeout:       30 * time.Second,
-			Transport:     base,
+			Transport:     otelhttp.NewTransport(base),
 		},
 		retry: RetryConfig{}.withDefaults(),
 	}
@@ -270,7 +271,7 @@ func (h *HTTPHelper) pinnedClient(pinnedIP net.IP) *http.Client {
 	return &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Timeout:       h.client.Timeout,
-		Transport:     base,
+		Transport:     otelhttp.NewTransport(base),
 	}
 }
 
@@ -429,17 +430,6 @@ func isRetryableNetError(err error) bool {
 		return false
 	}
 	return true
-}
-
-// DoUntrusted fetches a user-selected URL using context-aware DNS validation
-// and a pinned direct connection. Redirects require a new validation and are
-// returned to the caller instead of followed.
-func (h *HTTPHelper) DoUntrusted(ctx context.Context, method, rawURL, body, contentType string, headers map[string]string) (*http.Response, error) {
-	host, ip, err := ResolveAndValidateContext(ctx, rawURL)
-	if err != nil {
-		return nil, err
-	}
-	return h.DoPinned(ctx, method, rawURL, body, contentType, headers, host, ip)
 }
 
 const maxToolResponseBytes = 8 << 20

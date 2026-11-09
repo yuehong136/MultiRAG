@@ -18,7 +18,6 @@ package tool
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -30,17 +29,6 @@ import (
 // optional node-level configuration. The config map belongs to the
 // Agent node / DSL, not to the model-emitted function-call args.
 type Factory func(params map[string]any) (einotool.BaseTool, error)
-
-var ErrToolUnavailable = errors.New("agent tool is unavailable")
-
-var unavailableTools = map[string]string{
-	"akshare":           "AkShare runtime is not implemented",
-	"code_exec":         "sandbox client is not implemented",
-	"jin10":             "WebSocket subscription is not implemented",
-	"retrieval":         "authorized retrieval runtime is not implemented",
-	"search_my_dateset": "authorized retrieval runtime is not implemented",
-	"wencai":            "Wencai runtime is not implemented",
-}
 
 var registry = map[string]Factory{
 	"akshare":           noConfig("akshare", func() einotool.BaseTool { return NewAkShareTool() }),
@@ -82,9 +70,6 @@ func BuildByName(name string, params map[string]any) (einotool.BaseTool, error) 
 	key := strings.ToLower(strings.TrimSpace(name))
 	if key == "" {
 		return nil, fmt.Errorf("agent tool: empty tool name")
-	}
-	if reason := unavailableTools[key]; reason != "" {
-		return nil, fmt.Errorf("%w: %s: %s", ErrToolUnavailable, key, reason)
 	}
 	factory, ok := registry[key]
 	if !ok {

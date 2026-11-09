@@ -53,7 +53,7 @@ var credentialQueryParams = map[string]struct{}{
 // of public and private IPs is also dangerous (DNS-rebinding /
 // multi-A-record pinning).
 func validateURLForSSRF(rawURL string) error {
-	_, _, err := ResolveAndValidate(rawURL)
+	_, _, err := ResolveAndValidate(context.Background(), rawURL)
 	return err
 }
 
@@ -72,30 +72,15 @@ func validateURLForSSRF(rawURL string) error {
 // become the IP and cert verification would target the IP. The
 // transport-layer approach keeps the URL host as the original hostname,
 // preserving correct SNI / cert verification for any HTTPS endpoint.
-func ResolveAndValidate(rawURL string) (originalHost string, pinnedIP net.IP, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return ResolveAndValidateContext(ctx, rawURL)
-}
-
-// ResolveAndValidateContext validates every DNS record and honors cancellation.
-func ResolveAndValidateContext(ctx context.Context, rawURL string) (originalHost string, pinnedIP net.IP, err error) {
+func ResolveAndValidate(ctx context.Context, rawURL string) (originalHost string, pinnedIP net.IP, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	return resolveAndValidate(ctx, rawURL, net.DefaultResolver.LookupIP)
-}
-
-func resolveAndValidate(ctx context.Context, rawURL string, lookup func(context.Context, string, string) ([]net.IP, error)) (originalHost string, pinnedIP net.IP, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", nil, err
 	}
-
 	u, perr := url.Parse(rawURL)
 	if perr != nil {
 		return "", nil, fmt.Errorf("ssrf: parse url: %w", perr)
-	}
-	if u.User != nil {
-		return "", nil, errors.New("ssrf: URL credentials are not allowed")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", nil, fmt.Errorf("ssrf: unsupported scheme %q", u.Scheme)
@@ -123,8 +108,11 @@ func resolveAndValidate(ctx context.Context, rawURL string, lookup func(context.
 		return host, ip, nil
 	}
 
-	ips, lerr := lookup(ctx, "ip", host)
+	ips, lerr := net.DefaultResolver.LookupIP(ctx, "ip", host)
 	if lerr != nil {
+		if ctx.Err() != nil {
+			return "", nil, ctx.Err()
+		}
 		return "", nil, fmt.Errorf("ssrf: resolve %s: %w", host, lerr)
 	}
 	var firstSafe net.IP
@@ -148,7 +136,7 @@ func resolveAndValidate(ctx context.Context, rawURL string, lookup func(context.
 // metadata services live; multicast and the unspecified address are
 // also rejected.
 func isPrivateOrLoopback(ip net.IP) bool {
-	if ip == nil || !ip.IsGlobalUnicast() {
+	if ip == nil {
 		return true
 	}
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
@@ -168,9 +156,9 @@ func SanitizeURL(rawURL string) string {
 	if err != nil {
 		return "<invalid-url>"
 	}
-	changed := u.User != nil
 	u.User = nil
 	q := u.Query()
+	changed := false
 	for k := range q {
 		if _, ok := credentialQueryParams[strings.ToLower(k)]; ok {
 			q.Set(k, "REDACTED")

@@ -34,7 +34,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"html"
 	"strings"
 	"time"
 
@@ -51,9 +50,10 @@ const defaultDocsFontSize = 12
 
 // Default font families; Phase 5 will register a real TTF asset.
 const (
-	defaultPDFFontFamily  = "Noto Sans CJK SC"
-	defaultDOCXFontFamily = "Noto Sans CJK SC"
-	defaultHTMLFontFamily = "Noto Sans CJK SC"
+	defaultPDFFontFamily    = "Noto Sans CJK SC"
+	defaultDOCXFontFamily   = "Noto Sans CJK SC"
+	defaultHTMLFontFamily   = "Noto Sans CJK SC"
+	defaultMarkdownRenderer = "goldmark"
 )
 
 // Allowed output formats. Keep this in sync with the param.Check
@@ -106,7 +106,7 @@ func (p *docsGeneratorParam) Update(conf map[string]any) error {
 	if v, ok := boolFrom(conf, "add_page_numbers"); ok {
 		p.AddPageNumbers = v
 	} else {
-		p.AddPageNumbers = strings.EqualFold(p.OutputFormat, "docx") || strings.EqualFold(p.OutputFormat, "pdf")
+		p.AddPageNumbers = p.OutputFormat == "pdf" || p.OutputFormat == "docx"
 	}
 	if v, ok := boolFrom(conf, "add_timestamp"); ok {
 		p.AddTimestamp = v
@@ -131,12 +131,13 @@ func (p *docsGeneratorParam) Check() error {
 		}
 	}
 	format := strings.ToLower(strings.TrimSpace(p.OutputFormat))
-	if p.AddPageNumbers && format != "docx" && format != "pdf" {
-		return fmt.Errorf("DocsGenerator page numbers for %s: %w", format, ErrNotImplemented)
+	if (format == "txt" || format == "markdown" || format == "md") && p.WatermarkText != "" {
+		return fmt.Errorf("DocsGenerator: watermark for %s: %w", format, ErrNotImplemented)
 	}
-	if p.WatermarkText != "" && (format == "txt" || format == "md" || format == "markdown") {
-		return fmt.Errorf("DocsGenerator watermark for %s: %w", format, ErrNotImplemented)
+	if format != "pdf" && format != "docx" && p.AddPageNumbers {
+		return fmt.Errorf("DocsGenerator: page numbers for %s: %w", format, ErrNotImplemented)
 	}
+
 	if p.FontSize < 12 {
 		return &ParamError{
 			Field:  "font_size",
@@ -195,31 +196,7 @@ func (d *DocsGenerator) Invoke(ctx context.Context, inputs map[string]any) (map[
 	if v, ok := stringFrom(inputs, "output_format"); ok && v != "" {
 		param.OutputFormat = v
 	}
-	for key, dest := range map[string]*string{"header_text": &param.HeaderText, "footer_text": &param.FooterText, "watermark_text": &param.WatermarkText} {
-		if value, present := inputs[key]; present {
-			text, ok := value.(string)
-			if !ok {
-				return nil, &ParamError{Field: key, Reason: "must be a string"}
-			}
-			*dest = text
-		}
-	}
-	for key, dest := range map[string]*bool{"add_page_numbers": &param.AddPageNumbers, "add_timestamp": &param.AddTimestamp} {
-		if value, present := inputs[key]; present {
-			flag, ok := value.(bool)
-			if !ok {
-				return nil, &ParamError{Field: key, Reason: "must be boolean"}
-			}
-			*dest = flag
-		}
-	}
-	if _, present := inputs["font_size"]; present {
-		size, ok := intFrom(inputs, "font_size")
-		if !ok {
-			return nil, &ParamError{Field: "font_size", Reason: "must be an integer"}
-		}
-		param.FontSize = size
-	}
+	// Re-check after overrides.
 	if err := param.Check(); err != nil {
 		return nil, fmt.Errorf("DocsGenerator: %w", err)
 	}
@@ -312,15 +289,9 @@ func (d *DocsGenerator) Stream(ctx context.Context, inputs map[string]any) (<-ch
 // Inputs returns parameter metadata.
 func (d *DocsGenerator) Inputs() map[string]string {
 	return map[string]string{
-		"content":          "Plain source text; Markdown output preserves the source, HTML escapes it.",
-		"filename":         "Override: output filename (sanitized; extension auto-appended if missing).",
-		"output_format":    "docx | txt | markdown | html; PDF is unavailable.",
-		"header_text":      "Header line (TXT), comment (Markdown), element (HTML) or DOCX header.",
-		"footer_text":      "Footer line/comment/element or DOCX footer.",
-		"watermark_text":   "DOCX/HTML only; TXT/Markdown reject watermarks.",
-		"add_page_numbers": "DOCX only (default true there); other available formats reject true.",
-		"add_timestamp":    "Include generation timestamp in every supported format.",
-		"font_size":        "Font size applies to DOCX/HTML; plain formats carry no font metadata.",
+		"content":       "Override: source text/markdown body (otherwise uses the static param).",
+		"filename":      "Override: output filename (sanitized; extension auto-appended if missing).",
+		"output_format": "Override: pdf | docx | txt | markdown | html.",
 	}
 }
 
@@ -374,8 +345,8 @@ func sanitizeFilename(raw, ext string) string {
 		b.WriteRune(r)
 	}
 	base := strings.Join(strings.Fields(b.String()), "_")
-	if len([]rune(base)) > maxBase {
-		base = string([]rune(base)[:min(len([]rune(base)), maxBase)])
+	if len(base) > maxBase {
+		base = base[:maxBase]
 	}
 	if base == "" {
 		return "file" + ext
@@ -417,13 +388,13 @@ func renderMarkdown(content, header, footer string, addTimestamp bool) string {
 	}
 	if header != "" {
 		b.WriteString("<!-- header: ")
-		b.WriteString(html.EscapeString(header))
+		b.WriteString(header)
 		b.WriteString(" -->\n\n")
 	}
 	b.WriteString(content)
 	if footer != "" {
 		b.WriteString("\n\n<!-- footer: ")
-		b.WriteString(html.EscapeString(footer))
+		b.WriteString(footer)
 		b.WriteString(" -->\n")
 	}
 	return b.String()
@@ -439,7 +410,7 @@ func renderHTML(content, header, footer, watermark string, addTimestamp bool, fo
 	b.WriteString("<meta charset=\"utf-8\">\n")
 	b.WriteString("<title>")
 	if header != "" {
-		b.WriteString(html.EscapeString(header))
+		b.WriteString(header)
 	} else {
 		b.WriteString("Document")
 	}
@@ -453,20 +424,20 @@ func renderHTML(content, header, footer, watermark string, addTimestamp bool, fo
 	b.WriteString("</style>\n</head>\n<body>\n")
 	if header != "" {
 		b.WriteString("<header>")
-		b.WriteString(html.EscapeString(header))
+		b.WriteString(header)
 		b.WriteString("</header>\n")
 	}
 	if watermark != "" {
 		b.WriteString("<div class=\"watermark\">")
-		b.WriteString(html.EscapeString(watermark))
+		b.WriteString(watermark)
 		b.WriteString("</div>\n")
 	}
-	b.WriteString("<main><pre>\n")
-	b.WriteString(html.EscapeString(content))
-	b.WriteString("\n</pre></main>\n")
+	b.WriteString("<main>\n")
+	b.WriteString(content)
+	b.WriteString("\n</main>\n")
 	if footer != "" {
 		b.WriteString("<footer>")
-		b.WriteString(html.EscapeString(footer))
+		b.WriteString(footer)
 		b.WriteString("</footer>\n")
 	}
 	if addTimestamp {

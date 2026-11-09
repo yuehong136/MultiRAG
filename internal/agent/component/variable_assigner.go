@@ -370,16 +370,16 @@ func operate(state *runtime.CanvasState, oldVal any, op string, param any) (any,
 func writeVar(state *runtime.CanvasState, ref string, v any) error {
 	switch {
 	case ref == "item":
-		state.SetGlobal("__item__", v)
+		state.Globals["__item__"] = v
 		return nil
 	case ref == "index":
-		state.SetGlobal("__index__", v)
+		state.Globals["__index__"] = v
 		return nil
 	case strings.HasPrefix(ref, "sys."):
-		state.SetSys(strings.TrimPrefix(ref, "sys."), v)
+		state.Sys[strings.TrimPrefix(ref, "sys.")] = v
 		return nil
 	case strings.HasPrefix(ref, "env."):
-		state.SetEnv(strings.TrimPrefix(ref, "env."), v)
+		state.Env[strings.TrimPrefix(ref, "env.")] = v
 		return nil
 	}
 	idx := strings.Index(ref, "@")

@@ -14,222 +14,197 @@
 //  limitations under the License.
 //
 
+// Package component — Invoke component (T3, plan §2.11.3 row 14, §2.7).
+//
+// Invoke is the canvas HTTP client node. It supports GET/POST/PUT/DELETE
+// with custom headers, optional proxy, and per-request timeout, and
+// wraps the underlying net/http.Transport with
+// go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp.NewTransport
+// so outbound calls automatically propagate W3C traceparent headers
+// (plan §2.10 — OTel integration).
+//
+// The P0 implementation does NOT include HTML cleaning, JSON form-data
+// building, or retry/backoff. Those land in Phase 2 P3 (per plan §2.7)
+// when deepdoc HTTP use cases first need them.
 package component
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	agenttool "multirag/internal/agent/tool"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
-
-	"multirag/internal/agent/runtime"
 	"time"
 
-	agenttool "multirag/internal/agent/tool"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-const componentNameInvoke = "Invoke"
-const defaultInvokeTimeout = 30 * time.Second
-const defaultInvokeContentCT = "application/json"
-const maxInvokeResponseBody = 8 << 20
+const (
+	componentNameInvoke = "Invoke"
 
-type httpExecutor func(context.Context, string, string, string, string, map[string]string) (*http.Response, error)
-type httpExecutorKey struct{}
+	defaultInvokeTimeout   = 30 * time.Second
+	defaultInvokeUserAgent = "multirag-agent/1.0 (Invoke component)"
+	defaultInvokeContentCT = "application/json"
+	maxInvokeResponseBody  = 16 << 20 // 16 MiB; hard cap to avoid OOM
+)
 
-// executeHTTP keeps the controlled HTTP test boundary separate from the
-// production transport, which pins DNS and blocks non-public addresses.
-func executeHTTP(ctx context.Context, method, target, body, contentType string, headers map[string]string) (*http.Response, error) {
-	if execute, ok := ctx.Value(httpExecutorKey{}).(httpExecutor); ok {
-		return execute(ctx, method, target, body, contentType, headers)
-	}
-	helper := agenttool.NewHTTPHelper()
-	return helper.DoUntrusted(ctx, method, target, body, contentType, headers)
-}
-
-func readHTTPBody(resp *http.Response) ([]byte, error) {
-	if resp == nil || resp.Body == nil {
-		return nil, errors.New("HTTP response body missing")
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxInvokeResponseBody+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > maxInvokeResponseBody {
-		return nil, errors.New("HTTP response exceeds 8 MiB")
-	}
-	return body, nil
-}
-
+// InvokeComponent is the HTTP client node. Stateless across invocations.
 type InvokeComponent struct {
-	name     string
-	defaults map[string]any
+	name string
 }
 
-var invokeKeys = []string{"method", "url", "body", "headers", "timeout", "proxy", "content_type"}
-
-func validateInvokeOptions(values map[string]any) error {
-	for _, key := range []string{"method", "url", "body", "proxy", "content_type"} {
-		if value, present := values[key]; present {
-			if _, ok := value.(string); !ok {
-				return &ParamError{Field: key, Reason: "must be a string"}
-			}
-		}
-	}
-	if method, ok := values["method"].(string); ok && !runtime.VarRefPattern.MatchString(method) {
-		switch strings.ToUpper(strings.TrimSpace(method)) {
-		case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete:
-		default:
-			return fmt.Errorf("Invoke: invalid method %q", method)
-		}
-	}
-	if target, ok := values["url"].(string); ok && target != "" && !runtime.VarRefPattern.MatchString(target) {
-		parsed, err := url.Parse(target)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			return &ParamError{Field: "url", Reason: "must be an HTTP(S) URL"}
-		}
-	}
-	if proxy, _ := values["proxy"].(string); proxy != "" {
-		return fmt.Errorf("Invoke proxy: %w", ErrNotImplemented)
-	}
-	if _, present := values["timeout"]; present {
-		value, ok := floatFrom(values, "timeout")
-		if !ok || value <= 0 || value > 30 {
-			return &ParamError{Field: "timeout", Reason: "must be a finite number greater than 0 and no more than 30"}
-		}
-	}
-	if value, present := values["headers"]; present {
-		switch headers := value.(type) {
-		case map[string]string:
-		case map[string]any:
-			for _, value := range headers {
-				if _, ok := value.(string); !ok {
-					return &ParamError{Field: "headers", Reason: "must contain string values"}
-				}
-			}
-		default:
-			return &ParamError{Field: "headers", Reason: "must be a string map"}
-		}
-	}
-	return nil
+// NewInvokeComponent constructs an Invoke component.
+func NewInvokeComponent(_ map[string]any) (Component, error) {
+	return &InvokeComponent{name: componentNameInvoke}, nil
 }
 
-func NewInvokeComponent(params map[string]any) (Component, error) {
-	if err := validateInvokeOptions(params); err != nil {
-		return nil, err
-	}
-	defaults := map[string]any{"method": http.MethodGet}
-	for _, key := range invokeKeys {
-		if value, present := params[key]; present {
-			defaults[key] = value
-		}
-	}
-	// Own the nested header map so construction never borrows mutable caller data.
-	if raw, present := defaults["headers"]; present {
-		headers := map[string]string{}
-		switch value := raw.(type) {
-		case map[string]string:
-			for k, v := range value {
-				headers[k] = v
-			}
-		case map[string]any:
-			for k, v := range value {
-				headers[k] = v.(string)
-			}
-		}
-		defaults["headers"] = headers
-	}
-	return &InvokeComponent{name: componentNameInvoke, defaults: defaults}, nil
-}
+// Name returns the registered component name.
 func (i *InvokeComponent) Name() string { return i.name }
+
+// Invoke executes a single HTTP request and returns the status code,
+// body, and response headers. See Inputs() for the param contract.
 func (i *InvokeComponent) Invoke(ctx context.Context, inputs map[string]any) (map[string]any, error) {
-	merged := make(map[string]any, len(i.defaults)+len(inputs))
-	for key, value := range i.defaults {
-		merged[key] = value
-	}
-	for _, key := range invokeKeys {
-		if value, present := inputs[key]; present {
-			merged[key] = value
-		}
-	}
-	if err := validateInvokeOptions(merged); err != nil {
-		return nil, err
-	}
-	for _, key := range []string{"method", "url", "body", "content_type"} {
-		if text, ok := merged[key].(string); ok {
-			resolved, err := resolvePrompt(ctx, text)
-			if err != nil {
-				return nil, fmt.Errorf("Invoke %s: %w", key, err)
-			}
-			merged[key] = resolved
-		}
-	}
-	inputs = merged
 	method, _ := inputs["method"].(string)
 	method = strings.ToUpper(strings.TrimSpace(method))
 	switch method {
 	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete:
 	default:
-		return nil, fmt.Errorf("Invoke: invalid method %q", method)
+		return nil, fmt.Errorf("Invoke: invalid method %q (want GET/POST/PUT/DELETE)", method)
 	}
-	target, _ := inputs["url"].(string)
-	if target == "" {
+	rawURL, _ := inputs["url"].(string)
+	if rawURL == "" {
 		return nil, errors.New("Invoke: url is required")
 	}
-	if proxy, _ := inputs["proxy"].(string); proxy != "" {
-		return nil, fmt.Errorf("Invoke proxy: %w", ErrNotImplemented)
+	// url.Parse is a sanity check; we trust the orchestrator to have
+	// already resolved any {{...}} refs, but a bad string here is a
+	// programmer error worth surfacing.
+	if _, err := url.Parse(rawURL); err != nil {
+		return nil, fmt.Errorf("Invoke: parse url: %w", err)
 	}
+
+	originalHost, pinnedIP, err := agenttool.ResolveAndValidate(ctx, rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("Invoke: %w", err)
+	}
+
 	timeout := defaultInvokeTimeout
-	if seconds, ok := floatFrom(inputs, "timeout"); ok {
-		if seconds <= 0 || seconds > 30 {
-			return nil, &ParamError{Field: "timeout", Reason: "must be between 0 and 30 seconds"}
-		}
-		timeout = time.Duration(seconds * float64(time.Second))
+	if v, ok := inputs["timeout"].(int); ok && v > 0 {
+		timeout = time.Duration(v) * time.Second
+	} else if v, ok := inputs["timeout"].(float64); ok && v > 0 {
+		timeout = time.Duration(v) * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+
 	contentType, _ := inputs["content_type"].(string)
 	if contentType == "" && (method == http.MethodPost || method == http.MethodPut) {
 		contentType = defaultInvokeContentCT
 	}
-	body, _ := inputs["body"].(string)
-	headers := map[string]string{}
-	switch raw := inputs["headers"].(type) {
-	case map[string]string:
-		for key, value := range raw {
-			headers[key] = value
-		}
-	case map[string]any:
-		for key, value := range raw {
-			headers[key] = value.(string)
+
+	var body io.Reader
+	if s, ok := inputs["body"].(string); ok && s != "" {
+		body = bytes.NewReader([]byte(s))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("Invoke: build request: %w", err)
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.Header.Set("User-Agent", defaultInvokeUserAgent)
+	if h, ok := inputs["headers"].(map[string]any); ok {
+		for k, v := range h {
+			if s, ok := v.(string); ok {
+				req.Header.Set(k, s)
+			}
 		}
 	}
-	for key, value := range headers {
-		resolved, err := resolvePrompt(ctx, value)
+
+	// Wrap the stdlib Transport with otelhttp so the request gets a
+	// child span + W3C traceparent injected automatically.
+	var base http.RoundTripper = http.DefaultTransport
+	if native, ok := base.(*http.Transport); ok {
+		pinned := native.Clone()
+		pinned.Proxy = nil
+		pinned.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(pinnedIP.String(), port))
+		}
+		base = pinned
+		defer pinned.CloseIdleConnections()
+	}
+	_ = originalHost // The URL retains the original host for TLS SNI.
+	if proxyStr, ok := inputs["proxy"].(string); ok && proxyStr != "" {
+		_, proxyIP, err := agenttool.ResolveAndValidate(ctx, proxyStr)
 		if err != nil {
-			return nil, fmt.Errorf("Invoke header: %w", err)
+			return nil, fmt.Errorf("Invoke: proxy: %w", err)
 		}
-		headers[key] = resolved
+		proxyURL, err := url.Parse(proxyStr)
+		if err != nil {
+			return nil, fmt.Errorf("Invoke: proxy: %w", err)
+		}
+		pinned := &http.Transport{Proxy: http.ProxyURL(proxyURL), DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(proxyIP.String(), port))
+		}}
+		defer pinned.CloseIdleConnections()
+		base = pinned
 	}
-	resp, err := executeHTTP(ctx, method, target, body, contentType, headers)
+	transport := otelhttp.NewTransport(base)
+
+	client := &http.Client{
+		Timeout:       timeout,
+		Transport:     transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Invoke: %w", err)
+		return nil, fmt.Errorf("Invoke: do: %w", err)
 	}
-	payload, err := readHTTPBody(resp)
+	defer resp.Body.Close()
+
+	// Cap the response body to keep a hostile server from streaming
+	// infinite bytes into memory.
+	limited := io.LimitReader(resp.Body, maxInvokeResponseBody+1)
+	bodyBytes, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, fmt.Errorf("Invoke: %w", err)
+		return nil, fmt.Errorf("Invoke: read body: %w", err)
 	}
-	outHeaders := make(map[string]string, len(resp.Header))
-	for key, values := range resp.Header {
-		if len(values) > 0 {
-			outHeaders[key] = values[0]
+
+	if len(bodyBytes) > maxInvokeResponseBody {
+		return nil, fmt.Errorf("Invoke: response exceeds limit")
+	}
+
+	hdr := make(map[string]string, len(resp.Header))
+	for k, vs := range resp.Header {
+		// First value only — multi-value headers are uncommon in
+		// canvas-DSL HTTP responses, and the param contract specifies
+		// a string map.
+		if len(vs) > 0 {
+			hdr[k] = vs[0]
 		}
 	}
-	return map[string]any{"status": resp.StatusCode, "body": string(payload), "headers": outHeaders}, nil
+
+	return map[string]any{
+		"status":  resp.StatusCode,
+		"body":    string(bodyBytes),
+		"headers": hdr,
+	}, nil
 }
+
+// Stream is a synchronous facade over Invoke for P0. Real streaming
+// (chunked transfer as it arrives) is deferred to Phase 2 P3.
 func (i *InvokeComponent) Stream(ctx context.Context, inputs map[string]any) (<-chan map[string]any, error) {
 	out, err := i.Invoke(ctx, inputs)
 	if err != nil {
@@ -240,10 +215,53 @@ func (i *InvokeComponent) Stream(ctx context.Context, inputs map[string]any) (<-
 	close(ch)
 	return ch, nil
 }
+
+// Inputs returns the public parameter surface.
 func (i *InvokeComponent) Inputs() map[string]string {
-	return map[string]string{"method": "GET, POST, PUT or DELETE", "url": "Public HTTP(S) URL; redirects and proxies are disabled", "body": "Request body", "headers": "String request headers", "timeout": "Maximum 30 seconds", "content_type": "Request Content-Type"}
+	return map[string]string{
+		"method":       "HTTP method: GET, POST, PUT, or DELETE (case-insensitive).",
+		"url":          "Target URL; can be a {{...}} reference resolved upstream.",
+		"headers":      "Optional map of string headers.",
+		"body":         "Optional request body (string).",
+		"timeout":      "Per-request timeout in seconds; default 30.",
+		"proxy":        "Optional proxy URL (e.g. http://host:3128).",
+		"content_type": "Optional Content-Type; default 'application/json' for POST/PUT.",
+	}
 }
+
+// Outputs returns the response surface.
 func (i *InvokeComponent) Outputs() map[string]string {
-	return map[string]string{"status": "HTTP status code", "body": "Response body, maximum 8 MiB", "headers": "Response headers"}
+	return map[string]string{
+		"status":  "HTTP status code (int).",
+		"body":    "Response body (string, truncated at 16 MiB).",
+		"headers": "Response headers (first value per key).",
+	}
 }
-func init() { Register(componentNameInvoke, NewInvokeComponent) }
+
+// mustParseProxy parses a proxy URL string. We keep this helper here
+// (rather than calling url.Parse inline) so the panic-on-bad-input
+// behavior is uniform across the package — proxy strings are operator-
+// configured, a malformed one is a deployment error worth crashing
+// loud on.
+func mustParseProxy(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil {
+		panic(fmt.Sprintf("Invoke: invalid proxy URL %q: %v", raw, err))
+	}
+	// Defensive check: net/http.ProxyURL will silently no-op on a
+	// URL with no Host. Surface a clear panic instead.
+	if u.Host == "" {
+		panic(fmt.Sprintf("Invoke: proxy URL %q has no host", raw))
+	}
+	return u
+}
+
+// netHTTPImports is a no-op reference to keep `net` in the import set
+// for go vet's unused-import check while the production code path
+// doesn't otherwise need the net package (only used by the optional
+// proxy path via http.ProxyURL). Removed in Phase 2 P3.
+var _ = net.IPv4len
+
+func init() {
+	Register(componentNameInvoke, NewInvokeComponent)
+}

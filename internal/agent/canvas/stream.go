@@ -44,9 +44,7 @@ type StreamEvent struct {
 
 // StreamEmitter pushes events toward an SSE writer. Emit must be
 // non-blocking — a slow consumer must not stall canvas execution. The
-// Phase-1 implementation drops events when the buffer is full and
-// logs a warning; a Phase-5 SSE handler can swap in a back-pressured
-// implementation if needed.
+// implementation reports a full or closed channel to the caller.
 type StreamEmitter interface {
 	Emit(ev StreamEvent) error
 	Close() error
@@ -70,10 +68,7 @@ func NewChannelEmitter(buffer int) StreamEmitter {
 	return &channelEmitter{ch: make(chan StreamEvent, buffer)}
 }
 
-// Emit pushes ev onto the channel. Non-blocking: if the buffer is full
-// the event is dropped and a warning is logged. Returning a nil error
-// on drop is intentional — the canvas run must keep going even if the
-// SSE consumer is slow or absent.
+// Emit reports a full or closed channel without blocking or panicking.
 var (
 	ErrStreamClosed = errors.New("canvas: stream closed")
 	ErrStreamFull   = errors.New("canvas: stream buffer full")

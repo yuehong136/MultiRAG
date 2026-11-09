@@ -17,14 +17,9 @@
 package dao
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"multirag/internal/entity"
-	"os"
+	"errors"
 
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
+	"multirag/internal/entity"
 )
 
 // APITokenDAO API token data access object
@@ -53,30 +48,17 @@ func (dao *APITokenDAO) DeleteByTenantID(tenantID string) (int64, error) {
 	return result.RowsAffected, result.Error
 }
 
-// GetUserByAPIToken gets API token by access key
+// GetByToken gets API token by access key
 func (dao *APITokenDAO) GetUserByAPIToken(token string) (*entity.APIToken, error) {
-	return dao.GetUserByAPITokenContext(context.Background(), token)
-}
-
-// GetUserByAPITokenContext preserves the single token-to-tenant binding and
-// refuses disabled tenants. A duplicate key must never choose an arbitrary owner.
-func (dao *APITokenDAO) GetUserByAPITokenContext(ctx context.Context, token string) (*entity.APIToken, error) {
-	if os.Getenv("DISABLE_SDK") != "" || token == "" {
-		return nil, gorm.ErrRecordNotFound
-	}
 	var tokens []entity.APIToken
-	if err := DB.WithContext(ctx).Where("token = ?", token).Limit(2).Find(&tokens).Error; err != nil {
+	if token == "" {
+		return nil, errors.New("API token is empty")
+	}
+	if err := DB.Where("token = ?", token).Limit(2).Find(&tokens).Error; err != nil {
 		return nil, err
 	}
 	if len(tokens) != 1 || tokens[0].TenantID == "" {
-		return nil, gorm.ErrRecordNotFound
-	}
-	var active int64
-	if err := DB.WithContext(ctx).Model(&entity.Tenant{}).Where("id = ? AND status = ?", tokens[0].TenantID, "1").Count(&active).Error; err != nil {
-		return nil, err
-	}
-	if active != 1 {
-		return nil, gorm.ErrRecordNotFound
+		return nil, errors.New("API token must identify exactly one tenant")
 	}
 	return &tokens[0], nil
 }
@@ -104,6 +86,83 @@ func NewAPI4ConversationDAO() *API4ConversationDAO {
 	return &API4ConversationDAO{}
 }
 
+// ConversationStatsRow is one daily aggregate row for api_4_conversation.
+type ConversationStatsRow struct {
+	Dt       string  `gorm:"column:dt"`
+	PV       int64   `gorm:"column:pv"`
+	UV       int64   `gorm:"column:uv"`
+	Tokens   float64 `gorm:"column:tokens"`
+	Duration float64 `gorm:"column:duration"`
+	Round    float64 `gorm:"column:round"`
+	ThumbUp  int64   `gorm:"column:thumb_up"`
+}
+
+// Create inserts a new api_4_conversation row. The caller is responsible
+// for setting ID, DialogID, UserID and the BaseModel time fields; the
+// DAO does not assign defaults because session creation paths in the
+// Python agent API generate a uuid + tenant timestamp and rely on the
+// round-trip shape being byte-identical.
+func (dao *API4ConversationDAO) Create(conv *entity.API4Conversation) error {
+	if conv == nil {
+		return errors.New("api4 conversation: nil row")
+	}
+	return DB.Create(conv).Error
+}
+
+// Stats returns daily conversation aggregates for a tenant.
+func (dao *API4ConversationDAO) Stats(tenantID, fromDate, toDate string, source *string) ([]ConversationStatsRow, error) {
+	var rows []ConversationStatsRow
+	dateExpr := "DATE_FORMAT(a.create_date, '%Y-%m-%d 00:00:00')"
+	db := DB.Table("api_4_conversation AS a").
+		Select(`
+			DATE_FORMAT(a.create_date, '%Y-%m-%d 00:00:00') AS dt,
+			COUNT(a.id) AS pv,
+			COUNT(DISTINCT a.user_id) AS uv,
+			COALESCE(SUM(a.tokens), 0) AS tokens,
+			COALESCE(SUM(a.duration), 0) AS duration,
+			COALESCE(AVG(a.round), 0) AS round,
+			COALESCE(SUM(a.thumb_up), 0) AS thumb_up
+		`).
+		Joins("JOIN dialog AS d ON a.dialog_id = d.id AND d.tenant_id = ?", tenantID).
+		Where("a.create_date >= ? AND a.create_date <= ?", fromDate, toDate)
+
+	if source == nil {
+		db = db.Where("a.source IS NULL")
+	} else {
+		db = db.Where("a.source = ?", *source)
+	}
+
+	err := db.Group(dateExpr).
+		Order(dateExpr).
+		Scan(&rows).Error
+	return rows, err
+}
+
+func (dao *API4ConversationDAO) GetBySessionID(sessionID, agentID string) (*entity.API4Conversation, error) {
+	var result entity.API4Conversation
+	tx := DB.Where("id = ? AND dialog_id = ?", sessionID, agentID).Find(&result)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return nil, nil
+	}
+	return &result, nil
+}
+
+// ListIDsByAgentID lists conversation IDs for one agent.
+func (dao *API4ConversationDAO) ListIDsByAgentID(agentID string) ([]string, error) {
+	var ids []string
+	err := DB.Model(&entity.API4Conversation{}).Where("dialog_id = ?", agentID).Pluck("id", &ids).Error
+	return ids, err
+}
+
+// DeleteBySessionIDAndAgentID deletes API4Conversations by sessionID and agentID
+func (dao *API4ConversationDAO) DeleteBySessionIDAndAgentID(sessionID, agentID string) (int64, error) {
+	result := DB.Where("id = ? AND dialog_id = ?", sessionID, agentID).Delete(&entity.API4Conversation{})
+	return result.RowsAffected, result.Error
+}
+
 // DeleteByDialogIDs deletes API4Conversations by dialog IDs (hard delete)
 func (dao *API4ConversationDAO) DeleteByDialogIDs(dialogIDs []string) (int64, error) {
 	if len(dialogIDs) == 0 {
@@ -111,90 +170,4 @@ func (dao *API4ConversationDAO) DeleteByDialogIDs(dialogIDs []string) (int64, er
 	}
 	result := DB.Unscoped().Where("dialog_id IN ?", dialogIDs).Delete(&entity.API4Conversation{})
 	return result.RowsAffected, result.Error
-}
-
-// BackfillBeta performs a compare-and-set and returns the persisted concurrent winner.
-func (dao *APITokenDAO) BackfillBeta(tenantID, token, candidate string) (string, error) {
-	if candidate == "" {
-		return "", fmt.Errorf("empty beta candidate")
-	}
-	result := DB.Model(&entity.APIToken{}).Where("tenant_id = ? AND token = ? AND (beta IS NULL OR beta = '')", tenantID, token).Update("beta", candidate)
-	if result.Error != nil {
-		return "", result.Error
-	}
-	var stored entity.APIToken
-	if err := DB.Where("tenant_id = ? AND token = ?", tenantID, token).First(&stored).Error; err != nil {
-		return "", err
-	}
-	if stored.Beta == nil || *stored.Beta == "" {
-		return "", fmt.Errorf("beta readback is empty")
-	}
-	return *stored.Beta, nil
-}
-
-// AgentSession keeps immutable DSL JSON numeric identifiers lossless on read.
-// It shadows the legacy JSONMap scanner only for the agent session endpoints.
-type AgentSession struct {
-	entity.API4Conversation
-	DSL json.RawMessage `gorm:"column:dsl" json:"dsl,omitempty"`
-}
-
-func (d *API4ConversationDAO) GetBySessionID(ctx context.Context, sessionID, agentID string) (*AgentSession, error) {
-	var row AgentSession
-	err := DB.WithContext(ctx).Model(&entity.API4Conversation{}).
-		Where("id = ? AND dialog_id = ? AND source = ?", sessionID, agentID, "agent").First(&row).Error
-	if err != nil {
-		return nil, err
-	}
-	return &row, nil
-}
-
-// DeleteBySessionIDAndAgentID cannot delete another agent's or ordinary chat session.
-func (d *API4ConversationDAO) DeleteBySessionIDAndAgentID(ctx context.Context, sessionID, agentID string) (int64, error) {
-	result := DB.WithContext(ctx).Where("id = ? AND dialog_id = ? AND source = ?", sessionID, agentID, "agent").Delete(&entity.API4Conversation{})
-	return result.RowsAffected, result.Error
-}
-
-// ListIDsByAgentID never includes ordinary chat sessions sharing the dialog ID.
-func (d *API4ConversationDAO) ListIDsByAgentID(ctx context.Context, agentID string) ([]string, error) {
-	ids := []string{}
-	err := DB.WithContext(ctx).Model(&entity.API4Conversation{}).Where("dialog_id = ? AND source = ?", agentID, "agent").Order("id").Pluck("id", &ids).Error
-	return ids, err
-}
-
-// DeleteAgentSessionsOwned holds the owner row and commits all SQL deletes together.
-// Business-level missing IDs are returned separately from storage failures.
-func (d *API4ConversationDAO) DeleteAgentSessionsOwned(ctx context.Context, actorID, agentID string, ids []string, deleteAll bool) (int, []string, error) {
-	count := 0
-	missing := []string{}
-	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var parent entity.UserCanvas
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
-			Where("id = ? AND user_id = ?", agentID, actorID).
-			Where("EXISTS (SELECT 1 FROM t_ai_users u WHERE u.id = ? AND u.status = ? AND u.is_active = ?)", actorID, "1", true).
-			Where("EXISTS (SELECT 1 FROM t_ai_tenants t WHERE t.id = ? AND t.status = ?)", actorID, "1").Take(&parent).Error; err != nil {
-			return err
-		}
-		if ids == nil && deleteAll {
-			if err := tx.Model(&entity.API4Conversation{}).Where("dialog_id = ? AND source = ?", agentID, "agent").Order("id").Pluck("id", &ids).Error; err != nil {
-				return err
-			}
-		}
-		for _, id := range ids {
-			result := tx.Where("id = ? AND dialog_id = ? AND source = ?", id, agentID, "agent").Delete(&entity.API4Conversation{})
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected == 0 {
-				missing = append(missing, "The agent doesn't own the session "+id)
-			} else {
-				count++
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, nil, err
-	}
-	return count, missing, nil
 }
