@@ -4,10 +4,10 @@
 
 ## 行为与兼容性
 
-我方缺失的修复或新行为，尽量保留上游结构和方法名，降低后续合并成本；框架差异和本地契约优先。
-我方已有带类型的 helper、Protocol 或等价抽象时，按 [改进价值判断](../SKILL.md#等价之后仍须比较改进价值)
-比较上游机制；优先复用适合的本地抽象，必要时改进其内部实现，不为形式对齐撤掉本地改进。
-无抽象分歧的代码可以直接对齐；发现上游缺陷时做保证本次行为正确的适配，说明差异及必要的日落点。
+按 [结构与做法准则](../SKILL.md#保持上游结构与做法) 保持文件、目录、函数名及实现职责直接对应。
+FastAPI、SQLAlchemy 和类型注解所需的改写在对应位置完成，不能以“本地契约优先”或已有
+helper/Protocol 为由重新拆分、细化或改名。查明的具体缺陷在原位置做最小修复；明确提前采用
+后续改进时记录准确提交和范围。生产调用确需兼容时按下列证据判据处理。
 
 函数返回形状或字段变化时，沿生产者、本仓全部活跃调用方（含本地扩展入口）、存储映射和读回逐段核对。
 解析器传递元数据时确认真实数据形状、合并或覆盖顺序，并检查每条写入路径在索引前消费和移除临时字段。
@@ -38,8 +38,8 @@
 |---|---|
 | Quart/Flask 路由与请求对象 | FastAPI `APIRouter`、Pydantic body、`Depends` |
 | peewee 查询 | SQLAlchemy 2.0；新 service 用 `AsyncSession`，handler 用 `async def` + `Depends(get_async_db)` |
-| settings 定义变更 | 查 [RAGFLOW_PORTING_MAP](../../../../docs/enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；消费者的 `settings.X` 保留兼容 facade 用法 |
-| `rag/` | `core/`；具体文件名核实当前树，例如 `rag/llm/chat_model.py` → `core/llm/chat.py` |
+| settings 定义变更 | 查 [RAGFLOW_PORTING_MAP](../../../../docs/enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)，核对活动消费者并同步迁移；不默认新增 facade |
+| `rag/` | `core/`；保留对应文件名。已有改名先核实并记录直接映射，不能继续作为省略文件名片段或拆分文件的先例 |
 | `api/apps/restful_apis/*_api.py` | 同名路由；路由层 helper 不可反向引入底层 service，遵守 import-linter |
 | llm_factories `model_type` | `mdl_type` |
 
@@ -50,5 +50,6 @@
 涉及 session、阻塞桥接或 `LLMBundle` 时读 [异步 SQLAlchemy 细则](../../../../docs/development.md#异步-sqlalchemy-编码规范)，
 其中包含 `run_sync` 的范围与 facade session 不得逸出的约束。
 
-按我方 [测试选型](../../../../docs/development.md#写测试) 重建行为测试，不逐字搬上游测试结构。
+在对应测试位置验证目标合同，按我方 [测试选型](../../../../docs/development.md#写测试) 调整
+框架、隔离 fixture 与资源登记；保留实质断言，不能把本地裁剪后的拒绝行为锁成通过。
 通用验证见 [AGENTS.md](../../../../AGENTS.md#验证)；额外兼容矩阵按受影响协议执行。
