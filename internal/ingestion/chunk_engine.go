@@ -35,7 +35,7 @@ import (
 
 // ChunkPlan holds the ordered pipeline operators.
 type ChunkPlan struct {
-	operators   []chunk.Operator
+	Operators   []chunk.Operator
 	Version     string
 	Description string
 	Name        string
@@ -62,18 +62,8 @@ func (e *ChunkEngine) Compile(dsl string) (*ChunkPlan, error) {
 
 	pipelineRaw, ok := parsed["pipeline"].([]interface{})
 	if !ok || len(pipelineRaw) == 0 {
-		return nil, fmt.Errorf("compile DSL: non-empty pipeline required")
+		return plan, nil
 	}
-	for key := range parsed {
-		if key != "pipeline" && key != "name" && key != "description" && key != "version" {
-			return nil, fmt.Errorf("compile DSL: unknown field %q", key)
-		}
-	}
-	if len(pipelineRaw) > 3 {
-		return nil, fmt.Errorf("pipeline has more than three stages")
-	}
-	seen := map[string]bool{}
-	lastStage := -1
 
 	plan.Name, ok = parsed["name"].(string)
 	if !ok {
@@ -98,11 +88,6 @@ func (e *ChunkEngine) Compile(dsl string) (*ChunkPlan, error) {
 		var op chunk.Operator
 		var err error
 		operatorName, _ := operator["operator"].(string)
-		stage, known := map[string]int{"preprocess": 0, "split": 1, "postprocess": 2}[operatorName]
-		if !known || seen[operatorName] || stage <= lastStage {
-			return nil, fmt.Errorf("pipeline[%d]: invalid, duplicate or out-of-order operator %q", i, operatorName)
-		}
-		seen[operatorName], lastStage = true, stage
 		switch operatorName {
 		case "preprocess":
 			op, err = chunk.NewPreprocessOperator(operator)
@@ -122,10 +107,9 @@ func (e *ChunkEngine) Compile(dsl string) (*ChunkPlan, error) {
 		default:
 			return nil, fmt.Errorf("pipeline[%d]: unknown operator %s", i, operatorName)
 		}
-		plan.operators = append(plan.operators, op)
-	}
-	if !seen["split"] {
-		return nil, fmt.Errorf("pipeline requires one split stage")
+		delete(operator, "operator")
+
+		plan.Operators = append(plan.Operators, op)
 	}
 
 	return plan, nil
@@ -136,12 +120,12 @@ func (e *ChunkEngine) Compile(dsl string) (*ChunkPlan, error) {
 // ---------------------------------------------------------------------------
 
 func (e *ChunkEngine) Execute(plan *ChunkPlan, text string) (*chunk.ChunkContext, error) {
-	if plan == nil || len(plan.operators) == 0 {
+	if plan == nil {
 		return nil, fmt.Errorf("compiled plan required")
 	}
 	chunkContext := &chunk.ChunkContext{Origin: text, TextAfterPreprocess: text}
 
-	for i, op := range plan.operators {
+	for i, op := range plan.Operators {
 		if err := op.Prepare(chunkContext); err != nil {
 			return nil, fmt.Errorf("re-prepare operator[%d]: %w", i, err)
 		}
@@ -170,12 +154,12 @@ func (e *ChunkEngine) Execute(plan *ChunkPlan, text string) (*chunk.ChunkContext
 // ---------------------------------------------------------------------------
 
 func (e *ChunkEngine) Explain(plan *ChunkPlan) (string, error) {
-	if plan == nil || len(plan.operators) == 0 {
+	if plan == nil {
 		return "", fmt.Errorf("compiled plan required")
 	}
 	var buf strings.Builder
 	buf.WriteString("Chunk Pipeline Plan:\n")
-	for i, op := range plan.operators {
+	for i, op := range plan.Operators {
 		buf.WriteString(fmt.Sprintf("  [%d] %s\n", i, op.String()))
 	}
 	return buf.String(), nil

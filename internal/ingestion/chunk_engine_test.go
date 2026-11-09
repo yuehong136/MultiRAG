@@ -56,13 +56,11 @@ func TestChunkSplitWithoutOptionalStages(t *testing.T) {
 func TestChunkRejectsInvalidAndIgnoredOptions(t *testing.T) {
 	testsupport.NewCase(t)
 	for _, dsl := range []string{
-		`null`, `{}`, `{"pipeline":[]}`, `{"pipeline":[{"operator":"preprocess"}]}`,
+		`{`, `{"pipeline":[null]}`, `{"pipeline":[{"operator":"unknown"}]}`,
 		`{"pipeline":[{"operator":"split","strategy":"unknown"}]}`,
 		`{"pipeline":[{"operator":"split","params":{"boundaries":[""]}}]}`,
 		`{"pipeline":[{"operator":"split","params":{"boundaries":[12]}}]}`,
 		`{"pipeline":[{"operator":"split","typo":true}]}`,
-		`{"pipeline":[{"operator":"postprocess"},{"operator":"split"}]}`,
-		`{"pipeline":[{"operator":"split"},{"operator":"split"}]}`,
 		`{"pipeline":[{"operator":"split"},{"operator":"postprocess","overlap":{"conditions":[{"if":"length >","then":{"size":1}}]}}]}`,
 		`{"pipeline":[{"operator":"split"},{"operator":"postprocess","overlap":{"default":{"size":-1}}}]}`,
 		`{"pipeline":[{"operator":"split"},{"operator":"postprocess","filter":{"min_length":10,"max_length":1}}]}`,
@@ -73,6 +71,61 @@ func TestChunkRejectsInvalidAndIgnoredOptions(t *testing.T) {
 	}
 	if _, err := NewChunkEngine().Execute(nil, "input"); err == nil {
 		t.Error("nil plan succeeded")
+	}
+}
+
+func TestChunkPipelinePreservesDeclaredStages(t *testing.T) {
+	testsupport.NewCase(t)
+	for _, tt := range []struct {
+		name string
+		dsl  string
+		want []string
+	}{
+		{"repeated split", `{"pipeline":[{"operator":"split","strategy":"paragraph"},{"operator":"split","strategy":"char"}]}`, []string{"甲", "乙"}},
+		{"postprocess before split", `{"pipeline":[{"operator":"postprocess"},{"operator":"split","strategy":"char"}]}`, []string{"甲", "乙"}},
+		{"more than three stages", `{"pipeline":[{"operator":"preprocess"},{"operator":"preprocess"},{"operator":"split","strategy":"paragraph"},{"operator":"split","strategy":"char"}]}`, []string{"甲", "乙"}},
+		{"preprocess only", `{"extension":true,"pipeline":[{"operator":"preprocess","strip_whitespace":true}]}`, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := NewChunkEngine()
+			plan, err := e.Compile(tt.dsl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := e.Execute(plan, "甲乙")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(out.SplitChunks) != len(tt.want) {
+				t.Fatalf("split chunks: %#v; want %v", out.SplitChunks, tt.want)
+			}
+			for i, want := range tt.want {
+				if out.SplitChunks[i].Content != want {
+					t.Fatalf("chunk %d: %q; want %q", i, out.SplitChunks[i].Content, want)
+				}
+			}
+			if len(plan.Operators) == 0 {
+				t.Fatal("declared operators were discarded")
+			}
+		})
+	}
+}
+
+func TestChunkPipelineEmptyPlan(t *testing.T) {
+	testsupport.NewCase(t)
+	for _, dsl := range []string{`null`, `{}`, `{"pipeline":[]}`} {
+		e := NewChunkEngine()
+		plan, err := e.Compile(dsl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := e.Execute(plan, "原文")
+		if err != nil || out.Origin != "原文" || len(out.ResultChunks) != 0 {
+			t.Fatalf("empty plan: %#v, %v", out, err)
+		}
+		if text, err := e.Explain(plan); err != nil || text != "Chunk Pipeline Plan:\n" {
+			t.Fatalf("empty plan explanation: %q, %v", text, err)
+		}
 	}
 }
 func TestOverlapConditionFailureAndDisabled(t *testing.T) {

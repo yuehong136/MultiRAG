@@ -3,10 +3,11 @@
 This package belongs to the parallel Go implementation. It does not run the
 Python production ingestion worker or submit tasks to its queue.
 
-`NewChunkEngine().Compile(dsl)` compiles a JSON pipeline with one required
-`split` stage and optional `preprocess` and `postprocess` stages, in that order.
-Unknown options, invalid expressions, duplicate stages, and unsupported
-strategies fail compilation. `Explain` describes the compiled operators without
+`NewChunkEngine().Compile(dsl)` compiles the declared JSON pipeline in its given
+order. Stages may repeat; no fixed order, stage count or required `split` stage
+is imposed. A missing or empty pipeline compiles to an empty plan. Invalid
+operator options, expressions and unsupported strategies fail compilation.
+`ChunkPlan.Operators` exposes the ordered operators. `Explain` describes them without
 reading a document. `Execute` returns actual `ResultChunks` and propagates
 condition failures. Sizes, merge targets, filters and character overlap count
 Unicode code points. Compiled plans can be reused concurrently.

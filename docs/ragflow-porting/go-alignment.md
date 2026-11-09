@@ -45,6 +45,18 @@ Python；Go 尚未部署，本次收敛不保留旧 Go API、别名、包装器�
 测试差异，不能直接称为 139 个缺失能力或 677 个应无条件删除的文件。
 208 项只完成机械文本一致性检查；494 项仍存在文本或结构差异。当前没有全树运行对齐结论。
 
+AST 审计另保存 `ast-inventory.json` 和 `symbol-ledger.json`，逐项记录类型、签名、位置、
+函数体摘要和直接调用表达式。相同符号有 321 项位于不同文件；这用于发现结构搬迁，
+不是已完成语义审计的证明。方法继承、重命名、参数名和 import alias 都需人工解释。
+
+当前首处实现为 `internal/ingestion/chunk_engine.go`：公开 `ChunkPlan.Operators`，按声明
+顺序保留全部 stage，取消固定数量、顺序、去重和必选 split 的额外限制；空 pipeline 产生
+空 plan。已有 nil-plan 错误、缺失 preprocess 时输入初始化和最终 chunk 索引/Unicode
+size 归一化暂保留为有具体问题依据的修复，仍需在整个 operator 链审计中复核。
+`go test -race -count=1 -json ./internal/ingestion` 通过（11 个 test/subtest 事件、无 skip），
+原始报告和 JUnit 为 `19b40d3a055049c18d12d589d7831014.output` 与
+`chunk-dsl-race.junit.xml`。该证据不覆盖 CLI、native、SQL 或队列。
+
 主树 28 项既有 WIP 已留存快照，专项在独立 worktree 实施。所有本专项提交仅暂存已核归属
 路径；串行合并本地 main 前重查主树。测试经 `scripts/run_registered.py`，资源先登记、后创建，
 保留原始退出、首败、JUnit/JSON 及独立清理读回。真实供应商、生产和远程 `ci-required`
