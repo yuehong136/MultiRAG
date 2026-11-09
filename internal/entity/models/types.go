@@ -14,15 +14,9 @@ type ModelDriver interface {
 	Name() string
 
 	// ChatWithMessages sends multiple role-tagged messages and returns a response.
-	ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (*ChatResponse, error)
-	// ChatStreamly sends a message and streams response
-	ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error)
-	// ChatStreamlyWithChannel sends a message and streams response to channel (better performance)
-	ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error
-	// ChatStreamlyWithSender sends a message and streams response via sender function (best performance, no channel)
-	ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error
-	// ChatStreamlyWithMessages preserves roles and request cancellation while streaming.
-	ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error
+	ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error)
+	// ChatStreamlyWithSender preserves roles and request cancellation while streaming.
+	ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error
 	// Embed returns indexed embeddings for a list of texts with the selected configuration.
 	Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error)
 	Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error)

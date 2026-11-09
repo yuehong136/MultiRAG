@@ -35,23 +35,8 @@ func (m *MoonshotModel) Name() string {
 	return "moonshot"
 }
 
-func (m *MoonshotModel) Chat(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
-	if modelName == nil || message == nil {
-		return nil, fmt.Errorf("moonshot: model name and message are required")
-	}
-	return m.chat(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, modelConfig)
-}
-
-func (m *MoonshotModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (*ChatResponse, error) {
+func (m *MoonshotModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
 	return m.chat(modelName, messages, apiConfig, modelConfig)
-}
-
-func (m *MoonshotModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
-	return nil, fmt.Errorf("moonshot: channel-only streaming is unsupported; use the sender interface")
-}
-
-func (m *MoonshotModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
-	return fmt.Errorf("moonshot: channel-only streaming is unsupported; use the sender interface")
 }
 
 func moonshotChatBody(modelName string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
@@ -164,14 +149,7 @@ func (m *MoonshotModel) chat(modelName string, messages []Message, apiConfig *AP
 	return &ChatResponse{Answer: message.Content, ReasoningContent: message.ReasoningContent}, nil
 }
 
-func (m *MoonshotModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
-	if modelName == nil || message == nil {
-		return fmt.Errorf("model name and message are required")
-	}
-	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, modelConfig, sender)
-}
-
-func (m *MoonshotModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) (streamErr error) {
+func (m *MoonshotModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) (streamErr error) {
 	apiConfig, cancelCall := modelStreamConfig(apiConfig)
 	defer cancelCall()
 	if sender == nil {

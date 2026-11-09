@@ -29,16 +29,8 @@ func (m *MinimaxModel) Name() string {
 	return "minimax"
 }
 
-func (m *MinimaxModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (*ChatResponse, error) {
+func (m *MinimaxModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
 	return m.chat(modelName, messages, apiConfig, modelConfig)
-}
-
-func (m *MinimaxModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
-	return nil, fmt.Errorf("minimax: channel-only streaming is unsupported; use the sender interface")
-}
-
-func (m *MinimaxModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
-	return fmt.Errorf("minimax: channel-only streaming is unsupported; use the sender interface")
 }
 
 func minimaxChatBody(modelName string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
@@ -155,14 +147,7 @@ func (m *MinimaxModel) chat(modelName string, messages []Message, apiConfig *API
 	return &ChatResponse{Answer: message.Content, ReasoningContent: message.ReasoningContent}, nil
 }
 
-func (m *MinimaxModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
-	if modelName == nil || message == nil {
-		return fmt.Errorf("model name and message are required")
-	}
-	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, modelConfig, sender)
-}
-
-func (m *MinimaxModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+func (m *MinimaxModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
 	apiConfig, cancelCall := modelStreamConfig(apiConfig)
 	defer cancelCall()
 	if sender == nil {

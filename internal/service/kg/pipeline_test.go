@@ -81,7 +81,7 @@ type rewriteDriver struct {
 	calls   int
 }
 
-func (d *rewriteDriver) ChatWithMessages(_ string, api *models.APIConfig, _ []models.Message, _ *models.ChatConfig) (*models.ChatResponse, error) {
+func (d *rewriteDriver) ChatWithMessages(_ string, _ []models.Message, api *models.APIConfig, _ *models.ChatConfig) (*models.ChatResponse, error) {
 	d.calls++
 	d.context = api.Context
 	return &models.ChatResponse{Answer: &d.answer}, d.err

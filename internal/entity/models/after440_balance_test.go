@@ -137,7 +137,7 @@ func TestMoonshotActiveAndStalledStreamLifecycle(t *testing.T) {
 			defer srv.Close()
 			m := NewMoonshotModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 			m.streamIdleTimeout = 50 * time.Millisecond
-			err := m.ChatStreamlyWithMessages("kimi", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return nil })
+			err := m.ChatStreamlyWithSender("kimi", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return nil })
 			if active && err != nil || !active && !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatal(err)
 			}

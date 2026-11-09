@@ -49,23 +49,18 @@ func (h *HuaweiCloudModel) chatDriver(name string) *openAIChatDriver {
 	}
 	return &d
 }
-func (h *HuaweiCloudModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
-	response, err := h.chatDriver(name).ChatWithMessages(name, huaweiCloudAPI(api), messages, config)
+func (h *HuaweiCloudModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
+	response, err := h.chatDriver(name).ChatWithMessages(name, messages, huaweiCloudAPI(api), config)
 	if err == nil && response.ReasoningContent != nil {
 		reason := strings.TrimPrefix(*response.ReasoningContent, "\n")
 		response.ReasoningContent = &reason
 	}
 	return response, err
 }
-func (h *HuaweiCloudModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	return h.chatDriver(name).ChatStreamlyWithMessages(name, messages, huaweiCloudAPI(api), config, sender)
+func (h *HuaweiCloudModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	return h.chatDriver(name).ChatStreamlyWithSender(name, messages, huaweiCloudAPI(api), config, sender)
 }
-func (h *HuaweiCloudModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("model name and message are required")
-	}
-	return h.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, sender)
-}
+
 func (h *HuaweiCloudModel) ListModels(api *APIConfig) ([]string, error) {
 	return h.openAIChatDriver.ListModels(huaweiCloudAPI(api))
 }

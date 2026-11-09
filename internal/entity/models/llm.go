@@ -158,7 +158,7 @@ func (m *EinoChatModel) Stream(ctx context.Context, msgs []*schema.Message, opts
 	}()
 	go func() {
 		defer close(events)
-		err := cm.ChatStreamlyWithMessages(messages, nil, func(content, reasoning *string) error {
+		err := cm.ChatStreamlyWithSender(messages, nil, func(content, reasoning *string) error {
 			if content != nil && *content == "[DONE]" {
 				return nil
 			}

@@ -28,13 +28,7 @@ func (m *DeepSeekModel) Name() string {
 	return "deepseek"
 }
 
-func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
-	if modelName == nil || message == nil {
-		return nil, fmt.Errorf("model and message are required")
-	}
-	return m.ChatWithMessages(*modelName, apiConfig, []Message{{Role: "user", Content: *message}}, chatModelConfig)
-}
-func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+func (m *DeepSeekModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
 	apiConfig, cancelCall := modelCallConfig(apiConfig)
 	defer cancelCall()
 	if strings.TrimSpace(modelName) == "" {
@@ -158,21 +152,7 @@ func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig,
 	return response, nil
 }
 
-func (m *DeepSeekModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *DeepSeekModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
-	if modelName == nil || message == nil {
-		return fmt.Errorf("model and message are required")
-	}
-	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, chatModelConfig, sender)
-}
-func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
+func (m *DeepSeekModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
 	apiConfig, cancelCall := modelStreamConfig(apiConfig)
 	defer cancelCall()
 	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {

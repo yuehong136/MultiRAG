@@ -112,7 +112,7 @@ func TestAfter0fbNewProviderWire(t *testing.T) {
 			d := after0fbDriver(t, provider, srv.URL)
 			cfg := &ChatConfig{Temperature: &zero, TopP: &zero}
 			messages := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "prior"}, {Role: "user", Content: "question"}}
-			out, err := d.ChatWithMessages(name, api, messages, cfg)
+			out, err := d.ChatWithMessages(name, messages, api, cfg)
 			if err != nil || out == nil || *out.Answer != "answer" || *out.ReasoningContent != "reason" {
 				t.Fatal(out, err)
 			}
@@ -121,13 +121,13 @@ func TestAfter0fbNewProviderWire(t *testing.T) {
 			}
 			for _, raw := range []string{`{}`, `{"choices":[]}`, `{"choices":[null]}`, `{"choices":[{"message":{"content":42}}]}`, `{"choices":[{"message":{"content":null}}]}`, `{"choices":[{"message":{"content":"answer","reasoning_content":42}}]}`, `{"error":"private-provider-body"}`, `{"code":7,"choices":[{"message":{"content":"answer"}}]}`, `{"choices":[{"message":{"content":"ok"}}]} trailing`} {
 				response = raw
-				if out, err := d.ChatWithMessages(name, api, messages, cfg); err == nil || out != nil || strings.Contains(err.Error(), "private-provider-body") {
+				if out, err := d.ChatWithMessages(name, messages, api, cfg); err == nil || out != nil || strings.Contains(err.Error(), "private-provider-body") {
 					t.Fatal("accepted raw chat", raw, out, err)
 				}
 			}
 			response = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n"
 			var answer, reason string
-			err = d.ChatStreamlyWithMessages(name, messages, api, cfg, func(a, r *string) error {
+			err = d.ChatStreamlyWithSender(name, messages, api, cfg, func(a, r *string) error {
 				if a != nil {
 					answer += *a
 				}
@@ -142,19 +142,19 @@ func TestAfter0fbNewProviderWire(t *testing.T) {
 			for _, raw := range []string{"data: {oops}\n\n", "data: {\"choices\":[]}\n\n", "data: {\"choices\":[{\"delta\":{\"content\":42}}]}\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n", "data: {\"error\":\"private-provider-body\"}\n\n", "data: [DONE]\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"content_filter\"}]}\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]"} {
 				response = raw
 				done := false
-				err = d.ChatStreamlyWithMessages(name, messages, api, cfg, func(a, r *string) error { done = done || a != nil && *a == "[DONE]"; return nil })
+				err = d.ChatStreamlyWithSender(name, messages, api, cfg, func(a, r *string) error { done = done || a != nil && *a == "[DONE]"; return nil })
 				if err == nil || done || strings.Contains(err.Error(), "private-provider-body") {
 					t.Fatal("false completion", raw, done, err)
 				}
 			}
 			response = "data: {\"choices\":[{\"delta\":{\"content\":\"answer\",\"reasoning_content\":\"reason\"},\"finish_reason\":\"stop\"}]}\n\n"
 			want := errors.New("sender failed")
-			if err := d.ChatStreamlyWithMessages(name, messages, api, cfg, func(*string, *string) error { return want }); !errors.Is(err, want) {
+			if err := d.ChatStreamlyWithSender(name, messages, api, cfg, func(*string, *string) error { return want }); !errors.Is(err, want) {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			n := 0
-			err = d.ChatStreamlyWithMessages(name, messages, &APIConfig{APIKey: &key, Context: ctx}, cfg, func(*string, *string) error { n++; cancel(); return nil })
+			err = d.ChatStreamlyWithSender(name, messages, &APIConfig{APIKey: &key, Context: ctx}, cfg, func(*string, *string) error { n++; cancel(); return nil })
 			if !errors.Is(err, context.Canceled) || n != 1 {
 				t.Fatal("cancel continued", n, err)
 			}
@@ -172,14 +172,14 @@ func TestAfter0fbNewProviderWire(t *testing.T) {
 			negative := -1
 			bad := math.NaN()
 			for _, cfg := range []*ChatConfig{{Stream: &f}, {Temperature: &bad}, {MaxTokens: &negative}} {
-				if err := d.ChatStreamlyWithMessages(name, messages, api, cfg, func(*string, *string) error { return nil }); err == nil {
+				if err := d.ChatStreamlyWithSender(name, messages, api, cfg, func(*string, *string) error { return nil }); err == nil {
 					t.Fatal("bad config")
 				}
 			}
-			if _, err := d.ChatWithMessages("", api, messages, nil); err == nil {
+			if _, err := d.ChatWithMessages("", messages, api, nil); err == nil {
 				t.Fatal("empty model")
 			}
-			if _, err := d.ChatWithMessages(name, api, []Message{{Role: "user", Content: 42}}, nil); err == nil {
+			if _, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: 42}}, api, nil); err == nil {
 				t.Fatal("invalid message")
 			}
 			if _, err := d.ListModels(&APIConfig{APIKey: &key, Region: &missing}); err == nil {
@@ -247,7 +247,7 @@ func TestAfter0fbThinkingAndHuaweiPaths(t *testing.T) {
 			if tc.provider != "HuaweiCloud" {
 				key = "key"
 			}
-			if _, err := d.ChatWithMessages(tc.name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: "q"}}, &ChatConfig{Thinking: &tc.thinking, Effort: &tc.effort}); err != nil {
+			if _, err := d.ChatWithMessages(tc.name, []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: &tc.thinking, Effort: &tc.effort}); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -279,14 +279,14 @@ func TestAfter0fbModelScopeOptionalAuthAndAliases(t *testing.T) {
 			d := NewModelScopeModel(map[string]string{"default": srv.URL + "/v1/"}, URLSuffix{Chat: "v1/chat/completions"})
 			for _, auth := range []string{"", "key"} {
 				key = auth
-				out, err := d.ChatWithMessages("tenant", &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: "q"}}, nil)
+				out, err := d.ChatWithMessages("tenant", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil)
 				if err != nil || out.ReasoningContent == nil || *out.ReasoningContent != "reason" {
 					t.Fatal(out, err)
 				}
 			}
 			stream = true
 			reason := ""
-			err := d.ChatStreamlyWithMessages("tenant", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(a, r *string) error {
+			err := d.ChatStreamlyWithSender("tenant", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(a, r *string) error {
 				if r != nil {
 					reason += *r
 				}
@@ -326,16 +326,16 @@ func TestAfter0fbNewProviderDeadlineIsolation(t *testing.T) {
 					api := &APIConfig{APIKey: &key, Context: ctx}
 					var err error
 					if stream {
-						err = d.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, nil, func(*string, *string) error { return nil })
+						err = d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, api, nil, func(*string, *string) error { return nil })
 					} else {
-						_, err = d.ChatWithMessages("served", api, []Message{{Role: "user", Content: "q"}}, nil)
+						_, err = d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, nil)
 					}
 					if !errors.Is(err, context.DeadlineExceeded) {
 						t.Fatal(err)
 					}
 					if stream {
 						after0fbCore(d).streamIdleTimeout = 30 * time.Millisecond
-						err = d.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return nil })
+						err = d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return nil })
 						if !errors.Is(err, context.DeadlineExceeded) {
 							t.Fatal("unbounded idle", err)
 						}
@@ -359,7 +359,7 @@ func TestAfter0fbNewProviderDeadlineIsolation(t *testing.T) {
 						NewInstance(map[string]string) ModelDriver
 					}).NewInstance(localURLs)
 					localURLs["default"] = "http://mutated"
-					out, err := d.ChatWithMessages("served", &APIConfig{APIKey: &instance}, []Message{{Role: "user", Content: "q"}}, nil)
+					out, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &instance}, nil)
 					if err != nil || out == nil || *out.Answer != instance {
 						t.Fatal(out, err)
 					}

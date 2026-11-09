@@ -91,13 +91,13 @@ func TestAddedProvidersChatAndStreaming(t *testing.T) {
 			maxTokens, temperature, topP, thinking, stream, effort := 128, 0.0, 0.8, true, true, "high"
 			config := &ChatConfig{MaxTokens: &maxTokens, Temperature: &temperature, TopP: &topP, Thinking: &thinking, Stream: &stream, Effort: &effort}
 			messages := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "prior"}, {Role: "user", Content: "question"}}
-			response, err := driver.ChatWithMessages("model", addedProviderAPI(), messages, config)
+			response, err := driver.ChatWithMessages("model", messages, addedProviderAPI(), config)
 			if err != nil || response == nil || response.Answer == nil || *response.Answer != "answer" || response.ReasoningContent == nil || *response.ReasoningContent != "trace" {
 				t.Fatalf("chat: %#v %v", response, err)
 			}
 			stream = false // Entry point must still send stream=true.
 			var events []string
-			err = driver.ChatStreamlyWithMessages("model", messages, addedProviderAPI(), config, func(answer, reasoning *string) error {
+			err = driver.ChatStreamlyWithSender("model", messages, addedProviderAPI(), config, func(answer, reasoning *string) error {
 				if reasoning != nil {
 					events = append(events, "r:"+*reasoning)
 				}
@@ -151,7 +151,7 @@ func TestAddedProvidersStreamFailureAndCancellation(t *testing.T) {
 				api.Context = ctx
 				marker := errors.New("sender failure")
 				done := false
-				err := driver.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, api, nil, func(answer, reasoning *string) error {
+				err := driver.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, api, nil, func(answer, reasoning *string) error {
 					if answer != nil && *answer == "[DONE]" {
 						done = true
 					}
@@ -302,7 +302,7 @@ func TestAddedProviderValidationAndIsolation(t *testing.T) {
 				if _, err := driver.ListModels(api); err == nil {
 					t.Fatal("invalid configuration accepted")
 				}
-				if _, err := driver.ChatWithMessages("model", api, []Message{{Role: "user", Content: "q"}}, nil); err == nil {
+				if _, err := driver.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil {
 					t.Fatal("invalid chat configuration accepted")
 				}
 			}
@@ -468,7 +468,7 @@ func TestCoHereLargeStreamChunk(t *testing.T) {
 		fmt.Fprintf(w, "data: %s\n\ndata: {\"type\":\"message-end\"}\n\n", data)
 	})
 	var got strings.Builder
-	err := addedProviderDriver(t, "CoHere", server.URL).ChatStreamlyWithSender(addedProviderName("m"), addedProviderName("q"), addedProviderAPI(), nil, func(answer, reasoning *string) error {
+	err := addedProviderDriver(t, "CoHere", server.URL).ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, addedProviderAPI(), nil, func(answer, reasoning *string) error {
 		if answer != nil && *answer != "[DONE]" {
 			got.WriteString(*answer)
 		}
@@ -549,7 +549,7 @@ func TestCoHereChatProviderErrorIsNotAnAnswer(t *testing.T) {
 			driver := addedProviderDriver(t, "CoHere", server.URL)
 			if stream {
 				done := false
-				err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, addedProviderAPI(), nil, func(answer, reasoning *string) error {
+				err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, addedProviderAPI(), nil, func(answer, reasoning *string) error {
 					if answer != nil && *answer == "[DONE]" {
 						done = true
 					}
@@ -559,7 +559,7 @@ func TestCoHereChatProviderErrorIsNotAnAnswer(t *testing.T) {
 					t.Fatal(err, done)
 				}
 			} else {
-				if response, err := driver.ChatWithMessages("m", addedProviderAPI(), []Message{{Role: "user", Content: "q"}}, nil); err == nil || response != nil {
+				if response, err := driver.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, addedProviderAPI(), nil); err == nil || response != nil {
 					t.Fatal(response, err)
 				}
 			}
@@ -581,7 +581,7 @@ func TestAddedProviderUnsupportedCapabilities(t *testing.T) {
 				}
 			}
 			if provider == "FishAudio" {
-				if err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, addedProviderAPI(), nil, func(*string, *string) error { t.Error("unsupported stream emitted data"); return nil }); err == nil {
+				if err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, addedProviderAPI(), nil, func(*string, *string) error { t.Error("unsupported stream emitted data"); return nil }); err == nil {
 					t.Fatal("unsupported stream succeeded")
 				}
 			}

@@ -65,7 +65,7 @@ func TestXiaomiFactoryAndWire(t *testing.T) {
 	if _, ok := driver.(*XiaomiModel); !ok || driver.Name() != "xiaomi" {
 		t.Fatalf("factory selected %T (%s)", driver, driver.Name())
 	}
-	response, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, messages, config)
+	response, err := driver.ChatWithMessages(name, messages, &APIConfig{APIKey: &key}, config)
 	if err != nil || response == nil || response.Answer == nil || *response.Answer != "answer" || response.ReasoningContent == nil || *response.ReasoningContent != "reason" {
 		t.Fatal(response, err)
 	}
@@ -93,12 +93,12 @@ func TestXiaomiInstanceAndRegionIsolation(t *testing.T) {
 			instance := prototype.NewInstance(instanceURLs)
 			instanceURLs["private"] = "http://unused.invalid"
 			region, key := "private", endpoint
-			response, err := instance.ChatWithMessages("mimo", &APIConfig{APIKey: &key, Region: &region}, []Message{{Role: "user", Content: "q"}}, nil)
+			response, err := instance.ChatWithMessages("mimo", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key, Region: &region}, nil)
 			if err != nil || response.Answer == nil || *response.Answer != endpoint {
 				t.Fatal(response, err)
 			}
 			unknown := "unconfigured"
-			if _, err := instance.ChatWithMessages("mimo", &APIConfig{APIKey: &key, Region: &unknown}, []Message{{Role: "user", Content: "q"}}, nil); err == nil {
+			if _, err := instance.ChatWithMessages("mimo", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key, Region: &unknown}, nil); err == nil {
 				t.Fatal("unknown region silently selected another endpoint")
 			}
 		})
@@ -123,7 +123,7 @@ func TestXiaomiStreamEventsAndUsage(t *testing.T) {
 			})
 			key, on := "key", true
 			var answer, reasoning string
-			err := model.ChatStreamlyWithMessages("mimo", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: &on}, func(c, r *string) error {
+			err := model.ChatStreamlyWithSender("mimo", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: &on}, func(c, r *string) error {
 				if c != nil {
 					answer += *c
 				}
@@ -151,7 +151,7 @@ func TestXiaomiLongStreamAndEmptyRegionMap(t *testing.T) {
 	model := NewXiaomiModel(map[string]string{"": srv.URL}, URLSuffix{})
 	name, key, message := "mimo", "key", "q"
 	var answer string
-	err := model.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, func(c, r *string) error {
+	err := model.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(c, r *string) error {
 		if c != nil {
 			answer += *c
 		}
@@ -170,12 +170,12 @@ func TestXiaomiDenialBeforeHTTP(t *testing.T) {
 	messages := []Message{{Role: "user", Content: "q"}}
 	sender := func(*string, *string) error { return nil }
 	for _, run := range []func() error{
-		func() error { _, err := model.ChatWithMessages("", api, messages, nil); return err },
-		func() error { _, err := model.ChatWithMessages("mimo", nil, messages, nil); return err },
-		func() error { _, err := model.ChatWithMessages("mimo", api, nil, nil); return err },
-		func() error { return model.ChatStreamlyWithMessages("mimo", messages, api, nil, nil) },
+		func() error { _, err := model.ChatWithMessages("", messages, api, nil); return err },
+		func() error { _, err := model.ChatWithMessages("mimo", messages, nil, nil); return err },
+		func() error { _, err := model.ChatWithMessages("mimo", nil, api, nil); return err },
+		func() error { return model.ChatStreamlyWithSender("mimo", messages, api, nil, nil) },
 		func() error {
-			return model.ChatStreamlyWithMessages("mimo", messages, api, &ChatConfig{Stream: &off}, sender)
+			return model.ChatStreamlyWithSender("mimo", messages, api, &ChatConfig{Stream: &off}, sender)
 		},
 	} {
 		if err := run(); err == nil {
@@ -183,7 +183,7 @@ func TestXiaomiDenialBeforeHTTP(t *testing.T) {
 		}
 	}
 	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
-		if _, err := model.ChatWithMessages("mimo", api, messages, &ChatConfig{Temperature: &value}); err == nil {
+		if _, err := model.ChatWithMessages("mimo", messages, api, &ChatConfig{Temperature: &value}); err == nil {
 			t.Fatal("nonfinite generation value accepted")
 		}
 	}
@@ -206,7 +206,7 @@ func TestXiaomiResponseFailures(t *testing.T) {
 		t.Run(label, func(t *testing.T) {
 			model := xiaomiFixture(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) })
 			key := "key"
-			if response, err := model.ChatWithMessages("mimo", &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: "q"}}, nil); err == nil || response != nil || strings.Contains(err.Error(), "private-secret") {
+			if response, err := model.ChatWithMessages("mimo", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil); err == nil || response != nil || strings.Contains(err.Error(), "private-secret") {
 				t.Fatal(response, err)
 			}
 		})
@@ -218,7 +218,7 @@ func TestXiaomiResponseFailures(t *testing.T) {
 				fmt.Fprint(w, "private-secret")
 			})
 			key := "key"
-			if _, err := model.ChatWithMessages("mimo", &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: "q"}}, nil); err == nil || !strings.Contains(err.Error(), fmt.Sprint(status)) || strings.Contains(err.Error(), "private-secret") {
+			if _, err := model.ChatWithMessages("mimo", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil); err == nil || !strings.Contains(err.Error(), fmt.Sprint(status)) || strings.Contains(err.Error(), "private-secret") {
 				t.Fatal(err)
 			}
 		})
@@ -244,7 +244,7 @@ func TestXiaomiStreamFailures(t *testing.T) {
 				fmt.Fprint(w, body)
 			})
 			key, done := "key", false
-			err := model.ChatStreamlyWithMessages("mimo", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(c, r *string) error {
+			err := model.ChatStreamlyWithSender("mimo", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(c, r *string) error {
 				done = done || c != nil && *c == "[DONE]"
 				return nil
 			})
@@ -286,11 +286,11 @@ func TestXiaomiCancellationAndSenderDrain(t *testing.T) {
 			}
 			go func() {
 				if mode == "nonstream" {
-					_, err := model.ChatWithMessages("mimo", api, []Message{{Role: "user", Content: "q"}}, nil)
+					_, err := model.ChatWithMessages("mimo", []Message{{Role: "user", Content: "q"}}, api, nil)
 					result <- err
 					return
 				}
-				result <- model.ChatStreamlyWithMessages("mimo", []Message{{Role: "user", Content: "q"}}, api, nil, func(c, r *string) error {
+				result <- model.ChatStreamlyWithSender("mimo", []Message{{Role: "user", Content: "q"}}, api, nil, func(c, r *string) error {
 					if mode == "sender-error" {
 						return sentinel
 					}
@@ -330,7 +330,7 @@ func TestXiaomiRejectsRedirectAndUnsupportedCapabilities(t *testing.T) {
 	})
 	name, key := "mimo", "key"
 	api := &APIConfig{APIKey: &key}
-	if _, err := model.ChatWithMessages(name, api, []Message{{Role: "user", Content: "q"}}, nil); err == nil || targetCalls.Load() != 0 {
+	if _, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, nil); err == nil || targetCalls.Load() != 0 {
 		t.Fatal("redirect followed", err, targetCalls.Load())
 	}
 	for _, run := range []func() error{

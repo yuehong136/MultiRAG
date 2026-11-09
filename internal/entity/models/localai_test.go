@@ -43,12 +43,12 @@ func TestLocalAIChatAndStreaming(t *testing.T) {
 			max := 42
 			config := &ChatConfig{Effort: &effort, Thinking: &thinking, MaxTokens: &max}
 			messages := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "history"}, {Role: "user", Content: "x"}}
-			result, err := driver.ChatWithMessages("local", nil, messages, config)
+			result, err := driver.ChatWithMessages("local", messages, nil, config)
 			if err != nil || *result.Answer != "答案🙂" || result.ReasoningContent == nil || *result.ReasoningContent != "推理🙂" {
 				t.Fatalf("%v %v", result, err)
 			}
 			var got []string
-			err = driver.ChatStreamlyWithMessages("local", messages, nil, config, func(c, r *string) error {
+			err = driver.ChatStreamlyWithSender("local", messages, nil, config, func(c, r *string) error {
 				if c != nil {
 					got = append(got, *c)
 				}
@@ -78,7 +78,7 @@ func TestLocalAIStreamFailureLifecycle(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, test.body) }))
 			defer srv.Close()
 			d := NewLocalAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
-			err := d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "x"}}, nil, nil, func(*string, *string) error { return nil })
+			err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "x"}}, nil, nil, func(*string, *string) error { return nil })
 			if (err != nil) != test.wantErr {
 				t.Fatalf("%v", err)
 			}
@@ -93,17 +93,17 @@ func TestLocalAIStreamFailureLifecycle(t *testing.T) {
 		defer srv.Close()
 		d := NewLocalAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 		d.streamIdleTimeout = 30 * time.Millisecond
-		err := d.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "x"}}, nil, nil, func(*string, *string) error { return nil })
+		err := d.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "x"}}, nil, nil, func(*string, *string) error { return nil })
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatal("idle", err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		err = d.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "x"}}, &APIConfig{Context: ctx}, nil, func(*string, *string) error { cancel(); return nil })
+		err = d.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "x"}}, &APIConfig{Context: ctx}, nil, func(*string, *string) error { cancel(); return nil })
 		if !errors.Is(err, context.Canceled) {
 			t.Fatal("caller cancel", err)
 		}
 		sentinel := errors.New("sender failed")
-		err = d.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "x"}}, nil, nil, func(*string, *string) error { return sentinel })
+		err = d.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "x"}}, nil, nil, func(*string, *string) error { return sentinel })
 		if !errors.Is(err, sentinel) {
 			t.Fatal("sender", err)
 		}

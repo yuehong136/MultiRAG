@@ -13,9 +13,9 @@ import (
 	"time"
 )
 
-func googleTestConfig() (*string, *string, *APIConfig) {
+func googleTestConfig() (string, string, *APIConfig) {
 	name, message, key := "gemini-2.5-flash", "hello", "fixture-key"
-	return &name, &message, &APIConfig{APIKey: &key}
+	return name, message, &APIConfig{APIKey: &key}
 }
 
 func TestGoogleChatSDKRequestAndThoughtSeparation(t *testing.T) {
@@ -53,7 +53,7 @@ func TestGoogleChatSDKRequestAndThoughtSeparation(t *testing.T) {
 			name, message, api := googleTestConfig()
 			region := "custom"
 			api.Region = &region
-			response, err := g.Chat(name, message, api, &ChatConfig{Thinking: &thinking})
+			response, err := g.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, api, &ChatConfig{Thinking: &thinking})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,7 +78,7 @@ func TestGoogleEmptyChatResponses(t *testing.T) {
 			defer server.Close()
 			g := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 			name, message, api := googleTestConfig()
-			if result, err := g.Chat(name, message, api, nil); err == nil || result != nil {
+			if result, err := g.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, api, nil); err == nil || result != nil {
 				t.Fatalf("empty reply returned success: %v %v", result, err)
 			}
 		})
@@ -112,14 +112,14 @@ func TestGoogleStreamingEmptyChunksOrderAndCallbackFailure(t *testing.T) {
 		}
 		return nil
 	}
-	if err := g.ChatStreamlyWithSender(name, message, api, &ChatConfig{Thinking: &thinking}, sender); err != nil {
+	if err := g.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, api, &ChatConfig{Thinking: &thinking}, sender); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(events, []string{"r:reason", "a:answer", "a:[DONE]"}) {
 		t.Fatalf("events %v", events)
 	}
 	failed := errors.New("callback failed")
-	if err := g.ChatStreamlyWithSender(name, message, api, nil, func(*string, *string) error { return failed }); !errors.Is(err, failed) {
+	if err := g.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, api, nil, func(*string, *string) error { return failed }); !errors.Is(err, failed) {
 		t.Fatalf("callback error %v", err)
 	}
 }
@@ -206,14 +206,14 @@ func TestGoogleErrorsAreSafeAndCancellationReachesTransport(t *testing.T) {
 	defer server.Close()
 	g := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 	name, message, api := googleTestConfig()
-	if _, err := g.Chat(name, message, api, nil); err == nil || strings.Contains(err.Error(), "fixture-key") || !strings.Contains(err.Error(), "401") {
+	if _, err := g.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, api, nil); err == nil || strings.Contains(err.Error(), "fixture-key") || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("unsafe error %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	api.Context = ctx
 	done := make(chan error, 1)
 	go func() {
-		done <- g.ChatStreamlyWithSender(name, message, api, nil, func(*string, *string) error { return nil })
+		done <- g.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, api, nil, func(*string, *string) error { return nil })
 	}()
 	select {
 	case <-started:
@@ -245,23 +245,17 @@ func TestGoogleValidationAndUnsupportedCapabilities(t *testing.T) {
 			t.Fatal("missing key accepted")
 		}
 	}
-	if _, err := g.Chat(nil, message, api, nil); err == nil {
-		t.Fatal("nil model accepted")
+	if _, err := g.ChatWithMessages("", []Message{{Role: "user", Content: message}}, api, nil); err == nil {
+		t.Fatal("empty model accepted")
 	}
-	if _, err := g.Chat(name, nil, api, nil); err == nil {
-		t.Fatal("nil message accepted")
+	if _, err := g.ChatWithMessages(name, nil, api, nil); err == nil {
+		t.Fatal("empty history accepted")
 	}
-	if err := g.ChatStreamlyWithSender(name, message, api, nil, nil); err == nil {
+	if err := g.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, api, nil, nil); err == nil {
 		t.Fatal("nil sender accepted")
 	}
 	if values, err := g.Balance(api); err == nil || values != nil {
 		t.Fatal("unsupported balance succeeded")
-	}
-	if values, err := g.ChatStreamly(name, api.APIKey, message, nil); err == nil || values != nil {
-		t.Fatal("unsafe channel succeeded")
-	}
-	if err := g.ChatStreamlyWithChannel(name, api.APIKey, message, nil, make(chan string)); err == nil {
-		t.Fatal("unsafe channel succeeded")
 	}
 }
 
@@ -282,7 +276,7 @@ func TestGoogleChatWithMessagesPreservesRolesAndSystemInstruction(t *testing.T) 
 	defer server.Close()
 	g := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 	_, _, api := googleTestConfig()
-	reply, err := g.ChatWithMessages("gemini-test", api, []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "hello"}, {Role: "assistant", Content: "old"}}, nil)
+	reply, err := g.ChatWithMessages("gemini-test", []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "hello"}, {Role: "assistant", Content: "old"}}, api, nil)
 	if err != nil || reply == nil || reply.Answer == nil || *reply.Answer != "reply" {
 		t.Fatalf("reply %v %v", reply, err)
 	}
@@ -337,7 +331,7 @@ func TestGoogleHistorySenderPreservesRolesAndContext(t *testing.T) {
 	api.Region = &region
 	history := []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "old"}, {Role: "assistant", Content: "previous"}, {Role: "user", Content: "question"}}
 	var frames []string
-	err := model.ChatStreamlyWithMessages("gemini-test", history, api, nil, func(content, reason *string) error {
+	err := model.ChatStreamlyWithSender("gemini-test", history, api, nil, func(content, reason *string) error {
 		if content != nil {
 			frames = append(frames, *content)
 		}
@@ -349,10 +343,10 @@ func TestGoogleHistorySenderPreservesRolesAndContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	api.Context = ctx
-	if _, err := model.ChatWithMessages("gemini-test", api, history, nil); !errors.Is(err, context.Canceled) {
+	if _, err := model.ChatWithMessages("gemini-test", history, api, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("history cancellation=%v", err)
 	}
-	if err := model.ChatStreamlyWithMessages("gemini-test", history, api, nil, func(*string, *string) error { return nil }); !errors.Is(err, context.Canceled) {
+	if err := model.ChatStreamlyWithSender("gemini-test", history, api, nil, func(*string, *string) error { return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("history stream cancellation=%v", err)
 	}
 }
@@ -381,7 +375,7 @@ func TestGoogleMultimodalStreamAndTruncation(t *testing.T) {
 		g := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 		_, _, api := googleTestConfig()
 		done := false
-		err := g.ChatStreamlyWithMessages("gemini-test", multimodalFixture(), api, nil, func(c, r *string) error {
+		err := g.ChatStreamlyWithSender("gemini-test", multimodalFixture(), api, nil, func(c, r *string) error {
 			if c != nil && *c == "[DONE]" {
 				done = true
 			}

@@ -84,7 +84,7 @@ func TestLMStudioConfiguredInstanceHTTPIsolation(t *testing.T) {
 				t.Fatal(response, err)
 			}
 			var frames []string
-			err = bound.ChatStreamlyWithMessages(history, nil, func(c, r *string) error {
+			err = bound.ChatStreamlyWithSender(history, nil, func(c, r *string) error {
 				if r != nil {
 					frames = append(frames, *r)
 				}

@@ -56,7 +56,7 @@ func TestAnthropicCatalogBoundChatHTTP(t *testing.T) {
 			if err != nil || answer == nil || *answer.Answer != instance || *answer.ReasoningContent != "reason" {
 				t.Fatal(answer, err)
 			}
-			if err := bound.ChatStreamlyWithMessages(messages, nil, func(*string, *string) error { return nil }); err == nil || calls.Load() != 1 {
+			if err := bound.ChatStreamlyWithSender(messages, nil, func(*string, *string) error { return nil }); err == nil || calls.Load() != 1 {
 				t.Fatal("unsupported stream made request", err, calls.Load())
 			}
 			if provider.URL["default"] != original {

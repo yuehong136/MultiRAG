@@ -55,7 +55,7 @@ func TestXinferenceEndpointAuthAndChat(t *testing.T) {
 				}
 				api := &APIConfig{APIKey: &key}
 				zero, count, thinking, effort := 0.0, 32, false, "high"
-				resp, err := driver.ChatWithMessages("served-chat", api, []Message{{Role: "user", Content: "hello"}, {Role: "assistant", Content: "hi"}, {Role: "user", Content: "again"}}, &ChatConfig{Temperature: &zero, MaxTokens: &count, Thinking: &thinking, Effort: &effort})
+				resp, err := driver.ChatWithMessages("served-chat", []Message{{Role: "user", Content: "hello"}, {Role: "assistant", Content: "hi"}, {Role: "user", Content: "again"}}, api, &ChatConfig{Temperature: &zero, MaxTokens: &count, Thinking: &thinking, Effort: &effort})
 				if err != nil || resp.Answer == nil || *resp.Answer != "answer" || resp.ReasoningContent == nil || *resp.ReasoningContent != "steps" {
 					t.Fatal(resp, err)
 				}
@@ -81,7 +81,7 @@ func TestXinferenceStreamAndReasoning(t *testing.T) {
 			defer srv.Close()
 			x := NewXinferenceModel(map[string]string{"default": srv.URL + "/v1"}, URLSuffix{Chat: "v1/chat/completions"})
 			var content, reasoning string
-			err := x.ChatStreamlyWithMessages("served-chat", []Message{{Role: "user", Content: "hi"}}, nil, nil, func(c, r *string) error {
+			err := x.ChatStreamlyWithSender("served-chat", []Message{{Role: "user", Content: "hi"}}, nil, nil, func(c, r *string) error {
 				if c != nil {
 					content += *c
 				}
@@ -107,16 +107,16 @@ func TestXinferenceIdleCancellation(t *testing.T) {
 	defer srv.Close()
 	x := NewXinferenceModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "v1/chat/completions", Embedding: "future", Rerank: "future"})
 	x.streamIdleTimeout = 25 * time.Millisecond
-	if err := x.ChatStreamlyWithMessages("served-chat", []Message{{Role: "user", Content: "hi"}}, nil, nil, func(*string, *string) error { return nil }); err == nil {
+	if err := x.ChatStreamlyWithSender("served-chat", []Message{{Role: "user", Content: "hi"}}, nil, nil, func(*string, *string) error { return nil }); err == nil {
 		t.Fatal("idle stream succeeded")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := x.ChatWithMessages("served-chat", &APIConfig{Context: ctx}, []Message{{Role: "user", Content: "hi"}}, nil); !errors.Is(err, context.Canceled) {
+	if _, err := x.ChatWithMessages("served-chat", []Message{{Role: "user", Content: "hi"}}, &APIConfig{Context: ctx}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal("request cancellation lost", err)
 	}
 	stream := false
-	if err := x.ChatStreamlyWithMessages("served-chat", []Message{{Role: "user", Content: "hi"}}, nil, &ChatConfig{Stream: &stream}, func(*string, *string) error { return nil }); err == nil {
+	if err := x.ChatStreamlyWithSender("served-chat", []Message{{Role: "user", Content: "hi"}}, nil, &ChatConfig{Stream: &stream}, func(*string, *string) error { return nil }); err == nil {
 		t.Fatal("explicit stream=false ignored")
 	}
 }

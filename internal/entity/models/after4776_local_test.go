@@ -111,7 +111,7 @@ func TestAfter4776OllamaStreamCancelBetweenChannels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	content := false
-	err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{Context: ctx}, nil, func(c, r *string) error {
+	err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{Context: ctx}, nil, func(c, r *string) error {
 		if r != nil {
 			cancel()
 		}
@@ -130,7 +130,7 @@ func TestAfter4776OllamaIdleStream(t *testing.T) {
 	defer server.Close()
 	driver := NewOllamaModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "api/chat"})
 	driver.streamIdleTimeout = 40 * time.Millisecond
-	err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, nil, nil, func(*string, *string) error { return nil })
+	err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, nil, nil, func(*string, *string) error { return nil })
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestAfter4776OllamaLargeNDJSONAndEmptyCatalog(t *testing.T) {
 	}))
 	driver := NewOllamaModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "api/chat", Models: "api/tags"})
 	var got string
-	err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, nil, nil, func(c, r *string) error {
+	err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, nil, nil, func(c, r *string) error {
 		if c != nil && *c != "[DONE]" {
 			got += *c
 		}

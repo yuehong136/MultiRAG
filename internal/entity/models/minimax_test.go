@@ -72,12 +72,12 @@ func TestMinimaxChatRequestModesAndConfiguration(t *testing.T) {
 				config := &ChatConfig{Thinking: thinking, Stream: minimaxPtr(!stream), MaxTokens: minimaxPtr(123), Temperature: minimaxPtr(0.5), TopP: minimaxPtr(0.8), DoSample: minimaxPtr(false), Stop: &[]string{"stop"}}
 				if stream {
 					var frames []string
-					err := driver.ChatStreamlyWithSender(&name, &message, apiConfig, config, minimaxFrameCollector(&frames))
+					err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, apiConfig, config, minimaxFrameCollector(&frames))
 					if err != nil || !reflect.DeepEqual(frames, []string{"reason:reason", "answer", "[DONE]"}) {
 						t.Fatalf("frames = %v, %v", frames, err)
 					}
 				} else {
-					response, err := driver.ChatWithMessages(name, apiConfig, []Message{{Role: "user", Content: message}}, config)
+					response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, apiConfig, config)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -157,7 +157,7 @@ func TestMinimaxChatResponses(t *testing.T) {
 			defer server.Close()
 			driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "minimax-m2.7", "question"
-			response, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, &ChatConfig{Thinking: minimaxPtr(true)})
+			response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: minimaxPtr(true)})
 			if test.wantErr {
 				if err == nil || response != nil || strings.Contains(err.Error(), "secret-key-and-prompt") {
 					t.Fatalf("response = %#v, %v", response, err)
@@ -196,7 +196,7 @@ func TestMinimaxStreamContracts(t *testing.T) {
 			driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "minimax-m2.7", "question"
 			var frames []string
-			err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, minimaxFrameCollector(&frames))
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, minimaxFrameCollector(&frames))
 			if (err != nil) != test.wantErr || !reflect.DeepEqual(frames, test.wantFrames) || (err != nil && strings.Contains(err.Error(), "secret-key-and-prompt")) {
 				t.Fatalf("frames = %v, error = %v", frames, err)
 			}
@@ -216,7 +216,7 @@ func TestMinimaxLargeStreamDelta(t *testing.T) {
 	driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "minimax-m2.7", "question"
 	var frames []string
-	err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, minimaxFrameCollector(&frames))
+	err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, minimaxFrameCollector(&frames))
 	if err != nil || !reflect.DeepEqual(frames, []string{answer, "[DONE]"}) {
 		t.Fatalf("large delta: frames=%d, error=%v", len(frames), err)
 	}
@@ -232,7 +232,7 @@ func TestMinimaxSenderErrors(t *testing.T) {
 			driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "minimax-m2.7", "question"
 			failure, calls := errors.New("sender failed"), 0
-			err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, func(*string, *string) error {
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error {
 				calls++
 				if calls == failAt {
 					return failure
@@ -275,13 +275,13 @@ func TestMinimaxCancellationReachesTransport(t *testing.T) {
 			delivered := make(chan struct{}, 1)
 			go func() {
 				if stream {
-					result <- driver.ChatStreamlyWithSender(&name, &message, apiConfig, nil, func(content, reason *string) error {
+					result <- driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, apiConfig, nil, func(content, reason *string) error {
 						minimaxFrameCollector(&frames)(content, reason)
 						delivered <- struct{}{}
 						return nil
 					})
 				} else {
-					_, err := driver.ChatWithMessages(name, apiConfig, []Message{{Role: "user", Content: message}}, nil)
+					_, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, apiConfig, nil)
 					result <- err
 				}
 			}()
@@ -322,29 +322,29 @@ func TestMinimaxChatValidation(t *testing.T) {
 	driver := NewMinimaxModel(map[string]string{"default": "http://127.0.0.1:1"}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "minimax-m2.7", "question"
 	for _, config := range []*APIConfig{nil, {}, {APIKey: minimaxPtr("")}, {APIKey: minimaxPtr(" ")}, {APIKey: &key, Region: minimaxPtr("unknown")}} {
-		if _, err := driver.ChatWithMessages(name, config, []Message{{Role: "user", Content: message}}, nil); err == nil {
+		if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, config, nil); err == nil {
 			t.Fatal("invalid API config accepted")
 		}
 	}
 	for _, modelName := range []string{"", " "} {
-		if _, err := driver.ChatWithMessages(modelName, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, nil); err == nil {
+		if _, err := driver.ChatWithMessages(modelName, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil); err == nil {
 			t.Fatal("invalid model name accepted")
 		}
 	}
-	if err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, nil); err == nil {
+	if err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, nil); err == nil {
 		t.Fatal("nil sender accepted")
 	}
 	for _, messages := range [][]Message{nil, {{Content: "no role"}}} {
-		if _, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, messages, nil); err == nil {
+		if _, err := driver.ChatWithMessages(name, messages, &APIConfig{APIKey: &key}, nil); err == nil {
 			t.Fatal("invalid history accepted")
 		}
 	}
 	driver.URLSuffix.Chat = ""
-	if _, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, nil); err == nil {
+	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil); err == nil {
 		t.Fatal("missing chat endpoint accepted")
 	}
 	driver.URLSuffix.Chat = "chat"
-	if _, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, &ChatConfig{Temperature: minimaxPtr(math.NaN())}); err == nil {
+	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, &ChatConfig{Temperature: minimaxPtr(math.NaN())}); err == nil {
 		t.Fatal("invalid JSON number accepted")
 	}
 }
@@ -370,7 +370,7 @@ func TestMinimaxHistoryStream(t *testing.T) {
 	model := NewChatModel(driver, &name, &APIConfig{APIKey: &key})
 	history := []map[string]string{{"role": "user", "content": "first"}, {"role": "assistant", "content": "previous answer"}, {"role": "user", "content": "follow up"}}
 	var frames []string
-	err := model.ChatStreamlyWithSender("instruction", history, nil, minimaxFrameCollector(&frames))
+	err := model.ChatStreamlyWithSender(chatHistory("instruction", history), nil, minimaxFrameCollector(&frames))
 	if err != nil || !reflect.DeepEqual(frames, []string{"answer", "[DONE]"}) {
 		t.Fatalf("frames = %v, %v", frames, err)
 	}

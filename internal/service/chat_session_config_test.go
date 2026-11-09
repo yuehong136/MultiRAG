@@ -52,7 +52,7 @@ func TestChatSessionJSONGenerationConfig(t *testing.T) {
 				values := (&ChatSessionService{}).buildGenConf(&entity.Chat{LLMSetting: tc.stored}, tc.request)
 				history := []map[string]string{{"role": "user", "content": "question"}}
 				if stream {
-					if err := model.ChatStreamlyWithSender("rules", history, values, func(*string, *string) error { return nil }); err != nil {
+					if err := model.ChatStreamlyWithSender([]models.Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "question"}}, values, func(*string, *string) error { return nil }); err != nil {
 						t.Fatal(err)
 					}
 				} else if answer, err := model.Chat("rules", history, values); err != nil || answer != "answer" {
@@ -79,7 +79,7 @@ func TestChatSessionRejectsMalformedJSONGenerationConfig(t *testing.T) {
 			values := (&ChatSessionService{}).buildGenConf(&entity.Chat{}, config)
 			var err error
 			if stream {
-				err = model.ChatStreamlyWithSender("", nil, values, func(*string, *string) error { return nil })
+				err = model.ChatStreamlyWithSender([]models.Message{{Role: "user", Content: "question"}}, values, func(*string, *string) error { return nil })
 			} else {
 				_, err = model.Chat("", nil, values)
 			}

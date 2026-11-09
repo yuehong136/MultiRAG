@@ -17,7 +17,7 @@ type answerTestDriver struct {
 	consumed int
 }
 
-func (d *answerTestDriver) ChatStreamlyWithMessages(_ string, _ []models.Message, _ *models.APIConfig, cfg *models.ChatConfig, send func(*string, *string) error) error {
+func (d *answerTestDriver) ChatStreamlyWithSender(_ string, _ []models.Message, _ *models.APIConfig, cfg *models.ChatConfig, send func(*string, *string) error) error {
 	for _, delta := range d.deltas {
 		d.consumed++
 		a, b := delta.content, delta.reasoning

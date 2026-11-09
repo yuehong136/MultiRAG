@@ -56,12 +56,12 @@ func TestGoogleCustomEndpointSDKAndIsolation(t *testing.T) {
 			urls[instance] = fallback.URL
 			api := &APIConfig{APIKey: stringPtr(" " + instance + " "), Region: &instance}
 			name, message := "gemini-test", "hello"
-			reply, err := driver.ChatWithMessages(name, api, []Message{{Role: "user", Content: message}}, nil)
+			reply, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, api, nil)
 			if err != nil || reply == nil || reply.Answer == nil || *reply.Answer != instance {
 				t.Fatal("custom chat", reply, err)
 			}
 			var chunks []string
-			err = driver.ChatStreamlyWithSender(&name, &message, api, nil, func(answer, reasoning *string) error {
+			err = driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, api, nil, func(answer, reasoning *string) error {
 				if answer != nil {
 					chunks = append(chunks, *answer)
 				}

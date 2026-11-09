@@ -71,12 +71,12 @@ func TestMoonshotChatRequestModesAndConfiguration(t *testing.T) {
 				config := &ChatConfig{Thinking: thinking, Stream: moonshotPtr(!stream), MaxTokens: moonshotPtr(123), Temperature: moonshotPtr(0.5), TopP: moonshotPtr(0.8), DoSample: moonshotPtr(false), Stop: &[]string{"stop"}}
 				if stream {
 					var frames []string
-					err := driver.ChatStreamlyWithSender(&name, &message, apiConfig, config, moonshotFrameCollector(&frames))
+					err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, apiConfig, config, moonshotFrameCollector(&frames))
 					if err != nil || !reflect.DeepEqual(frames, []string{"reason:reason", "answer", "[DONE]"}) {
 						t.Fatalf("frames = %v, %v", frames, err)
 					}
 				} else {
-					response, err := driver.ChatWithMessages(name, apiConfig, []Message{{Role: "user", Content: message}}, config)
+					response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, apiConfig, config)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -155,7 +155,7 @@ func TestMoonshotChatResponses(t *testing.T) {
 			defer server.Close()
 			driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "kimi-k2.6", "question"
-			response, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, &ChatConfig{Thinking: moonshotPtr(true)})
+			response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: moonshotPtr(true)})
 			if test.wantErr {
 				if err == nil || response != nil || strings.Contains(err.Error(), "secret-key-and-prompt") {
 					t.Fatalf("response = %#v, %v", response, err)
@@ -192,7 +192,7 @@ func TestMoonshotStreamContracts(t *testing.T) {
 			driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "kimi-k2.6", "question"
 			var frames []string
-			err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, moonshotFrameCollector(&frames))
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, moonshotFrameCollector(&frames))
 			if (err != nil) != test.wantErr || !reflect.DeepEqual(frames, test.wantFrames) || (err != nil && strings.Contains(err.Error(), "secret-key-and-prompt")) {
 				t.Fatalf("frames = %v, error = %v", frames, err)
 			}
@@ -212,7 +212,7 @@ func TestMoonshotLargeStreamDelta(t *testing.T) {
 	driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "kimi-k2.6", "question"
 	var frames []string
-	err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, moonshotFrameCollector(&frames))
+	err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, moonshotFrameCollector(&frames))
 	if err != nil || !reflect.DeepEqual(frames, []string{answer, "[DONE]"}) {
 		t.Fatalf("large delta: frames=%d, error=%v", len(frames), err)
 	}
@@ -228,7 +228,7 @@ func TestMoonshotSenderErrors(t *testing.T) {
 			driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "kimi-k2.6", "question"
 			failure, calls := errors.New("sender failed"), 0
-			err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, func(*string, *string) error {
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error {
 				calls++
 				if calls == failAt {
 					return failure
@@ -271,13 +271,13 @@ func TestMoonshotCancellationReachesTransport(t *testing.T) {
 			delivered := make(chan struct{}, 1)
 			go func() {
 				if stream {
-					result <- driver.ChatStreamlyWithSender(&name, &message, apiConfig, nil, func(content, reason *string) error {
+					result <- driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, apiConfig, nil, func(content, reason *string) error {
 						moonshotFrameCollector(&frames)(content, reason)
 						delivered <- struct{}{}
 						return nil
 					})
 				} else {
-					_, err := driver.ChatWithMessages(name, apiConfig, []Message{{Role: "user", Content: message}}, nil)
+					_, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, apiConfig, nil)
 					result <- err
 				}
 			}()
@@ -318,29 +318,32 @@ func TestMoonshotChatValidation(t *testing.T) {
 	driver := NewMoonshotModel(map[string]string{"default": "http://127.0.0.1:1"}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "kimi-k2.6", "question"
 	for _, config := range []*APIConfig{nil, {}, {APIKey: moonshotPtr("")}, {APIKey: moonshotPtr(" ")}, {APIKey: &key, Region: moonshotPtr("unknown")}} {
-		if _, err := driver.ChatWithMessages(name, config, []Message{{Role: "user", Content: message}}, nil); err == nil {
+		if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, config, nil); err == nil {
 			t.Fatal("invalid API config accepted")
 		}
 	}
-	for _, test := range []struct{ name, message *string }{{nil, &message}, {&name, nil}, {moonshotPtr(" "), &message}} {
-		if _, err := driver.Chat(test.name, test.message, &APIConfig{APIKey: &key}, nil); err == nil {
+	for _, test := range []struct {
+		name     string
+		messages []Message
+	}{{"", []Message{{Role: "user", Content: message}}}, {name, nil}, {" ", []Message{{Role: "user", Content: message}}}} {
+		if _, err := driver.ChatWithMessages(test.name, test.messages, &APIConfig{APIKey: &key}, nil); err == nil {
 			t.Fatal("invalid chat arguments accepted")
 		}
 	}
-	if err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, nil); err == nil {
+	if err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, nil); err == nil {
 		t.Fatal("nil sender accepted")
 	}
 	for _, messages := range [][]Message{nil, {{Content: "no role"}}} {
-		if _, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, messages, nil); err == nil {
+		if _, err := driver.ChatWithMessages(name, messages, &APIConfig{APIKey: &key}, nil); err == nil {
 			t.Fatal("invalid history accepted")
 		}
 	}
 	driver.URLSuffix.Chat = ""
-	if _, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, nil); err == nil {
+	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil); err == nil {
 		t.Fatal("missing chat endpoint accepted")
 	}
 	driver.URLSuffix.Chat = "chat"
-	if _, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, &ChatConfig{Temperature: moonshotPtr(math.NaN())}); err == nil {
+	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, &ChatConfig{Temperature: moonshotPtr(math.NaN())}); err == nil {
 		t.Fatal("invalid JSON number accepted")
 	}
 }

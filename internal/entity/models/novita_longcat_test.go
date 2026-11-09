@@ -61,7 +61,7 @@ func TestNewChatProviderRequestAndReasoningHTTP(t *testing.T) {
 			stop := []string{"stop"}
 			cfg := &ChatConfig{Stream: &yes, Thinking: &no, Temperature: &zero, MaxTokens: &maxTokens, TopP: &topP, Stop: &stop}
 			msgs := []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "old"}, {Role: "assistant", Content: "prior"}, {Role: "user", Content: "question"}}
-			r, e := d.ChatWithMessages("model", &APIConfig{APIKey: stringPtr("key")}, msgs, cfg)
+			r, e := d.ChatWithMessages("model", msgs, &APIConfig{APIKey: stringPtr("key")}, cfg)
 			wantReason := "separate"
 			if provider == "Novita" {
 				wantReason = "inline\nseparate"
@@ -120,7 +120,7 @@ func TestNewChatProviderStreamsHTTP(t *testing.T) {
 					d, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 					var answer, reasoning strings.Builder
 					done := 0
-					err := d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(a, r *string) error {
+					err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(a, r *string) error {
 						if a != nil {
 							if *a == "[DONE]" {
 								done++
@@ -141,7 +141,7 @@ func TestNewChatProviderStreamsHTTP(t *testing.T) {
 					}
 					marker := errors.New("sender failed")
 					if test.valid {
-						e := d.ChatStreamlyWithSender(stringPtr("model"), stringPtr("q"), &APIConfig{APIKey: stringPtr("key")}, nil, func(a, r *string) error { return marker })
+						e := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(a, r *string) error { return marker })
 						if !errors.Is(e, marker) {
 							t.Fatal(e)
 						}
@@ -168,7 +168,7 @@ func TestNewProviderCancellationAndUnsupported(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 				defer cancel()
 				done := 0
-				err := d.ChatStreamlyWithSender(stringPtr("model"), stringPtr("q"), &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(a, r *string) error {
+				err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(a, r *string) error {
 					if a != nil && *a == "[DONE]" {
 						done++
 					}
@@ -213,9 +213,6 @@ func TestNewProviderCancellationAndUnsupported(t *testing.T) {
 			}
 			if _, ok := d.(TTSDriver); ok {
 				t.Fatal("invented TTS")
-			}
-			if ch, e := d.ChatStreamly(nil, nil, nil, nil); e == nil || !reflect.ValueOf(ch).IsNil() {
-				t.Fatal("channel success")
 			}
 		})
 	}

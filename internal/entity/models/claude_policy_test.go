@@ -63,9 +63,9 @@ func TestClaudeSamplingOutgoingHTTP(t *testing.T) {
 				var response *ChatResponse
 				var err error
 				if bedrock {
-					response, err = NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{}).ChatWithMessages(name, bedrockTestAPI(), []Message{{Role: "user", Content: "q"}}, config)
+					response, err = NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{}).ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, bedrockTestAPI(), config)
 				} else {
-					response, err = NewAnthropicModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "messages"}).ChatWithMessages(name, &APIConfig{APIKey: stringPtr("fixture")}, []Message{{Role: "user", Content: "q"}}, config)
+					response, err = NewAnthropicModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "messages"}).ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("fixture")}, config)
 				}
 				if err != nil || response == nil || *response.Answer != "answer" {
 					t.Fatal(response, err)

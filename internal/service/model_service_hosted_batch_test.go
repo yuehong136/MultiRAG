@@ -179,7 +179,7 @@ func TestHostedProviderBindingScratchPostgres(t *testing.T) {
 						t.Fatal(r, code, e)
 					}
 					done := 0
-					code, e = svc.ChatToModelStreamWithSender(providerName, fmt.Sprint(i), name, "batch-b-owner", "q", nil, nil, func(a, r *string) error {
+					code, e = svc.ChatToModelStreamWithSender(providerName, fmt.Sprint(i), name, "batch-b-owner", []models.Message{{Role: "user", Content: "q"}}, nil, nil, func(a, r *string) error {
 						if a != nil && *a == "[DONE]" {
 							done++
 						}

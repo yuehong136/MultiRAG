@@ -62,11 +62,11 @@ func TestAfterB7TransportRoutingAndIsolation(t *testing.T) {
 			}
 			before := calls.Load()
 			for _, driver := range []ModelDriver{first, second} {
-				if got, err := driver.ChatWithMessages("model", &APIConfig{APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "q"}}, nil); err != nil || *got.Answer != "answer" {
+				if got, err := driver.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil); err != nil || *got.Answer != "answer" {
 					t.Fatal(got, err)
 				}
 				ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-				_, err := driver.ChatWithMessages("model", &APIConfig{APIKey: stringPtr("key"), Context: ctx}, []Message{{Role: "user", Content: "q"}}, nil)
+				_, err := driver.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)
 				cancel()
 				if !errors.Is(err, context.DeadlineExceeded) {
 					t.Fatal("wrapper lost deadline", err)
@@ -101,7 +101,7 @@ func TestAfterB7TransportStandardCloneProxy(t *testing.T) {
 	}
 	for _, provider := range []string{"ModelScope", "Novita"} {
 		driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": "http://provider.invalid"}, URLSuffix{Chat: "chat"})
-		if _, err := driver.ChatWithMessages("model", &APIConfig{APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "q"}}, nil); err != nil {
+		if _, err := driver.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil); err != nil {
 			t.Fatal(provider, err)
 		}
 	}

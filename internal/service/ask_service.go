@@ -211,7 +211,7 @@ func streamVisibleAnswer(ctx context.Context, model *models.ChatModel, history [
 	var parser ThinkStreamState
 	var answer, reasoning strings.Builder
 	var firstError error
-	err := local.ChatStreamlyWithMessages(history, settings, func(content, thought *string) error {
+	err := local.ChatStreamlyWithSender(history, settings, func(content, thought *string) error {
 		if firstError != nil {
 			return firstError
 		}

@@ -65,7 +65,7 @@ func TestNVIDIAConfiguredInstancesHTTP(t *testing.T) {
 				t.Fatal(answer, err)
 			}
 			done, content := 0, ""
-			err = model.ChatStreamlyWithMessages(history, nil, func(c, r *string) error {
+			err = model.ChatStreamlyWithSender(history, nil, func(c, r *string) error {
 				if c != nil {
 					if *c == "[DONE]" {
 						done++

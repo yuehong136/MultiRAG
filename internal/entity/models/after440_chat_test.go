@@ -69,13 +69,13 @@ func TestAfter440ChatPayloadReasoningAndIsolation(t *testing.T) {
 					api := &APIConfig{APIKey: &key}
 					zero := 0.0
 					messages := []Message{{Role: "system", Content: "s"}, {Role: "user", Content: "q"}, {Role: "assistant", Content: "a"}, {Role: "user", Content: "q2"}}
-					response, err := driver.ChatWithMessages("served", api, messages, &ChatConfig{Temperature: &zero, TopP: &zero})
+					response, err := driver.ChatWithMessages("served", messages, api, &ChatConfig{Temperature: &zero, TopP: &zero})
 					if err != nil || response.Answer == nil || *response.Answer != key || response.ReasoningContent == nil || *response.ReasoningContent != "fallback" {
 						t.Error(response, err)
 						return
 					}
 					var frames []string
-					err = driver.ChatStreamlyWithMessages("served", messages, api, &ChatConfig{Temperature: &zero, TopP: &zero}, moonshotFrameCollector(&frames))
+					err = driver.ChatStreamlyWithSender("served", messages, api, &ChatConfig{Temperature: &zero, TopP: &zero}, moonshotFrameCollector(&frames))
 					if err != nil || !reflect.DeepEqual(frames, []string{"reason:reason", key, "[DONE]"}) {
 						t.Error(frames, err)
 					}
@@ -132,7 +132,7 @@ func TestAfter440ChatFailures(t *testing.T) {
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 				defer srv.Close()
 				d, _ := after440ChatDriver(provider, srv.URL)
-				response, err := d.ChatWithMessages("served", &APIConfig{APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "q"}}, nil)
+				response, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
 				if err == nil || response != nil || strings.Contains(err.Error(), "private-secret") {
 					t.Fatal(response, err)
 				}
@@ -144,7 +144,7 @@ func TestAfter440ChatFailures(t *testing.T) {
 				defer srv.Close()
 				d, _ := after440ChatDriver(provider, srv.URL)
 				done := false
-				err := d.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
 					if c != nil && *c == "[DONE]" {
 						done = true
 					}
@@ -192,7 +192,7 @@ func TestAfter440StreamLifecycle(t *testing.T) {
 				}
 				marker := errors.New("sender stopped")
 				done := false
-				err := d.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 					if c != nil && *c == "[DONE]" {
 						done = true
 					}
@@ -251,7 +251,7 @@ func TestAfter440TerminalEventsWithoutDelta(t *testing.T) {
 					defer srv.Close()
 					d, _ := after440ChatDriver(provider, srv.URL)
 					done := false
-					err := d.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+					err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
 						if c != nil && *c == "[DONE]" {
 							done = true
 						}

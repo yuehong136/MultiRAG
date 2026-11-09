@@ -18,7 +18,7 @@ type einoProbeDriver struct {
 	config  chan ChatConfig
 }
 
-func (d *einoProbeDriver) ChatWithMessages(_ string, api *APIConfig, messages []Message, cfg *ChatConfig) (*ChatResponse, error) {
+func (d *einoProbeDriver) ChatWithMessages(_ string, messages []Message, api *APIConfig, cfg *ChatConfig) (*ChatResponse, error) {
 	if err := api.Context.Err(); err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func (d *einoProbeDriver) ChatWithMessages(_ string, api *APIConfig, messages []
 	answer, reason := "answer", "reason"
 	return &ChatResponse{Answer: &answer, ReasoningContent: &reason}, nil
 }
-func (d *einoProbeDriver) ChatStreamlyWithMessages(_ string, _ []Message, api *APIConfig, _ *ChatConfig, send func(*string, *string) error) error {
+func (d *einoProbeDriver) ChatStreamlyWithSender(_ string, _ []Message, api *APIConfig, _ *ChatConfig, send func(*string, *string) error) error {
 	close(d.started)
 	defer close(d.stopped)
 	<-api.Context.Done()
@@ -90,7 +90,7 @@ func TestEinoAdapterStreamCloseCancelsStalledProvider(t *testing.T) {
 
 type einoCompletedDriver struct{ DummyModel }
 
-func (d *einoCompletedDriver) ChatStreamlyWithMessages(_ string, _ []Message, _ *APIConfig, _ *ChatConfig, send func(*string, *string) error) error {
+func (d *einoCompletedDriver) ChatStreamlyWithSender(_ string, _ []Message, _ *APIConfig, _ *ChatConfig, send func(*string, *string) error) error {
 	answer, done := "answer", "[DONE]"
 	if err := send(&answer, nil); err != nil {
 		return err

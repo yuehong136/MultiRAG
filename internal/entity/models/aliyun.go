@@ -170,36 +170,12 @@ func (m *AliyunModel) chat(modelName string, messages []Message, apiConfig *APIC
 	return response, nil
 }
 
-// Chat sends a user message and returns the complete answer.
-func (m *AliyunModel) Chat(modelName, message *string, apiConfig *APIConfig, chatConfig *ChatConfig) (*ChatResponse, error) {
-	if modelName == nil || message == nil {
-		return nil, errors.New("aliyun: model name and message are required")
-	}
-	return m.chat(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, chatConfig)
-}
-
 // ChatWithMessages sends role-tagged messages through the same chat endpoint.
-func (m *AliyunModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatConfig *ChatConfig) (*ChatResponse, error) {
+func (m *AliyunModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatConfig *ChatConfig) (*ChatResponse, error) {
 	return m.chat(modelName, messages, apiConfig, chatConfig)
 }
 
-func (m *AliyunModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
-	return nil, errors.New("aliyun: channel streaming is not implemented")
-}
-
-func (m *AliyunModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
-	return errors.New("aliyun: channel streaming is not implemented")
-}
-
-// ChatStreamlyWithSender sends content and reasoning deltas to sender.
-func (m *AliyunModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, chatConfig *ChatConfig, sender func(*string, *string) error) error {
-	if modelName == nil || message == nil {
-		return fmt.Errorf("model name and message are required")
-	}
-	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, chatConfig, sender)
-}
-
-func (m *AliyunModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatConfig *ChatConfig, sender func(*string, *string) error) error {
+func (m *AliyunModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, chatConfig *ChatConfig, sender func(*string, *string) error) error {
 	apiConfig, cancelCall := modelStreamConfig(apiConfig)
 	defer cancelCall()
 	if sender == nil {

@@ -153,7 +153,7 @@ type ollamaResponse struct {
 	Error json.RawMessage `json:"error"`
 }
 
-func (o *OllamaModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (o *OllamaModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	body, err := ollamaBody(name, messages, config, false)
 	if err != nil {
 		return nil, err
@@ -184,13 +184,8 @@ func (o *OllamaModel) ChatWithMessages(name string, api *APIConfig, messages []M
 	}
 	return result, nil
 }
-func (o *OllamaModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("ollama: model and message are required")
-	}
-	return o.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, sender)
-}
-func (o *OllamaModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) (streamErr error) {
+
+func (o *OllamaModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) (streamErr error) {
 	api, cancelCall := modelStreamConfig(api)
 	defer cancelCall()
 	if sender == nil {

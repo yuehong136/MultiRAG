@@ -74,12 +74,12 @@ func TestReasoningDefaultsPreserveCallerConfigHTTP(t *testing.T) {
 				var group sync.WaitGroup
 				for range 3 {
 					group.Go(func() {
-						response, err := driver.ChatWithMessages(name, api, []Message{{Role: "user", Content: question}}, config)
+						response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: question}}, api, config)
 						if err != nil || response == nil || response.Answer == nil || *response.Answer != "answer" {
 							t.Error("sync response", response, err)
 						}
 						var frames []string
-						err = driver.ChatStreamlyWithSender(&name, &question, api, config, func(content, _ *string) error {
+						err = driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: question}}, api, config, func(content, _ *string) error {
 							if content != nil {
 								frames = append(frames, *content)
 							}
@@ -138,7 +138,7 @@ func TestBoundReasoningDefaultsHTTP(t *testing.T) {
 			if answer, err := bound.Chat("rules", history, nil); err != nil || answer != "answer" {
 				t.Fatal(answer, err)
 			}
-			if err := bound.ChatStreamlyWithSender("rules", history, nil, func(*string, *string) error { return nil }); err != nil {
+			if err := bound.ChatStreamlyWithSender(chatHistory("rules", history), nil, func(*string, *string) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
 			if bound.ModelConfig.Effort != nil || bound.ModelConfig.Verbosity != nil || bound.ModelConfig.Thinking != &on || !on {

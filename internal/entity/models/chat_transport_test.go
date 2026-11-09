@@ -124,7 +124,7 @@ func TestLongCatCustomTransportRequestsAndIsolation(t *testing.T) {
 		t.Fatal("clients/pool isolation")
 	}
 	for _, m := range []*LongCatModel{first, second} {
-		if _, err := m.ChatWithMessages("model", &APIConfig{APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "q"}}, nil); err != nil {
+		if _, err := m.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

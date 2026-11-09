@@ -116,7 +116,7 @@ func (m localAIMessage) reasoning() *string {
 	}
 	return nil
 }
-func (l *LocalAIModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (l *LocalAIModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	body, err := localAIChatBody(name, messages, config, false)
 	if err != nil {
 		return nil, err
@@ -149,13 +149,8 @@ func (l *LocalAIModel) ChatWithMessages(name string, api *APIConfig, messages []
 	message := result.Choices[0].Message
 	return &ChatResponse{Answer: message.Content, ReasoningContent: message.reasoning()}, nil
 }
-func (l *LocalAIModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("model and message are required")
-	}
-	return l.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, sender)
-}
-func (l *LocalAIModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+
+func (l *LocalAIModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
 	if sender == nil {
 		return fmt.Errorf("sender is required")
 	}

@@ -13,14 +13,12 @@ func NewJinaModel(urls map[string]string, suffix URLSuffix) *JinaModel {
 	return &JinaModel{d}
 }
 
-func (j *JinaModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
-	return j.openAIChatDriver.ChatWithMessages(name, api, messages, config)
+func (j *JinaModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
+	return j.openAIChatDriver.ChatWithMessages(name, messages, api, config)
 }
-func (j *JinaModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	return j.DummyModel.ChatStreamlyWithSender(name, message, api, config, sender)
-}
-func (j *JinaModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	return j.DummyModel.ChatStreamlyWithMessages(name, messages, api, config, sender)
+
+func (j *JinaModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	return j.DummyModel.ChatStreamlyWithSender(name, messages, api, config, sender)
 }
 func (j *JinaModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
 	options := embeddingHTTPOptions{}

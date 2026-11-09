@@ -31,10 +31,8 @@ func TestZhipuAIChatUsesConfiguredRegionURL(t *testing.T) {
 	apiKey := "test-key"
 	message := "hello"
 
-	response, err := model.Chat(
-		&modelName,
-		&message,
-		&APIConfig{APIKey: &apiKey, Region: &region},
+	response, err := model.ChatWithMessages(
+		modelName, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &apiKey, Region: &region},
 		&ChatConfig{},
 	)
 	if err != nil {
@@ -60,7 +58,7 @@ func TestZhipuAIChatReturnsThinkingContent(t *testing.T) {
 
 	apiKey, modelName, message, thinking := "key", "glm-test", "hello", true
 	model := NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
-	response, err := model.Chat(&modelName, &message, &APIConfig{APIKey: &apiKey}, &ChatConfig{Thinking: &thinking})
+	response, err := model.ChatWithMessages(modelName, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &apiKey}, &ChatConfig{Thinking: &thinking})
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
@@ -135,9 +133,7 @@ func TestZhipuAIStreamUsesConfiguredRegionURL(t *testing.T) {
 	}
 
 	err := model.ChatStreamlyWithSender(
-		&modelName,
-		&message,
-		&APIConfig{APIKey: &apiKey, Region: &region},
+		modelName, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &apiKey, Region: &region},
 		&ChatConfig{Stream: &stream},
 		sender,
 	)
@@ -159,10 +155,8 @@ func TestZhipuAIRejectsUnknownRegion(t *testing.T) {
 	apiKey := "test-key"
 	message := "hello"
 
-	_, err := model.Chat(
-		&modelName,
-		&message,
-		&APIConfig{APIKey: &apiKey, Region: &region},
+	_, err := model.ChatWithMessages(
+		modelName, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &apiKey, Region: &region},
 		&ChatConfig{},
 	)
 	if err == nil || !strings.Contains(err.Error(), `region "missing"`) {
@@ -179,7 +173,7 @@ func TestZhipuAIStreamSendsReasoningBeforeContent(t *testing.T) {
 	model := NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
 	key, name, message, stream := "test-key", "glm-test", "hello", true
 	var events []string
-	err := model.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, &ChatConfig{Stream: &stream}, func(content, reason *string) error {
+	err := model.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, &ChatConfig{Stream: &stream}, func(content, reason *string) error {
 		if reason != nil {
 			events = append(events, "r:"+*reason)
 		}

@@ -704,7 +704,7 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 		}
 
 		// Stream response using sender function (best performance, no channel)
-		err := bound.ChatStreamlyWithMessages(messages, nil, sender)
+		err := bound.ChatStreamlyWithSender(messages, nil, sender)
 
 		if err != nil {
 			c.SSEvent("error", "Model stream failed")

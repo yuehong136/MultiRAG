@@ -55,7 +55,7 @@ func TestNVIDIADiscoveryOptionalKeyHTTP(t *testing.T) {
 			}
 		}
 		if key == nil || *key == "" {
-			if _, err := driver.ChatWithMessages("model", configs[0], []Message{{Role: "user", Content: "q"}}, nil); err == nil {
+			if _, err := driver.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, configs[0], nil); err == nil {
 				t.Fatal("optional discovery key weakened chat authentication")
 			}
 		}
@@ -101,7 +101,7 @@ func TestNVIDIAThinkingAndUnsupportedBalance(t *testing.T) {
 				}
 			}
 			key := "fixture"
-			response, err := driver.ChatWithMessages("qwen3", &APIConfig{APIKey: &key}, history, config)
+			response, err := driver.ChatWithMessages("qwen3", history, &APIConfig{APIKey: &key}, config)
 			if err != nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
 				t.Fatal(response, err)
 			}

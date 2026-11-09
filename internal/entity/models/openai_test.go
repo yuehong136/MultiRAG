@@ -45,11 +45,11 @@ func TestOpenAIReasoningModelsHTTP(t *testing.T) {
 			key, effort, limit, temperature := "fixture", "low", 32, 0.3
 			config := &ChatConfig{MaxTokens: &limit, Temperature: &temperature, TopP: &temperature, Effort: &effort}
 			history := []Message{{Role: "user", Content: "Reply OK"}}
-			response, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, history, config)
+			response, err := driver.ChatWithMessages(name, history, &APIConfig{APIKey: &key}, config)
 			if err != nil || response == nil || response.Answer == nil || *response.Answer != "OK" {
 				t.Fatal(response, err)
 			}
-			if err := driver.ChatStreamlyWithMessages(name, history, &APIConfig{APIKey: &key}, config, func(content, reasoning *string) error { return nil }); err != nil {
+			if err := driver.ChatStreamlyWithSender(name, history, &APIConfig{APIKey: &key}, config, func(content, reasoning *string) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
 			if *config.MaxTokens != 32 || *config.Temperature != 0.3 || *config.TopP != 0.3 {
@@ -117,13 +117,13 @@ func testHostedChatHTTP(t *testing.T, provider string, extra func(*testing.T, ma
 			off, on, zero, max := false, true, 0.0, 16
 			stop := []string{"stop"}
 			config := &ChatConfig{Stream: &on, Thinking: &off, Temperature: &zero, TopP: &zero, MaxTokens: &max, Stop: &stop, DoSample: &off}
-			response, err := driver.ChatWithMessages(instance, api, history, config)
+			response, err := driver.ChatWithMessages(instance, history, api, config)
 			if err != nil || response == nil || *response.Answer != instance || *response.ReasoningContent != "reason" {
 				t.Fatal(response, err)
 			}
 			config.Stream = &off
 			var frames []string
-			if err := driver.ChatStreamlyWithMessages(instance, history, api, config, func(c, r *string) error {
+			if err := driver.ChatStreamlyWithSender(instance, history, api, config, func(c, r *string) error {
 				if r != nil {
 					frames = append(frames, *r)
 				}
@@ -189,13 +189,13 @@ func testHostedChatFailures(t *testing.T, provider string, discovery bool) {
 			var err error
 			switch test.call {
 			case "chat":
-				_, err = driver.ChatWithMessages("m", api, history, nil)
+				_, err = driver.ChatWithMessages("m", history, api, nil)
 			case "models":
 				_, err = driver.ListModels(api)
 			case "connection":
 				err = driver.CheckConnection(api)
 			case "stream":
-				err = driver.ChatStreamlyWithMessages("m", history, api, nil, func(c, r *string) error {
+				err = driver.ChatStreamlyWithSender("m", history, api, nil, func(c, r *string) error {
 					if c != nil && *c == "[DONE]" {
 						done++
 					}
@@ -260,14 +260,14 @@ func testHostedCancellation(t *testing.T, provider string, discovery bool) {
 				go func() { <-started; cancel() }()
 				switch mode {
 				case "cancel chat":
-					_, err = driver.ChatWithMessages("m", api, history, nil)
+					_, err = driver.ChatWithMessages("m", history, api, nil)
 				case "cancel models":
 					_, err = driver.ListModels(api)
 				case "cancel connection":
 					err = driver.CheckConnection(api)
 				}
 			} else {
-				err = driver.ChatStreamlyWithMessages("m", history, api, nil, func(c, r *string) error {
+				err = driver.ChatStreamlyWithSender("m", history, api, nil, func(c, r *string) error {
 					terminal := c != nil && *c == "[DONE]"
 					if mode == "sender failure" || mode == "reasoning failure" && r != nil || mode == "terminal failure" && terminal {
 						return sentinel
@@ -302,21 +302,21 @@ func TestOpenAIInputAndLocalEmbedding(t *testing.T) {
 	history := []Message{{Role: "user", Content: "q"}}
 	key, name := "fixture", "m"
 	for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}} {
-		if _, err := driver.ChatWithMessages(name, api, history, nil); err == nil {
+		if _, err := driver.ChatWithMessages(name, history, api, nil); err == nil {
 			t.Fatal("missing key accepted")
 		}
-		if err := driver.ChatStreamlyWithMessages(name, history, api, nil, func(*string, *string) error { return nil }); err == nil {
+		if err := driver.ChatStreamlyWithSender(name, history, api, nil, func(*string, *string) error { return nil }); err == nil {
 			t.Fatal("missing stream key accepted")
 		}
 	}
 	api := &APIConfig{APIKey: &key}
-	if _, err := driver.ChatWithMessages(name, api, nil, nil); err == nil {
+	if _, err := driver.ChatWithMessages(name, nil, api, nil); err == nil {
 		t.Fatal("empty history accepted")
 	}
-	if err := driver.ChatStreamlyWithMessages(name, history, api, nil, nil); err == nil {
+	if err := driver.ChatStreamlyWithSender(name, history, api, nil, nil); err == nil {
 		t.Fatal("nil sender accepted")
 	}
-	if err := driver.ChatStreamlyWithSender(nil, nil, api, nil, nil); err == nil {
+	if err := driver.ChatStreamlyWithSender("", nil, api, nil, nil); err == nil {
 		t.Fatal("nil inputs accepted")
 	}
 	if _, err := NewRerankModel(driver, &name, api).Rerank("q", []string{"d"}); err == nil {
@@ -324,9 +324,6 @@ func TestOpenAIInputAndLocalEmbedding(t *testing.T) {
 	}
 	if _, err := driver.Balance(api); err == nil {
 		t.Fatal("balance fabricated")
-	}
-	if _, err := driver.ChatStreamly(&name, &key, &name, nil); err == nil {
-		t.Fatal("channel stream fabricated")
 	}
 	transport, ok := openAIChatTransport.(*http.Transport)
 	if !ok || transport.ResponseHeaderTimeout != 60*time.Second || driver.httpClient.Timeout != 0 {

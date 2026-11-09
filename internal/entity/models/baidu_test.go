@@ -76,11 +76,11 @@ func TestBaiduThinkingHTTP(t *testing.T) {
 				config.Effort = &test.effort
 			}
 			messages := []Message{{Role: "user", Content: "q"}}
-			response, err := driver.ChatWithMessages(test.name, api, messages, config)
+			response, err := driver.ChatWithMessages(test.name, messages, api, config)
 			if err != nil || response == nil || response.ReasoningContent == nil || *response.ReasoningContent != "reason" {
 				t.Fatal(response, err)
 			}
-			if err := driver.ChatStreamlyWithMessages(test.name, messages, api, config, func(*string, *string) error { return nil }); err != nil {
+			if err := driver.ChatStreamlyWithSender(test.name, messages, api, config, func(*string, *string) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
 		})

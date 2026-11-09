@@ -41,7 +41,7 @@ func TestTogetherAIChatReasoningConfiguration(t *testing.T) {
 				t.Fatal(driver, err)
 			}
 			thinking, effort := false, "high"
-			resp, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: "hi"}}, &ChatConfig{Thinking: &thinking, Effort: &effort})
+			resp, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: &thinking, Effort: &effort})
 			if err != nil || *resp.Answer != "answer" || resp.ReasoningContent == nil || *resp.ReasoningContent != "primary" {
 				t.Fatal(resp, err)
 			}
@@ -75,7 +75,7 @@ func TestTogetherAIStreamFormatsAndFailures(t *testing.T) {
 			defer srv.Close()
 			d := NewTogetherAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 			var content, reasoning string
-			err := d.ChatStreamlyWithMessages("chat-model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, nil, func(c, r *string) error {
+			err := d.ChatStreamlyWithSender("chat-model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, nil, func(c, r *string) error {
 				if c != nil {
 					content += *c
 				}
@@ -130,15 +130,15 @@ func TestTogetherAICancellationAndSender(t *testing.T) {
 	defer srv.Close()
 	d := NewTogetherAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 	want := errors.New("sender failed")
-	if err := d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
+	if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
 		t.Fatal("sender error lost", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { cancel(); return nil }); !errors.Is(err, context.Canceled) {
+	if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { cancel(); return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatal("stream cancellation lost", err)
 	}
 	stream := false
-	if err := d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, &ChatConfig{Stream: &stream}, func(*string, *string) error { return nil }); err == nil {
+	if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, &ChatConfig{Stream: &stream}, func(*string, *string) error { return nil }); err == nil {
 		t.Fatal("stream=false accepted")
 	}
 }
@@ -154,7 +154,7 @@ func TestTogetherAICancelBetweenReasoningFields(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	calls := 0
-	err := d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { calls++; cancel(); return nil })
+	err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { calls++; cancel(); return nil })
 	if !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatal("callback continued after cancellation", calls, err)
 	}

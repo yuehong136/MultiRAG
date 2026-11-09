@@ -295,17 +295,17 @@ func TestProviderFixTokenHubZeroAndInvalid(t *testing.T) {
 	zero := 0.0
 	yes := true
 	messages := []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "q"}}
-	result, err := d.ChatWithMessages("model", &APIConfig{APIKey: stringPtr("key")}, messages, &ChatConfig{Temperature: &zero, TopP: &zero, Stream: &yes})
+	result, err := d.ChatWithMessages("model", messages, &APIConfig{APIKey: stringPtr("key")}, &ChatConfig{Temperature: &zero, TopP: &zero, Stream: &yes})
 	if err != nil || *result.Answer != "ok" {
 		t.Fatal(result, err)
 	}
 	for _, temp := range []float64{math.NaN(), math.Inf(1), -1, 3} {
-		if _, err := d.ChatWithMessages("model", &APIConfig{APIKey: stringPtr("key")}, messages, &ChatConfig{Temperature: &temp}); err == nil {
+		if _, err := d.ChatWithMessages("model", messages, &APIConfig{APIKey: stringPtr("key")}, &ChatConfig{Temperature: &temp}); err == nil {
 			t.Fatal("invalid temperature")
 		}
 	}
 	for _, messages := range [][]Message{nil, {{Role: "invalid", Content: "q"}}, {{Role: "user", Content: 3}}} {
-		if _, err := d.ChatWithMessages("model", &APIConfig{APIKey: stringPtr("key")}, messages, nil); err == nil {
+		if _, err := d.ChatWithMessages("model", messages, &APIConfig{APIKey: stringPtr("key")}, nil); err == nil {
 			t.Fatal("invalid messages")
 		}
 	}
@@ -422,7 +422,7 @@ func TestProviderFixRegionalInstanceIsolation(t *testing.T) {
 			urls["china"] = "https://mutated.invalid"
 			region := "china"
 			api := &APIConfig{APIKey: stringPtr("china-key"), Region: &region}
-			if _, err := d.ChatWithMessages("m", api, []Message{{Role: "user", Content: "q"}}, nil); err != nil {
+			if _, err := d.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, api, nil); err != nil {
 				t.Fatal(err)
 			}
 			if calls.Load() != 1 {

@@ -58,12 +58,12 @@ func TestHistoryChatProtocolsAndCancellation(t *testing.T) {
 			}
 			key, name, region, off, zero := "fixture-key", "model", "region", false, 0.0
 			api := &APIConfig{APIKey: &key, Region: &region}
-			answer, err := driver.ChatWithMessages(name, api, history, &ChatConfig{Thinking: &off, Temperature: &zero})
+			answer, err := driver.ChatWithMessages(name, history, api, &ChatConfig{Thinking: &off, Temperature: &zero})
 			if err != nil || answer == nil || answer.Answer == nil || *answer.Answer != "answer" {
 				t.Fatalf("history chat=%v err=%v", answer, err)
 			}
 			var events []string
-			err = driver.ChatStreamlyWithMessages(name, history, api, &ChatConfig{Thinking: &off, Temperature: &zero}, func(content, reason *string) error {
+			err = driver.ChatStreamlyWithSender(name, history, api, &ChatConfig{Thinking: &off, Temperature: &zero}, func(content, reason *string) error {
 				if content != nil {
 					events = append(events, *content)
 				}
@@ -76,17 +76,17 @@ func TestHistoryChatProtocolsAndCancellation(t *testing.T) {
 				t.Fatalf("stream=%v err=%v", events, err)
 			}
 			want := errors.New("sender failed")
-			err = driver.ChatStreamlyWithMessages(name, history, api, &ChatConfig{Thinking: &off, Temperature: &zero}, func(*string, *string) error { return want })
+			err = driver.ChatStreamlyWithSender(name, history, api, &ChatConfig{Thinking: &off, Temperature: &zero}, func(*string, *string) error { return want })
 			if !errors.Is(err, want) {
 				t.Fatalf("sender=%v", err)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			api.Context = ctx
-			if _, err := driver.ChatWithMessages(name, api, history, nil); !errors.Is(err, context.Canceled) {
+			if _, err := driver.ChatWithMessages(name, history, api, nil); !errors.Is(err, context.Canceled) {
 				t.Fatalf("sync cancellation=%v", err)
 			}
-			if err := driver.ChatStreamlyWithMessages(name, history, api, nil, func(*string, *string) error { return nil }); !errors.Is(err, context.Canceled) {
+			if err := driver.ChatStreamlyWithSender(name, history, api, nil, func(*string, *string) error { return nil }); !errors.Is(err, context.Canceled) {
 				t.Fatalf("stream cancellation=%v", err)
 			}
 		})
@@ -110,7 +110,7 @@ func TestBoundHistoryStreamingArrivesBeforeProviderCompletes(t *testing.T) {
 	chunks := make(chan string, 1)
 	finished := make(chan error, 1)
 	go func() {
-		finished <- model.ChatStreamlyWithSender("rules", []map[string]string{{"role": "user", "content": "question"}}, nil, func(content, reason *string) error {
+		finished <- model.ChatStreamlyWithSender(chatHistory("rules", []map[string]string{{"role": "user", "content": "question"}}), nil, func(content, reason *string) error {
 			if content != nil {
 				chunks <- *content
 			}
@@ -152,7 +152,7 @@ func TestBoundHistoryRejectsTruncationAndInvalidConfig(t *testing.T) {
 		name, key := "model", "key"
 		bound := NewChatModel(NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"}), &name, &APIConfig{APIKey: &key})
 		done := false
-		err := bound.ChatStreamlyWithSender("", []map[string]string{{"role": "user", "content": "q"}}, nil, func(content, reason *string) error { done = content != nil && *content == "[DONE]"; return nil })
+		err := bound.ChatStreamlyWithSender(chatHistory("", []map[string]string{{"role": "user", "content": "q"}}), nil, func(content, reason *string) error { done = content != nil && *content == "[DONE]"; return nil })
 		server.Close()
 		if err == nil || done {
 			t.Fatalf("failed stream succeeded %v done=%v", err, done)

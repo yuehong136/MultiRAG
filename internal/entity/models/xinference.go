@@ -1,7 +1,6 @@
 package models
 
 import (
-	"fmt"
 	"maps"
 	"strings"
 )
@@ -29,19 +28,12 @@ func xinferenceChatConfig(config *ChatConfig) *ChatConfig {
 	return &local
 }
 
-func (x *XinferenceModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
-	return x.LocalAIModel.ChatWithMessages(name, api, messages, xinferenceChatConfig(config))
+func (x *XinferenceModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
+	return x.LocalAIModel.ChatWithMessages(name, messages, api, xinferenceChatConfig(config))
 }
 
-func (x *XinferenceModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	return x.LocalAIModel.ChatStreamlyWithMessages(name, messages, api, xinferenceChatConfig(config), sender)
-}
-
-func (x *XinferenceModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("xinference: model and message are required")
-	}
-	return x.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, sender)
+func (x *XinferenceModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	return x.LocalAIModel.ChatStreamlyWithSender(name, messages, api, xinferenceChatConfig(config), sender)
 }
 
 func (x *XinferenceModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {

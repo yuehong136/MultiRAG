@@ -59,7 +59,7 @@ func decodeCoHereJSON(reader io.Reader, target any) error {
 	return nil
 }
 
-func (c *CoHereModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (c *CoHereModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	body, err := cohereChatBody(name, messages, config, false)
 	if err != nil {
 		return nil, err
@@ -106,14 +106,7 @@ func (c *CoHereModel) ChatWithMessages(name string, api *APIConfig, messages []M
 	return &ChatResponse{Answer: &a, ReasoningContent: &r}, nil
 }
 
-func (c *CoHereModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("cohere: model name and message are required")
-	}
-	return c.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, sender)
-}
-
-func (c *CoHereModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+func (c *CoHereModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
 	api, cancelCall := modelStreamConfig(api)
 	defer cancelCall()
 	if sender == nil {

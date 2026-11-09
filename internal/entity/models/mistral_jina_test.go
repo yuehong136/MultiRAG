@@ -31,13 +31,13 @@ func TestMistralChatStructuredContentHTTP(t *testing.T) {
 	d := NewMistralModel(map[string]string{"default": server.URL + "/v1/"}, URLSuffix{Chat: "chat/completions"})
 	messages := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous"}, {Role: "user", Content: []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/image.png"}}}}}
 	yes := true
-	result, err := d.ChatWithMessages("pixtral", &APIConfig{APIKey: stringPtr("key")}, messages, &ChatConfig{Stream: &yes})
+	result, err := d.ChatWithMessages("pixtral", messages, &APIConfig{APIKey: stringPtr("key")}, &ChatConfig{Stream: &yes})
 	if err != nil || *result.Answer != "answer" || *result.ReasoningContent != "reason" || body["stream"] != false || len(body["messages"].([]any)) != 3 {
 		t.Fatal(result, err, body)
 	}
 	for _, invalid := range []string{`{"choices":[]}`, `{"error":{"message":"private-body"}}`, `{"choices":[{"message":{"content":[]}}]}`, `{"choices":[{"message":{"content":false}}]}`, `{"choices":[{"message":{"content":"answer"}}]} {}`} {
 		response = invalid
-		if r, e := d.ChatWithMessages("pixtral", &APIConfig{APIKey: stringPtr("key")}, messages, nil); e == nil || r != nil || strings.Contains(e.Error(), "private-body") {
+		if r, e := d.ChatWithMessages("pixtral", messages, &APIConfig{APIKey: stringPtr("key")}, nil); e == nil || r != nil || strings.Contains(e.Error(), "private-body") {
 			t.Fatal(r, e)
 		}
 	}
@@ -60,7 +60,7 @@ func TestMistralStreamHTTP(t *testing.T) {
 			defer server.Close()
 			d := NewMistralModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			done := 0
-			err := d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(a, r *string) error {
+			err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(a, r *string) error {
 				if a != nil && *a == "[DONE]" {
 					done++
 				}
@@ -148,7 +148,7 @@ func TestJinaTaskDiscoveryRerankHTTP(t *testing.T) {
 	if _, e := d.Rerank(&name, "q", []string{"a"}, api, &RerankConfig{TopN: -1}); e == nil {
 		t.Fatal("negative top_n")
 	}
-	if e := d.ChatStreamlyWithMessages("chat", []Message{{Role: "user", Content: "q"}}, api, nil, nil); e == nil {
+	if e := d.ChatStreamlyWithSender("chat", []Message{{Role: "user", Content: "q"}}, api, nil, nil); e == nil {
 		t.Fatal("unsupported streaming chat")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

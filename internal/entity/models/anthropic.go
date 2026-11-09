@@ -65,7 +65,7 @@ func (a *AnthropicModel) request(method, suffix string, api *APIConfig, body any
 	return resp, nil
 }
 
-func (a *AnthropicModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (a *AnthropicModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("anthropic: model name is required")
 	}

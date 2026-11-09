@@ -188,7 +188,7 @@ func (m *ChatModel) ChatWithMessages(messages []Message, values map[string]inter
 	if err := requestContext(m.APIConfig).Err(); err != nil {
 		return nil, err
 	}
-	response, err := m.ModelDriver.ChatWithMessages(*m.ModelName, m.APIConfig, messages, config)
+	response, err := m.ModelDriver.ChatWithMessages(*m.ModelName, messages, m.APIConfig, config)
 	if err != nil {
 		return nil, err
 	}
@@ -214,11 +214,7 @@ func chatHistory(system string, history []map[string]string) []Message {
 	return messages
 }
 
-func (m *ChatModel) ChatStreamlyWithSender(system string, history []map[string]string, values map[string]interface{}, sender func(*string, *string) error) error {
-	return m.ChatStreamlyWithMessages(chatHistory(system, history), values, sender)
-}
-
-func (m *ChatModel) ChatStreamlyWithMessages(messages []Message, values map[string]interface{}, sender func(*string, *string) error) error {
+func (m *ChatModel) ChatStreamlyWithSender(messages []Message, values map[string]interface{}, sender func(*string, *string) error) error {
 	if err := ValidateMessages(messages); err != nil {
 		return err
 	}
@@ -249,7 +245,7 @@ func (m *ChatModel) ChatStreamlyWithMessages(messages []Message, values map[stri
 		}
 		return sender(content, reasoning)
 	}
-	if err := m.ModelDriver.ChatStreamlyWithMessages(*m.ModelName, messages, m.APIConfig, config, guardedSender); err != nil {
+	if err := m.ModelDriver.ChatStreamlyWithSender(*m.ModelName, messages, m.APIConfig, config, guardedSender); err != nil {
 		return err
 	}
 	if err := requestContext(m.APIConfig).Err(); err != nil {

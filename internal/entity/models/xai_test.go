@@ -60,14 +60,14 @@ func TestXAIChatStreamDiscovery(t *testing.T) {
 		key, zero, max, on := "key", 0.0, 100, true
 		api := &APIConfig{APIKey: &key}
 		config := &ChatConfig{Temperature: &zero, MaxTokens: &max, Stream: &on}
-		response, err := driver.ChatWithMessages("grok-test", api, multimodalFixture(), config)
+		response, err := driver.ChatWithMessages("grok-test", multimodalFixture(), api, config)
 		if err != nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
 			t.Fatal(response, err)
 		}
 		off := false
 		config.Stream = &off
 		var frames []string
-		err = driver.ChatStreamlyWithMessages("grok-test", multimodalFixture(), api, config, func(c, r *string) error {
+		err = driver.ChatStreamlyWithSender("grok-test", multimodalFixture(), api, config, func(c, r *string) error {
 			if r != nil {
 				frames = append(frames, *r)
 			}
@@ -106,14 +106,14 @@ func TestXAIFailuresAndCompletion(t *testing.T) {
 			key := "key"
 			api := &APIConfig{APIKey: &key}
 			history := []Message{{Role: "user", Content: "q"}}
-			if _, err := driver.ChatWithMessages("m", api, history, nil); err == nil {
+			if _, err := driver.ChatWithMessages("m", history, api, nil); err == nil {
 				t.Fatal("malformed answer accepted")
 			}
 			if err := driver.CheckConnection(api); err == nil {
 				t.Fatal("malformed/empty discovery accepted")
 			}
 			done := false
-			err := driver.ChatStreamlyWithMessages("m", history, api, nil, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender("m", history, api, nil, func(c, r *string) error {
 				if c != nil && *c == "[DONE]" {
 					done = true
 				}
@@ -144,7 +144,7 @@ func TestXAICancellationAndSenderError(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		result <- driver.ChatStreamlyWithMessages("m", history, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { cancel(); return nil })
+		result <- driver.ChatStreamlyWithSender("m", history, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { cancel(); return nil })
 	}()
 	select {
 	case <-started:
@@ -160,13 +160,13 @@ func TestXAICancellationAndSenderError(t *testing.T) {
 		t.Fatal("provider request not cancelled")
 	}
 	want := errors.New("sender failed")
-	if err := driver.ChatStreamlyWithMessages("m", history, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
+	if err := driver.ChatStreamlyWithSender("m", history, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
 		t.Fatal(err)
 	}
 	if driver.httpClient.Timeout != 0 {
 		t.Fatal("global timeout truncates long streams")
 	}
-	if _, err := driver.ChatWithMessages("m", nil, history, nil); err == nil {
+	if _, err := driver.ChatWithMessages("m", history, nil, nil); err == nil {
 		t.Fatal("missing key accepted")
 	}
 }

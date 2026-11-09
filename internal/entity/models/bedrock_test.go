@@ -89,7 +89,7 @@ func TestBedrockConverseAndCatalog(t *testing.T) {
 	api := bedrockTestAPI()
 	def := "default"
 	api.Region = &def
-	result, err := driver.ChatWithMessages("arn:aws:bedrock:us-east-1:123:inference-profile/m", api, []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "q"}}, &ChatConfig{Temperature: &zero, TopP: &zero})
+	result, err := driver.ChatWithMessages("arn:aws:bedrock:us-east-1:123:inference-profile/m", []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "q"}}, api, &ChatConfig{Temperature: &zero, TopP: &zero})
 	if err != nil || *result.Answer != "Hello world" {
 		t.Fatal(result, err)
 	}
@@ -107,7 +107,7 @@ func TestBedrockStrictRawResponses(t *testing.T) {
 	for _, raw := range []string{`{}`, `null`, `{"output":{"message":{"role":"assistant","content":[{"text":""}]}},"stopReason":"end_turn"}`, `{"output":{"message":{"role":"user","content":[{"text":"answer"}]}},"stopReason":"end_turn"}`, `{"output":{"message":{"role":"assistant","content":[{"text":"answer"}]}}}`, `{"output":{"message":{"role":"assistant","content":[{"text":"answer"}]}},"stopReason":"tool_use"}`, `{"output":{"message":{"role":"assistant","content":[{"text":"answer"},{"toolUse":{}}]}},"stopReason":"end_turn"}`, `{"error":"private-secret"}`, `{} {}`} {
 		server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
 		driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
-		if result, err := driver.ChatWithMessages("m", bedrockTestAPI(), []Message{{Role: "user", Content: "q"}}, nil); err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
+		if result, err := driver.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, bedrockTestAPI(), nil); err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
 			t.Fatal(result, err)
 		}
 		server.Close()
@@ -137,7 +137,7 @@ func TestBedrockInvalidInputsNoHTTP(t *testing.T) {
 		}
 	}
 	for _, history := range [][]Message{nil, {{Role: "user", Content: " "}}, {{Role: "system", Content: "rules"}}, {{Role: "user", Content: "q"}, {Role: "system", Content: "rules"}}, multimodalFixture(), {{Role: "tool", Content: "q"}}} {
-		if _, err := driver.ChatWithMessages("m", bedrockTestAPI(), history, nil); err == nil {
+		if _, err := driver.ChatWithMessages("m", history, bedrockTestAPI(), nil); err == nil {
 			t.Fatal("invalid history")
 		}
 	}
@@ -180,7 +180,7 @@ func TestBedrockBinaryEventStream(t *testing.T) {
 	defer server.Close()
 	driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
 	var chunks []string
-	err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, bedrockTestAPI(), nil, func(c, r *string) error {
+	err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, bedrockTestAPI(), nil, func(c, r *string) error {
 		if c != nil {
 			chunks = append(chunks, *c)
 		}
@@ -232,7 +232,7 @@ func TestBedrockStreamCancellationIdleAndSender(t *testing.T) {
 			api := bedrockTestAPI()
 			api.Context = ctx
 			want := errors.New("sender stopped")
-			err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, api, nil, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, api, nil, func(c, r *string) error {
 				if mode == "sender" {
 					return want
 				}
@@ -335,7 +335,7 @@ func TestBedrockTransportFailures(t *testing.T) {
 		t.Fatal("pre-canceled request reached HTTP")
 	}
 	done := false
-	err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, bedrockTestAPI(), nil, func(c, r *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
+	err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, bedrockTestAPI(), nil, func(c, r *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
 	if err == nil || done {
 		t.Fatal("JSON accepted as binary stream", err, done)
 	}

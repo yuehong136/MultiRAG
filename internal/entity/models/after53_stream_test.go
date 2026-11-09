@@ -126,9 +126,9 @@ func TestAfter53StreamingLargeFramesAndFailures(t *testing.T) {
 					}
 					api := &APIConfig{APIKey: stringPtr("key"), Context: ctx}
 					if method == "sender" {
-						err = d.ChatStreamlyWithSender(stringPtr("served"), stringPtr("q"), api, &ChatConfig{}, sender)
+						err = d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, api, &ChatConfig{}, sender)
 					} else {
-						err = d.ChatStreamlyWithMessages("served", []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "q"}}, api, &ChatConfig{}, sender)
+						err = d.ChatStreamlyWithSender("served", []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "q"}}, api, &ChatConfig{}, sender)
 					}
 					switch scenario {
 					case "128KiB", "over1MiB":

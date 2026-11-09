@@ -262,7 +262,7 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 			t.Fatalf("bound %q %v", answer, err)
 		}
 		var frames []string
-		err = bound.ChatStreamlyWithSender("system", []map[string]string{{"role": "user", "content": "q"}}, map[string]interface{}{"thinking": false}, func(content, reason *string) error {
+		err = bound.ChatStreamlyWithSender([]models.Message{{Role: "system", Content: "system"}, {Role: "user", Content: "q"}}, map[string]interface{}{"thinking": false}, func(content, reason *string) error {
 			if content != nil {
 				frames = append(frames, *content)
 			}
@@ -407,7 +407,7 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 	if err := pool.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := svc.ChatToModel("vllm", "local-0", "Qwen/custom", "owner", "q", &models.APIConfig{}, &models.ChatConfig{}); err == nil {
+	if _, _, err := svc.ChatToModelWithMessages("vllm", "local-0", "Qwen/custom", "owner", []models.Message{{Role: "user", Content: "q"}}, &models.APIConfig{}, &models.ChatConfig{}); err == nil {
 		t.Fatal("database failure became success")
 	}
 }

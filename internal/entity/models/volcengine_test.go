@@ -43,7 +43,7 @@ func TestVolcEngineChatAndDiscovery(t *testing.T) {
 	}
 	key, name, message, region, thinking := `{"ark_api_key":"key","endpoint_id":"ep"}`, "doubao", "question", "fixture", true
 	config := &APIConfig{APIKey: &key, Region: &region}
-	response, err := driver.ChatWithMessages(name, config, []Message{{Role: "user", Content: message}}, &ChatConfig{Thinking: &thinking})
+	response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, config, &ChatConfig{Thinking: &thinking})
 	if err != nil || response == nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
 		t.Fatalf("response = %#v, %v", response, err)
 	}
@@ -85,7 +85,7 @@ func TestVolcEngineStreamContracts(t *testing.T) {
 			driver := NewVolcEngine(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "doubao", "question"
 			var frames []string
-			err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, func(content, reason *string) error {
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(content, reason *string) error {
 				if reason != nil {
 					frames = append(frames, "reason:"+*reason)
 				}
@@ -115,20 +115,20 @@ func TestVolcEngineValidationSenderErrorAndCancellation(t *testing.T) {
 	driver := NewVolcEngine(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "doubao", "question"
 	failure := errors.New("sender failed")
-	err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return failure })
+	err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return failure })
 	if !errors.Is(err, failure) {
 		t.Fatalf("error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { return nil })
+	err = driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { return nil })
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error = %v", err)
 	}
-	if _, err := driver.ChatWithMessages("", &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, nil); err == nil {
+	if _, err := driver.ChatWithMessages("", []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil); err == nil {
 		t.Fatal("empty model name accepted")
 	}
-	if _, err := driver.ChatWithMessages(name, nil, []Message{{Role: "user", Content: message}}, nil); err == nil {
+	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, nil, nil); err == nil {
 		t.Fatal("missing key accepted")
 	}
 	if _, err := volcEngineBody(name, []Message{{Role: "user", Content: message}}, &ChatConfig{Thinking: func() *bool { v := true; return &v }(), Effort: func() *string { v := "invalid"; return &v }()}, false); err == nil {
@@ -145,7 +145,7 @@ func TestVolcEngineLargeStreamDelta(t *testing.T) {
 	driver := NewVolcEngine(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "doubao", "q"
 	var got string
-	err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, func(content, reason *string) error {
+	err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(content, reason *string) error {
 		if content != nil && *content != "[DONE]" {
 			got += *content
 		}

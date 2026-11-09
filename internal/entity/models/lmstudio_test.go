@@ -61,7 +61,7 @@ func TestLMStudioChatAndReasoningHTTP(t *testing.T) {
 			}
 			key := "fixture-key"
 			for _, name := range []string{"qwen3-8b", "glm-4"} {
-				response, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, history, config)
+				response, err := driver.ChatWithMessages(name, history, &APIConfig{APIKey: &key}, config)
 				if err != nil || response == nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
 					t.Fatal(response, err)
 				}
@@ -83,7 +83,7 @@ func TestLMStudioInlineReasoningAndNilConfig(t *testing.T) {
 	}))
 	defer server.Close()
 	driver := NewLMStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
-	response, err := driver.ChatWithMessages("qwen3-8b", nil, []Message{{Role: "user", Content: "q"}}, nil)
+	response, err := driver.ChatWithMessages("qwen3-8b", []Message{{Role: "user", Content: "q"}}, nil, nil)
 	if err != nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
 		t.Fatal(response, err)
 	}
@@ -114,7 +114,7 @@ func TestLMStudioStreamEndHTTP(t *testing.T) {
 			driver := NewLMStudioModel(map[string]string{"default": server.URL + "/v1"}, URLSuffix{Chat: "chat/completions"})
 			off, name, q := false, "glm-4", "question"
 			var frames []string
-			err := driver.ChatStreamlyWithSender(&name, &q, nil, &ChatConfig{Stream: &off, Thinking: &off}, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: q}}, nil, &ChatConfig{Stream: &off, Thinking: &off}, func(c, r *string) error {
 				if r != nil {
 					frames = append(frames, *r)
 				}
@@ -151,9 +151,9 @@ func TestLMStudioFailureHTTP(t *testing.T) {
 			var err error
 			done := false
 			if test.stream {
-				err = driver.ChatStreamlyWithMessages("qwen3", history, nil, nil, func(c, r *string) error { done = done || (c != nil && *c == "[DONE]"); return nil })
+				err = driver.ChatStreamlyWithSender("qwen3", history, nil, nil, func(c, r *string) error { done = done || (c != nil && *c == "[DONE]"); return nil })
 			} else {
-				_, err = driver.ChatWithMessages("qwen3", nil, history, nil)
+				_, err = driver.ChatWithMessages("qwen3", history, nil, nil)
 			}
 			if err == nil || done || strings.Contains(err.Error(), "private-body") {
 				t.Fatal("failure accepted or private body exposed", err)
@@ -222,7 +222,7 @@ func TestLMStudioCancelAndSenderFailure(t *testing.T) {
 			done := false
 			var err error
 			if mode == "cancel streaming" || mode == "sender failure" {
-				err = driver.ChatStreamlyWithMessages("m", history, api, nil, func(c, r *string) error {
+				err = driver.ChatStreamlyWithSender("m", history, api, nil, func(c, r *string) error {
 					if c != nil && *c == "[DONE]" {
 						done = true
 					}
@@ -235,7 +235,7 @@ func TestLMStudioCancelAndSenderFailure(t *testing.T) {
 			} else {
 				go func() { <-started; cancel() }()
 				if mode == "cancel normal" {
-					_, err = driver.ChatWithMessages("m", api, history, nil)
+					_, err = driver.ChatWithMessages("m", history, api, nil)
 				} else {
 					_, err = driver.ListModels(api)
 				}
@@ -262,7 +262,7 @@ func TestLMStudioCancelAndSenderFailure(t *testing.T) {
 		driver := NewLMStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
 		ctx, cancel := context.WithCancel(context.Background())
 		done := false
-		err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{Context: ctx}, nil, func(c, r *string) error {
+		err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{Context: ctx}, nil, func(c, r *string) error {
 			if c != nil && *c == "[DONE]" {
 				done = true
 			}
@@ -289,8 +289,6 @@ func TestLMStudioInputIsolationAndUnsupported(t *testing.T) {
 		func() error { _, e := NewRerankModel(driver, &name, nil).Rerank(q, []string{q}); return e },
 		func() error { _, e := driver.Balance(nil); return e },
 		func() error { return driver.CheckConnection(nil) },
-		func() error { _, e := driver.ChatStreamly(&name, nil, &q, nil); return e },
-		func() error { return driver.ChatStreamlyWithChannel(&name, nil, &q, nil, nil) },
 	} {
 		if err := call(); err == nil {
 			t.Fatal("unsupported capability succeeded")
@@ -302,14 +300,14 @@ func TestLMStudioInputIsolationAndUnsupported(t *testing.T) {
 	}{
 		{"", []Message{{Role: "user", Content: q}}}, {name, nil}, {name, []Message{{Role: "invalid", Content: q}}}, {name, []Message{{Role: "user", Content: ""}}}, {name, []Message{{Role: "user", Content: 42}}},
 	} {
-		if _, err := driver.ChatWithMessages(test.name, nil, test.history, nil); err == nil {
+		if _, err := driver.ChatWithMessages(test.name, test.history, nil, nil); err == nil {
 			t.Fatal("bad input accepted")
 		}
 	}
-	if err := driver.ChatStreamlyWithMessages(name, []Message{{Role: "user", Content: q}}, nil, nil, nil); err == nil {
+	if err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: q}}, nil, nil, nil); err == nil {
 		t.Fatal("nil sender accepted")
 	}
-	if err := driver.ChatStreamlyWithSender(nil, &q, nil, nil, func(*string, *string) error { return nil }); err == nil {
+	if err := driver.ChatStreamlyWithSender("", []Message{{Role: "user", Content: q}}, nil, nil, func(*string, *string) error { return nil }); err == nil {
 		t.Fatal("nil model accepted")
 	}
 	region := "missing"
@@ -353,7 +351,7 @@ func TestLMStudioPerCallTimeouts(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})
 	history := []Message{{Role: "user", Content: "q"}}
-	if _, err := driver.ChatWithMessages("m", nil, history, nil); err != nil {
+	if _, err := driver.ChatWithMessages("m", history, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := driver.ListModels(nil); err != nil {
@@ -365,7 +363,7 @@ func TestLMStudioPerCallTimeouts(t *testing.T) {
 		}
 	}
 	stream = true
-	if err := driver.ChatStreamlyWithMessages("m", history, nil, nil, func(*string, *string) error { return nil }); err != nil {
+	if err := driver.ChatStreamlyWithSender("m", history, nil, nil, func(*string, *string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -382,7 +380,7 @@ func TestLMStudioSenderErrorsAndScannerLimit(t *testing.T) {
 			defer server.Close()
 			driver := NewLMStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
 			var frames []string
-			err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, nil, nil, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, nil, nil, func(c, r *string) error {
 				if mode == "reasoning" && r != nil {
 					return sentinel
 				}

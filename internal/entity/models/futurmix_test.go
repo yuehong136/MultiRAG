@@ -37,7 +37,7 @@ func TestFuturMixChatAndSSE(t *testing.T) {
 		t.Fatal(result, err)
 	}
 	var chunks []string
-	err = driver.ChatStreamlyWithMessages("m", history, api, nil, func(c, r *string) error {
+	err = driver.ChatStreamlyWithSender("m", history, api, nil, func(c, r *string) error {
 		if r != nil {
 			chunks = append(chunks, *r)
 		}
@@ -67,7 +67,7 @@ func TestFuturMixRawFailures(t *testing.T) {
 		server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 		key := "key"
 		driver := NewFuturMixModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
-		if result, err := driver.ChatWithMessages("m", &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: "q"}}, nil); err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
+		if result, err := driver.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil); err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
 			t.Fatal(result, err)
 		}
 		server.Close()
@@ -77,7 +77,7 @@ func TestFuturMixRawFailures(t *testing.T) {
 		key := "key"
 		driver := NewFuturMixModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 		done := false
-		err := driver.ChatStreamlyWithMessages("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(c, r *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
+		err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(c, r *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
 		if err == nil || done || strings.Contains(err.Error(), "private-secret") {
 			t.Fatal(err, done)
 		}
@@ -103,7 +103,7 @@ func TestFuturMixStreamLifecycle(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			want := errors.New("sender stopped")
-			err := driver.ChatStreamlyWithMessages("m", messages, &APIConfig{APIKey: &key, Context: ctx}, nil, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender("m", messages, &APIConfig{APIKey: &key, Context: ctx}, nil, func(c, r *string) error {
 				if mode == "sender" {
 					return want
 				}
@@ -133,7 +133,7 @@ func TestFuturMixConcurrentInstances(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				result, err := driver.ChatWithMessages("m", &APIConfig{APIKey: &id}, []Message{{Role: "user", Content: "q"}}, nil)
+				result, err := driver.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &id}, nil)
 				if err != nil || *result.Answer != id {
 					t.Error(result, err)
 				}

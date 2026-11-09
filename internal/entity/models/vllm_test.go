@@ -46,7 +46,7 @@ func TestVLLMModelChatAndDiscovery(t *testing.T) {
 	}
 	key, name, message, region, thinking := "key", "doubao", "question", "fixture", true
 	config := &APIConfig{APIKey: &key, Region: &region}
-	response, err := driver.ChatWithMessages(name, config, []Message{{Role: "user", Content: message}}, &ChatConfig{Thinking: &thinking})
+	response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, config, &ChatConfig{Thinking: &thinking})
 	if err != nil || response == nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
 		t.Fatalf("response = %#v, %v", response, err)
 	}
@@ -88,7 +88,7 @@ func TestVLLMModelStreamContracts(t *testing.T) {
 			driver := NewVLLMModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "doubao", "question"
 			var frames []string
-			err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, func(content, reason *string) error {
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(content, reason *string) error {
 				if reason != nil {
 					frames = append(frames, "reason:"+*reason)
 				}
@@ -118,17 +118,17 @@ func TestVLLMModelValidationSenderErrorAndCancellation(t *testing.T) {
 	driver := NewVLLMModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "doubao", "question"
 	failure := errors.New("sender failed")
-	err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return failure })
+	err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return failure })
 	if !errors.Is(err, failure) {
 		t.Fatalf("error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { return nil })
+	err = driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { return nil })
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error = %v", err)
 	}
-	if _, err := driver.ChatWithMessages("", nil, []Message{{Role: "user", Content: message}}, nil); err == nil {
+	if _, err := driver.ChatWithMessages("", []Message{{Role: "user", Content: message}}, nil, nil); err == nil {
 		t.Fatal("nil arguments accepted")
 	}
 
@@ -143,7 +143,7 @@ func TestVLLMModelLargeStreamDelta(t *testing.T) {
 	driver := NewVLLMModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "doubao", "q"
 	var got string
-	err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, func(content, reason *string) error {
+	err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(content, reason *string) error {
 		if content != nil && *content != "[DONE]" {
 			got += *content
 		}
@@ -176,7 +176,7 @@ func TestVLLMModelKeylessAndThinkingFalse(t *testing.T) {
 	defer server.Close()
 	driver := NewVLLMModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
 	thinking := false
-	_, err := driver.ChatWithMessages("Qwen/test", nil, []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "q"}}, &ChatConfig{Thinking: &thinking})
+	_, err := driver.ChatWithMessages("Qwen/test", []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "q"}}, nil, &ChatConfig{Thinking: &thinking})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -306,7 +306,7 @@ func validBedrockStop(reason string) error {
 	}
 	return fmt.Errorf("bedrock: missing, failed or unsupported stop reason")
 }
-func (b *BedrockModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (b *BedrockModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	body, err := bedrockChatBody(name, messages, config)
 	if err != nil {
 		return nil, err

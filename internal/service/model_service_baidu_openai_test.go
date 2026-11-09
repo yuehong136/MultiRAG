@@ -97,7 +97,7 @@ func TestBaiduOpenAICatalogBoundCapabilitiesHTTP(t *testing.T) {
 				if _, err := chat.ChatWithMessages(messages, nil); err != nil {
 					t.Fatal(err)
 				}
-				if err := chat.ChatStreamlyWithMessages(messages, nil, func(*string, *string) error { return nil }); err != nil {
+				if err := chat.ChatStreamlyWithSender(messages, nil, func(*string, *string) error { return nil }); err != nil {
 					t.Fatal(err)
 				}
 				if err := driver.CheckConnection(api); err != nil {

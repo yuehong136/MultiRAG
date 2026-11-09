@@ -38,11 +38,11 @@ func TestAliyunChatAndMessages(t *testing.T) {
 	model := aliyunTestModel(server.URL)
 	key, name, prompt := "test-key", "qwen-flash", "hello"
 	thinking, stream := true, true
-	response, err := model.Chat(&name, &prompt, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: &thinking, Stream: &stream})
+	response, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: &thinking, Stream: &stream})
 	if err != nil || response.Answer == nil || *response.Answer != "answer" || response.ReasoningContent == nil || *response.ReasoningContent != "reason" {
 		t.Fatalf("Chat() = %#v, %v", response, err)
 	}
-	answer, err := model.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "system", Content: "guide"}, {Role: "user", Content: prompt}}, nil)
+	answer, err := model.ChatWithMessages(name, []Message{{Role: "system", Content: "guide"}, {Role: "user", Content: prompt}}, &APIConfig{APIKey: &key}, nil)
 	if err != nil || answer == nil || answer.Answer == nil || *answer.Answer != "answer" {
 		t.Fatalf("ChatWithMessages() = %v, %v", answer, err)
 	}
@@ -77,7 +77,7 @@ func TestAliyunStreamSendsDeltasAndDone(t *testing.T) {
 	model := aliyunTestModel(server.URL)
 	key, name, prompt, region := "test-key", "qwen-flash", "hello", "singapore"
 	var content, reasoning, done string
-	err := model.ChatStreamlyWithSender(&name, &prompt, &APIConfig{APIKey: &key, Region: &region}, nil, func(answer, thought *string) error {
+	err := model.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{APIKey: &key, Region: &region}, nil, func(answer, thought *string) error {
 		if answer != nil {
 			if *answer == "[DONE]" {
 				done = *answer
@@ -98,10 +98,10 @@ func TestAliyunStreamSendsDeltasAndDone(t *testing.T) {
 func TestAliyunRejectsErrorsWithoutFalseDone(t *testing.T) {
 	key, name, prompt, region := "test-key", "qwen-flash", "hello", "unknown"
 	model := aliyunTestModel("https://example.invalid")
-	if _, err := model.Chat(&name, &prompt, &APIConfig{APIKey: &key, Region: &region}, nil); err == nil || !strings.Contains(err.Error(), "region") {
+	if _, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{APIKey: &key, Region: &region}, nil); err == nil || !strings.Contains(err.Error(), "region") {
 		t.Fatalf("unknown region error = %v", err)
 	}
-	if _, err := model.Chat(&name, &prompt, nil, nil); err == nil || !strings.Contains(err.Error(), "API key") {
+	if _, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, nil, nil); err == nil || !strings.Contains(err.Error(), "API key") {
 		t.Fatalf("missing API key error = %v", err)
 	}
 
@@ -123,7 +123,7 @@ func TestAliyunRejectsErrorsWithoutFalseDone(t *testing.T) {
 			defer server.Close()
 			model := aliyunTestModel(server.URL)
 			var received []string
-			err := model.ChatStreamlyWithSender(&name, &prompt, &APIConfig{APIKey: &key}, nil, func(answer, thought *string) error {
+			err := model.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{APIKey: &key}, nil, func(answer, thought *string) error {
 				if answer != nil {
 					received = append(received, *answer)
 				}
@@ -159,7 +159,7 @@ func TestAliyunChatRejectsErrorResponses(t *testing.T) {
 			defer server.Close()
 			model := aliyunTestModel(server.URL)
 			key, name, prompt := "test-key", "qwen-flash", "hello"
-			if response, err := model.Chat(&name, &prompt, &APIConfig{APIKey: &key}, nil); err == nil || response != nil {
+			if response, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{APIKey: &key}, nil); err == nil || response != nil {
 				t.Fatalf("Chat() = %#v, %v", response, err)
 			}
 		})

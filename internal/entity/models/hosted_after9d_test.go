@@ -46,13 +46,13 @@ func TestAfter9dHostedChatHTTP(t *testing.T) {
 			limit, temp, top, stop := 64, 0.3, 0.9, []string{"END"}
 			config := &ChatConfig{MaxTokens: &limit, Temperature: &temp, TopP: &top, Stop: &stop}
 			history := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "q"}}
-			answer, err := d.ChatWithMessages("model", api, history, config)
+			answer, err := d.ChatWithMessages("model", history, api, config)
 			if err != nil || answer == nil || *answer.Answer != "answer" || *answer.ReasoningContent != "reason" {
 				t.Fatal(answer, err)
 			}
 			var output, reason string
 			done := 0
-			err = d.ChatStreamlyWithMessages("model", history, api, config, func(c, r *string) error {
+			err = d.ChatStreamlyWithSender("model", history, api, config, func(c, r *string) error {
 				if c != nil {
 					if *c == "[DONE]" {
 						done++
@@ -80,7 +80,7 @@ func TestAfter9dHostedChatFailuresHTTP(t *testing.T) {
 					fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 					defer fixture.Close()
 					d, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": fixture.URL}, URLSuffix{Chat: "chat"})
-					answer, err := d.ChatWithMessages("model", &APIConfig{APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "q"}}, nil)
+					answer, err := d.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
 					if err == nil || answer != nil || strings.Contains(err.Error(), "private-body") {
 						t.Fatal(answer, err)
 					}
@@ -101,7 +101,7 @@ func TestAfter9dHostedChatFailuresHTTP(t *testing.T) {
 					defer fixture.Close()
 					d, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": fixture.URL}, URLSuffix{Chat: "chat"})
 					done := 0
-					err := d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+					err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
 						if c != nil && *c == "[DONE]" {
 							done++
 						}
@@ -119,13 +119,13 @@ func TestAfter9dHostedChatFailuresHTTP(t *testing.T) {
 			defer fixture.Close()
 			d, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": fixture.URL}, URLSuffix{Chat: "chat"})
 			marker := errors.New("sender failed")
-			if err := d.ChatStreamlyWithSender(stringPtr("model"), stringPtr("q"), &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return marker }); !errors.Is(err, marker) {
+			if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return marker }); !errors.Is(err, marker) {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			done := 0
-			err := d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+			err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 				if c != nil && *c == "[DONE]" {
 					done++
 				}

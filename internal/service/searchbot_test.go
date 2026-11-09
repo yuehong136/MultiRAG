@@ -17,7 +17,7 @@ type searchbotTestDriver struct {
 	chat func(string, *models.APIConfig, []models.Message, *models.ChatConfig) (*models.ChatResponse, error)
 }
 
-func (d *searchbotTestDriver) ChatWithMessages(name string, api *models.APIConfig, messages []models.Message, config *models.ChatConfig) (*models.ChatResponse, error) {
+func (d *searchbotTestDriver) ChatWithMessages(name string, messages []models.Message, api *models.APIConfig, config *models.ChatConfig) (*models.ChatResponse, error) {
 	return d.chat(name, api, messages, config)
 }
 

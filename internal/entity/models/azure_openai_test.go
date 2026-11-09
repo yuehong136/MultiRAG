@@ -118,7 +118,7 @@ func TestAzureOpenAIAnnotationsAndFiltering(t *testing.T) {
 			defer srv.Close()
 			driver := NewAzureOpenAIModel(map[string]string{"default": srv.URL + "/openai"}, URLSuffix{Chat: "chat/completions"})
 			var answer string
-			err := driver.ChatStreamlyWithMessages("tenant-deployment", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender("tenant-deployment", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
 				if c != nil {
 					answer += *c
 				}
@@ -136,7 +136,7 @@ func TestAzureOpenAIAnnotationsAndFiltering(t *testing.T) {
 			}))
 			defer srv.Close()
 			driver := NewAzureOpenAIModel(map[string]string{"default": srv.URL + "/openai"}, URLSuffix{Chat: "chat/completions"})
-			if result, err := driver.ChatWithMessages("deployment", &APIConfig{APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "hi"}}, nil); err == nil || result != nil {
+			if result, err := driver.ChatWithMessages("deployment", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil); err == nil || result != nil {
 				t.Fatal("filtered response returned success", result, err)
 			}
 		})

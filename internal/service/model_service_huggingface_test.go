@@ -60,12 +60,12 @@ func TestHuggingFaceCatalogBoundCapabilitiesHTTP(t *testing.T) {
 			}
 			name := "org/m"
 			messages := []models.Message{{Role: "user", Content: "q"}}
-			response, err := driver.ChatWithMessages(name, api, messages, nil)
+			response, err := driver.ChatWithMessages(name, messages, api, nil)
 			if err != nil || response == nil || *response.Answer != "answer" {
 				t.Fatal(response, err)
 			}
 			frames := []string{}
-			err = driver.ChatStreamlyWithMessages(name, messages, api, nil, func(c, r *string) error {
+			err = driver.ChatStreamlyWithSender(name, messages, api, nil, func(c, r *string) error {
 				if c != nil {
 					frames = append(frames, *c)
 				}

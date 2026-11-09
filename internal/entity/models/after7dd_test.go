@@ -41,10 +41,10 @@ func TestAfter7ddGPUStackOptionalKey(t *testing.T) {
 			d := NewGPUStackModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat", Models: "models", Embedding: "embed"})
 			api := &APIConfig{APIKey: &key}
 			name := "m"
-			if _, err := d.ChatWithMessages(name, api, []Message{{Role: "user", Content: "q"}}, nil); err != nil {
+			if _, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, nil); err != nil {
 				t.Fatal(err)
 			}
-			if err := d.ChatStreamlyWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, nil, func(*string, *string) error { return nil }); err != nil {
+			if err := d.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: "q"}}, api, nil, func(*string, *string) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := d.ListModels(api); err != nil {
@@ -379,7 +379,7 @@ func TestAfter7ddOllamaBlankKeyOmitsAuthorization(t *testing.T) {
 		fmt.Fprint(w, `{"message":{"content":"ok"},"done":true}`)
 	}))
 	d := NewOllamaModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
-	if _, err := d.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: "q"}}, nil); err != nil {
+	if _, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil); err != nil {
 		t.Fatal(err)
 	}
 }

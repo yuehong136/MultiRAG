@@ -118,11 +118,11 @@ func TestAI302NormalizedRequests(t *testing.T) {
 	api := &APIConfig{APIKey: &key}
 	zero, zint, yes, no := 0.0, 0, true, false
 	cfg := &ChatConfig{Stream: &yes, Temperature: &zero, TopP: &zero, MaxTokens: &zint}
-	if _, err := m.ChatWithMessages(name, api, []Message{{Role: "user", Content: "q"}}, cfg); err != nil {
+	if _, err := m.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, cfg); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Stream = &no
-	if err := m.ChatStreamlyWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, cfg, func(*string, *string) error { return nil }); err != nil {
+	if err := m.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: "q"}}, api, cfg, func(*string, *string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.Embed(&name, []string{"q"}, api, nil); err != nil {
@@ -163,11 +163,15 @@ func ai302ContractCalls() map[string]ai302Call {
 			if n != nil {
 				name = *n
 			}
-			_, e := m.ChatWithMessages(name, a, []Message{{Role: "user", Content: "q"}}, nil)
+			_, e := m.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, a, nil)
 			return e
 		},
 		"stream": func(m *AI302Model, n *string, a *APIConfig) error {
-			return m.ChatStreamlyWithSender(n, stringPtr("q"), a, nil, func(*string, *string) error { return nil })
+			name := ""
+			if n != nil {
+				name = *n
+			}
+			return m.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: "q"}}, a, nil, func(*string, *string) error { return nil })
 		},
 		"embed": func(m *AI302Model, n *string, a *APIConfig) error {
 			_, e := m.Embed(n, []string{"q"}, a, nil)
@@ -236,10 +240,10 @@ func TestAI302DenialsHaveNoHTTP(t *testing.T) {
 	if _, err := m.Rerank(stringPtr("model"), " ", []string{"x"}, api, nil); err == nil {
 		t.Fatal("blank query")
 	}
-	if err := m.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, api, nil, nil); err == nil {
+	if err := m.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, api, nil, nil); err == nil {
 		t.Fatal("nil sender")
 	}
-	if _, err := m.ChatWithMessages("model", api, nil, nil); err == nil {
+	if _, err := m.ChatWithMessages("model", nil, api, nil); err == nil {
 		t.Fatal("no messages")
 	}
 	for _, bad := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}} {
@@ -304,7 +308,7 @@ func TestAI302CancellationAndFailure(t *testing.T) {
 	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n")
 	}))
-	if err := newAI302ContractModel(srv.URL).ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return sentinel }); !errors.Is(err, sentinel) {
+	if err := newAI302ContractModel(srv.URL).ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return sentinel }); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
 }
@@ -342,7 +346,7 @@ func TestAI302ConcurrentInstanceIsolation(t *testing.T) {
 		api := &APIConfig{APIKey: &key}
 		for range 8 {
 			group.Go(func() {
-				if _, err := models[index].ChatWithMessages(name, api, []Message{{Role: "user", Content: "q"}}, nil); err != nil {
+				if _, err := models[index].ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, nil); err != nil {
 					t.Error(err)
 				}
 			})
@@ -415,7 +419,7 @@ func TestHostedStreamIdleDeadlines(t *testing.T) {
 				defer cancel()
 				api := &APIConfig{APIKey: stringPtr("key"), Context: ctx}
 				answer := ""
-				err := driver.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, api, nil, func(content, reason *string) error {
+				err := driver.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, api, nil, func(content, reason *string) error {
 					if content != nil {
 						answer += *content
 					}
@@ -454,7 +458,7 @@ func TestAI302RejectsMalformedFramesAfterAnswer(t *testing.T) {
 			}))
 			model := NewAI302Model(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 			answer := ""
-			err := model.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(content, reason *string) error {
+			err := model.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(content, reason *string) error {
 				if content != nil {
 					answer += *content
 				}

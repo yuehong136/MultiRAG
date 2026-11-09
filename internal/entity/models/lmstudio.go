@@ -129,18 +129,11 @@ func (l *LMStudioModel) chat(name string, messages []Message, apiConfig *APIConf
 	}
 	return &ChatResponse{Answer: answer, ReasoningContent: reasoning}, nil
 }
-func (l *LMStudioModel) ChatWithMessages(name string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (l *LMStudioModel) ChatWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	return l.chat(name, messages, apiConfig, config)
 }
 
-func (l *LMStudioModel) ChatStreamlyWithSender(name, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("model name and message are required")
-	}
-	return l.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, apiConfig, config, sender)
-}
-
-func (l *LMStudioModel) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+func (l *LMStudioModel) ChatStreamlyWithSender(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
 	apiConfig, cancelCall := modelStreamConfig(apiConfig)
 	defer cancelCall()
 	if sender == nil {

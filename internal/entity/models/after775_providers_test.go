@@ -56,20 +56,20 @@ func TestAfter775Gateways(t *testing.T) {
 			cfg := &ChatConfig{Temperature: &zero, TopP: &zero, Effort: &effort}
 			messages := []Message{{Role: "system", Content: "system"}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "question"}}
 			response = `{"choices":[{"message":{"content":"answer","reasoning_content":"primary","reasoning":"alias"}}]}`
-			r, err := d.ChatWithMessages(name, api, messages, cfg)
+			r, err := d.ChatWithMessages(name, messages, api, cfg)
 			if err != nil || *r.Answer != "answer" || *r.ReasoningContent != "primary" {
 				t.Fatal(r, err)
 			}
 			for _, raw := range []string{`{}`, `{"choices":[]}`, `{"choices":[{}]}`, `{"choices":[{"message":{"content":42}}]}`, `{"error":{"message":"private-provider-body"}}`, `{"code":9,"choices":[{"message":{"content":"bad"}}]}`} {
 				response = raw
-				if _, err := d.ChatWithMessages(name, api, messages, cfg); err == nil || strings.Contains(err.Error(), "private-provider-body") {
+				if _, err := d.ChatWithMessages(name, messages, api, cfg); err == nil || strings.Contains(err.Error(), "private-provider-body") {
 					t.Fatal("malformed chat accepted/leaked", raw, err)
 				}
 			}
 			contentType = "text/event-stream"
 			response = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"primary\",\"reasoning\":\"alias\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n"
 			var answer, reason string
-			err = d.ChatStreamlyWithMessages(name, messages, api, cfg, func(a, r *string) error {
+			err = d.ChatStreamlyWithSender(name, messages, api, cfg, func(a, r *string) error {
 				if a != nil {
 					answer += *a
 				}
@@ -84,19 +84,19 @@ func TestAfter775Gateways(t *testing.T) {
 			for _, raw := range []string{"data: {oops}\n\n", "data: {\"choices\":[]}\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n", "data: {\"error\":\"private-provider-body\"}\n\n", "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n"} {
 				response = raw
 				done := false
-				err = d.ChatStreamlyWithMessages(name, messages, api, cfg, func(a, r *string) error { done = done || a != nil && *a == "[DONE]"; return nil })
+				err = d.ChatStreamlyWithSender(name, messages, api, cfg, func(a, r *string) error { done = done || a != nil && *a == "[DONE]"; return nil })
 				if err == nil || done || strings.Contains(err.Error(), "private-provider-body") {
 					t.Fatal("false completion", raw, err, done)
 				}
 			}
 			response = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\",\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\n"
 			want := errors.New("sender")
-			if err := d.ChatStreamlyWithMessages(name, messages, api, cfg, func(*string, *string) error { return want }); !errors.Is(err, want) {
+			if err := d.ChatStreamlyWithSender(name, messages, api, cfg, func(*string, *string) error { return want }); !errors.Is(err, want) {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			n := 0
-			err = d.ChatStreamlyWithMessages(name, messages, &APIConfig{APIKey: &key, Context: ctx}, cfg, func(*string, *string) error { n++; cancel(); return nil })
+			err = d.ChatStreamlyWithSender(name, messages, &APIConfig{APIKey: &key, Context: ctx}, cfg, func(*string, *string) error { n++; cancel(); return nil })
 			if !errors.Is(err, context.Canceled) || n != 1 {
 				t.Fatal("continued after cancellation", n, err)
 			}
@@ -111,7 +111,7 @@ func TestAfter775Gateways(t *testing.T) {
 			}
 			before := calls.Load()
 			f := false
-			if err := d.ChatStreamlyWithMessages(name, messages, api, &ChatConfig{Stream: &f}, func(*string, *string) error { return nil }); err == nil {
+			if err := d.ChatStreamlyWithSender(name, messages, api, &ChatConfig{Stream: &f}, func(*string, *string) error { return nil }); err == nil {
 				t.Fatal("stream false")
 			}
 			if _, err := d.ListModels(&APIConfig{}); err == nil {

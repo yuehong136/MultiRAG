@@ -144,7 +144,7 @@ func TestCallTimeoutChatHTTP(t *testing.T) {
 			client := timeoutTestClient(t, driver)
 			scaledTimeoutClient(t, client, streamCallTimeout)
 			var got []string
-			err = driver.ChatStreamlyWithSender(stringPtr("served"), stringPtr("hello"), api, nil, func(c, r *string) error {
+			err = driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hello"}}, api, nil, func(c, r *string) error {
 				if c != nil {
 					got = append(got, *c)
 				}
@@ -154,7 +154,7 @@ func TestCallTimeoutChatHTTP(t *testing.T) {
 				t.Fatal(got, err)
 			}
 			scaledTimeoutClient(t, client, nonStreamCallTimeout)
-			_, err = driver.ChatWithMessages("served", api, []Message{{Role: "user", Content: "hello"}}, nil)
+			_, err = driver.ChatWithMessages("served", []Message{{Role: "user", Content: "hello"}}, api, nil)
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatal("ordinary deadline not enforced", err)
 			}
@@ -184,7 +184,7 @@ func TestCallTimeoutParentAndCleanup(t *testing.T) {
 			defer cancel()
 			terminal := false
 			sentinel := errors.New("sender stopped")
-			err := driver.ChatStreamlyWithSender(stringPtr("model"), stringPtr("q"), &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 				if c != nil && *c == "[DONE]" {
 					terminal = true
 				}
@@ -231,7 +231,7 @@ func TestCallTimeoutMinimaxConcurrentInstances(t *testing.T) {
 				key = "two"
 			}
 			api := &APIConfig{APIKey: &key, Region: &key}
-			response, err := driver.ChatWithMessages("model", api, []Message{{Role: "user", Content: "q"}}, nil)
+			response, err := driver.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, api, nil)
 			if err != nil || response == nil || *response.Answer != key {
 				t.Error(response, err)
 			}
@@ -266,7 +266,7 @@ func TestCallTimeoutMinimaxRealLongStream(t *testing.T) {
 	driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	var got []string
 	start := time.Now()
-	err := driver.ChatStreamlyWithSender(stringPtr("model"), stringPtr("q"), &APIConfig{APIKey: stringPtr("fixture")}, nil, func(c, r *string) error {
+	err := driver.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("fixture")}, nil, func(c, r *string) error {
 		if c != nil {
 			got = append(got, *c)
 		}
@@ -359,7 +359,7 @@ func TestCallTimeoutCanceledBufferedTerminal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	terminal := false
-	err := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"}).ChatStreamlyWithSender(stringPtr("model"), stringPtr("q"), &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+	err := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"}).ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 		if c != nil && *c == "[DONE]" {
 			terminal = true
 		}

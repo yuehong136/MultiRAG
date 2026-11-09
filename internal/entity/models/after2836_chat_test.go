@@ -93,7 +93,7 @@ func TestAfter2836NewChatPayloads(t *testing.T) {
 				driver := p.driver(srv.URL)
 				zero, top, tokens, stop := 0.0, 0.5, 32, []string{"end"}
 				messages := []Message{{Role: "system", Content: "system"}, {Role: "user", Content: []map[string]any{{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": map[string]any{"url": "https://files.invalid/image.png"}}}}}
-				response, err := driver.ChatWithMessages(name, &APIConfig{APIKey: stringPtr("key")}, messages, &ChatConfig{Thinking: &thinking, Temperature: &zero, TopP: &top, MaxTokens: &tokens, Stop: &stop})
+				response, err := driver.ChatWithMessages(name, messages, &APIConfig{APIKey: stringPtr("key")}, &ChatConfig{Thinking: &thinking, Temperature: &zero, TopP: &top, MaxTokens: &tokens, Stop: &stop})
 				if err != nil || response.Answer == nil || *response.Answer != "answer🙂" || response.ReasoningContent == nil || *response.ReasoningContent != "reason" {
 					t.Fatal(response, err)
 				}
@@ -159,7 +159,7 @@ func TestAfter2836NewChatStreams(t *testing.T) {
 				}))
 				defer srv.Close()
 				var answer, reasoning string
-				err := p.driver(srv.URL).ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+				err := p.driver(srv.URL).ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
 					if c != nil {
 						answer += *c
 					}
@@ -203,7 +203,7 @@ func TestAfter2836NewChatCancellationIdleAndSender(t *testing.T) {
 				defer cancel()
 				marker := errors.New("sender stopped")
 				done := false
-				err := driver.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+				err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 					if c != nil && *c == "[DONE]" {
 						done = true
 					}
@@ -246,28 +246,28 @@ func TestAfter2836NewChatCredentialsFailuresAndRedirect(t *testing.T) {
 			}))
 			defer srv.Close()
 			driver := p.driver(srv.URL)
-			if _, err := driver.ChatWithMessages("served", nil, []Message{{Role: "user", Content: "hi"}}, nil); err == nil {
+			if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "hi"}}, nil, nil); err == nil {
 				t.Fatal("missing key accepted")
 			}
 			if _, err := driver.ListModels(nil); err == nil {
 				t.Fatal("missing discovery key accepted")
 			}
 			api := &APIConfig{APIKey: stringPtr("key")}
-			if _, err := driver.ChatWithMessages("served", api, []Message{{Role: "user", Content: "hi"}}, nil); err == nil || leaked.Load() != 0 {
+			if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "hi"}}, api, nil); err == nil || leaked.Load() != 0 {
 				t.Fatal("redirect followed with credential", err)
 			}
 			stream := false
-			if err := driver.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "hi"}}, api, &ChatConfig{Stream: &stream}, func(*string, *string) error { return nil }); err == nil {
+			if err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, api, &ChatConfig{Stream: &stream}, func(*string, *string) error { return nil }); err == nil {
 				t.Fatal("explicit stream=false ignored")
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			if _, err := driver.ChatWithMessages("served", &APIConfig{Context: ctx, APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "hi"}}, nil); !errors.Is(err, context.Canceled) {
+			if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{Context: ctx, APIKey: stringPtr("key")}, nil); !errors.Is(err, context.Canceled) {
 				t.Fatal("cancel lost", err)
 			}
 			if p.name == "Azure-OpenAI" {
 				for _, name := range []string{"", " ", ".", "..", " padded"} {
-					if _, err := driver.ChatWithMessages(name, api, []Message{{Role: "user", Content: "hi"}}, nil); err == nil {
+					if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: "hi"}}, api, nil); err == nil {
 						t.Fatal("invalid deployment accepted", name)
 					}
 				}
@@ -287,7 +287,7 @@ func TestAfter2836NewChatParentDeadlineAndActiveStream(t *testing.T) {
 			defer srv.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 			defer cancel()
-			err := p.driver(srv.URL).ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(*string, *string) error { return nil })
+			err := p.driver(srv.URL).ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(*string, *string) error { return nil })
 			if !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "idle timeout") {
 				t.Fatal("parent deadline mislabeled as idle", err)
 			}
@@ -311,7 +311,7 @@ func TestAfter2836NewChatParentDeadlineAndActiveStream(t *testing.T) {
 			case *AzureOpenAIModel:
 				d.streamIdleTimeout = 50 * time.Millisecond
 			}
-			if err := driver.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return nil }); err != nil {
+			if err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return nil }); err != nil {
 				t.Fatal("working stream hit total timeout", err)
 			}
 		})
@@ -337,12 +337,12 @@ func TestAfter2836StrictChatFinishReasons(t *testing.T) {
 				defer srv.Close()
 				driver := p.driver(srv.URL)
 				valid := reason == "stop" || reason == "length"
-				result, err := driver.ChatWithMessages("served", &APIConfig{APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "hi"}}, nil)
+				result, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
 				if valid != (err == nil) || !valid && result != nil {
 					t.Fatal("nonstream invalid terminal succeeded", result, err)
 				}
 				answer := ""
-				err = driver.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+				err = driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
 					if c != nil {
 						answer += *c
 					}

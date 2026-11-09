@@ -48,11 +48,11 @@ func TestAliyunRegionResolutionAcrossOperations(t *testing.T) {
 	key, empty, singapore, unknown, emptyURL := "key", "", "singapore", "unknown", "empty"
 	for name, operation := range map[string]func(*APIConfig) error{
 		"chat": func(config *APIConfig) error {
-			_, err := model.ChatWithMessages("qwen", config, []Message{{Role: "user", Content: "q"}}, nil)
+			_, err := model.ChatWithMessages("qwen", []Message{{Role: "user", Content: "q"}}, config, nil)
 			return err
 		},
 		"stream": func(config *APIConfig) error {
-			return model.ChatStreamlyWithMessages("qwen", []Message{{Role: "user", Content: "q"}}, config, nil, func(*string, *string) error { return nil })
+			return model.ChatStreamlyWithSender("qwen", []Message{{Role: "user", Content: "q"}}, config, nil, func(*string, *string) error { return nil })
 		},
 		"list":  func(config *APIConfig) error { _, err := model.ListModels(config); return err },
 		"check": model.CheckConnection,

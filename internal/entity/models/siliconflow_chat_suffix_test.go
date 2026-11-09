@@ -26,11 +26,11 @@ func TestSiliconFlowConfiguredChatSuffixHTTP(t *testing.T) {
 	defer fixture.Close()
 	d := NewSiliconFlowModel(map[string]string{"default": fixture.URL + "/instance/"}, URLSuffix{Chat: "/custom/chat"})
 	api := &APIConfig{APIKey: stringPtr("key")}
-	response, err := d.ChatWithMessages("model", api, []Message{{Role: "user", Content: "q"}}, nil)
+	response, err := d.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, api, nil)
 	if err != nil || response == nil || *response.Answer != "answer" {
 		t.Fatal(response, err)
 	}
-	if err := d.ChatStreamlyWithSender(stringPtr("model"), stringPtr("q"), api, nil, func(*string, *string) error { return nil }); err != nil {
+	if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, api, nil, func(*string, *string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {

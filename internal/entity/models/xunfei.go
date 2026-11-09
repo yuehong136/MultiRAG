@@ -83,27 +83,20 @@ func (x *XunFeiModel) driverForModel(name string) *openAIChatDriver {
 	return &d
 }
 
-func (x *XunFeiModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (x *XunFeiModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	local, err := sparkAPIConfig(api)
 	if err != nil {
 		return nil, err
 	}
-	return x.driverForModel(name).ChatWithMessages(name, local, messages, config)
+	return x.driverForModel(name).ChatWithMessages(name, messages, local, config)
 }
 
-func (x *XunFeiModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, send func(*string, *string) error) error {
+func (x *XunFeiModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, send func(*string, *string) error) error {
 	local, err := sparkAPIConfig(api)
 	if err != nil {
 		return err
 	}
-	return x.driverForModel(name).ChatStreamlyWithMessages(name, messages, local, config, send)
-}
-
-func (x *XunFeiModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, send func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("xunfei: model and message are required")
-	}
-	return x.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, send)
+	return x.driverForModel(name).ChatStreamlyWithSender(name, messages, local, config, send)
 }
 
 // Spark exposes no models endpoint in this catalog. This is local discovery,
@@ -117,7 +110,7 @@ func (x *XunFeiModel) ListModels(api *APIConfig) ([]string, error) {
 
 func (x *XunFeiModel) CheckConnection(api *APIConfig) error {
 	limit := 1
-	_, err := x.ChatWithMessages("Spark-Lite", api, []Message{{Role: "user", Content: "Hi"}}, &ChatConfig{MaxTokens: &limit})
+	_, err := x.ChatWithMessages("Spark-Lite", []Message{{Role: "user", Content: "Hi"}}, api, &ChatConfig{MaxTokens: &limit})
 	return err
 }
 

@@ -123,11 +123,11 @@ func TestHuggingFaceConfiguredSuffixAndRegionHTTP(t *testing.T) {
 	driver := NewHuggingFaceModel(map[string]string{"default": "http://unused.invalid", "office": server.URL + "/tenant/v1/"}, URLSuffix{Chat: "custom-chat", Embedding: "custom-infer"})
 	api := &APIConfig{APIKey: stringPtr("fixture"), Region: stringPtr("office")}
 	messages := []Message{{Role: "user", Content: "q"}}
-	response, err := driver.ChatWithMessages("m", api, messages, nil)
+	response, err := driver.ChatWithMessages("m", messages, api, nil)
 	if err != nil || response == nil || *response.Answer != "ok" {
 		t.Fatal(response, err)
 	}
-	if err := driver.ChatStreamlyWithMessages("m", messages, api, nil, func(c, r *string) error { return nil }); err != nil {
+	if err := driver.ChatStreamlyWithSender("m", messages, api, nil, func(c, r *string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("org/m"), []string{"a"}, api, nil))

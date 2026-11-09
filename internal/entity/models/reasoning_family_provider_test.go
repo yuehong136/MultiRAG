@@ -54,7 +54,7 @@ func TestReasoningFamilyProviderConsumers(t *testing.T) {
 				}
 				thinking := tt.thinking
 				config := &ChatConfig{ModelClass: tt.class, Thinking: &thinking}
-				response, err := driver.ChatWithMessages(tt.model, &APIConfig{APIKey: stringPtr("family-key"), Context: t.Context()}, []Message{{Role: "user", Content: "ping"}}, config)
+				response, err := driver.ChatWithMessages(tt.model, []Message{{Role: "user", Content: "ping"}}, &APIConfig{APIKey: stringPtr("family-key"), Context: t.Context()}, config)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -98,7 +98,7 @@ func TestReasoningFamilyProvidersStreamThinkingFalse(t *testing.T) {
 			thinking := false
 			var answer, reason strings.Builder
 			done := 0
-			err = driver.ChatStreamlyWithMessages("qwen/qwen3-8b", []Message{{Role: "user", Content: "ping"}}, &APIConfig{APIKey: stringPtr("family-key"), Context: t.Context()}, &ChatConfig{Thinking: &thinking}, func(content, reasoning *string) error {
+			err = driver.ChatStreamlyWithSender("qwen/qwen3-8b", []Message{{Role: "user", Content: "ping"}}, &APIConfig{APIKey: stringPtr("family-key"), Context: t.Context()}, &ChatConfig{Thinking: &thinking}, func(content, reasoning *string) error {
 				if content != nil {
 					if *content == "[DONE]" {
 						done++

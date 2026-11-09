@@ -40,7 +40,7 @@ func TestRemainingDriverPoolReuseAndCredentialIsolation(t *testing.T) {
 			}
 			for i, driver := range []ModelDriver{first.driver, second.driver} {
 				key := fmt.Sprint(i)
-				result, err := driver.ChatWithMessages("served", &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: "question"}}, nil)
+				result, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "question"}}, &APIConfig{APIKey: &key}, nil)
 				if err != nil || result == nil || *result.Answer != "answer" {
 					t.Fatal(result, err)
 				}
@@ -50,7 +50,7 @@ func TestRemainingDriverPoolReuseAndCredentialIsolation(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
-			_, err := first.driver.ChatWithMessages("served", &APIConfig{APIKey: stringPtr("key"), Context: ctx}, []Message{{Role: "user", Content: "question"}}, nil)
+			_, err := first.driver.ChatWithMessages("served", []Message{{Role: "user", Content: "question"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)
 			if !errors.Is(err, context.Canceled) || len(addresses) != 2 {
 				t.Fatal("cancellation", err, addresses)
 			}
@@ -79,7 +79,7 @@ func TestRemainingChatStrictFramingAndJSON(t *testing.T) {
 				driver := remainingPoolDrivers(srv.URL)[provider].driver
 				api := &APIConfig{APIKey: stringPtr("key")}
 				if mode == "bad-json" {
-					if r, e := driver.ChatWithMessages("served", api, []Message{{Role: "user", Content: "q"}}, nil); e == nil || r != nil {
+					if r, e := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, nil); e == nil || r != nil {
 						t.Fatal(r, e)
 					}
 					return
@@ -89,7 +89,7 @@ func TestRemainingChatStrictFramingAndJSON(t *testing.T) {
 				api.Context = ctx
 				frames := []string{}
 				sentinel := errors.New("sender failed")
-				err := driver.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, nil, func(content, _ *string) error {
+				err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, api, nil, func(content, _ *string) error {
 					if content != nil {
 						frames = append(frames, *content)
 					}
@@ -160,7 +160,7 @@ func TestDummyMethodsNeverSucceed(t *testing.T) {
 	name, message := "model", "q"
 	for _, call := range []func() error{
 		func() error {
-			_, e := d.ChatWithMessages(name, nil, []Message{{Role: "user", Content: message}}, nil)
+			_, e := d.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, nil, nil)
 			return e
 		},
 		func() error { _, e := d.Embed(&name, []string{message}, nil, nil); return e },
@@ -168,7 +168,7 @@ func TestDummyMethodsNeverSucceed(t *testing.T) {
 		func() error { _, e := d.ListModels(nil); return e },
 		func() error { _, e := d.Balance(nil); return e },
 		func() error {
-			return d.ChatStreamlyWithMessages(name, nil, nil, nil, func(*string, *string) error { t.Error("stub emitted success"); return nil })
+			return d.ChatStreamlyWithSender(name, nil, nil, nil, func(*string, *string) error { t.Error("stub emitted success"); return nil })
 		},
 	} {
 		if err := call(); err == nil || !strings.Contains(err.Error(), "not") && !strings.Contains(err.Error(), "unsupported") {

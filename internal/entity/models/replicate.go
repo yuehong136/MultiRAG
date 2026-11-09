@@ -307,7 +307,7 @@ func (r *ReplicateModel) start(name string, api *APIConfig, messages []Message, 
 	return prediction, endpoint, err
 }
 
-func (r *ReplicateModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (r *ReplicateModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	local, cancel := modelCallConfig(api)
 	defer cancel()
 	prediction, origin, err := r.start(name, local, messages, config, false)
@@ -325,14 +325,7 @@ func (r *ReplicateModel) ChatWithMessages(name string, api *APIConfig, messages 
 	return &ChatResponse{Answer: &answer}, nil
 }
 
-func (r *ReplicateModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("replicate: model and message are required")
-	}
-	return r.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, sender)
-}
-
-func (r *ReplicateModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+func (r *ReplicateModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
 	if sender == nil || config != nil && config.Stream != nil && !*config.Stream {
 		return fmt.Errorf("replicate: sender is required and stream must be true")
 	}

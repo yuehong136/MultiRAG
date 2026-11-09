@@ -42,7 +42,7 @@ func TestMultimodalProviderContract(t *testing.T) {
 				t.Fatal(err)
 			}
 			key, on := "fixture", true
-			response, err := driver.ChatWithMessages("fixture", &APIConfig{APIKey: &key}, multimodalFixture(), &ChatConfig{Stream: &on, Thinking: &on})
+			response, err := driver.ChatWithMessages("fixture", multimodalFixture(), &APIConfig{APIKey: &key}, &ChatConfig{Stream: &on, Thinking: &on})
 			if err != nil || response == nil || response.Answer == nil || *response.Answer != "answer" {
 				t.Fatalf("response=%+v err=%v", response, err)
 			}
@@ -53,17 +53,17 @@ func TestMultimodalProviderContract(t *testing.T) {
 			}
 			for _, bad := range []string{`{"choices":[]}`, `{"choices":[{}]}`, `{"choices":[{"message":{"content":null}}]}`, `{"error":{"message":"failed"}}`} {
 				responseBody = bad
-				if _, err := driver.ChatWithMessages("fixture", &APIConfig{APIKey: &key}, multimodalFixture(), nil); err == nil {
+				if _, err := driver.ChatWithMessages("fixture", multimodalFixture(), &APIConfig{APIKey: &key}, nil); err == nil {
 					t.Fatalf("accepted %s", bad)
 				}
 			}
 			before := calls
 			for _, content := range []any{nil, 42, map[string]any{"text": "x"}, []any{}, []any{true}, []any{map[string]any{"type": "audio"}}, []any{map[string]any{"type": "text", "text": false}}} {
-				if _, err := driver.ChatWithMessages("fixture", &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: content}}, nil); err == nil {
+				if _, err := driver.ChatWithMessages("fixture", []Message{{Role: "user", Content: content}}, &APIConfig{APIKey: &key}, nil); err == nil {
 					t.Fatalf("accepted %#v", content)
 				}
 			}
-			if _, err := driver.ChatWithMessages("fixture", &APIConfig{APIKey: &key}, nil, nil); err == nil {
+			if _, err := driver.ChatWithMessages("fixture", nil, &APIConfig{APIKey: &key}, nil); err == nil {
 				t.Fatal("accepted empty messages")
 			}
 			if calls != before {
@@ -71,7 +71,7 @@ func TestMultimodalProviderContract(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			if _, err := driver.ChatWithMessages("fixture", &APIConfig{APIKey: &key, Context: ctx}, multimodalFixture(), nil); !errors.Is(err, context.Canceled) {
+			if _, err := driver.ChatWithMessages("fixture", multimodalFixture(), &APIConfig{APIKey: &key, Context: ctx}, nil); !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancellation lost: %v", err)
 			}
 		})
@@ -114,20 +114,20 @@ func TestNewHistoryStreamProviders(t *testing.T) {
 				}
 				return nil
 			}
-			if err := driver.ChatStreamlyWithMessages("fixture", history, &APIConfig{APIKey: &key}, nil, sender); err != nil {
+			if err := driver.ChatStreamlyWithSender("fixture", history, &APIConfig{APIKey: &key}, nil, sender); err != nil {
 				t.Fatal(err)
 			}
 			if answer.String() != "answer" || reason.String() != "reason" || done != 1 {
 				t.Fatalf("stream %q %q %d", answer.String(), reason.String(), done)
 			}
 			want := errors.New("sender failed")
-			if err := driver.ChatStreamlyWithMessages("fixture", history, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
+			if err := driver.ChatStreamlyWithSender("fixture", history, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
 				t.Fatalf("sender failure %v", err)
 			}
 			for _, bad := range []string{"data: {bad}\n\n", "data: {\"choices\":[]}\n\ndata: [DONE]\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n", "data: {\"error\":{}}\n\ndata: [DONE]\n\n"} {
 				payload = bad
 				done = 0
-				if err := driver.ChatStreamlyWithMessages("fixture", history, &APIConfig{APIKey: &key}, nil, sender); err == nil || done != 0 {
+				if err := driver.ChatStreamlyWithSender("fixture", history, &APIConfig{APIKey: &key}, nil, sender); err == nil || done != 0 {
 					t.Fatalf("bad stream accepted %q: %v done=%d", bad, err, done)
 				}
 			}
@@ -161,7 +161,7 @@ type emptyChatDriver struct {
 	response *ChatResponse
 }
 
-func (d *emptyChatDriver) ChatWithMessages(string, *APIConfig, []Message, *ChatConfig) (*ChatResponse, error) {
+func (d *emptyChatDriver) ChatWithMessages(string, []Message, *APIConfig, *ChatConfig) (*ChatResponse, error) {
 	return d.response, nil
 }
 func TestBoundChatRejectsEmptyResponse(t *testing.T) {

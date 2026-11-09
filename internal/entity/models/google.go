@@ -175,15 +175,8 @@ func (g *GoogleModel) generate(modelName string, contents []*genai.Content, apiC
 	return &ChatResponse{Answer: &answer, ReasoningContent: &reasoning}, nil
 }
 
-func (g *GoogleModel) Chat(modelName, message *string, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
-	if err := validateGoogleChat(modelName, message); err != nil {
-		return nil, err
-	}
-	return g.generate(*modelName, []*genai.Content{genai.NewContentFromText(*message, genai.RoleUser)}, apiConfig, config, googleGenerationConfig(config))
-}
-
 // ChatWithMessages preserves roles, system instructions and text/image content.
-func (g *GoogleModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (g *GoogleModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	if strings.TrimSpace(modelName) == "" {
 		return nil, errors.New("Google model name is required")
 	}
@@ -194,14 +187,7 @@ func (g *GoogleModel) ChatWithMessages(modelName string, apiConfig *APIConfig, m
 	return g.generate(modelName, contents, apiConfig, config, generation)
 }
 
-func (g *GoogleModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if err := validateGoogleChat(modelName, message); err != nil {
-		return err
-	}
-	return g.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, config, sender)
-}
-
-func (g *GoogleModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+func (g *GoogleModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
 	if err := ValidateMessages(messages); err != nil {
 		return err
 	}
@@ -257,14 +243,6 @@ func (g *GoogleModel) ChatStreamlyWithMessages(modelName string, messages []Mess
 	}
 	done := "[DONE]"
 	return sender(&done, nil)
-}
-
-// The legacy channel-only API cannot report asynchronous provider errors safely.
-func (g *GoogleModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
-	return nil, errors.New("Google channel-only streaming is unsupported; use the sender interface")
-}
-func (g *GoogleModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
-	return errors.New("Google channel-only streaming is unsupported; use the sender interface")
 }
 
 // googleResponseTransport rejects null objects before SDK conversion can panic,

@@ -13,10 +13,10 @@ func TestZhipuBlankKeyDenialHasNoHTTP(t *testing.T) {
 	srv := providerTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
 	d := NewZhipuAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat", Files: "files"})
 	for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" \t ")}} {
-		if result, err := d.ChatWithMessages("glm", api, []Message{{Role: "user", Content: "q"}}, nil); err == nil || result != nil {
+		if result, err := d.ChatWithMessages("glm", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil || result != nil {
 			t.Fatal("blank chat key accepted")
 		}
-		if err := d.ChatStreamlyWithMessages("glm", []Message{{Role: "user", Content: "q"}}, api, nil, func(*string, *string) error { return nil }); err == nil {
+		if err := d.ChatStreamlyWithSender("glm", []Message{{Role: "user", Content: "q"}}, api, nil, func(*string, *string) error { return nil }); err == nil {
 			t.Fatal("blank stream key accepted")
 		}
 		if err := d.CheckConnection(api); err == nil {

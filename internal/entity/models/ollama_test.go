@@ -50,12 +50,12 @@ func TestOllamaChatDiscoveryAndStreaming(t *testing.T) {
 	messages := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous", ReasoningContent: stringPtr("previous thought")}, {Role: "user", Content: []any{map[string]any{"type": "text", "text": "first"}, map[string]any{"type": "text", "text": "second"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,aGVsbG8="}}}}}
 	off, zero := false, 0.0
 	config := &ChatConfig{Thinking: &off, Temperature: &zero}
-	answer, err := driver.ChatWithMessages("qwen3:latest", nil, messages, config)
+	answer, err := driver.ChatWithMessages("qwen3:latest", messages, nil, config)
 	if err != nil || *answer.Answer != "answer" || *answer.ReasoningContent != "reason" {
 		t.Fatal(answer, err)
 	}
 	var frames []string
-	if err := driver.ChatStreamlyWithMessages("qwen3:latest", messages, nil, config, func(c, r *string) error {
+	if err := driver.ChatStreamlyWithSender("qwen3:latest", messages, nil, config, func(c, r *string) error {
 		if r != nil {
 			frames = append(frames, *r)
 		}
@@ -89,10 +89,10 @@ func TestOllamaFailureContracts(t *testing.T) {
 		driver := NewOllamaModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "api/chat", Models: "api/tags"})
 		history := []Message{{Role: "user", Content: "q"}}
 		done := false
-		if _, err := driver.ChatWithMessages("m", nil, history, nil); err == nil {
+		if _, err := driver.ChatWithMessages("m", history, nil, nil); err == nil {
 			t.Error("bad response accepted")
 		}
-		err := driver.ChatStreamlyWithMessages("m", history, nil, nil, func(c, r *string) error {
+		err := driver.ChatStreamlyWithSender("m", history, nil, nil, func(c, r *string) error {
 			if c != nil && *c == "[DONE]" {
 				done = true
 			}
@@ -113,12 +113,12 @@ func TestOllamaFailureContracts(t *testing.T) {
 	driver := NewOllamaModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "api/chat"})
 	history := []Message{{Role: "user", Content: "q"}}
 	want := errors.New("sender failed")
-	if err := driver.ChatStreamlyWithMessages("m", history, nil, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
+	if err := driver.ChatStreamlyWithSender("m", history, nil, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := driver.ChatWithMessages("m", &APIConfig{Context: ctx}, history, nil); !errors.Is(err, context.Canceled) {
+	if _, err := driver.ChatWithMessages("m", history, &APIConfig{Context: ctx}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if _, err := ollamaBody("m", multimodalFixture(), nil, false); err == nil {

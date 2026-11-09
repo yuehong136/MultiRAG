@@ -84,12 +84,12 @@ func TestXAIInstanceLiveHTTPAndSQL(t *testing.T) {
 		if _, err := svc.CheckProviderConnection("xAI", instance, "xai-owner"); err != nil {
 			t.Fatal(err)
 		}
-		response, code, err := svc.ChatToModel("xAI", instance, "grok-test", "xai-owner", "question", nil, nil)
+		response, code, err := svc.ChatToModelWithMessages("xAI", instance, "grok-test", "xai-owner", []models.Message{{Role: "user", Content: "question"}}, nil, nil)
 		if err != nil || code != common.CodeSuccess || *response.Answer != fmt.Sprintf("answer-%d", i) {
 			t.Fatal(response, err)
 		}
 		var frames []string
-		code, err = svc.ChatToModelStreamWithMessages("xAI", instance, "grok-test", "xai-owner", []models.Message{{Role: "user", Content: "q"}}, nil, nil, func(c, r *string) error {
+		code, err = svc.ChatToModelStreamWithSender("xAI", instance, "grok-test", "xai-owner", []models.Message{{Role: "user", Content: "q"}}, nil, nil, func(c, r *string) error {
 			if c != nil {
 				frames = append(frames, *c)
 			}

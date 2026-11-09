@@ -59,7 +59,7 @@ func TestVoyageContracts(t *testing.T) {
 	if _, err := d.Balance(api); !errors.Is(err, ErrUnsupportedCapability) {
 		t.Fatal(err)
 	}
-	if _, err := d.ChatWithMessages(name, api, []Message{{Role: "user", Content: "x"}}, nil); err == nil {
+	if _, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: "x"}}, api, nil); err == nil {
 		t.Fatal("chat success")
 	}
 	if _, ok := any(d).(OCRDriver); ok {

@@ -29,7 +29,7 @@ func TestInstanceProvidersCancelDuringStream(t *testing.T) {
 			defer cancel()
 			key, name, message := "fixture", "model", "q"
 			done := false
-			err = driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key, Context: ctx}, nil, func(content, reason *string) error {
+			err = driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(content, reason *string) error {
 				if content != nil && *content == "[DONE]" {
 					done = true
 				}

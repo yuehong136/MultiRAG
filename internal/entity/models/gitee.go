@@ -46,14 +46,7 @@ func (m *GiteeModel) Name() string {
 	return "gitee"
 }
 
-// Chat sends a message and returns response
-func (m *GiteeModel) Chat(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
-	if modelName == nil || message == nil {
-		return nil, fmt.Errorf("model and message are required")
-	}
-	return m.ChatWithMessages(*modelName, apiConfig, []Message{{Role: "user", Content: *message}}, chatModelConfig)
-}
-func (m *GiteeModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+func (m *GiteeModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
 	apiConfig, cancelCall := modelCallConfig(apiConfig)
 	defer cancelCall()
 	if strings.TrimSpace(modelName) == "" {
@@ -159,22 +152,7 @@ func (m *GiteeModel) ChatWithMessages(modelName string, apiConfig *APIConfig, me
 
 // ChatWithMessages sends multiple messages with roles and returns response
 
-func (m *GiteeModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
-	return nil, fmt.Errorf("streaming chat is not implemented for %s", m.Name())
-}
-
-func (m *GiteeModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
-	return fmt.Errorf("streaming chat is not implemented for %s", m.Name())
-}
-
-// ChatStreamlyWithSender sends a message and streams response via sender function (best performance, no channel)
-func (m *GiteeModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
-	if modelName == nil || message == nil {
-		return fmt.Errorf("model and message are required")
-	}
-	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, chatModelConfig, sender)
-}
-func (m *GiteeModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
+func (m *GiteeModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
 	apiConfig, cancelCall := modelStreamConfig(apiConfig)
 	defer cancelCall()
 	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {

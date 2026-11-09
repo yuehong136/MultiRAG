@@ -57,6 +57,16 @@ size 归一化暂保留为有具体问题依据的修复，仍需在整个 opera
 原始报告和 JUnit 为 `19b40d3a055049c18d12d589d7831014.output` 与
 `chunk-dsl-race.junit.xml`。该证据不覆盖 CLI、native、SQL 或队列。
 
+模型接口第一步已统一为 messages 同步调用和 `ChatStreamlyWithSender`；删除旧单消息、
+channel 入口及三项 service 包装，全部 Go 引用同步迁移。模型包 race 复跑通过，
+`64718f4f6f0f45f596010d611305c1be.output` 有 4,098 个 test/subtest 通过事件，无 skip。
+首跑的测试夹具 nil 指针失败保留于 `64872a27d69d451a92295042d8df108a.output`。
+全包测试编译发现跨包测试 driver 和绑定模型的旧签名，修复后对 service、KG 与 handler
+执行定向 race（`0f818a8659ff4e2ca4b091cf1b4973e9.output`）。该命令运行 generation、
+searchbot 和 pipeline 测试；handler 仅完成编译，不表示 SQL/HTTP live 已验收。
+typed inventory、模型定义归位、factory、配置/provider 身份和其余模型结构仍未完成，
+不能将本步记为 GOA-02 全部对齐。
+
 主树 28 项既有 WIP 已留存快照，专项在独立 worktree 实施。所有本专项提交仅暂存已核归属
 路径；串行合并本地 main 前重查主树。测试经 `scripts/run_registered.py`，资源先登记、后创建，
 保留原始退出、首败、JUnit/JSON 及独立清理读回。真实供应商、生产和远程 `ci-required`

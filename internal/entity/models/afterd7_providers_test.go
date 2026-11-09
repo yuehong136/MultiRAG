@@ -81,12 +81,12 @@ func TestAfterD7HostedChatDiscoveryAndVectors(t *testing.T) {
 			thinking, sample, effort := false, false, "low"
 			config := &ChatConfig{Thinking: &thinking, DoSample: &sample, Effort: &effort}
 			messages := []Message{{Role: "system", Content: "system"}, {Role: "user", Content: []map[string]any{{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": map[string]any{"url": "https://files.invalid/image.png"}}}}}
-			response, err := driver.ChatWithMessages(name, api, messages, config)
+			response, err := driver.ChatWithMessages(name, messages, api, config)
 			if err != nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
 				t.Fatal(response, err)
 			}
 			var answer, reasoning string
-			if err := driver.ChatStreamlyWithMessages(name, messages, api, config, func(c, r *string) error {
+			if err := driver.ChatStreamlyWithSender(name, messages, api, config, func(c, r *string) error {
 				if c != nil {
 					answer += *c
 				}

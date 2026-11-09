@@ -66,12 +66,12 @@ func TestAfterf9ChatHTTP(t *testing.T) {
 			zero, tokens, effort := 0.0, 0, "low"
 			cfg := &ChatConfig{Temperature: &zero, TopP: &zero, MaxTokens: &tokens, Effort: &effort}
 			messages := []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "question"}}
-			resp, err := d.ChatWithMessages("openai/gpt-oss-20b", api, messages, cfg)
+			resp, err := d.ChatWithMessages("openai/gpt-oss-20b", messages, api, cfg)
 			if err != nil || resp == nil || *resp.Answer != "answer" || *resp.ReasoningContent != "thought" {
 				t.Fatal(resp, err)
 			}
 			output, reason := "", ""
-			err = d.ChatStreamlyWithMessages("openai/gpt-oss-20b", messages, api, cfg, func(c, r *string) error {
+			err = d.ChatStreamlyWithSender("openai/gpt-oss-20b", messages, api, cfg, func(c, r *string) error {
 				if c != nil {
 					output += *c
 				}
@@ -103,7 +103,7 @@ func TestAfterf9ChatFailuresHTTP(t *testing.T) {
 			t.Run(provider+body, func(t *testing.T) {
 				srv := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 				defer srv.Close()
-				result, err := afterf9Driver(t, provider, srv.URL).ChatWithMessages("served", &APIConfig{APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "q"}}, nil)
+				result, err := afterf9Driver(t, provider, srv.URL).ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
 				if err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
 					t.Fatal(result, err)
 				}
@@ -117,7 +117,7 @@ func TestAfterf9ChatFailuresHTTP(t *testing.T) {
 				}))
 				defer srv.Close()
 				done := 0
-				err := afterf9Driver(t, provider, srv.URL).ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+				err := afterf9Driver(t, provider, srv.URL).ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
 					if c != nil && *c == "[DONE]" {
 						done++
 					}
@@ -157,19 +157,19 @@ func TestAfterf9ChatPreflightAndIsolation(t *testing.T) {
 			over := 1.1
 			negativeTokens := -1
 			for _, cfg := range []*ChatConfig{{Temperature: &bad}, {TopP: &over}, {Temperature: &negative}, {MaxTokens: &negativeTokens}} {
-				if _, err := d.ChatWithMessages("served", api, []Message{{Role: "user", Content: "q"}}, cfg); err == nil {
+				if _, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, cfg); err == nil {
 					t.Fatal("invalid config accepted")
 				}
 			}
 			for _, name := range []string{"", " "} {
-				if _, err := d.ChatWithMessages(name, api, []Message{{Role: "user", Content: "q"}}, nil); err == nil {
+				if _, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, nil); err == nil {
 					t.Fatal("blank name accepted")
 				}
 			}
-			if _, err := d.ChatWithMessages("served", nil, []Message{{Role: "user", Content: "q"}}, nil); err == nil {
+			if _, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, nil, nil); err == nil {
 				t.Fatal("nil credentials accepted")
 			}
-			if _, err := d.ChatWithMessages("served", &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("missing")}, []Message{{Role: "user", Content: "q"}}, nil); err == nil {
+			if _, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("missing")}, nil); err == nil {
 				t.Fatal("unknown region fell back")
 			}
 			if calls.Load() != 0 {
@@ -178,12 +178,12 @@ func TestAfterf9ChatPreflightAndIsolation(t *testing.T) {
 			urls := map[string]string{"default": "http://unreachable.invalid", "office": srv.URL}
 			d, _ = NewModelFactory().CreateModelDriver(provider, urls, URLSuffix{Chat: "chat"})
 			urls["office"] = "http://mutated.invalid"
-			if _, err := d.ChatWithMessages("served", &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("office")}, []Message{{Role: "user", Content: "q"}}, nil); err != nil {
+			if _, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("office")}, nil); err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			_, err := d.ChatWithMessages("served", &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("office"), Context: ctx}, []Message{{Role: "user", Content: "q"}}, nil)
+			_, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("office"), Context: ctx}, nil)
 			if !errors.Is(err, context.Canceled) || calls.Load() != 1 {
 				t.Fatal(calls.Load(), err)
 			}
@@ -209,7 +209,7 @@ func TestAfterf9ChatSenderAndCancellation(t *testing.T) {
 			}))
 			defer srv.Close()
 			sentinel := errors.New("consumer stopped")
-			err := afterf9Driver(t, provider, srv.URL).ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return sentinel })
+			err := afterf9Driver(t, provider, srv.URL).ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return sentinel })
 			if !errors.Is(err, sentinel) {
 				t.Fatal(err)
 			}

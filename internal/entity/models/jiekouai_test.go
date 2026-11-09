@@ -71,12 +71,12 @@ func TestAfterB7JieKouAIWire(t *testing.T) {
 	api := &APIConfig{APIKey: stringPtr(" key ")}
 	on, off, zero := true, false, 0.0
 	cfg := &ChatConfig{Stream: &on, Thinking: &off, DoSample: &off, Temperature: &zero}
-	if got, err := m.ChatWithMessages(" model ", api, []Message{{Role: "user", Content: "q"}}, cfg); err != nil || *got.Answer != "answer" {
+	if got, err := m.ChatWithMessages(" model ", []Message{{Role: "user", Content: "q"}}, api, cfg); err != nil || *got.Answer != "answer" {
 		t.Fatal(got, err)
 	}
 	cfg.Stream = &off
 	var answer, reason string
-	err := m.ChatStreamlyWithMessages(" model ", []Message{{Role: "user", Content: "q"}}, api, cfg, func(c, r *string) error {
+	err := m.ChatStreamlyWithSender(" model ", []Message{{Role: "user", Content: "q"}}, api, cfg, func(c, r *string) error {
 		if c != nil {
 			answer += *c
 		}
@@ -110,15 +110,15 @@ func TestAfterB7JieKouAIDenial(t *testing.T) {
 	msg := []Message{{Role: "user", Content: "q"}}
 	send := func(*string, *string) error { return nil }
 	cases := []func() error{
-		func() error { _, e := m.ChatWithMessages(" ", api, msg, nil); return e },
-		func() error { _, e := m.ChatWithMessages("model", nil, msg, nil); return e },
+		func() error { _, e := m.ChatWithMessages(" ", msg, api, nil); return e },
+		func() error { _, e := m.ChatWithMessages("model", msg, nil, nil); return e },
 		func() error {
-			_, e := m.ChatWithMessages("model", &APIConfig{APIKey: stringPtr(" ")}, msg, nil)
+			_, e := m.ChatWithMessages("model", msg, &APIConfig{APIKey: stringPtr(" ")}, nil)
 			return e
 		},
-		func() error { _, e := m.ChatWithMessages("model", api, nil, nil); return e },
-		func() error { return m.ChatStreamlyWithMessages("model", msg, api, nil, nil) },
-		func() error { return m.ChatStreamlyWithMessages("model", msg, nil, nil, send) },
+		func() error { _, e := m.ChatWithMessages("model", nil, api, nil); return e },
+		func() error { return m.ChatStreamlyWithSender("model", msg, api, nil, nil) },
+		func() error { return m.ChatStreamlyWithSender("model", msg, nil, nil, send) },
 		func() error { _, e := m.Embed(nil, []string{"q"}, api, nil); return e },
 		func() error { _, e := m.Embed(stringPtr("model"), []string{"q"}, nil, nil); return e },
 		func() error { _, e := m.Rerank(stringPtr("model"), " ", []string{"q"}, api, nil); return e },
@@ -178,7 +178,7 @@ func TestAfterB7JieKouAIStreamFailure(t *testing.T) {
 				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"prefix\"}}]}\n"+tail)
 			})
 			var answer string
-			err := m.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+			err := m.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
 				if c != nil {
 					answer += *c
 				}
@@ -208,9 +208,9 @@ func TestAfterB7JieKouAICancellation(t *testing.T) {
 			var err error
 			switch kind {
 			case "chat":
-				_, err = m.ChatWithMessages(name, api, msg, nil)
+				_, err = m.ChatWithMessages(name, msg, api, nil)
 			case "stream":
-				err = m.ChatStreamlyWithMessages(name, msg, api, nil, func(*string, *string) error { return nil })
+				err = m.ChatStreamlyWithSender(name, msg, api, nil, func(*string, *string) error { return nil })
 			case "embed":
 				_, err = m.Embed(&name, []string{"q"}, api, nil)
 			case "rerank":
@@ -255,7 +255,7 @@ func TestAfterB7JieKouAILargeStreamAndStop(t *testing.T) {
 			defer cancel()
 			stop := errors.New("sender stopped")
 			var answer string
-			err := m.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+			err := m.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 				if c != nil {
 					answer += *c
 				}
@@ -307,9 +307,9 @@ func TestAfterB7JieKouAIHTTPFailures(t *testing.T) {
 			var err error
 			switch kind {
 			case "chat":
-				_, err = m.ChatWithMessages(name, api, msg, nil)
+				_, err = m.ChatWithMessages(name, msg, api, nil)
 			case "stream":
-				err = m.ChatStreamlyWithMessages(name, msg, api, nil, func(*string, *string) error { return nil })
+				err = m.ChatStreamlyWithSender(name, msg, api, nil, func(*string, *string) error { return nil })
 			case "embed":
 				_, err = m.Embed(&name, []string{"q"}, api, nil)
 			case "rerank":

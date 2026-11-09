@@ -34,7 +34,7 @@ func TestProviderSharedOptionalKeyAndThinking(t *testing.T) {
 				var err error
 				reason := ""
 				if stream {
-					err = d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, nil, nil, func(a, r *string) error {
+					err = d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, nil, nil, func(a, r *string) error {
 						if r != nil {
 							reason += *r
 						}
@@ -42,7 +42,7 @@ func TestProviderSharedOptionalKeyAndThinking(t *testing.T) {
 					})
 				} else {
 					var result *ChatResponse
-					result, err = d.ChatWithMessages("model", nil, []Message{{Role: "user", Content: "q"}}, nil)
+					result, err = d.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, nil, nil)
 					if result != nil && result.ReasoningContent != nil {
 						reason = *result.ReasoningContent
 					}

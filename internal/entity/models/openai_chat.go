@@ -251,18 +251,11 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 	}
 	return &ChatResponse{Answer: answer, ReasoningContent: reasoning}, nil
 }
-func (d *openAIChatDriver) ChatWithMessages(name string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (d *openAIChatDriver) ChatWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	return d.chat(name, messages, apiConfig, config)
 }
 
-func (d *openAIChatDriver) ChatStreamlyWithSender(name, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("model name and message are required")
-	}
-	return d.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, apiConfig, config, sender)
-}
-
-func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) (streamErr error) {
+func (d *openAIChatDriver) ChatStreamlyWithSender(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) (streamErr error) {
 	apiConfig, cancelCall := modelStreamConfig(apiConfig)
 	defer cancelCall()
 	if sender == nil {

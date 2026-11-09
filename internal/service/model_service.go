@@ -567,10 +567,6 @@ func (m *ModelProviderService) UpdateModelStatus(providerName, instanceName, mod
 	})
 }
 
-func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName, userID, message string, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig) (*modelModule.ChatResponse, common.ErrorCode, error) {
-	return m.ChatToModelWithMessages(providerName, instanceName, modelName, userID, []modelModule.Message{{Role: "user", Content: message}}, apiConfig, modelConfig)
-}
-
 func (m *ModelProviderService) ChatToModelWithMessages(providerName, instanceName, modelName, userID string, messages []modelModule.Message, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig) (*modelModule.ChatResponse, common.ErrorCode, error) {
 	if err := modelModule.ValidateMessages(messages); err != nil {
 		return nil, common.CodeBadRequest, err
@@ -589,26 +585,6 @@ func (m *ModelProviderService) ChatToModelWithMessages(providerName, instanceNam
 	return response, common.CodeSuccess, nil
 }
 
-// ChatToModelStream streams chat response via a channel (better performance)
-func (m *ModelProviderService) ChatToModelStream(providerName, instanceName, modelName, userID, message string) (<-chan string, <-chan error, common.ErrorCode, error) {
-	bound, code, err := m.userInstanceChatModel(providerName, instanceName, modelName, userID, nil, nil)
-	streamChan, errChan := make(chan string), make(chan error, 1)
-	if err != nil {
-		close(streamChan)
-		close(errChan)
-		return streamChan, errChan, code, err
-	}
-	go func() {
-		defer close(streamChan)
-		defer close(errChan)
-		err := bound.ModelDriver.ChatStreamlyWithChannel(bound.ModelName, bound.APIConfig.APIKey, &message, nil, streamChan)
-		if err != nil {
-			errChan <- err
-		}
-	}()
-	return streamChan, errChan, common.CodeSuccess, nil
-}
-
 // applyModelChatDefaults respects explicit false and uses the selected model's defaults.
 func applyModelChatDefaults(model *entity.Model, config *modelModule.ChatConfig) {
 	config.ModelClass = model.Class
@@ -618,12 +594,7 @@ func applyModelChatDefaults(model *entity.Model, config *modelModule.ChatConfig)
 	}
 }
 
-// ChatToModelStreamWithSender streams chat response directly via sender function (best performance, no channel)
-func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanceName, modelName, userID, message string, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig, sender func(*string, *string) error) (common.ErrorCode, error) {
-	return m.ChatToModelStreamWithMessages(providerName, instanceName, modelName, userID, []modelModule.Message{{Role: "user", Content: message}}, apiConfig, modelConfig, sender)
-}
-
-func (m *ModelProviderService) ChatToModelStreamWithMessages(providerName, instanceName, modelName, userID string, messages []modelModule.Message, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig, sender func(*string, *string) error) (common.ErrorCode, error) {
+func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanceName, modelName, userID string, messages []modelModule.Message, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig, sender func(*string, *string) error) (common.ErrorCode, error) {
 	if err := modelModule.ValidateMessages(messages); err != nil {
 		return common.CodeBadRequest, err
 	}
@@ -631,7 +602,7 @@ func (m *ModelProviderService) ChatToModelStreamWithMessages(providerName, insta
 	if err != nil {
 		return code, err
 	}
-	if err := bound.ChatStreamlyWithMessages(messages, nil, sender); err != nil {
+	if err := bound.ChatStreamlyWithSender(messages, nil, sender); err != nil {
 		return common.CodeServerError, err
 	}
 	return common.CodeSuccess, nil

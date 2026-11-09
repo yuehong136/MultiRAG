@@ -38,29 +38,9 @@ func (z *DummyModel) Name() string {
 	return "dummy"
 }
 
-// Chat sends a message and returns response
-func (z *DummyModel) Chat(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
 // ChatWithMessages sends multiple role-tagged messages and returns a response.
-func (z *DummyModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (*ChatResponse, error) {
+func (z *DummyModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
 	return nil, fmt.Errorf("not implemented")
-}
-
-// ChatStreamly sends a message and streams response
-func (z *DummyModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-// ChatStreamlyWithChannel sends a message and streams response to channel (better performance)
-func (z *DummyModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
-	return fmt.Errorf("not implemented")
-}
-
-// ChatStreamlyWithSender sends a message and streams response via sender function (best performance, no channel)
-func (z *DummyModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
-	return fmt.Errorf("not implemented")
 }
 
 // Embed returns indexed embeddings for a list of texts
@@ -84,6 +64,6 @@ func (m *DummyModel) Rerank(modelName *string, query string, texts []string, api
 	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
 }
 
-func (z *DummyModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+func (z *DummyModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
 	return fmt.Errorf("%s: history streaming is unsupported", z.Name())
 }

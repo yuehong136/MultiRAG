@@ -58,13 +58,13 @@ func TestOpenRouterChatHTTP(t *testing.T) {
 			api := &APIConfig{APIKey: &key, Region: stringPtr("")}
 			on, off, zero, max := true, false, 0.0, 12
 			config := &ChatConfig{Stream: &on, Thinking: &off, Temperature: &zero, MaxTokens: &max}
-			response, err := driver.ChatWithMessages(instance, api, history, config)
+			response, err := driver.ChatWithMessages(instance, history, api, config)
 			if err != nil || response == nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
 				t.Fatal(response, err)
 			}
 			config.Stream = &off
 			var frames []string
-			err = driver.ChatStreamlyWithMessages(instance, history, api, config, func(content, reasoning *string) error {
+			err = driver.ChatStreamlyWithSender(instance, history, api, config, func(content, reasoning *string) error {
 				if reasoning != nil {
 					frames = append(frames, *reasoning)
 				}
@@ -139,11 +139,11 @@ func TestProviderEmptyRegionChatHTTP(t *testing.T) {
 			driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
 			api := &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("")}
 			history := []Message{{Role: "user", Content: "q"}}
-			response, err := driver.ChatWithMessages("model", api, history, nil)
+			response, err := driver.ChatWithMessages("model", history, api, nil)
 			if err != nil || response == nil || *response.Answer != "answer" {
 				t.Fatal(response, err)
 			}
-			if err := driver.ChatStreamlyWithMessages("model", history, api, nil, func(*string, *string) error { return nil }); err != nil {
+			if err := driver.ChatStreamlyWithSender("model", history, api, nil, func(*string, *string) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
 		})

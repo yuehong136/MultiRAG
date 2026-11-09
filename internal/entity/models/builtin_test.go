@@ -172,13 +172,13 @@ func TestBuiltinInvalidCallsHaveNoHTTPAndUnsupportedFails(t *testing.T) {
 	if data, err := model.Embed(stringPtr("owned-model"), nil, nil, nil); err != nil || data == nil || len(data) != 0 {
 		t.Fatal("empty input contract changed", data, err)
 	}
-	if response, err := model.ChatWithMessages("owned-model", nil, []Message{{Role: "user", Content: "q"}}, nil); response != nil || err == nil {
+	if response, err := model.ChatWithMessages("owned-model", []Message{{Role: "user", Content: "q"}}, nil, nil); response != nil || err == nil {
 		t.Fatal("unsupported chat succeeded")
 	}
 	if response, err := model.Rerank(stringPtr("owned-model"), "q", []string{"a"}, nil, nil); response != nil || err == nil {
 		t.Fatal("unsupported rerank succeeded")
 	}
-	if err := model.ChatStreamlyWithMessages("owned-model", []Message{{Role: "user", Content: "q"}}, nil, nil, func(*string, *string) error { t.Error("unsupported stream emitted output"); return nil }); err == nil {
+	if err := model.ChatStreamlyWithSender("owned-model", []Message{{Role: "user", Content: "q"}}, nil, nil, func(*string, *string) error { t.Error("unsupported stream emitted output"); return nil }); err == nil {
 		t.Fatal("unsupported stream succeeded")
 	}
 	if _, err := model.Balance(nil); err == nil {

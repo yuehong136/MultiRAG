@@ -47,8 +47,8 @@ func baiduChatBody(name string, messages []Message, config *ChatConfig, stream b
 	return body, nil
 }
 
-func (b *BaiduModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
-	response, err := b.openAIChatDriver.ChatWithMessages(name, api, messages, config)
+func (b *BaiduModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
+	response, err := b.openAIChatDriver.ChatWithMessages(name, messages, api, config)
 	if err != nil {
 		return nil, err
 	}

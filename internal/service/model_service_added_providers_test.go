@@ -140,7 +140,7 @@ func TestAddedProviderCatalogBoundConsumersHTTP(t *testing.T) {
 						t.Fatal(response, err)
 					}
 					var output []string
-					if err := chat.ChatStreamlyWithMessages(messages, nil, func(answer, reasoning *string) error {
+					if err := chat.ChatStreamlyWithSender(messages, nil, func(answer, reasoning *string) error {
 						if answer != nil {
 							output = append(output, *answer)
 						}

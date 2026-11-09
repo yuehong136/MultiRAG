@@ -312,7 +312,7 @@ func TestGoogleProviderLiveHTTPAndSQL(t *testing.T) {
 		}
 	}
 	callbackFailure := errors.New("callback failure")
-	code, err := svc.ChatToModelStreamWithSender("Google", "controlled", "gemini-2.5-flash", "google-user", "default-thinking", &models.APIConfig{}, nil, func(*string, *string) error { return callbackFailure })
+	code, err := svc.ChatToModelStreamWithSender("Google", "controlled", "gemini-2.5-flash", "google-user", []models.Message{{Role: "user", Content: "default-thinking"}}, &models.APIConfig{}, nil, func(*string, *string) error { return callbackFailure })
 	if code == common.CodeSuccess || !errors.Is(err, callbackFailure) {
 		t.Fatalf("service lost callback error: %v %v", code, err)
 	}
@@ -388,7 +388,7 @@ func TestGoogleProviderLiveHTTPAndSQL(t *testing.T) {
 	if err := dao.DB.Exec("ALTER TABLE tenant_model RENAME TO google_fixture_unavailable_models").Error; err != nil {
 		t.Fatal(err)
 	}
-	code, dbErr := svc.ChatToModelStreamWithSender("Google", "controlled", "gemini-2.5-flash", "google-user", "default-thinking", nil, nil, func(*string, *string) error { return nil })
+	code, dbErr := svc.ChatToModelStreamWithSender("Google", "controlled", "gemini-2.5-flash", "google-user", []models.Message{{Role: "user", Content: "default-thinking"}}, nil, nil, func(*string, *string) error { return nil })
 	restoreErr := dao.DB.Exec("ALTER TABLE google_fixture_unavailable_models RENAME TO tenant_model").Error
 	if restoreErr != nil {
 		t.Fatal(restoreErr)
@@ -396,7 +396,7 @@ func TestGoogleProviderLiveHTTPAndSQL(t *testing.T) {
 	if code == common.CodeSuccess || dbErr == nil || chatRequests.Load() != before {
 		t.Fatal("SQL failure was treated as a missing disabled-model row")
 	}
-	code, missingErr := svc.ChatToModelStreamWithSender("Google", "controlled", "gemini-2.5-flash", "missing-user", "hello", nil, nil, func(*string, *string) error { return nil })
+	code, missingErr := svc.ChatToModelStreamWithSender("Google", "controlled", "gemini-2.5-flash", "missing-user", []models.Message{{Role: "user", Content: "hello"}}, nil, nil, func(*string, *string) error { return nil })
 	if code == common.CodeSuccess || missingErr == nil {
 		t.Fatal("missing tenant lost its service error")
 	}

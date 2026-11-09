@@ -78,7 +78,7 @@ func (a *AzureOpenAIModel) adapter(deployment string, api *APIConfig) (*openAICh
 	return driver, &local, nil
 }
 
-func (a *AzureOpenAIModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (a *AzureOpenAIModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("Azure OpenAI deployment is required")
 	}
@@ -86,10 +86,10 @@ func (a *AzureOpenAIModel) ChatWithMessages(name string, api *APIConfig, message
 	if err != nil {
 		return nil, err
 	}
-	return driver.ChatWithMessages(name, local, messages, config)
+	return driver.ChatWithMessages(name, messages, local, config)
 }
 
-func (a *AzureOpenAIModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+func (a *AzureOpenAIModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("Azure OpenAI deployment is required")
 	}
@@ -97,14 +97,7 @@ func (a *AzureOpenAIModel) ChatStreamlyWithMessages(name string, messages []Mess
 	if err != nil {
 		return err
 	}
-	return driver.ChatStreamlyWithMessages(name, messages, local, config, sender)
-}
-
-func (a *AzureOpenAIModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("Azure OpenAI deployment and message are required")
-	}
-	return a.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, sender)
+	return driver.ChatStreamlyWithSender(name, messages, local, config, sender)
 }
 
 func (a *AzureOpenAIModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {

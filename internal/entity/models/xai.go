@@ -106,18 +106,11 @@ func (x *XAIModel) chat(name string, messages []Message, apiConfig *APIConfig, c
 	message := result.Choices[0].Message
 	return &ChatResponse{Answer: message.Content, ReasoningContent: message.ReasoningContent}, nil
 }
-func (x *XAIModel) ChatWithMessages(name string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+func (x *XAIModel) ChatWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
 	return x.chat(name, messages, apiConfig, config)
 }
 
-func (x *XAIModel) ChatStreamlyWithSender(name, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil {
-		return fmt.Errorf("model name and message are required")
-	}
-	return x.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, apiConfig, config, sender)
-}
-
-func (x *XAIModel) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+func (x *XAIModel) ChatStreamlyWithSender(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
 	apiConfig, cancelCall := modelStreamConfig(apiConfig)
 	defer cancelCall()
 	if sender == nil {

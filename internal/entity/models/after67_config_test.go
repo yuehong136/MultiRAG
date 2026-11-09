@@ -55,11 +55,11 @@ func TestAfter67ChatConfigIsolationHTTP(t *testing.T) {
 				group.Go(func() {
 					api := &APIConfig{APIKey: stringPtr("key")}
 					messages := []Message{{Role: "user", Content: "q"}}
-					if got, err := driver.ChatWithMessages("served", api, messages, config); err != nil || got == nil || *got.Answer != "answer" {
+					if got, err := driver.ChatWithMessages("served", messages, api, config); err != nil || got == nil || *got.Answer != "answer" {
 						t.Error(got, err)
 					}
 					done := 0
-					if err := driver.ChatStreamlyWithMessages("served", messages, api, config, func(content, _ *string) error {
+					if err := driver.ChatStreamlyWithSender("served", messages, api, config, func(content, _ *string) error {
 						if content != nil && *content == "[DONE]" {
 							done++
 						}
@@ -87,10 +87,10 @@ func TestAfter67ChatPreflightHasNoHTTP(t *testing.T) {
 			}))
 			driver := after67ChatDriver(t, provider, map[string]string{"default": srv.URL})
 			for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr("")}, {APIKey: stringPtr(" \t ")}, {APIKey: stringPtr("key"), Region: stringPtr("unknown")}} {
-				if got, err := driver.ChatWithMessages("served", api, []Message{{Role: "user", Content: "q"}}, nil); err == nil || got != nil {
+				if got, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil || got != nil {
 					t.Error("invalid API configuration accepted")
 				}
-				if err := driver.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, nil, func(*string, *string) error { return nil }); err == nil {
+				if err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, api, nil, func(*string, *string) error { return nil }); err == nil {
 					t.Error("invalid streaming API configuration accepted")
 				}
 			}
@@ -116,7 +116,7 @@ func TestAfter67ChatResponseStrictness(t *testing.T) {
 				after67Transport(driver).Transport = providerContractTransport(func(*http.Request) (*http.Response, error) {
 					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, nil
 				})
-				got, err := driver.ChatWithMessages("served", &APIConfig{APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "q"}}, nil)
+				got, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
 				if err == nil || got != nil || strings.Contains(err.Error(), "private-secret") {
 					t.Fatal("malformed response accepted or raw error exposed", got, err)
 				}
@@ -130,7 +130,7 @@ func TestAfter67ChatResponseStrictness(t *testing.T) {
 					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 				})
 				done := false
-				err := driver.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(content, _ *string) error {
+				err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(content, _ *string) error {
 					if content != nil && *content == "[DONE]" {
 						done = true
 					}
@@ -176,10 +176,10 @@ func TestAfter67DeepSeekEndpointAndThinkingCopies(t *testing.T) {
 		})
 		api := &APIConfig{APIKey: stringPtr("key")}
 		if stream {
-			if err := driver.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, config, func(*string, *string) error { return nil }); err != nil {
+			if err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, api, config, func(*string, *string) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
-		} else if _, err := driver.ChatWithMessages("served", api, []Message{{Role: "user", Content: "q"}}, config); err != nil {
+		} else if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, config); err != nil {
 			t.Fatal(err)
 		}
 		if config.Thinking == nil || !*config.Thinking || config.Verbosity != nil {
@@ -212,7 +212,7 @@ func TestAfter67ChatEndpointIsolationAndDefaults(t *testing.T) {
 			})
 			key := " key "
 			for _, region := range []*string{nil, stringPtr("office"), stringPtr("")} {
-				if _, err := driver.ChatWithMessages("served", &APIConfig{APIKey: &key, Region: region}, []Message{{Role: "user", Content: "q"}}, nil); err != nil {
+				if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key, Region: region}, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -220,7 +220,7 @@ func TestAfter67ChatEndpointIsolationAndDefaults(t *testing.T) {
 				t.Fatal("caller credentials modified or request lost")
 			}
 			for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" 	 ")}, {APIKey: stringPtr("key"), Region: stringPtr("missing")}} {
-				if _, err := driver.ChatWithMessages("served", api, []Message{{Role: "user", Content: "q"}}, nil); err == nil {
+				if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil {
 					t.Error("bad key/region accepted")
 				}
 			}
@@ -245,7 +245,7 @@ func TestAfter67StreamTerminalFailureAndCancellation(t *testing.T) {
 					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, nil
 				})
 				done := false
-				err := d.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, _ *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
+				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, _ *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
 				if err == nil || done {
 					t.Fatal("invalid terminal became success", err, done)
 				}
@@ -259,7 +259,7 @@ func TestAfter67StreamTerminalFailureAndCancellation(t *testing.T) {
 		sentinel := errors.New("sender stopped")
 		ctx, cancel := context.WithCancel(t.Context())
 		for _, cancelInSender := range []bool{false, true} {
-			err := d.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(*string, *string) error {
+			err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(*string, *string) error {
 				if cancelInSender {
 					cancel()
 					return nil
@@ -304,7 +304,7 @@ func TestAfter67GiteeTailFlushCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := false
-	err := d.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(content, _ *string) error {
+	err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(content, _ *string) error {
 		if content != nil && *content == "[DONE]" {
 			done = true
 		}
@@ -337,7 +337,7 @@ func TestAfter67EmptyFramesUsageAndTerminalPolicy(t *testing.T) {
 					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, nil
 				})
 				done := false
-				err := d.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, _ *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
+				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, _ *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
 				if (err == nil) != tc.want || done != tc.want {
 					t.Fatal(err, done, tc.want)
 				}
@@ -363,7 +363,7 @@ func TestAfter67BodyReadCancellation(t *testing.T) {
 			after67Transport(d).Transport = providerContractTransport(func(*http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: 200, Body: after67CancelledBody{ctx: ctx, cancel: cancel}}, nil
 			})
-			result, err := d.ChatWithMessages("served", &APIConfig{APIKey: stringPtr("key"), Context: ctx}, []Message{{Role: "user", Content: "q"}}, nil)
+			result, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)
 			if !errors.Is(err, context.Canceled) || result != nil {
 				t.Fatal(result, err)
 			}
