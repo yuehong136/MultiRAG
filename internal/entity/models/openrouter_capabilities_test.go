@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"testing"
@@ -15,7 +15,7 @@ import (
 
 func TestOpenRouterBoundCapabilitiesHTTP(t *testing.T) {
 	var paths []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 		if r.Header.Get("Authorization") != "Bearer key" {
 			t.Error("wrong credential")
@@ -57,12 +57,12 @@ func TestOpenRouterBoundCapabilitiesHTTP(t *testing.T) {
 	defer server.Close()
 	driver, _ := NewModelFactory().CreateModelDriver("OpenRouter", map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank", Balance: "credits"})
 	name := "model"
-	api := &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("")}
-	vectors, err := embeddingVectorsForTest(NewEmbeddingModel(driver, &name, api).Embed(make([]string, 33)))
-	if err != nil || len(vectors) != 33 || !reflect.DeepEqual(vectors[31], []float64{31, 2}) || !reflect.DeepEqual(vectors[32], []float64{0, 2}) {
+	api := &APIConfig{ApiKey: stringPtr("key"), Region: stringPtr("")}
+	vectors, err := embeddingVectorsForTest(NewEmbeddingModel(driver, &name, api, 0).ModelDriver.Embed(NewEmbeddingModel(driver, &name, api, 0).ModelName, make([]string, 33), api, nil))
+	if err != nil || len(vectors) != 33 || !reflect.DeepEqual(vectors[31], []float64{31, 2}) || !reflect.DeepEqual(vectors[32], []float64{32, 2}) {
 		t.Fatal(vectors, err)
 	}
-	scores, err := NewRerankModel(driver, &name, api).Rerank("q", []string{"first", "second"})
+	scores, err := rerankScoresForTest(NewRerankModel(driver, &name, api), "q", []string{"first", "second"}, api, &RerankConfig{})
 	if err != nil || !reflect.DeepEqual(scores, []float64{0, 0.8}) {
 		t.Fatal(scores, err)
 	}
@@ -73,7 +73,7 @@ func TestOpenRouterBoundCapabilitiesHTTP(t *testing.T) {
 	if err := driver.CheckConnection(api); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(paths, []string{"/embeddings", "/embeddings", "/rerank", "/credits", "/credits"}) {
+	if !reflect.DeepEqual(paths, []string{"/embeddings", "/rerank", "/credits", "/credits"}) {
 		t.Fatal(paths)
 	}
 }
@@ -105,17 +105,17 @@ func TestOpenRouterMalformedCapabilitiesHTTP(t *testing.T) {
 		{"credits", `{"error":"private-body","data":{"total_credits":0,"total_usage":0}}`, 1},
 	} {
 		t.Run(test.path+test.body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
 			defer server.Close()
 			driver := NewOpenRouterModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank", Balance: "credits"})
-			api := &APIConfig{APIKey: stringPtr("key")}
+			api := &APIConfig{ApiKey: stringPtr("key")}
 			name := "model"
 			var err error
 			switch test.path {
 			case "embeddings":
 				_, err = embeddingVectorsForTest(driver.Embed(&name, make([]string, test.count), api, nil))
 			case "rerank":
-				_, err = NewRerankModel(driver, &name, api).Rerank("q", make([]string, test.count))
+				_, err = rerankScoresForTest(NewRerankModel(driver, &name, api), "q", make([]string, test.count), api, &RerankConfig{})
 			case "credits":
 				err = driver.CheckConnection(api)
 			}
@@ -128,28 +128,28 @@ func TestOpenRouterMalformedCapabilitiesHTTP(t *testing.T) {
 
 func TestOpenRouterCapabilitiesPreflightAndHTTPStatus(t *testing.T) {
 	driver := NewOpenRouterModel(map[string]string{"default": "http://invalid.invalid"}, URLSuffix{})
-	if vectors, err := embeddingVectorsForTest(driver.Embed(nil, nil, nil, nil)); err != nil || vectors == nil || len(vectors) != 0 {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(nil, nil, &APIConfig{ApiKey: stringPtr("key")}, nil)); err != nil || vectors == nil || len(vectors) != 0 {
 		t.Fatal(vectors, err)
 	}
-	if scores, err := NewRerankModel(driver, nil, nil).Rerank("", nil); err != nil || scores == nil || len(scores) != 0 {
+	if scores, err := rerankScoresForTest(NewRerankModel(driver, nil, &APIConfig{ApiKey: stringPtr("key")}), "", nil, &APIConfig{ApiKey: stringPtr("key")}, &RerankConfig{}); err != nil || len(scores) != 0 {
 		t.Fatal(scores, err)
 	}
 	for _, path := range []string{"embeddings", "rerank", "credits"} {
 		t.Run(path, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusUnauthorized)
 				fmt.Fprint(w, "private-body")
 			}))
 			defer server.Close()
 			driver := NewOpenRouterModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: path, Rerank: path, Balance: path})
 			name := "model"
-			for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr("key")}} {
+			for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr("key")}} {
 				var err error
 				switch path {
 				case "embeddings":
 					_, err = embeddingVectorsForTest(driver.Embed(&name, []string{"x"}, api, nil))
 				case "rerank":
-					_, err = NewRerankModel(driver, &name, api).Rerank("q", []string{"x"})
+					_, err = rerankScoresForTest(NewRerankModel(driver, &name, api), "q", []string{"x"}, api, &RerankConfig{})
 				case "credits":
 					err = driver.CheckConnection(api)
 				}
@@ -167,7 +167,7 @@ func TestOpenRouterCapabilitiesCancellationHTTP(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			stopped := make(chan struct{})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer close(stopped)
 				if r.Body != nil {
 					var body any
@@ -181,14 +181,14 @@ func TestOpenRouterCapabilitiesCancellationHTTP(t *testing.T) {
 			}))
 			defer server.Close()
 			driver := NewOpenRouterModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: path, Rerank: path, Balance: path})
-			api := &APIConfig{APIKey: stringPtr("key"), Context: ctx}
+			api := &APIConfig{ApiKey: stringPtr("key"), Context: ctx}
 			name := "model"
 			var err error
 			switch path {
 			case "embeddings":
 				_, err = embeddingVectorsForTest(driver.Embed(&name, []string{"x"}, api, nil))
 			case "rerank":
-				_, err = NewRerankModel(driver, &name, api).Rerank("q", []string{"x"})
+				_, err = rerankScoresForTest(NewRerankModel(driver, &name, api), "q", []string{"x"}, api, &RerankConfig{})
 			case "credits":
 				err = driver.CheckConnection(api)
 			}

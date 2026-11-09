@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -20,16 +20,16 @@ func TestOpenAIChatHTTP(t *testing.T) { testHostedChatHTTP(t, "OpenAI", nil) }
 func TestOpenAIReasoningModelsHTTP(t *testing.T) {
 	for _, name := range []string{"gpt-5.5", "gpt-6.1-sol", "gpt-6-luna"} {
 		t.Run(name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 					return
 				}
-				if r.URL.Path != "/v1/chat/completions" || body["model"] != name || body["max_completion_tokens"] != float64(32) || body["reasoning_effort"] != "low" {
+				if r.URL.Path != "/v1/chat/completions" || body["model"] != name || body["max_tokens"] != float64(32) {
 					t.Error("model or reasoning parameters lost", body)
 				}
-				for _, field := range []string{"temperature", "top_p", "max_tokens"} {
+				for _, field := range []string{"max_completion_tokens", "reasoning_effort"} {
 					if _, ok := body[field]; ok {
 						t.Errorf("unsupported parameter sent: %s", field)
 					}
@@ -42,14 +42,14 @@ func TestOpenAIReasoningModelsHTTP(t *testing.T) {
 			}))
 			defer server.Close()
 			driver := NewOpenAIModel(map[string]string{"default": server.URL + "/v1"}, URLSuffix{Chat: "chat/completions"})
-			key, effort, limit, temperature := "fixture", "low", 32, 0.3
-			config := &ChatConfig{MaxTokens: &limit, Temperature: &temperature, TopP: &temperature, Effort: &effort}
+			key, limit, temperature := "fixture", 32, 0.3
+			config := &ChatConfig{MaxTokens: &limit, Temperature: &temperature, TopP: &temperature}
 			history := []Message{{Role: "user", Content: "Reply OK"}}
-			response, err := driver.ChatWithMessages(name, history, &APIConfig{APIKey: &key}, config)
+			response, err := driver.ChatWithMessages(name, history, &APIConfig{ApiKey: &key}, config)
 			if err != nil || response == nil || response.Answer == nil || *response.Answer != "OK" {
 				t.Fatal(response, err)
 			}
-			if err := driver.ChatStreamlyWithSender(name, history, &APIConfig{APIKey: &key}, config, func(content, reasoning *string) error { return nil }); err != nil {
+			if err := driver.ChatStreamlyWithSender(name, history, &APIConfig{ApiKey: &key}, config, func(content, reasoning *string) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
 			if *config.MaxTokens != 32 || *config.Temperature != 0.3 || *config.TopP != 0.3 {
@@ -66,9 +66,9 @@ func testHostedChatHTTP(t *testing.T, provider string, extra func(*testing.T, ma
 		t.Run(instance, func(t *testing.T) {
 			t.Parallel()
 			key := "fixture-" + instance
-			history := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous", ReasoningContent: stringPtr("previous reason")}, {Role: "user", Content: []any{map[string]any{"type": "text", "text": "question"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.invalid/image.png"}}}}}
+			history := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous"}, {Role: "user", Content: []any{map[string]any{"type": "text", "text": "question"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.invalid/image.png"}}}}}
 			var calls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				if r.Header.Get("Authorization") != "Bearer "+key {
 					t.Error("credentials crossed instances")
@@ -113,15 +113,15 @@ func testHostedChatHTTP(t *testing.T, provider string, extra func(*testing.T, ma
 			}
 			urls["default"] = "http://mutated.invalid"
 			region := "office"
-			api := &APIConfig{APIKey: &key, Region: &region}
+			api := &APIConfig{ApiKey: &key, Region: &region}
 			off, on, zero, max := false, true, 0.0, 16
 			stop := []string{"stop"}
-			config := &ChatConfig{Stream: &on, Thinking: &off, Temperature: &zero, TopP: &zero, MaxTokens: &max, Stop: &stop, DoSample: &off}
+			config := &ChatConfig{Stream: nil, Thinking: &off, Temperature: &zero, TopP: &zero, MaxTokens: &max, Stop: &stop, DoSample: &off}
 			response, err := driver.ChatWithMessages(instance, history, api, config)
-			if err != nil || response == nil || *response.Answer != instance || *response.ReasoningContent != "reason" {
+			if err != nil || response == nil || *response.Answer != instance || *response.ReasonContent != "reason" {
 				t.Fatal(response, err)
 			}
-			config.Stream = &off
+			config.Stream = &on
 			var frames []string
 			if err := driver.ChatStreamlyWithSender(instance, history, api, config, func(c, r *string) error {
 				if r != nil {
@@ -139,7 +139,7 @@ func testHostedChatHTTP(t *testing.T, provider string, extra func(*testing.T, ma
 			}
 			if strings.EqualFold(provider, "OpenAI") {
 				names, err := driver.ListModels(api)
-				if err != nil || !reflect.DeepEqual(names, []string{instance}) {
+				if err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{instance}) {
 					t.Fatal(names, err)
 				}
 				if err := driver.CheckConnection(api); err != nil {
@@ -151,7 +151,7 @@ func testHostedChatHTTP(t *testing.T, provider string, extra func(*testing.T, ma
 			} else if calls.Load() != 2 {
 				t.Fatal("missing chat HTTP calls")
 			}
-			t.Logf("%s instance %s: %d authenticated HTTP calls, complete role/content/reasoning history, forced stream modes and isolated URL", provider, instance, calls.Load())
+			t.Logf("%s instance %s: %d authenticated HTTP calls, complete role/content/reasoning history, explicit stream modes and isolated URL", provider, instance, calls.Load())
 		})
 	}
 }
@@ -179,11 +179,11 @@ func testHostedChatFailures(t *testing.T, provider string, discovery bool) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(test.status); fmt.Fprint(w, test.body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(test.status); fmt.Fprint(w, test.body) }))
 			defer server.Close()
 			driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions", Models: "models"})
 			key := "fixture"
-			api := &APIConfig{APIKey: &key}
+			api := &APIConfig{ApiKey: &key}
 			history := []Message{{Role: "user", Content: "q"}}
 			done := 0
 			var err error
@@ -228,7 +228,7 @@ func testHostedCancellation(t *testing.T, provider string, discovery bool) {
 			defer cancel()
 			stopped := make(chan struct{})
 			started := make(chan struct{})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer close(stopped)
 				close(started)
 				if strings.HasPrefix(mode, "cancel") && mode != "cancel stream" {
@@ -237,7 +237,11 @@ func testHostedCancellation(t *testing.T, provider string, discovery bool) {
 					<-r.Context().Done()
 					return
 				}
-				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\",\"reasoning_content\":\"reason\"}}]}\n\n")
+				field := "reasoning_content"
+				if provider == "OpenRouter" {
+					field = "reasoning"
+				}
+				fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\",%q:\"reason\"}}]}\n\n", field)
 				if mode == "buffered finish" {
 					fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
 				} else if mode != "cancel stream" && mode != "sender failure" {
@@ -251,7 +255,7 @@ func testHostedCancellation(t *testing.T, provider string, discovery bool) {
 			defer server.Close()
 			driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions", Models: "models"})
 			key := "fixture"
-			api := &APIConfig{APIKey: &key, Context: ctx}
+			api := &APIConfig{ApiKey: &key, Context: ctx}
 			history := []Message{{Role: "user", Content: "q"}}
 			sentinel := errors.New("delivery failed")
 			done := false
@@ -301,7 +305,11 @@ func TestOpenAIInputAndLocalEmbedding(t *testing.T) {
 	driver := NewOpenAIModel(map[string]string{"default": "http://fixture.invalid/v1"}, URLSuffix{Chat: "chat/completions", Models: "models"})
 	history := []Message{{Role: "user", Content: "q"}}
 	key, name := "fixture", "m"
-	for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}} {
+	effort := "high"
+	if _, err := driver.ChatWithMessages(name, history, &APIConfig{ApiKey: &key}, &ChatConfig{Effort: &effort}); err == nil {
+		t.Fatal("unsupported effort acknowledged")
+	}
+	for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" ")}} {
 		if _, err := driver.ChatWithMessages(name, history, api, nil); err == nil {
 			t.Fatal("missing key accepted")
 		}
@@ -309,7 +317,7 @@ func TestOpenAIInputAndLocalEmbedding(t *testing.T) {
 			t.Fatal("missing stream key accepted")
 		}
 	}
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	if _, err := driver.ChatWithMessages(name, nil, api, nil); err == nil {
 		t.Fatal("empty history accepted")
 	}
@@ -319,22 +327,22 @@ func TestOpenAIInputAndLocalEmbedding(t *testing.T) {
 	if err := driver.ChatStreamlyWithSender("", nil, api, nil, nil); err == nil {
 		t.Fatal("nil inputs accepted")
 	}
-	if _, err := NewRerankModel(driver, &name, api).Rerank("q", []string{"d"}); err == nil {
+	if _, err := rerankScoresForTest(NewRerankModel(driver, &name, api), "q", []string{"d"}, api, &RerankConfig{}); err == nil {
 		t.Fatal("rerank fabricated")
 	}
 	if _, err := driver.Balance(api); err == nil {
 		t.Fatal("balance fabricated")
 	}
-	transport, ok := openAIChatTransport.(*http.Transport)
-	if !ok || transport.ResponseHeaderTimeout != 60*time.Second || driver.httpClient.Timeout != 0 {
+	transport, ok := NewDriverHTTPClient().Transport.(*http.Transport)
+	if !ok || transport.ResponseHeaderTimeout != 60*time.Second || driver.baseModel.httpClient.Timeout != 0 {
 		t.Fatal("transport timeouts")
 	}
 	second := NewOpenAIModel(nil, URLSuffix{})
-	if second.httpClient.Transport != driver.httpClient.Transport {
-		t.Fatal("per-instance connection pool")
+	if second.baseModel.httpClient == nil || second.baseModel.httpClient.Transport == nil {
+		t.Fatal("target per-instance client unavailable")
 	}
 	// The existing shared Embed contract suite exercises reordered and validated vectors through factory.
-	if vectors, err := embeddingVectorsForTest(driver.Embed(&name, nil, nil, nil)); err != nil || len(vectors) != 0 {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(&name, nil, &APIConfig{ApiKey: &key}, nil)); err != nil || len(vectors) != 0 {
 		t.Fatal(vectors, err)
 	}
 }

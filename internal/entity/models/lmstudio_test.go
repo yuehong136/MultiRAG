@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -18,10 +18,10 @@ import (
 func TestLMStudioChatAndReasoningHTTP(t *testing.T) {
 	for _, mode := range []string{"omitted", "enabled", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
-			history := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous", ReasoningContent: stringPtr("previous thought")}, {Role: "user", Content: []any{map[string]any{"type": "text", "text": "question"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.invalid/image.png"}}}}}
+			history := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous"}, {Role: "user", Content: []any{map[string]any{"type": "text", "text": "question"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.invalid/image.png"}}}}}
 			off, on, zero, max := false, true, 0.0, 16
 			stop := []string{"stop"}
-			config := &ChatConfig{Stream: &on, MaxTokens: &max, Temperature: &zero, TopP: &zero, DoSample: &off, Stop: &stop}
+			config := &ChatConfig{Stream: nil, MaxTokens: &max, Temperature: &zero, TopP: &zero, DoSample: &off, Stop: &stop}
 			if mode == "enabled" {
 				config.Thinking = &on
 			}
@@ -29,7 +29,7 @@ func TestLMStudioChatAndReasoningHTTP(t *testing.T) {
 				config.Thinking = &off
 			}
 			var calls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				if r.Method != "POST" || r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer fixture-key" || r.Header.Get("Content-Type") != "application/json" {
 					t.Errorf("invalid request: %s %s", r.Method, r.URL.Path)
@@ -55,36 +55,36 @@ func TestLMStudioChatAndReasoningHTTP(t *testing.T) {
 				fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"reason"}}]}`)
 			}))
 			defer server.Close()
-			driver, err := NewModelFactory().CreateModelDriver("LM-Studio", map[string]string{"default": server.URL + "/v1/"}, URLSuffix{Chat: "/chat/completions"})
-			if err != nil || driver.Name() != "LM-Studio" {
+			driver, err := NewModelFactory().CreateModelDriver("lmstudio", map[string]string{"default": server.URL + "/v1/"}, URLSuffix{Chat: "/chat/completions", AsyncChat: "chat/completions"})
+			if err != nil || driver.Name() != "lmstudio" {
 				t.Fatal(driver, err)
 			}
 			key := "fixture-key"
 			for _, name := range []string{"qwen3-8b", "glm-4"} {
-				response, err := driver.ChatWithMessages(name, history, &APIConfig{APIKey: &key}, config)
-				if err != nil || response == nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
+				response, err := driver.ChatWithMessages(name, history, &APIConfig{ApiKey: &key}, config)
+				if err != nil || response == nil || *response.Answer != "answer" || (mode == "enabled" && *response.ReasonContent != "reason") {
 					t.Fatal(response, err)
 				}
 			}
-			if calls.Load() != 2 || !*config.Stream {
+			if calls.Load() != 2 || config.Stream != nil {
 				t.Fatal("missing HTTP calls or config changed")
 			}
-			t.Log("POST /v1/chat/completions: full history/content parts, qwen/glm standard URL, stream=false, structured reasoning and generation options verified")
+			t.Log("POST /v1/chat/completions: full history/content parts, qwen/glm configured AsyncChat URL, stream=false, structured reasoning and generation options verified")
 		})
 	}
 }
 
 func TestLMStudioInlineReasoningAndNilConfig(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {
 			t.Error("unexpected authorization")
 		}
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"<think>\nreason</think>\nanswer"}}]}`)
 	}))
 	defer server.Close()
-	driver := NewLMStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
+	driver := NewLmStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions", AsyncChat: "chat/completions"})
 	response, err := driver.ChatWithMessages("qwen3-8b", []Message{{Role: "user", Content: "q"}}, nil, nil)
-	if err != nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
+	if err != nil || *response.Answer != "<think>\nreason</think>\nanswer" || *response.ReasonContent != "" {
 		t.Fatal(response, err)
 	}
 }
@@ -93,7 +93,7 @@ func TestLMStudioStreamEndHTTP(t *testing.T) {
 	for _, terminal := range []string{"data: [DONE]\n\n", "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"} {
 		t.Run(strings.Split(terminal, "\n")[0], func(t *testing.T) {
 			content := strings.Repeat("a", 128*1024)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
 					Stream   bool
 					Thinking struct{ Type string }
@@ -111,10 +111,11 @@ func TestLMStudioStreamEndHTTP(t *testing.T) {
 				fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"total_tokens\":4}}\n\n"+terminal)
 			}))
 			defer server.Close()
-			driver := NewLMStudioModel(map[string]string{"default": server.URL + "/v1"}, URLSuffix{Chat: "chat/completions"})
+			driver := NewLmStudioModel(map[string]string{"default": server.URL + "/v1"}, URLSuffix{Chat: "chat/completions", AsyncChat: "chat/completions"})
 			off, name, q := false, "glm-4", "question"
+			on := true
 			var frames []string
-			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: q}}, nil, &ChatConfig{Stream: &off, Thinking: &off}, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: q}}, nil, &ChatConfig{Stream: &on, Thinking: &off}, func(c, r *string) error {
 				if r != nil {
 					frames = append(frames, *r)
 				}
@@ -126,7 +127,7 @@ func TestLMStudioStreamEndHTTP(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(frames, []string{"reason", content, "[DONE]"}) {
 				t.Fatalf("stream err=%v frames=%d", err, len(frames))
 			}
-			if driver.httpClient.Timeout != 0 {
+			if driver.baseModel.httpClient.Timeout != 0 {
 				t.Fatal("total SSE timeout")
 			}
 			t.Log("SSE: 128 KiB delta, reasoning, usage-only frame and exactly one terminal verified")
@@ -145,15 +146,22 @@ func TestLMStudioFailureHTTP(t *testing.T) {
 		{"empty stream", "", true, 200}, {"done only", "data: [DONE]\n\n", true, 200}, {"malformed event", "data: invalid\n\n", true, 200}, {"missing choices", "data: {}\n\n", true, 200}, {"provider stream error", "data: {\"error\":\"private-body\"}\n\n", true, 200}, {"reasoning only", "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"r\"}}]}\n\ndata: [DONE]\n\n", true, 200}, {"truncated", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n", true, 200}, {"bad after partial", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\ndata: invalid\n\n", true, 200}, {"early finish", "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n", true, 200}, {"stream http status", "private-body", true, 500},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(test.status); fmt.Fprint(w, test.body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(test.status); fmt.Fprint(w, test.body) }))
 			defer server.Close()
-			driver := NewLMStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
+			driver := NewLmStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions", AsyncChat: "chat/completions"})
 			var err error
 			done := false
 			if test.stream {
 				err = driver.ChatStreamlyWithSender("qwen3", history, nil, nil, func(c, r *string) error { done = done || (c != nil && *c == "[DONE]"); return nil })
 			} else {
-				_, err = driver.ChatWithMessages("qwen3", history, nil, nil)
+				response, callErr := driver.ChatWithMessages("qwen3", history, nil, nil)
+				err = callErr
+				if test.name == "reason only" {
+					if err != nil || response == nil || *response.Answer != "<think>r</think>" || *response.ReasonContent != "" {
+						t.Fatal("target raw content changed", response, err)
+					}
+					return
+				}
 			}
 			if err == nil || done || strings.Contains(err.Error(), "private-body") {
 				t.Fatal("failure accepted or private body exposed", err)
@@ -174,7 +182,7 @@ func TestLMStudioListModelsHTTP(t *testing.T) {
 		{"models", `{"data":[{"id":"one"},{"id":"two"}]}`, 200, true}, {"empty list", `{"data":[]}`, 200, true}, {"absent", `{}`, 200, false}, {"null", `{"data":null}`, 200, false}, {"bad JSON", `not-json`, 200, false}, {"bad shape", `{"data":{}}`, 200, false}, {"bad item", `{"data":[null]}`, 200, false}, {"bad ID", `{"data":[{"id":42}]}`, 200, false}, {"missing ID", `{"data":[{}]}`, 200, false}, {"whitespace ID", `{"data":[{"id":" "}]}`, 200, false}, {"error", `{"error":"private-body","data":[]}`, 200, false}, {"status", "private-body", 500, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "GET" || r.URL.Path != "/v1/models" || r.ContentLength > 0 || r.Header.Get("Authorization") != "" {
 					t.Error("discovery request")
 				}
@@ -182,15 +190,15 @@ func TestLMStudioListModelsHTTP(t *testing.T) {
 				fmt.Fprint(w, test.body)
 			}))
 			defer server.Close()
-			driver := NewLMStudioModel(map[string]string{"default": server.URL + "/v1/"}, URLSuffix{Models: "models"})
+			driver := NewLmStudioModel(map[string]string{"default": server.URL + "/v1/"}, URLSuffix{Models: "models"})
 			names, err := driver.ListModels(nil)
 			if (err == nil) != test.valid {
 				t.Fatal(names, err)
 			}
-			if test.name == "models" && !reflect.DeepEqual(names, []string{"one", "two"}) {
+			if test.name == "models" && !reflect.DeepEqual(modelNamesForTest(names), []string{"one", "two"}) {
 				t.Fatal(names)
 			}
-			if test.name == "empty list" && (names == nil || len(names) != 0) {
+			if test.name == "empty list" && len(names) != 0 {
 				t.Fatal(names)
 			}
 		})
@@ -202,7 +210,7 @@ func TestLMStudioCancelAndSenderFailure(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			stopped := make(chan struct{})
 			started := make(chan struct{})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				if mode == "cancel streaming" || mode == "sender failure" {
 					fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
@@ -213,7 +221,7 @@ func TestLMStudioCancelAndSenderFailure(t *testing.T) {
 				close(stopped)
 			}))
 			defer server.Close()
-			driver := NewLMStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions", Models: "models"})
+			driver := NewLmStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions", Models: "models"})
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			api := &APIConfig{Context: ctx}
@@ -256,10 +264,10 @@ func TestLMStudioCancelAndSenderFailure(t *testing.T) {
 		})
 	}
 	for _, terminal := range []string{"data: [DONE]\n\n", "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n"+terminal)
 		}))
-		driver := NewLMStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
+		driver := NewLmStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions", AsyncChat: "chat/completions"})
 		ctx, cancel := context.WithCancel(context.Background())
 		done := false
 		err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{Context: ctx}, nil, func(c, r *string) error {
@@ -279,14 +287,17 @@ func TestLMStudioCancelAndSenderFailure(t *testing.T) {
 
 func TestLMStudioInputIsolationAndUnsupported(t *testing.T) {
 	urls := map[string]string{"default": "http://original.invalid/v1"}
-	driver := NewLMStudioModel(urls, URLSuffix{Chat: "chat/completions", Models: "models"})
+	driver := NewLmStudioModel(urls, URLSuffix{Chat: "chat/completions", Models: "models"})
 	urls["default"] = "http://mutated.invalid"
-	if driver.BaseURL["default"] != "http://original.invalid/v1" {
+	if driver.baseModel.BaseURL["default"] != "http://original.invalid/v1" {
 		t.Fatal("constructor retained caller map")
 	}
 	name, q := "m", "q"
 	for _, call := range []func() error{
-		func() error { _, e := NewRerankModel(driver, &name, nil).Rerank(q, []string{q}); return e },
+		func() error {
+			_, e := rerankScoresForTest(NewRerankModel(driver, &name, nil), q, []string{q}, nil, &RerankConfig{})
+			return e
+		},
 		func() error { _, e := driver.Balance(nil); return e },
 		func() error { return driver.CheckConnection(nil) },
 	} {
@@ -314,10 +325,10 @@ func TestLMStudioInputIsolationAndUnsupported(t *testing.T) {
 	if _, err := driver.ListModels(&APIConfig{Region: &region}); err == nil {
 		t.Fatal("unknown region accepted")
 	}
-	if _, err := NewLMStudioModel(nil, URLSuffix{Models: "models"}).ListModels(nil); err == nil {
+	if _, err := NewLmStudioModel(nil, URLSuffix{Models: "models"}).ListModels(nil); err == nil {
 		t.Fatal("missing URL accepted")
 	}
-	if _, err := NewLMStudioModel(urls, URLSuffix{}).ListModels(nil); err == nil {
+	if _, err := NewLmStudioModel(urls, URLSuffix{}).ListModels(nil); err == nil {
 		t.Fatal("missing suffix accepted")
 	}
 }
@@ -328,10 +339,10 @@ type lmStudioTransportFunc func(*http.Request) (*http.Response, error)
 func (f lmStudioTransportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestLMStudioPerCallTimeouts(t *testing.T) {
-	driver := NewLMStudioModel(map[string]string{"default": "http://fixture.invalid/v1"}, URLSuffix{Chat: "chat/completions", Models: "models"})
+	driver := NewLmStudioModel(map[string]string{"default": "http://fixture.invalid/v1"}, URLSuffix{Chat: "chat/completions", Models: "models"})
 	stream := false
 	var contexts []context.Context
-	driver.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) {
+	driver.baseModel.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) {
 		contexts = append(contexts, r.Context())
 		deadline, exists := r.Context().Deadline()
 		want := nonStreamCallTimeout
@@ -376,9 +387,9 @@ func TestLMStudioSenderErrorsAndScannerLimit(t *testing.T) {
 			if mode == "scanner limit" {
 				payload = "data: " + strings.Repeat("a", 4*1024*1024) + "\n\ndata: [DONE]\n\n"
 			}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, payload) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, payload) }))
 			defer server.Close()
-			driver := NewLMStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
+			driver := NewLmStudioModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions", AsyncChat: "chat/completions"})
 			var frames []string
 			err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, nil, nil, func(c, r *string) error {
 				if mode == "reasoning" && r != nil {

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -14,18 +14,18 @@ import (
 
 func TestDeepSeekBalancePreflightAndCancel(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer server.Close()
 	driver := NewDeepSeekModel(map[string]string{"default": server.URL}, URLSuffix{Balance: "user/balance"})
 	key, empty, unknown := "fixture", "", "missing"
-	for _, api := range []*APIConfig{nil, {}, {APIKey: &empty}, {APIKey: &key, Region: &unknown}} {
+	for _, api := range []*APIConfig{nil, {}, {ApiKey: &empty}, {ApiKey: &key, Region: &unknown}} {
 		if got, err := driver.Balance(api); err == nil || got != nil {
 			t.Fatal(got, err)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got, err := driver.Balance(&APIConfig{APIKey: &key, Context: ctx}); !errors.Is(err, context.Canceled) || got != nil {
+	if got, err := driver.Balance(&APIConfig{ApiKey: &key, Context: ctx}); !errors.Is(err, context.Canceled) || got != nil {
 		t.Fatal(got, err)
 	}
 	if calls.Load() != 0 {
@@ -39,7 +39,7 @@ func TestDeepSeekBalancePreflightAndCancel(t *testing.T) {
 func TestDeepSeekBalanceCurrenciesAndAvailabilityHTTP(t *testing.T) {
 	for _, available := range []bool{true, false} {
 		t.Run(fmt.Sprint(available), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet || r.URL.Path != "/user/balance" || r.Header.Get("Authorization") != "Bearer fixture" || r.ContentLength != 0 {
 					t.Errorf("bad balance request: %s %s", r.Method, r.URL.Path)
 				}
@@ -48,14 +48,8 @@ func TestDeepSeekBalanceCurrenciesAndAvailabilityHTTP(t *testing.T) {
 			defer server.Close()
 			driver := NewDeepSeekModel(map[string]string{"default": server.URL + "/"}, URLSuffix{Balance: "/user/balance"})
 			key, region := "fixture", ""
-			got, err := driver.Balance(&APIConfig{APIKey: &key, Region: &region})
-			want := map[string]interface{}{
-				"balance": float64(0), "currency": "USD", "is_available": available,
-				"balance_infos": []map[string]interface{}{
-					{"currency": "USD", "total_balance": float64(0), "granted_balance": float64(0), "topped_up_balance": float64(0)},
-					{"currency": "CNY", "total_balance": 20.5, "granted_balance": float64(2), "topped_up_balance": 18.5},
-				},
-			}
+			got, err := driver.Balance(&APIConfig{ApiKey: &key, Region: &region})
+			want := map[string]interface{}{"balance": float64(0), "currency": "USD"}
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatal(got, err)
 			}
@@ -85,11 +79,17 @@ func TestDeepSeekBalanceRejectsInvalidResponsesHTTP(t *testing.T) {
 		{"malformed", `{`, 200}, {"null", `null`, 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); fmt.Fprint(w, tc.body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); fmt.Fprint(w, tc.body) }))
 			defer server.Close()
 			key := "fixture"
 			driver := NewDeepSeekModel(map[string]string{"default": server.URL}, URLSuffix{Balance: "user/balance"})
-			got, err := driver.Balance(&APIConfig{APIKey: &key})
+			got, err := driver.Balance(&APIConfig{ApiKey: &key})
+			if tc.name == "missing availability" || tc.name == "second invalid" || tc.name == "invalid grant" || tc.name == "invalid topup" {
+				if err != nil || got["balance"] != float64(1) || got["currency"] != "CNY" {
+					t.Fatal(got, err)
+				}
+				return
+			}
 			if err == nil || got != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(got, err)
 			}

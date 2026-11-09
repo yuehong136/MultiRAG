@@ -8,7 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"testing"
@@ -23,11 +23,11 @@ func TestMoonshotChatRequestModesAndConfiguration(t *testing.T) {
 		thinking := thinkingConfig.value
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("thinking=%s/stream=%v", thinkingConfig.name, stream), func(t *testing.T) {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method != http.MethodPost || r.URL.Path != "/api/custom/chat" || r.Header.Get("Authorization") != "Bearer key" || r.Header.Get("Content-Type") != "application/json" {
 						t.Errorf("incorrect request: %s %s", r.Method, r.URL.Path)
 					}
-					accept := "application/json"
+					accept := ""
 					if stream {
 						accept = "text/event-stream"
 					}
@@ -43,7 +43,10 @@ func TestMoonshotChatRequestModesAndConfiguration(t *testing.T) {
 						"model": "kimi-k2.6", "stream": stream,
 						"messages":   []interface{}{map[string]interface{}{"role": "user", "content": "question"}},
 						"max_tokens": float64(123), "temperature": 0.5, "top_p": 0.8,
-						"do_sample": false, "stop": []interface{}{"stop"},
+						"stop": []interface{}{"stop"}, "do_sample": false,
+					}
+					if stream {
+						want["do_sample"] = false
 					}
 					if thinking != nil {
 						mode := "disabled"
@@ -67,8 +70,8 @@ func TestMoonshotChatRequestModesAndConfiguration(t *testing.T) {
 					t.Fatalf("driver = %v, %v", driver, err)
 				}
 				key, name, message, region := " key ", "kimi-k2.6", "question", "fixture"
-				apiConfig := &APIConfig{APIKey: &key, Region: &region}
-				config := &ChatConfig{Thinking: thinking, Stream: moonshotPtr(!stream), MaxTokens: moonshotPtr(123), Temperature: moonshotPtr(0.5), TopP: moonshotPtr(0.8), DoSample: moonshotPtr(false), Stop: &[]string{"stop"}}
+				apiConfig := &APIConfig{ApiKey: &key, Region: &region}
+				config := &ChatConfig{Thinking: thinking, Stream: moonshotPtr(stream), MaxTokens: moonshotPtr(123), Temperature: moonshotPtr(0.5), TopP: moonshotPtr(0.8), DoSample: moonshotPtr(false), Stop: &[]string{"stop"}}
 				if stream {
 					var frames []string
 					err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, apiConfig, config, moonshotFrameCollector(&frames))
@@ -81,7 +84,11 @@ func TestMoonshotChatRequestModesAndConfiguration(t *testing.T) {
 						t.Fatal(err)
 					}
 					assertStringPointer(t, response.Answer, stringPtr("answer"))
-					assertStringPointer(t, response.ReasoningContent, stringPtr("reason"))
+					wantReason := ""
+					if thinking != nil && *thinking {
+						wantReason = "reason"
+					}
+					assertStringPointer(t, response.ReasonContent, &wantReason)
 				}
 			})
 		}
@@ -103,7 +110,7 @@ func moonshotFrameCollector(frames *[]string) func(*string, *string) error {
 }
 
 func TestMoonshotHistoryChat(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Messages []Message
 			Stream   bool
@@ -120,9 +127,9 @@ func TestMoonshotHistoryChat(t *testing.T) {
 	defer server.Close()
 	driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name := "key", "kimi-k2.6"
-	model := NewChatModel(driver, &name, &APIConfig{APIKey: &key})
+	model := NewChatModel(driver, &name, &APIConfig{ApiKey: &key})
 	history := []map[string]string{{"role": "user", "content": "first"}, {"role": "assistant", "content": "previous answer"}, {"role": "user", "content": "follow up"}}
-	answer, err := model.Chat("instruction", history, nil)
+	answer, err := chatAnswerForTest(model, messagesForTest("instruction", history), nil)
 	if err != nil || answer != "answer" {
 		t.Fatalf("answer = %q, %v", answer, err)
 	}
@@ -148,14 +155,14 @@ func TestMoonshotChatResponses(t *testing.T) {
 		{"invalid content", `{"choices":[{"message":{"content":42}}]}`, 200, true, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(test.status)
 				fmt.Fprint(w, test.body)
 			}))
 			defer server.Close()
 			driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "kimi-k2.6", "question"
-			response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: moonshotPtr(true)})
+			response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, &ChatConfig{Thinking: moonshotPtr(true)})
 			if test.wantErr {
 				if err == nil || response != nil || strings.Contains(err.Error(), "secret-key-and-prompt") {
 					t.Fatalf("response = %#v, %v", response, err)
@@ -166,7 +173,11 @@ func TestMoonshotChatResponses(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertStringPointer(t, response.Answer, stringPtr("answer"))
-			assertStringPointer(t, response.ReasoningContent, test.reasoning)
+			wantReason := ""
+			if test.reasoning != nil {
+				wantReason = *test.reasoning
+			}
+			assertStringPointer(t, response.ReasonContent, &wantReason)
 		})
 	}
 }
@@ -182,17 +193,17 @@ func TestMoonshotStreamContracts(t *testing.T) {
 		{"finish then done", answerEvent + "data: [DONE]\n\ndata: [DONE]\n\n", []string{"answer", "[DONE]"}, false},
 		{"empty stream", "data: [DONE]\n\n", nil, true},
 		{"reasoning only", "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\",\"content\":null}}]}\n\ndata: [DONE]\n\n", []string{"reason:reason"}, true},
-		{"truncated stream", answerEvent, []string{"answer"}, true},
+		{"truncated stream", strings.ReplaceAll(answerEvent, `,"finish_reason":"stop"`, ""), []string{"answer"}, true},
 		{"bad JSON", answerEvent + "data: nope\n\n", []string{"answer"}, true},
 		{"business error after answer", answerEvent + "data: {\"error\":{\"message\":\"secret-key-and-prompt\"}}\n\ndata: [DONE]\n\n", []string{"answer"}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
 			defer server.Close()
 			driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "kimi-k2.6", "question"
 			var frames []string
-			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, moonshotFrameCollector(&frames))
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil, moonshotFrameCollector(&frames))
 			if (err != nil) != test.wantErr || !reflect.DeepEqual(frames, test.wantFrames) || (err != nil && strings.Contains(err.Error(), "secret-key-and-prompt")) {
 				t.Fatalf("frames = %v, error = %v", frames, err)
 			}
@@ -205,14 +216,14 @@ func TestMoonshotStreamContracts(t *testing.T) {
 
 func TestMoonshotLargeStreamDelta(t *testing.T) {
 	answer := strings.Repeat("a", 100000)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", answer)
 	}))
 	defer server.Close()
 	driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "kimi-k2.6", "question"
 	var frames []string
-	err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, moonshotFrameCollector(&frames))
+	err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil, moonshotFrameCollector(&frames))
 	if err != nil || !reflect.DeepEqual(frames, []string{answer, "[DONE]"}) {
 		t.Fatalf("large delta: frames=%d, error=%v", len(frames), err)
 	}
@@ -221,21 +232,21 @@ func TestMoonshotLargeStreamDelta(t *testing.T) {
 func TestMoonshotSenderErrors(t *testing.T) {
 	for _, failAt := range []int{1, 2, 3} {
 		t.Run(fmt.Sprint(failAt), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\",\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n")
 			}))
 			defer server.Close()
 			driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "kimi-k2.6", "question"
 			failure, calls := errors.New("sender failed"), 0
-			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error {
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil, func(*string, *string) error {
 				calls++
 				if calls == failAt {
 					return failure
 				}
 				return nil
 			})
-			if err != failure || calls != failAt {
+			if !errors.Is(err, failure) || calls != failAt {
 				t.Fatalf("sender error = %v, calls = %d", err, calls)
 			}
 		})
@@ -247,7 +258,7 @@ func TestMoonshotCancellationReachesTransport(t *testing.T) {
 		t.Run(fmt.Sprint(stream), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			started, canceled := make(chan struct{}), make(chan struct{})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if _, err := io.Copy(io.Discard, r.Body); err != nil {
 					t.Error(err)
 				}
@@ -265,7 +276,7 @@ func TestMoonshotCancellationReachesTransport(t *testing.T) {
 			defer cancel()
 			driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "kimi-k2.6", "question"
-			apiConfig := &APIConfig{APIKey: &key, Context: ctx}
+			apiConfig := &APIConfig{ApiKey: &key, Context: ctx}
 			result := make(chan error, 1)
 			var frames []string
 			delivered := make(chan struct{}, 1)
@@ -317,7 +328,7 @@ func TestMoonshotCancellationReachesTransport(t *testing.T) {
 func TestMoonshotChatValidation(t *testing.T) {
 	driver := NewMoonshotModel(map[string]string{"default": "http://127.0.0.1:1"}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "kimi-k2.6", "question"
-	for _, config := range []*APIConfig{nil, {}, {APIKey: moonshotPtr("")}, {APIKey: moonshotPtr(" ")}, {APIKey: &key, Region: moonshotPtr("unknown")}} {
+	for _, config := range []*APIConfig{nil, {}, {ApiKey: moonshotPtr("")}, {ApiKey: moonshotPtr(" ")}, {ApiKey: &key, Region: moonshotPtr("unknown")}} {
 		if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, config, nil); err == nil {
 			t.Fatal("invalid API config accepted")
 		}
@@ -326,24 +337,24 @@ func TestMoonshotChatValidation(t *testing.T) {
 		name     string
 		messages []Message
 	}{{"", []Message{{Role: "user", Content: message}}}, {name, nil}, {" ", []Message{{Role: "user", Content: message}}}} {
-		if _, err := driver.ChatWithMessages(test.name, test.messages, &APIConfig{APIKey: &key}, nil); err == nil {
+		if _, err := driver.ChatWithMessages(test.name, test.messages, &APIConfig{ApiKey: &key}, nil); err == nil {
 			t.Fatal("invalid chat arguments accepted")
 		}
 	}
-	if err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, nil); err == nil {
+	if err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil, nil); err == nil {
 		t.Fatal("nil sender accepted")
 	}
 	for _, messages := range [][]Message{nil, {{Content: "no role"}}} {
-		if _, err := driver.ChatWithMessages(name, messages, &APIConfig{APIKey: &key}, nil); err == nil {
+		if _, err := driver.ChatWithMessages(name, messages, &APIConfig{ApiKey: &key}, nil); err == nil {
 			t.Fatal("invalid history accepted")
 		}
 	}
-	driver.URLSuffix.Chat = ""
-	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil); err == nil {
+	driver.baseModel.URLSuffix.Chat = ""
+	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil); err == nil {
 		t.Fatal("missing chat endpoint accepted")
 	}
-	driver.URLSuffix.Chat = "chat"
-	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, &ChatConfig{Temperature: moonshotPtr(math.NaN())}); err == nil {
+	driver.baseModel.URLSuffix.Chat = "chat"
+	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, &ChatConfig{Temperature: moonshotPtr(math.NaN())}); err == nil {
 		t.Fatal("invalid JSON number accepted")
 	}
 }

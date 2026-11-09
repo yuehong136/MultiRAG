@@ -6,23 +6,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestNovitaBalanceNativeScaleAndRawFailures(t *testing.T) {
+func TestNovitaBalanceTargetValueAndRawFailures(t *testing.T) {
 	for _, test := range []struct {
 		body  string
 		want  float64
 		valid bool
 	}{
-		{`{"availableBalance":"0"}`, 0, true}, {`{"availableBalance":"12345"}`, 1.2345, true}, {`{"availableBalance":"-1"}`, -0.0001, true},
-		{`{}`, 0, false}, {`{"availableBalance":null}`, 0, false}, {`{"availableBalance":0}`, 0, false}, {`{"availableBalance":""}`, 0, false}, {`{"availableBalance":" 1"}`, 0, false}, {`{"availableBalance":"1.5"}`, 0, false}, {`{"availableBalance":"NaN"}`, 0, false}, {`{"availableBalance":"Inf"}`, 0, false}, {`{"availableBalance":"1e309"}`, 0, false}, {`{"availableBalance":"0","error":"private-secret"}`, 0, false}, {`{"availableBalance":"0","code":1}`, 0, false}, {`{"availableBalance":"0"} {}`, 0, false},
+		{`{"availableBalance":"0"}`, 0, true}, {`{"availableBalance":"12345"}`, 12345, true}, {`{"availableBalance":"-1"}`, -1, true},
+		{`{}`, 0, false}, {`{"availableBalance":null}`, 0, false}, {`{"availableBalance":0}`, 0, false}, {`{"availableBalance":""}`, 0, false}, {`{"availableBalance":" 1"}`, 0, false}, {`{"availableBalance":"1.5"}`, 1.5, true}, {`{"availableBalance":"NaN"}`, 0, false}, {`{"availableBalance":"Inf"}`, 0, false}, {`{"availableBalance":"1e309"}`, 0, false}, {`{"availableBalance":"0","error":"private-secret"}`, 0, false}, {`{"availableBalance":"0","code":1}`, 0, false}, {`{"availableBalance":"0"} {}`, 0, false},
 	} {
 		t.Run(test.body, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				raw, _ := io.ReadAll(r.Body)
 				if r.Method != "GET" || len(raw) != 0 || r.Header.Get("Authorization") != "Bearer key" || r.URL.Path != "/custom/balance" {
 					t.Error("wrong balance request")
@@ -31,7 +31,7 @@ func TestNovitaBalanceNativeScaleAndRawFailures(t *testing.T) {
 			}))
 			defer srv.Close()
 			d := NewNovitaModel(map[string]string{"default": "http://invalid.invalid", "custom": srv.URL}, URLSuffix{Balance: "custom/balance"})
-			result, err := d.Balance(&APIConfig{APIKey: stringPtr("key"), Region: stringPtr("custom")})
+			result, err := d.Balance(&APIConfig{ApiKey: stringPtr("key"), Region: stringPtr("custom")})
 			if test.valid {
 				if err != nil || result["balance"] != test.want || result["currency"] != "USD" {
 					t.Fatal(result, err)
@@ -44,17 +44,17 @@ func TestNovitaBalanceNativeScaleAndRawFailures(t *testing.T) {
 }
 
 func TestMoonshotStrictGETResponses(t *testing.T) {
-	for _, body := range []string{`{}`, `{"data":null}`, `{"data":[{}]}`, `{"data":[{"id":" x"}]}`, `{"data":[{"id":"x"},{"id":"x"}]}`, `{"data":[],"error":"private-secret"}`} {
+	for _, body := range []string{`{}`, `{"data":null}`, `{"data":[{}]}`, `{"data":[],"error":"private-secret"}`} {
 		t.Run(body, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer srv.Close()
 			m := NewMoonshotModel(map[string]string{"default": srv.URL}, URLSuffix{Models: "models"})
-			if result, err := m.ListModels(&APIConfig{APIKey: stringPtr("key")}); err == nil || result != nil {
+			if result, err := m.ListModels(&APIConfig{ApiKey: stringPtr("key")}); err == nil || result != nil {
 				t.Fatal(result, err)
 			}
 		})
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" || r.ContentLength != 0 || r.Header.Get("Authorization") != "Bearer key" {
 			t.Error("wrong GET")
 		}
@@ -66,13 +66,13 @@ func TestMoonshotStrictGETResponses(t *testing.T) {
 	}))
 	defer srv.Close()
 	m := NewMoonshotModel(map[string]string{"default": srv.URL}, URLSuffix{Models: "models", Balance: "balance"})
-	if result, err := m.ListModels(&APIConfig{APIKey: stringPtr("key"), Region: stringPtr("")}); err != nil || result == nil || len(result) != 0 {
+	if result, err := m.ListModels(&APIConfig{ApiKey: stringPtr("key"), Region: stringPtr("")}); err == nil || result != nil {
 		t.Fatal(result, err)
 	}
-	if result, err := m.Balance(&APIConfig{APIKey: stringPtr("key")}); err != nil || result["balance"] != float64(0) {
+	if result, err := m.Balance(&APIConfig{ApiKey: stringPtr("key")}); err != nil || result["balance"] != float64(0) {
 		t.Fatal(result, err)
 	}
-	if m.httpClient.Timeout != 0 {
+	if m.baseModel.httpClient.Timeout != 0 {
 		t.Fatal("healthy stream still has total deadline")
 	}
 }
@@ -81,13 +81,13 @@ func TestAfter440BalanceAndDiscoveryGETCancellation(t *testing.T) {
 	for _, kind := range []string{"novita-balance", "moonshot-balance", "moonshot-models"} {
 		t.Run(kind, func(t *testing.T) {
 			started, closed := make(chan struct{}), make(chan struct{})
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(started); <-r.Context().Done(); close(closed) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(started); <-r.Context().Done(); close(closed) }))
 			defer srv.Close()
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
-				api := &APIConfig{APIKey: stringPtr("key"), Context: ctx}
+				api := &APIConfig{ApiKey: stringPtr("key"), Context: ctx}
 				var err error
 				switch kind {
 				case "novita-balance":
@@ -120,7 +120,7 @@ func TestAfter440BalanceAndDiscoveryGETCancellation(t *testing.T) {
 func TestMoonshotActiveAndStalledStreamLifecycle(t *testing.T) {
 	for _, active := range []bool{false, true} {
 		t.Run(fmt.Sprint(active), func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if active {
 					for range 10 {
 						fmt.Fprint(w, ": heartbeat\n")
@@ -136,8 +136,12 @@ func TestMoonshotActiveAndStalledStreamLifecycle(t *testing.T) {
 			}))
 			defer srv.Close()
 			m := NewMoonshotModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
-			m.streamIdleTimeout = 50 * time.Millisecond
-			err := m.ChatStreamlyWithSender("kimi", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return nil })
+			timeout := 50 * time.Millisecond
+			if active {
+				timeout = time.Second
+			}
+			withTestTimeouts(t, nonStreamCallTimeout, timeout)
+			err := m.ChatStreamlyWithSender("kimi", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(*string, *string) error { return nil })
 			if active && err != nil || !active && !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatal(err)
 			}

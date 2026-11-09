@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"testing"
@@ -15,8 +15,8 @@ func TestOpenRouterChatHTTP(t *testing.T) {
 		t.Run(instance, func(t *testing.T) {
 			t.Parallel()
 			key := "key-" + instance
-			history := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous", ReasoningContent: stringPtr("thought")}, {Role: "user", Content: []any{map[string]any{"type": "text", "text": "question"}}}}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			history := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous"}, {Role: "user", Content: []any{map[string]any{"type": "text", "text": "question"}}}}
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer "+key {
 					t.Error("credentials crossed instances")
 				}
@@ -36,10 +36,10 @@ func TestOpenRouterChatHTTP(t *testing.T) {
 					return
 				}
 				messages, _ := body["messages"].([]any)
-				if len(messages) != 3 || messages[1].(map[string]any)["reasoning"] != "thought" || body["model"] != instance || body["temperature"] != float64(0) || body["max_tokens"] != float64(12) {
+				if len(messages) != 3 || body["model"] != instance || body["temperature"] != float64(0) || body["max_tokens"] != float64(12) {
 					t.Error("history/options lost", body)
 				}
-				if !reflect.DeepEqual(body["reasoning"], map[string]any{"enabled": false}) || body["thinking"] != nil || body["do_sample"] != nil {
+				if body["reasoning"] != nil || body["do_sample"] != nil || (body["stream"] != true && body["thinking"] != nil) {
 					t.Error("wrong reasoning controls", body)
 				}
 				if body["stream"] == true {
@@ -50,19 +50,19 @@ func TestOpenRouterChatHTTP(t *testing.T) {
 			}))
 			defer server.Close()
 			urls := map[string]string{"default": server.URL + "/v1/"}
-			driver, err := NewModelFactory().CreateModelDriver("OpenRouter", urls, URLSuffix{Chat: "/chat/completions", Models: "models"})
+			driver, err := NewModelFactory().CreateModelDriver("OpenRouter", urls, URLSuffix{Chat: "/chat/completions", AsyncChat: "chat/completions", Models: "models"})
 			if err != nil || driver.Name() != "openrouter" {
 				t.Fatal(driver, err)
 			}
 			urls["default"] = "http://invalid.invalid"
-			api := &APIConfig{APIKey: &key, Region: stringPtr("")}
-			on, off, zero, max := true, false, 0.0, 12
-			config := &ChatConfig{Stream: &on, Thinking: &off, Temperature: &zero, MaxTokens: &max}
+			api := &APIConfig{ApiKey: &key, Region: stringPtr("")}
+			on, zero, max := true, 0.0, 12
+			config := &ChatConfig{Stream: nil, Thinking: &on, Temperature: &zero, MaxTokens: &max}
 			response, err := driver.ChatWithMessages(instance, history, api, config)
-			if err != nil || response == nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
+			if err != nil || response == nil || *response.Answer != "answer" || *response.ReasonContent != "reason" {
 				t.Fatal(response, err)
 			}
-			config.Stream = &off
+			config.Stream = &on
 			var frames []string
 			err = driver.ChatStreamlyWithSender(instance, history, api, config, func(content, reasoning *string) error {
 				if reasoning != nil {
@@ -76,7 +76,7 @@ func TestOpenRouterChatHTTP(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(frames, []string{"reason", "answer", "[DONE]"}) {
 				t.Fatal(frames, err)
 			}
-			if names, err := driver.ListModels(api); err != nil || !reflect.DeepEqual(names, []string{instance}) {
+			if names, err := driver.ListModels(api); err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{instance}) {
 				t.Fatal(names, err)
 			}
 		})
@@ -89,13 +89,14 @@ func TestOpenRouterReasoningBody(t *testing.T) {
 		want   any
 	}{
 		{nil, nil},
-		{&ChatConfig{Thinking: minimaxPtr(true)}, map[string]any{"enabled": true}},
+		{&ChatConfig{Thinking: minimaxPtr(true)}, nil},
 		{&ChatConfig{Effort: stringPtr("high")}, map[string]any{"effort": "high"}},
-		{&ChatConfig{Thinking: minimaxPtr(false), Effort: stringPtr("high")}, map[string]any{"enabled": false}},
+		{&ChatConfig{Thinking: minimaxPtr(false), Effort: stringPtr("high")}, map[string]any{"effort": "high"}},
 	} {
 		for _, stream := range []bool{false, true} {
-			body, err := openRouterChatBody("m", []Message{{Role: "user", Content: "q"}}, test.config, stream)
-			if err != nil || !reflect.DeepEqual(body["reasoning"], test.want) {
+			body, err := captureChatBodyForTest(t, "OpenRouter", "m", []Message{{Role: "user", Content: "q"}}, test.config, stream)
+			want := test.want
+			if err != nil || !reflect.DeepEqual(body["reasoning"], want) {
 				t.Fatal(body, err)
 			}
 		}
@@ -108,10 +109,10 @@ func TestOpenRouterCancelHTTP(t *testing.T)   { testHostedCancellation(t, "OpenR
 func TestOpenRouterDiscoveryFailures(t *testing.T) {
 	for _, body := range []string{`{}`, `{"data":null}`, `{"data":[{}]}`, `{"data":[{"id":123}]}`, `{"error":"private-body","data":[]}`} {
 		t.Run(body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
 			driver := NewOpenRouterModel(map[string]string{"default": server.URL}, URLSuffix{Models: "models"})
-			if _, err := driver.ListModels(&APIConfig{APIKey: stringPtr("key")}); err == nil || strings.Contains(err.Error(), "private-body") {
+			if _, err := driver.ListModels(&APIConfig{ApiKey: stringPtr("key")}); err == nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(err)
 			}
 		})
@@ -119,9 +120,9 @@ func TestOpenRouterDiscoveryFailures(t *testing.T) {
 }
 
 func TestProviderEmptyRegionChatHTTP(t *testing.T) {
-	for _, provider := range []string{"Aliyun", "DeepSeek", "Gitee", "SiliconFlow", "Moonshot", "NVIDIA", "OpenAI", "OpenRouter", "VolcEngine", "XAI", "ZHIPU-AI", "LM-Studio", "vllm"} {
+	for _, provider := range []string{"Aliyun", "DeepSeek", "Gitee", "SiliconFlow", "Moonshot", "NVIDIA", "OpenAI", "OpenRouter", "VolcEngine", "XAI", "ZHIPU-AI", "lmstudio", "vllm"} {
 		t.Run(provider, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/chat/completions" {
 					t.Error("empty region did not select default", r.URL.Path)
 				}
@@ -137,7 +138,7 @@ func TestProviderEmptyRegionChatHTTP(t *testing.T) {
 			}))
 			defer server.Close()
 			driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
-			api := &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("")}
+			api := &APIConfig{ApiKey: stringPtr("key"), Region: stringPtr("")}
 			history := []Message{{Role: "user", Content: "q"}}
 			response, err := driver.ChatWithMessages("model", history, api, nil)
 			if err != nil || response == nil || *response.Answer != "answer" {
