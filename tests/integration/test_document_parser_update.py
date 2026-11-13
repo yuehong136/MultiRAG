@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from api.apps.services import dataset_api_service
 from api.db.db_models import Document, DocumentMetadata, File, File2Document, Knowledgebase, Task, UserCanvas, UserTenant
 from api.db.services import document_image_lock as image_lock
 from api.db.services import document_ingest_service as ingest_service
@@ -546,6 +548,48 @@ def test_real_http_save_same_config_and_reset_exact_images(parser_api: dict[str,
     smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     env["parser_record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0
+
+
+def test_parser_model_only_update_retains_configuration_results_and_dataset_model(parser_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = parser_api
+
+    @contextmanager
+    def scratch_connection() -> Iterator[Session]:
+        with Session(env["engine"]) as db:
+            yield db
+            db.commit()
+
+    monkeypatch.setattr(dataset_api_service, "db_connection", scratch_connection)
+    with env["engine"].begin() as db:
+        db.execute(
+            sa.update(Knowledgebase).where(Knowledgebase.id == env["ids"]["kb"]).values(parser_config={"llm_id": "glm-5-turbo@ZHIPU-AI", "raptor": {"use_raptor": True}, "future": {"keep": False}})
+        )
+    before = snapshot(env)
+    path = env["base"] + f"/api/v1/datasets/{env['ids']['kb']}"
+    headers = {"Authorization": "Bearer " + env["tokens"]["owner"]}
+    # Synthetic references check HTTP/storage semantics, not provider calls.
+    response = requests.put(path, headers=headers, json={"parser_config": {"llm_id": "54"}}, timeout=30)
+    assert response.status_code == 200 and response.json()["code"] == 0
+    expected_kb = {"llm_id": "54", "raptor": {"use_raptor": True}, "future": {"keep": False}}
+    assert response.json()["data"]["parser_config"] == expected_kb
+    readback = requests.get(path, headers=headers, timeout=30)
+    assert readback.status_code == 200 and readback.json()["data"]["parser_config"] == expected_kb
+    dataset_changed = snapshot(env)
+    assert dataset_changed["sql"][Document.__tablename__] == before["sql"][Document.__tablename__]
+    assert next(row["parser_config"] for row in dataset_changed["sql"][Knowledgebase.__tablename__] if row["id"] == env["ids"]["kb"]) == expected_kb
+    original = next(row["parser_config"] for row in before["sql"][Document.__tablename__] if row["id"] == env["docs"]["a"])
+    result = patch(env, {"parser_config": {"llm_id": "55"}})["data"]
+    expected = {**original, "llm_id": "55"}
+    assert result["parser_config"] == expected
+    assert result["state"] == "DONE" and result["chunk_count"] == 2
+    current = snapshot(env)
+    assert next(row["parser_config"] for row in current["sql"][Document.__tablename__] if row["id"] == env["docs"]["a"]) == expected
+    assert current["sql"][Knowledgebase.__tablename__] == dataset_changed["sql"][Knowledgebase.__tablename__]
+    assert current["sql"][Task.__tablename__] == before["sql"][Task.__tablename__]
+    for field in ["index", "objects", "queue"]:
+        assert current[field] == before[field], field
+    # The PATCH helper also verifies the canonical GET through independent HTTP.
+    assert patch(env, {"parser_config": {"llm_id": "55"}})["data"]["parser_config"] == expected
 
 
 @pytest.mark.parametrize(

@@ -83,6 +83,11 @@ async def write(db: AsyncSession, operation: Callable[[], Awaitable[Any]]) -> di
         return result(data)
     except service.ModelConflict as error:
         await db.rollback()
+        if error.references:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": 409, "error_code": "MODEL_REFERENCED", "message": str(error), "data": {"references": error.references}},
+            ) from None
         raise failure(409, str(error)) from None
     except LookupError:
         await db.rollback()

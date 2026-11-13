@@ -1,6 +1,5 @@
 """Tenant model lifecycle. Callers own the AsyncSession transaction."""
 
-import json
 import os
 from typing import Any
 from uuid import uuid4
@@ -8,14 +7,19 @@ from uuid import uuid4
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import Dialog, Knowledgebase, Memory, Search, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, UserCanvas, UserCanvasVersion
+from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.model_contract import DEFAULT_MODEL_FIELDS, ConnectionCandidate, DiscoveredModel, DiscoveryInput, InstanceInput, InstancePatch, ModelRegistration
 from api.db.provider_catalog import provider_order, provider_transport, public_factories, regional_provider
+from api.db.services.model_deletion_policy import ModelReference, collect_blocking_model_references
 from common import settings
 
 
 class ModelConflict(ValueError):
     """A conflicting identity or reference prevents this operation."""
+
+    def __init__(self, message: str, references: list[ModelReference] | None = None) -> None:
+        super().__init__(message)
+        self.references = references
 
 
 def catalog_entries(provider_name: str, region: str = "") -> list[tuple[ModelRegistration, dict[str, Any]]]:
@@ -340,87 +344,11 @@ async def models_for_owner(db: AsyncSession, tenant_id: str) -> list[tuple[Tenan
     return sorted(rows, key=lambda item: (*provider_order(item[3].provider_name), item[2].instance_name, item[1].model_name, item[0].id))
 
 
-_REFERENCE_KEYS = {
-    "model_id",
-    "llm_id",
-    "embd_id",
-    "embedding_model",
-    "rerank_id",
-    "asr_id",
-    "img2txt_id",
-    "tts_id",
-    "ocr_id",
-    "parse_method",
-    "layout_recognize",
-    "layout_recognizer",
-    "tenant_llm_id",
-    "tenant_embd_id",
-    "tenant_rerank_id",
-    "tenant_img2txt_id",
-    "tenant_asr_id",
-    "tenant_tts_id",
-    "tenant_ocr_id",
-    "embedding_model_id",
-    "rerank_model_id",
-}
-
-
-def _references(value: Any, identifiers: set[str], names: set[str], key: str = "") -> bool:
-    if isinstance(value, dict):
-        return any(_references(item, identifiers, names, "llm_id" if key == "search_config" and field == "chat_id" else field) for field, item in value.items())
-    if isinstance(value, list):
-        return any(_references(item, identifiers, names, key) for item in value)
-    if key in {"dsl", "snapshot_dsl"} and isinstance(value, str):
-        try:
-            return _references(json.loads(value), identifiers, names)
-        except (TypeError, ValueError):
-            return False
-    return key in _REFERENCE_KEYS and str(value) in identifiers | names
-
-
 async def require_unreferenced(db: AsyncSession, rows: list[tuple[TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider]]) -> None:
-    if not rows:
-        return
-    from api.db.db_models import API4Conversation, ChannelCanvasCandidate, Document, PipelineOperationLog, PythonSkillCoreConfig, SkillSearchConfig
-
-    identifiers = {str(row.id) for row, *_ in rows}
-    owners = {row.tenant_id for row, *_ in rows}
-    names = {
-        name
-        for row, model, instance, provider in rows
-        for name in (
-            row.llm_name,
-            model.model_name,
-            f"{model.model_name}@{provider.provider_name}",
-            f"{model.model_name}@{instance.instance_name}@{provider.provider_name}",
-            f"{model.model_name}@{provider.provider_name}@{provider.provider_name}",
-        )
-        if name
-    }
-    # Numeric IDs are global identities, including explicitly shared consumers.
-    # Name aliases are tenant-local and count only in actual model-ref fields.
-    for entity in (
-        Tenant,
-        Knowledgebase,
-        Document,
-        Dialog,
-        Memory,
-        UserCanvas,
-        UserCanvasVersion,
-        Search,
-        SkillSearchConfig,
-        PythonSkillCoreConfig,
-        API4Conversation,
-        ChannelCanvasCandidate,
-        PipelineOperationLog,
-    ):
-        for item in (await db.scalars(select(entity))).all():
-            data = item.to_dict()
-            item_owner = data.get("tenant_id", data.get("user_id"))
-            if isinstance(item, UserCanvasVersion):
-                item_owner = await db.scalar(select(UserCanvas.user_id).where(UserCanvas.id == item.user_canvas_id))
-            if _references(data, identifiers, names if item_owner in owners else set()):
-                raise ModelConflict("Model is referenced; update its consumers before deletion")
+    """Apply the project policy at one seam before the lifecycle deletes rows."""
+    references = await collect_blocking_model_references(db, rows)
+    if references:
+        raise ModelConflict("Model is referenced; update its consumers before deletion", references)
 
 
 async def delete_models(db: AsyncSession, rows: list[tuple[TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider]]) -> None:

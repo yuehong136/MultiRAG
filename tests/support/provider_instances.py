@@ -1,6 +1,8 @@
 """Shared owned PostgreSQL and HTTP fixtures for provider-instance contracts."""
 
+import asyncio
 import hashlib
+import sys
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -75,11 +77,12 @@ def http(owned_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[tupl
     app.include_router(provider_api.router, prefix="/api/v1")
     app.dependency_overrides[get_async_db] = session
     app.dependency_overrides[async_current_user] = lambda: SimpleNamespace(id=owner)
-    client = TestClient(app)
-    try:
-        yield client, owner, owned_engine, provider_api
-    finally:
-        client.close()
-        import asyncio
-
-        asyncio.run(engine.dispose())
+    # Psycopg requires Selector on Windows. Keep pooled connections and their
+    # disposal on the same portal loop across all requests in the fixture.
+    backend_options = {"loop_factory": asyncio.SelectorEventLoop} if sys.platform == "win32" else {}
+    with TestClient(app, backend_options=backend_options) as client:
+        try:
+            yield client, owner, owned_engine, provider_api
+        finally:
+            assert client.portal is not None
+            client.portal.call(engine.dispose)

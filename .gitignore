@@ -242,6 +242,7 @@ docs/*
 !docs/development.md
 !docs/database-migration.md
 !docs/knowledge-base-guide.md
+!docs/model-provider-lifecycle.md
 !docs/knowledge-base-guide-assets/
 !docs/references/
 !docs/channel-program/

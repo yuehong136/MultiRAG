@@ -56,6 +56,7 @@ worker 的 `-i` / `--index` 默认值为 `0`；旧位置参数已退出。仅支
 `GET /api/v1/system/healthz`；诊断还需核对组件状态、业务响应和相关日志，HTTP 200 本身不代表业务成功。
 部署与恢复见 [docker/README.md](../docker/README.md)，工具钩子以 `.claude/settings.json` 和实际脚本为准，不能替代交付验证。
 数据库启动引导、schema 升级和备份恢复边界见 [数据库迁移指南](database-migration.md)。
+模型厂商、连接与模型的删除保护和历史保留边界见 [模型配置生命周期](model-provider-lifecycle.md)。
 
 ## Go 并行实现的本地验证
 

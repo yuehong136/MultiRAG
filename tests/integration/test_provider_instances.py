@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import event, func, select, text
+from sqlalchemy import event, func, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -569,6 +569,146 @@ def test_long_base_url_strict_paths_and_validation_never_echo_secrets(http: tupl
         assert db.get(TenantLLM, identifier).api_base == long_url
         assert db.get(TenantLLM, identifier).status == "1"
         assert db.scalar(select(func.count()).select_from(TenantModelInstance)) == 1
+
+
+@pytest.mark.parametrize("scope", ["provider", "instance", "model"])
+def test_deletion_lists_all_references_without_leaking_foreign_resources(http: tuple[Any, ...], scope: str) -> None:
+    from api.db.db_models import Search, UserCanvas, UserCanvasVersion
+
+    client, owner, engine, _module = http
+    create(client)
+    identifier = client.get("/api/v1/models").json()["data"]["items"][0]["id"]
+    other, canvas_id, version_id, search_id, private_id = (uuid4().hex for _ in range(5))
+    with Session(engine) as db:
+        db.add(tenant(other))
+        db.add(UserCanvas(id=canvas_id, user_id=owner, title="Current agent", dsl={"llm_id": str(identifier), "tenant_llm_id": identifier}))
+        db.add(UserCanvasVersion(id=version_id, user_canvas_id=canvas_id, title="Published agent", release=True, create_time=2, dsl={"llm_id": "catalog-chat@OpenAI"}))
+        db.add(Search(id=search_id, tenant_id=owner, name="Deleted search", created_by=owner, status="0", search_config={"chat_id": str(identifier)}))
+        db.add(Search(id=private_id, tenant_id=other, name="Private foreign name", created_by=other, search_config={"chat_id": str(identifier)}))
+        db.commit()
+    assert client.patch("/api/v1/models/default", json={"model_type": "chat", "model_id": identifier}).status_code == 200
+    path = "/api/v1/providers/OpenAI"
+    if scope != "provider":
+        path += "/instances/first"
+    if scope == "model":
+        path += f"/models/{identifier}"
+    response = client.delete(path)
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["error_code"] == "MODEL_REFERENCED"
+    references = payload["data"]["references"]
+    assert len(references) == 4
+    by_type = {item["resource_type"]: item for item in references}
+    assert by_type["UserCanvas"]["resource_name"] == "Current agent"
+    assert by_type["UserCanvasVersion"]["resource_id"] == version_id
+    assert by_type["UserCanvasVersion"]["resource_name"] == "Published agent"
+    assert "Search" not in by_type
+    assert all(item["is_deleted"] is False for item in references)
+    assert by_type["Tenant"]["resource_id"] == owner
+    assert by_type["SharedResource"]["resource_id"] is None
+    assert by_type["SharedResource"]["resource_name"] is None
+    assert all(item["model_names"] == ["catalog-chat"] for item in references)
+    assert "fixture-shared-key" not in response.text and "Private foreign name" not in response.text and private_id not in response.text
+    with Session(engine) as reader:
+        assert reader.get(TenantLLM, identifier) is not None
+        assert reader.scalar(select(func.count()).select_from(TenantModelProvider)) == 1
+        assert reader.scalar(select(func.count()).select_from(TenantModelInstance)) == 1
+        assert reader.get(Tenant, owner).tenant_llm_id == identifier
+        assert reader.get(UserCanvasVersion, version_id).dsl == {"llm_id": "catalog-chat@OpenAI"}
+
+
+@pytest.mark.parametrize("scope", ["provider", "instance", "model"])
+def test_model_deletion_preserves_history_and_ignores_deleted_consumers(http: tuple[Any, ...], scope: str) -> None:
+    from api.db.db_models import API4Conversation, Document, Knowledgebase, PipelineOperationLog, Search, UserCanvas, UserCanvasVersion
+
+    client, owner, engine, _module = http
+    create(client)
+    identifier = client.get("/api/v1/models").json()["data"]["items"][0]["id"]
+    canvas_id, version_id, published_id, current_id, conversation_id, deleted_search_id, kb_id, deleted_kb_id, document_id, parent_deleted_doc_id, log_id = (uuid4().hex for _ in range(11))
+    snapshot = {"components": {"agent": {"params": {"llm_id": str(identifier)}}}}
+    with Session(engine) as db:
+        db.add(UserCanvas(id=canvas_id, user_id=owner, title="Current agent", dsl={}))
+        db.add(UserCanvasVersion(id=published_id, user_canvas_id=canvas_id, title="Previous release", release=True, create_time=1, dsl=snapshot))
+        db.add(UserCanvasVersion(id=current_id, user_canvas_id=canvas_id, title="Serving release", release=True, create_time=2, dsl={}))
+        db.add(UserCanvasVersion(id=version_id, user_canvas_id=canvas_id, title="Draft history", release=False, create_time=3, dsl=snapshot))
+        db.add(API4Conversation(id=conversation_id, dialog_id=canvas_id, user_id=owner, name="Existing conversation", source="agent", dsl=snapshot))
+        db.add(Search(id=deleted_search_id, tenant_id=owner, name="Deleted search", created_by=owner, status="0", search_config={"chat_id": str(identifier)}))
+        db.add(Knowledgebase(id=kb_id, tenant_id=owner, created_by=owner, name="Dataset", embd_id="", status="1"))
+        db.add(Knowledgebase(id=deleted_kb_id, tenant_id=owner, created_by=owner, name="Deleted dataset", embd_id=str(identifier), status="0"))
+        for doc_id, parent, status in ((document_id, kb_id, "0"), (parent_deleted_doc_id, deleted_kb_id, "1")):
+            db.add(Document(id=doc_id, kb_id=parent, created_by=owner, name="Archived document", type="txt", parser_id="naive", parser_config={"llm_id": str(identifier)}, status=status))
+        db.add(
+            PipelineOperationLog(
+                id=log_id,
+                tenant_id=owner,
+                kb_id=kb_id,
+                parser_id="naive",
+                document_name="Processed document",
+                document_suffix="txt",
+                document_type="txt",
+                source_from="local",
+                operation_status="completed",
+                dsl=snapshot,
+            )
+        )
+        # BaseModel's insert hook owns timestamps; establish the persisted
+        # version ordering after insertion rather than relying on constructor values.
+        db.flush()
+        for version, timestamp in ((published_id, 1), (current_id, 2), (version_id, 3)):
+            db.execute(update(UserCanvasVersion).where(UserCanvasVersion.id == version).values(create_time=timestamp))
+        db.commit()
+    path = "/api/v1/providers/OpenAI"
+    if scope != "provider":
+        path += "/instances/first"
+    if scope == "model":
+        path += f"/models/{identifier}"
+    response = client.delete(path)
+    assert response.status_code == 200, response.text
+    with Session(engine) as reader:
+        assert reader.get(TenantLLM, identifier) is None
+        assert reader.get(TenantModel, identifier) is None
+        assert reader.get(UserCanvasVersion, version_id).dsl == snapshot
+        assert reader.get(UserCanvasVersion, published_id).dsl == snapshot
+        assert reader.get(UserCanvasVersion, current_id).dsl == {}
+        assert reader.get(API4Conversation, conversation_id).dsl == snapshot
+        assert reader.get(PipelineOperationLog, log_id).dsl == snapshot
+        assert reader.get(Search, deleted_search_id).status == "0"
+        assert reader.get(Document, document_id).parser_config == {"llm_id": str(identifier)}
+        assert reader.get(Document, parent_deleted_doc_id).status == "1"
+        with pytest.raises(LookupError, match="not found"):
+            get_model_config_by_id(reader, identifier, tenant_id=owner, model_type="chat")
+
+
+def test_published_version_and_live_document_remain_protected_until_replaced(http: tuple[Any, ...]) -> None:
+    from api.db.db_models import Document, Knowledgebase, UserCanvas, UserCanvasVersion
+
+    client, owner, engine, _module = http
+    create(client)
+    identifier = client.get("/api/v1/models").json()["data"]["items"][0]["id"]
+    canvas_id, published_id, draft_id, kb_id, document_id = (uuid4().hex for _ in range(5))
+    with Session(engine) as db:
+        db.add(UserCanvas(id=canvas_id, user_id=owner, title="Agent draft", dsl={}))
+        db.add(UserCanvasVersion(id=published_id, user_canvas_id=canvas_id, title="Serving version", release=True, create_time=1, dsl={"llm_id": str(identifier)}))
+        db.add(UserCanvasVersion(id=draft_id, user_canvas_id=canvas_id, title="Newer draft", release=False, create_time=2, dsl={}))
+        db.add(Knowledgebase(id=kb_id, tenant_id=owner, created_by=owner, name="Dataset", embd_id="", status="1"))
+        db.add(Document(id=document_id, kb_id=kb_id, created_by=owner, name="Live document", type="txt", parser_id="naive", parser_config={"llm_id": "catalog-chat@OpenAI"}, status="1"))
+        db.commit()
+    path = f"/api/v1/providers/OpenAI/instances/first/models/{identifier}"
+    response = client.delete(path)
+    assert response.status_code == 409, response.text
+    references = {item["resource_type"]: item for item in response.json()["data"]["references"]}
+    assert set(references) == {"UserCanvasVersion", "Document"}
+    assert references["UserCanvasVersion"]["resource_id"] == published_id
+    assert references["Document"]["resource_name"] == "Live document"
+    with Session(engine) as db:
+        assert db.get(TenantLLM, identifier) is not None
+        db.get(Document, document_id).status = "0"
+        db.add(UserCanvasVersion(id=uuid4().hex, user_canvas_id=canvas_id, title="Replacement release", release=True, create_time=3, dsl={}))
+        db.commit()
+    assert client.delete(path).status_code == 200
+    with Session(engine) as reader:
+        assert reader.get(UserCanvasVersion, published_id).dsl == {"llm_id": str(identifier)}
+        assert reader.get(TenantLLM, identifier) is None
 
 
 def test_reference_checks_use_model_fields_and_owner_scope(http: tuple[Any, ...]) -> None:
