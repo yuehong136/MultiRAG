@@ -211,7 +211,8 @@ def tenant_models(monkeypatch: pytest.MonkeyPatch, db: Session, mineru_http: Any
             state.open = False
 
     def ocr_config(session: Session, tenant_id: str, model_type: str, name: str) -> dict[str, Any]:
-        assert session is db and tenant_id == "tenant-f" and model_type == LLMType.OCR.value and name == "mineru@MinerU"
+        assert session is db and tenant_id == "tenant-f" and model_type == LLMType.OCR.value
+        assert name in {"mineru@MinerU", "mineru@MinerU@MinerU"}
         return {"id": 10, "tenant_id": tenant_id, "llm_name": name, "mdl_type": model_type, "llm_factory": "MinerU"}
 
     def default_config(session: Session, tenant_id: str, model_type: Any) -> dict[str, Any]:

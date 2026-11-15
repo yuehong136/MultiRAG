@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -525,7 +526,7 @@ def test_update_session_rejects_message_and_reference_changes(client, monkeypatc
     assert reference["message"] == "`reference` cannot be changed."
 
 
-def test_session_completion_non_stream_reads_ids_from_body(monkeypatch):
+def test_session_completion_non_stream_reads_ids_from_body(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(chat_api, "_owned_chat_exists", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(chat_api, "get_uuid", lambda: "msg-1")
     conv = Obj(id="session-1", dialog_id="chat-1", message=[], reference=[])
@@ -549,7 +550,7 @@ def test_session_completion_non_stream_reads_ids_from_body(monkeypatch):
 
     db_stub = AsyncSession()
 
-    async def fake_async_chat(dialog_arg, messages_arg, db_arg, stream=True, **kwargs):
+    async def fake_async_chat(dialog_arg: Any, messages_arg: list[dict[str, Any]], db_arg: AsyncSession, stream: bool = True, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         assert dialog_arg is not dialog
         assert all(getattr(dialog_arg, key) == value for key, value in dialog.to_dict().items())
         assert dialog_arg.llm_setting is not dialog.llm_setting
@@ -557,7 +558,7 @@ def test_session_completion_non_stream_reads_ids_from_body(monkeypatch):
         assert db_arg is db_stub
         assert stream is False
         assert messages_arg == [{"role": "user", "content": "hi", "id": "msg-1"}]
-        assert kwargs == {}
+        assert kwargs == {"session_id": "session-1", "trace_user_id": "tenant-1"}
         yield {"answer": "ok", "reference": {}, "audio_binary": None, "final": True}
 
     monkeypatch.setattr(chat_api, "async_chat", fake_async_chat)

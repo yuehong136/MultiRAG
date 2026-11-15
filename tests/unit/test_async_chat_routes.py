@@ -241,20 +241,20 @@ def test_chat_completion_autocreates_session_when_missing(client, monkeypatch, c
     assert chat_route_stubs.updates == ["conv-1"]
 
 
-def test_chat_completion_direct_mode_without_chat_id(client, monkeypatch, chat_route_stubs):
+def test_chat_completion_direct_mode_without_chat_id(client: TestClient, monkeypatch: pytest.MonkeyPatch, chat_route_stubs: Any) -> None:
     """无 chat_id 直连聊天:临时默认 dialog(租户默认模型),不落库。"""
     chat_api = _route_module("api.apps.restful_apis.chat")
     seen = {}
 
-    async def fake_async_chat(dialog, messages, db, stream=True, **kwargs):
+    async def fake_async_chat(dialog: Any, messages: list[dict[str, Any]], db: AsyncSession, stream: bool = True, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         seen["dialog"] = dialog
         yield {"answer": "直答", "reference": {}, "final": True}
 
     monkeypatch.setattr(chat_api, "async_chat", fake_async_chat)
     monkeypatch.setattr(
-        chat_api.TenantService,
-        "get_by_id",
-        classmethod(lambda cls, s, tid: types.SimpleNamespace(llm_id="default-llm", tenant_llm_id=7)),
+        chat_api,
+        "get_tenant_default_model_by_type",
+        lambda db, tenant_id, model_type: {"llm_name": "default-llm", "llm_factory": "OpenAI", "id": 7},
     )
 
     resp = client.post(
@@ -267,7 +267,7 @@ def test_chat_completion_direct_mode_without_chat_id(client, monkeypatch, chat_r
     assert body["code"] == 0
     assert body["data"]["answer"] == "直答"
     assert "chat_id" not in body["data"]
-    assert seen["dialog"].llm_id == "default-llm"
+    assert seen["dialog"].llm_id == "default-llm@OpenAI"
     assert seen["dialog"].tenant_llm_id == 7
     assert seen["dialog"].kb_ids == []
     assert chat_route_stubs.updates == []
@@ -285,7 +285,7 @@ def test_chat_completion_rejects_session_without_chat(client):
     assert body["message"] == "`chat_id` is required when `session_id` is provided."
 
 
-def test_chat_completion_openai_like_streams(client, monkeypatch, chat_route_stubs):
+def test_chat_completion_openai_like_streams(client: TestClient, monkeypatch: pytest.MonkeyPatch, chat_route_stubs: Any) -> None:
     from api.utils.api_utils import async_token_required
 
     openai_api = _route_module("api.apps.restful_apis.openai")
@@ -305,7 +305,7 @@ def test_chat_completion_openai_like_streams(client, monkeypatch, chat_route_stu
     )
 
     resp = client.post(
-        "/api/v1/chats_openai/dlg-1/chat/completions",
+        "/api/v1/openai/dlg-1/chat/completions",
         json={"model": "model", "messages": [{"role": "user", "content": "hi"}], "stream": True, "internet": True},
     )
 

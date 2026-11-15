@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from tests.integration.test_memory_dreaming_http import dreaming_api as dreaming_api
-from tests.integration.test_memory_writes_http import writes_api as writes_api
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.memory_dreaming_http import dreaming_api as dreaming_api
+from tests.support.memory_writes_http import writes_api as writes_api
 from tests.support.resource_journal import ResourceJournal
 from tests.support.web_consumer import pinned_web_checkout, private_consumer_file
 

@@ -58,12 +58,18 @@ def test_self_http_responses_keep_email_without_credentials(client: TestClient, 
 def test_reset_http_returns_boolean_without_user_or_token(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     module = import_module("api.apps.restful_apis.user")
     user = actual_user()
-    monkeypatch.setattr(module, "REDIS_CONN", Mock(get=Mock(return_value="verified")))
-    monkeypatch.setattr(UserService, "query_password_user_by_email", classmethod(lambda *args: user))
-    update = Mock(return_value=True)
-    monkeypatch.setattr(UserService, "update_user_password", update)
-    response = client.post("/api/v1/auth/password/reset", json={"email": user.email, "new_password": "new", "confirm_new_password": "new"})
+    reset = AsyncMock()
+    monkeypatch.setattr(module.recovery, "reset_password", reset)
+    token = "a" * 64
+    response = client.post(
+        "/api/v1/auth/password/reset",
+        json={"email": user.email, "new_password": "new", "confirm_new_password": "new"},
+        headers={"Cookie": f"multirag_py_recovery={token}"},
+    )
     assert response.status_code == 200 and response.json()["retcode"] == 0
     assert response.json()["data"] is True and "authorization" not in response.headers
     assert "private" not in response.text and user.email not in response.text
-    update.assert_called_once()
+    reset.assert_awaited_once()
+    assert isinstance(reset.await_args.args[0], AsyncSession)
+    assert reset.await_args.args[1:] == (user.email, "new", token)
+    assert 'multirag_py_recovery=""' in response.headers["set-cookie"]
