@@ -122,7 +122,7 @@ POST /api/v1/memories/{memory_id}/operations/{operation_id}/reconciliations
 ```
 
 受理后在请求内尝试推进一次；未完成的内容保留在 SQL outbox，由调用者显式对账。
-GET、页面轮询和应用重启本身不会自动推进。结果未知时保留原 operation 和物理 ID，先读回再决定后续动作，
+GET 和页面轮询本身不会自动推进修订或清理。Dreaming 分析由独立持久 worker 执行，见[维护文档](memory-maintenance.md)。结果未知时保留原 operation 和物理 ID，先读回再决定后续动作，
 不换 ID 重发、也不以异常证明“没有写入”。配置指纹不保存凭据正文。
 
 每次外部执行都有 attempt/lease。**租约过期不代表旧 IO 已结束。**
@@ -190,7 +190,8 @@ Content-Type: application/json
 操作分别报告 `lifecycle`、`writer_drain`、`blocked_by` 和 `needs_operator_reconciliation`。
 只有 `lifecycle=deleted` 且 `tracked_cleanup_confirmed=true` 表示本协议追踪的清理完成。
 `physical_cleanup_complete=false`、`untraceable_copies=true` 不承诺备份、客户端副本和未受控历史副本消失。
-Web 删除对话框在等待排空或清理中保持未完成状态，并允许对同一操作重试；关闭页面后的自动恢复不在当前保证内。
+Web 删除对话框在等待排空或清理中保持未完成状态，并允许对同一操作重试；独立操作页可在刷新或关闭页面后，
+通过服务端待办及 URL 中的原操作 ID 重新读取。发现和读取不自动执行对账，清理完成仍以原回执为准。
 
 升级部署时，先备份、应用 Alembic 迁移，再停止旧 API/worker，确认旧远程调用结束后统一切换。
 不能混用绕过 admission 的旧进程与新进程。历史 Task 即使 `progress=1` 也不构成旧 IO 排空证据，删除时会作为

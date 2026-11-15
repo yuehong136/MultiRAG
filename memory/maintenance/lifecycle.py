@@ -99,6 +99,9 @@ async def _redact_jobs(
         job.entry_snapshots = []
         job.error_code = "source_withdrawn" if permanent else "source_state_changed"
         job.receipt = {key: value for key, value in job.receipt.items() if key in {"commands", "analysis_attempts"}}
+        from memory.maintenance.execution import cancel_execution
+
+        await cancel_execution(db, memory_id=memory_id, job_id=job.job_id, reason=job.error_code)
         inputs = list(await db.scalars(select(MemoryMaintenanceInput).where(MemoryMaintenanceInput.job_id == job.job_id).order_by(MemoryMaintenanceInput.input_id).with_for_update()))
         for item in inputs:
             item.snapshot = {}

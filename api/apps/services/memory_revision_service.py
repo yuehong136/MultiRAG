@@ -191,6 +191,13 @@ async def _legacy_state_service(db: AsyncSession, memory_id: str, actor_id: str)
 
 
 async def get_operation(db: AsyncSession, memory_id: str, operation_id: str, *, actor_id: str) -> dict[str, Any]:
+    from api.apps.services.memory_operation_service import recovery_metadata
+
+    operation = await _read_operation(db, memory_id, operation_id, actor_id=actor_id)
+    return {**operation, **await recovery_metadata(db, memory_id, operation_id, actor_id=actor_id, operation=operation)}
+
+
+async def _read_operation(db: AsyncSession, memory_id: str, operation_id: str, *, actor_id: str) -> dict[str, Any]:
     kind = await _operation_kind(db, memory_id, operation_id)
     if kind == "dream_publish":
         from api.apps.services.memory_maintenance_service import publications
@@ -244,7 +251,9 @@ async def _reconcile(db: AsyncSession, service: RevisionService, store: ManagedM
 
 
 async def reconcile_operation(db: AsyncSession, memory_id: str, operation_id: str, *, actor_id: str) -> dict[str, Any]:
-    kind = await _operation_kind(db, memory_id, operation_id)
+    from api.apps.services.memory_operation_service import authorize_reconciliation
+
+    kind = await authorize_reconciliation(db, memory_id, operation_id, actor_id=actor_id)
     if kind == "dream_publish":
         from api.apps.services.memory_maintenance_service import publications
 
@@ -252,7 +261,7 @@ async def reconcile_operation(db: AsyncSession, memory_id: str, operation_id: st
     if kind == "dream_publish_item":
         raise RevisionConflict("reconcile_parent_publication_operation")
     if kind == "dream_analyze":
-        from api.apps.services.memory_maintenance_service import jobs
+        from api.apps.services.memory_maintenance_service import executions, jobs
         from api.db.memory_writer_models import MemoryWriterAdmission
 
         job_service = await jobs(db, memory_id, actor_id=actor_id)
@@ -261,7 +270,7 @@ async def reconcile_operation(db: AsyncSession, memory_id: str, operation_id: st
         await _release_read_transaction(db)
         if not isinstance(job_id, str):
             raise RevisionNotFound("maintenance_job_not_found")
-        await job_service.run(memory_id, job_id, operation_id=operation_id)
+        await (await executions(db, memory_id, actor_id=actor_id)).submit(memory_id, job_id, operation_id=operation_id)
         return await job_service.operation(memory_id, operation_id)
     if kind == "delete_memory":
         from memory.revisions.deletion import MemoryDeletionService

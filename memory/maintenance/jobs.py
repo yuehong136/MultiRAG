@@ -19,7 +19,7 @@ from api.db.memory_writer_models import MemoryWriterAdmission, MemoryWriterFence
 from common.asyncio_utils import finish_owned_work
 from memory.maintenance.domain import ASSESSMENT, assemble_candidates, canonical_request, identifier, validate_manifest
 from memory.maintenance.types import AnalysisResult, Analyzer, Authorize, InputValidator, Snapshotter
-from memory.revisions.domain import RevisionConflict, RevisionNotFound, RevisionValidationError, positive_int, request_hash, validate_operation_id
+from memory.revisions.domain import RevisionBusy, RevisionConflict, RevisionNotFound, RevisionValidationError, positive_int, request_hash, validate_operation_id
 from memory.writes.admission import WriterCoordinator
 
 
@@ -150,6 +150,22 @@ class JobService(WriterCoordinator):
             ).all()
         )
 
+    async def _manifest(self, job: MemoryMaintenanceJob) -> dict[str, Any]:
+        return manifest_for_job(job, await self._inputs(job))
+
+    async def _job_view(self, job: MemoryMaintenanceJob, inputs: list[MemoryMaintenanceInput]) -> dict[str, Any]:
+        from api.db.memory_execution_models import MemoryMaintenanceExecution
+        from memory.maintenance.execution import execution_snapshot
+
+        value = job_view(job, inputs)
+        row = await self.db.scalar(
+            select(MemoryMaintenanceExecution).where(
+                MemoryMaintenanceExecution.job_id == job.job_id, MemoryMaintenanceExecution.memory_id == job.memory_id, MemoryMaintenanceExecution.tenant_id == self.tenant_id
+            )
+        )
+        value["execution"] = await execution_snapshot(self.db, row) if row is not None else None
+        return value
+
     async def _locked(self, memory_id: str, job_id: str, *, validate: bool = True) -> tuple[MemoryMaintenanceJob, list[MemoryMaintenanceInput]]:
         await self._memory_fence(memory_id)
         observed = await self._job(memory_id, job_id)
@@ -192,7 +208,7 @@ class JobService(WriterCoordinator):
             if previous is not None:
                 if previous.tenant_id != self.tenant_id or previous.request_sha256 != digest:
                     raise RevisionConflict("operation_request_mismatch")
-                return job_view(previous, await self._inputs(previous))
+                return await self._job_view(previous, await self._inputs(previous))
         finally:
             await self.db.rollback()
         manifest = validate_manifest(await finish_owned_work(self.snapshotter(memory_id, request["source_ids"], request["entry_ids"], input_budget_tokens)), request, self.count_tokens)
@@ -203,7 +219,7 @@ class JobService(WriterCoordinator):
             if previous is not None:
                 if previous.request_sha256 != digest or previous.tenant_id != self.tenant_id:
                     raise RevisionConflict("operation_request_mismatch")
-                return job_view(previous, await self._inputs(previous))
+                return await self._job_view(previous, await self._inputs(previous))
             job = MemoryMaintenanceJob(
                 job_id=uuid4().hex,
                 memory_id=memory_id,
@@ -227,14 +243,14 @@ class JobService(WriterCoordinator):
             inputs = [MemoryMaintenanceInput(job_id=job.job_id, memory_id=memory_id, tenant_id=self.tenant_id, **item) for item in manifest["inputs"]]
             self.db.add_all(inputs)
             await self.db.flush()
-            result = job_view(job, inputs)
+            result = await self._job_view(job, inputs)
         return result
 
     async def get(self, memory_id: str, job_id: str) -> dict[str, Any]:
         await self._idle()
         try:
             job, inputs, _ = await self._read(memory_id, identifier(job_id))
-            return job_view(job, inputs)
+            return await self._job_view(job, inputs)
         finally:
             await self.db.rollback()
 
@@ -254,7 +270,7 @@ class JobService(WriterCoordinator):
                     )
                 ).all()
             )
-            return {"jobs": [job_view(job, await self._inputs(job)) for job in jobs[:limit]], "limit": limit, "has_more": len(jobs) > limit}
+            return {"jobs": [await self._job_view(job, await self._inputs(job)) for job in jobs[:limit]], "limit": limit, "has_more": len(jobs) > limit}
         finally:
             await self.db.rollback()
 
@@ -288,10 +304,19 @@ class JobService(WriterCoordinator):
             raise RevisionConflict("operation_request_mismatch")
         job.analysis_operation_id = row.operation_id
         row.request_metadata = {"job_id": job.job_id, "source_ids": list(job.source_ids)}
+        await self.db.flush()
+        outbox = await self._outbox(row)
+        if outbox.payload.get("server_metadata", {}).get("execution_mode") == "background":
+            from memory.maintenance.execution import register_execution
 
-    async def _start(self, memory_id: str, job_id: str, operation_id: str, token: str, generation: int) -> tuple[dict[str, Any], str, int]:
+            await register_execution(self.db, job, row)
+
+    async def _start(self, memory_id: str, job_id: str, operation_id: str, token: str, generation: int, execution_claim_token: str | None = None) -> tuple[dict[str, Any], str, int]:
+        from memory.maintenance.execution import require_execution_permit
+
         async with self._write(operation_id):
             job, inputs = await self._locked(memory_id, job_id)
+            await require_execution_permit(self.db, job, operation_id, execution_claim_token, token, start=True)
             row = await self._row(memory_id, operation_id, lock=True)
             if (
                 job.generation != generation
@@ -351,9 +376,14 @@ class JobService(WriterCoordinator):
         job.receipt = {**job.receipt, "analysis_attempts": attempts}
         job.usage = totals
 
-    async def _save_analysis(self, memory_id: str, job_id: str, operation_id: str, token: str, generation: int, result: AnalysisResult, candidates: list[dict[str, Any]]) -> None:
+    async def _save_analysis(
+        self, memory_id: str, job_id: str, operation_id: str, token: str, generation: int, result: AnalysisResult, candidates: list[dict[str, Any]], execution_claim_token: str | None = None
+    ) -> None:
+        from memory.maintenance.execution import require_execution_permit
+
         async with self._write(operation_id):
             job, inputs = await self._locked(memory_id, job_id)
+            await require_execution_permit(self.db, job, operation_id, execution_claim_token, token, start=False)
             row = await self._row(memory_id, operation_id, lock=True)
             if job.generation != generation or job.analysis_operation_id != operation_id or row.active_token != token or row.publication_state == "canceled" or job.state != "running":
                 raise RevisionConflict("maintenance_analysis_fence_changed")
@@ -378,9 +408,15 @@ class JobService(WriterCoordinator):
             assert operation is not None
             operation.status, operation.index_sync_status, operation.error_code, operation.result = "ready", "ready", None, {"job_id": job_id, "candidate_ids": candidate_ids}
 
-    async def _analysis_error(self, memory_id: str, job_id: str, operation_id: str, code: str, *, token: str, result: AnalysisResult | None = None) -> None:
+    async def _analysis_error(self, memory_id: str, job_id: str, operation_id: str, code: str, *, token: str, result: AnalysisResult | None = None, execution_claim_token: str | None = None) -> None:
         async with self._write(operation_id):
             job = await self._job(memory_id, job_id, lock=True)
+            if execution_claim_token is not None:
+                from api.db.memory_execution_models import MemoryMaintenanceExecution
+
+                execution = await self.db.scalar(select(MemoryMaintenanceExecution).where(MemoryMaintenanceExecution.job_id == job_id).execution_options(populate_existing=True).with_for_update())
+                if execution is None or execution.claim_token != execution_claim_token:
+                    return
             if job.state != "ready":
                 self._record_attempt(job, operation_id, token, result, code)
             if job.state not in {"pending", "running", "failed"}:
@@ -402,13 +438,15 @@ class JobService(WriterCoordinator):
                     if operation is not None and operation.status == "cancel_requested":
                         operation.status, operation.index_sync_status = "canceled", "canceled"
 
-    async def run(self, memory_id: str, job_id: str, *, operation_id: str) -> dict[str, Any]:
+    async def run(self, memory_id: str, job_id: str, *, operation_id: str, execution_claim_token: str | None = None) -> dict[str, Any]:
         validate_operation_id(operation_id)
         view = await self.get(memory_id, job_id)
         if view["analysis_operation_id"] is not None and view["analysis_operation_id"] != operation_id:
             raise RevisionConflict("maintenance_analysis_operation_mismatch")
         if view["state"] == "ready":
             return view
+        if view["execution"] is not None and execution_claim_token is None:
+            raise RevisionBusy("maintenance_background_execution_required")
         if view["state"] not in {"pending", "failed", "running"}:
             raise RevisionConflict("maintenance_job_not_runnable")
         generation = view["generation"]
@@ -417,7 +455,7 @@ class JobService(WriterCoordinator):
         token = claimed["active_token"]
         metadata: AnalysisResult | None = None
         try:
-            manifest, policy, budget = await self._start(memory_id, job_id, operation_id, token, generation)
+            manifest, policy, budget = await self._start(memory_id, job_id, operation_id, token, generation, execution_claim_token)
             if any(item["coverage"] == "included" for item in manifest["inputs"]):
                 result: AnalysisResult = await finish_owned_work(self.analyzer(memory_id, manifest, policy, budget))
             else:
@@ -425,13 +463,15 @@ class JobService(WriterCoordinator):
             self._analysis_metadata(result)
             metadata = result
             proposed = assemble_candidates(result["proposals"], manifest, self.count_tokens, budget)
-            await self._save_analysis(memory_id, job_id, operation_id, token, generation, result, proposed)
+            await self._save_analysis(memory_id, job_id, operation_id, token, generation, result, proposed, execution_claim_token)
         except asyncio.CancelledError:
-            await finish_owned_work(self._analysis_error(memory_id, job_id, operation_id, "maintenance_analysis_interrupted", token=token, result=metadata))
+            await finish_owned_work(
+                self._analysis_error(memory_id, job_id, operation_id, "maintenance_analysis_interrupted", token=token, result=metadata, execution_claim_token=execution_claim_token)
+            )
             raise
         except Exception as error:
             code = error.code if isinstance(error, (RevisionConflict, RevisionValidationError, RevisionNotFound)) else "maintenance_analysis_unconfirmed"
-            await self._analysis_error(memory_id, job_id, operation_id, code, token=token, result=metadata)
+            await self._analysis_error(memory_id, job_id, operation_id, code, token=token, result=metadata, execution_claim_token=execution_claim_token)
         finally:
             try:
                 await finish_owned_work(self._settle_cancel(memory_id, job_id, operation_id))
@@ -510,15 +550,18 @@ class JobService(WriterCoordinator):
         return value
 
     async def cancel(self, memory_id: str, job_id: str, *, operation_id: str) -> dict[str, Any]:
+        from memory.maintenance.execution import cancel_execution
+
         validate_operation_id(operation_id)
         digest = request_hash({"actor_id": self.actor_id, "job_id": job_id, "action": "cancel"})
         async with self._write(operation_id):
             job, inputs = await self._locked(memory_id, job_id, validate=False)
             if self._command(job, operation_id, digest) is not None:
-                return job_view(job, inputs)
+                return await self._job_view(job, inputs)
             candidates = list(
                 await self.db.scalars(select(MemoryMaintenanceCandidate).where(MemoryMaintenanceCandidate.job_id == job_id).order_by(MemoryMaintenanceCandidate.candidate_id).with_for_update())
             )
+            await cancel_execution(self.db, memory_id=memory_id, job_id=job_id, reason="maintenance_job_canceled")
             row = (
                 await self.db.scalar(
                     select(MemoryWriterAdmission).where(MemoryWriterAdmission.memory_id == memory_id, MemoryWriterAdmission.operation_id == job.analysis_operation_id).with_for_update()
@@ -547,5 +590,21 @@ class JobService(WriterCoordinator):
                     )
             self._command(job, operation_id, digest, {"state": job.state, "generation": job.generation})
             await self.db.flush()
-            value = job_view(job, inputs)
+            value = await self._job_view(job, inputs)
         return value
+
+    async def operation(self, memory_id: str, operation_id: str) -> dict[str, Any]:
+        from api.db.memory_execution_models import MemoryMaintenanceExecution
+        from memory.maintenance.execution import execution_snapshot
+
+        value = await super().operation(memory_id, operation_id)
+        try:
+            row = await self.db.scalar(
+                select(MemoryMaintenanceExecution).where(
+                    MemoryMaintenanceExecution.memory_id == memory_id, MemoryMaintenanceExecution.operation_id == operation_id, MemoryMaintenanceExecution.tenant_id == self.tenant_id
+                )
+            )
+            value["execution"] = await execution_snapshot(self.db, row) if row is not None else None
+            return value
+        finally:
+            await self.db.rollback()

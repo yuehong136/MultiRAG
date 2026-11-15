@@ -378,13 +378,17 @@ def _migration() -> Any:
 
 
 async def test_migration_bootstraps_revalidates_and_refuses_nonempty_review_history(environment: dict[str, Any]) -> None:
+    from api.db.memory_execution_models import MemoryMaintenanceExecution
+
     migration, engine = _migration(), environment["engine"]
     with engine.begin() as connection:
+        MemoryMaintenanceExecution.__table__.drop(connection)
         for model in reversed(MEMORY_MAINTENANCE_MODELS):
             model.__table__.drop(connection)
         with Operations.context(MigrationContext.configure(connection)):
             migration.upgrade()
             migration.upgrade()
+        MemoryMaintenanceExecution.__table__.create(connection)
     job = await create(environment)
     with engine.begin() as connection, Operations.context(MigrationContext.configure(connection)):
         with pytest.raises(RuntimeError, match="review history"):
@@ -394,8 +398,11 @@ async def test_migration_bootstraps_revalidates_and_refuses_nonempty_review_hist
 
 
 async def test_migration_rejects_incompatible_existing_table_without_replacing_it(environment: dict[str, Any]) -> None:
+    from api.db.memory_execution_models import MemoryMaintenanceExecution
+
     migration, engine = _migration(), environment["engine"]
     with engine.begin() as connection:
+        MemoryMaintenanceExecution.__table__.drop(connection)
         for model in reversed(MEMORY_MAINTENANCE_MODELS):
             model.__table__.drop(connection)
         connection.execute(sa.text("CREATE TABLE usr_ai.t_ai_memory_maintenance_jobs (job_id TEXT PRIMARY KEY)"))
