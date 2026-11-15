@@ -249,6 +249,11 @@ class Relay:
                     if entry.first_token_ms is None:
                         entry.first_token_ms = _elapsed_ms(started)
                     yield forwarded
+                if tap.finished:
+                    # The terminator is delivered. SDKs hang up on it at once and
+                    # some upstreams keep the connection open, so stop here.
+                    outcome = "completed"
+                    break
             else:
                 rest = tap.flush()
                 if rest:
@@ -261,6 +266,9 @@ class Relay:
             outcome = "upstream_stream_error"
             yield _sse_error(errors.upstream_unreachable())
         finally:
+            # A caller that hangs up right after the terminator received everything.
+            if outcome == "client_closed" and tap.finished:
+                outcome = "completed"
             # A disconnecting client cancels this generator; awaits here would be
             # cancelled with it, so cleanup and the log write run in their own task.
             self._spawn(self._finish_stream(response, tap, entry, started, outcome))

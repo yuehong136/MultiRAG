@@ -7,6 +7,8 @@ from typing import Any
 
 # Only events whose usage is an object are parsed; ``"usage": null`` chunks are skipped.
 _USAGE_OBJECT = re.compile(rb'"usage"\s*:\s*\{')
+# The sentinel that ends an OpenAI chat stream.
+_DONE_EVENT = re.compile(rb"^data:\s*\[DONE\]\s*$", re.MULTILINE)
 _EVENT_SEPARATORS = (b"\r\n\r\n", b"\n\n", b"\r\r")
 # An upstream that never ends an event must not grow the buffer without bound.
 _MAX_EVENT_BYTES = 1 << 20
@@ -65,6 +67,8 @@ class SSEUsageTap:
         self._buffer = bytearray()
         self._hide = hide_usage_only_chunk
         self.usage = UNAVAILABLE
+        # True once the stream's terminating event has passed through.
+        self.finished = False
 
     def feed(self, chunk: bytes) -> bytes:
         self._buffer += chunk
@@ -96,6 +100,9 @@ class SSEUsageTap:
         return end
 
     def _keep(self, event: bytes) -> bool:
+        if _DONE_EVENT.search(event):
+            self.finished = True
+            return True
         if not _USAGE_OBJECT.search(event):
             return True
         payload = _event_payload(event)

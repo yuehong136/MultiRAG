@@ -510,3 +510,55 @@ def test_failing_limiter_settlement_does_not_change_the_response():
 
     assert gateway.call("POST", CHAT, headers=AUTH, json=_CHAT_BODY).status_code == 200
     assert gateway.only_record().status_code == 200
+
+
+async def _streamed_entry(chunks: list[bytes], take: int) -> tuple[RequestLogEntry, httpx.Response]:
+    """Drive the stream generator, take ``take`` chunks, then hang up like a real client."""
+    store = FakeStore()
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, headers=_SSE, stream=Chunks(chunks)))
+    async with httpx.AsyncClient(transport=transport) as client:
+        relay = Relay(client, store, ModelGatewayConfig(), MemoryLimiter())
+        response = await client.send(client.build_request("POST", "http://upstream.test/v1/chat/completions"), stream=True)
+        entry = RequestLogEntry(id="r" * 32, tenant_id="tenant-1", key_id="k" * 32, key_name="eval-runner", endpoint="chat.completions", started_at=datetime.now(UTC), stream=True)
+        started = time.monotonic()
+        stream = relay._stream(response, SSEUsageTap(hide_usage_only_chunk=True), entry, started, started + 60)
+        for _ in range(take):
+            await anext(stream)
+        await stream.aclose()
+        await relay.drain()
+    assert store.records == [entry]
+    return entry, response
+
+
+async def test_caller_hanging_up_right_after_done_is_a_completed_call():
+    # SDKs close the connection as soon as they read [DONE]; the upstream here
+    # would keep sending, as some servers hold the connection open.
+    entry, response = await _streamed_entry([_DELTA, _USAGE_ONLY, _DONE, b": keep-alive\n\n"], take=2)
+
+    assert (entry.status_code, entry.error_type, entry.error_code) == (200, None, None)
+    assert (entry.usage.total_tokens, entry.usage.source) == (5, "reported")
+    assert response.is_closed
+
+
+async def test_stream_is_not_read_past_its_terminator():
+    served: list[bytes] = []
+
+    class Counting(Chunks):
+        async def __aiter__(self):
+            async for chunk in super().__aiter__():
+                served.append(chunk)
+                yield chunk
+
+    store = FakeStore()
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, headers=_SSE, stream=Counting([_DELTA, _DONE, _DELTA, _DELTA])))
+    async with httpx.AsyncClient(transport=transport) as client:
+        relay = Relay(client, store, ModelGatewayConfig(), MemoryLimiter())
+        response = await client.send(client.build_request("POST", "http://upstream.test/v1/chat/completions"), stream=True)
+        entry = RequestLogEntry(id="r" * 32, tenant_id="tenant-1", key_id="k" * 32, key_name="eval-runner", endpoint="chat.completions", started_at=datetime.now(UTC), stream=True)
+        started = time.monotonic()
+        forwarded = [chunk async for chunk in relay._stream(response, SSEUsageTap(hide_usage_only_chunk=True), entry, started, started + 60)]
+        await relay.drain()
+
+    assert forwarded == [_DELTA, _DONE]
+    assert served == [_DELTA, _DONE]
+    assert (entry.status_code, entry.error_type) == (200, None)

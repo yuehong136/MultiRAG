@@ -118,3 +118,21 @@ def test_forwarded_events_remain_valid_json_lines():
     events = [line[6:] for line in forwarded.split(b"\n\n") if line]
     assert json.loads(events[0])["choices"][0]["delta"]["content"] == "hi"
     assert events[1] == b"[DONE]"
+
+
+def test_tap_reports_when_the_terminating_event_has_passed():
+    tap = SSEUsageTap(hide_usage_only_chunk=True)
+
+    tap.feed(_DELTA + _USAGE_ONLY)
+    assert tap.finished is False
+
+    tap.feed(_DONE)
+    assert tap.finished is True
+
+
+def test_done_inside_content_is_not_the_terminator():
+    quoted = b'data: {"choices":[{"index":0,"delta":{"content":"data: [DONE]"}}],"usage":null}\n\n'
+    tap = SSEUsageTap(hide_usage_only_chunk=True)
+
+    assert tap.feed(quoted) == quoted
+    assert tap.finished is False
