@@ -16,6 +16,7 @@ from api.db.db_models import get_async_db
 from api.utils.api_utils import Principal, async_current_user
 from common.constants import RetCode
 from common.exceptions import NotFoundException
+from memory.revisions.domain import RevisionConflict
 from memory.services.context import SourceContentChangedError
 from memory.services.messages import MessageService, RecentMessageCursorStaleError, RecentMessageReadLimitError, SourceMessageBindingError
 
@@ -58,6 +59,8 @@ def _result(data: object, *, status_code: int = 200, retcode: RetCode = RetCode.
 def _read_error(error: Exception) -> JSONResponse:
     if isinstance(error, NotFoundException):
         return _result(False, status_code=404, retcode=RetCode.NOT_FOUND, retmsg=str(error.msg))
+    if isinstance(error, RevisionConflict):
+        return _result(False, status_code=409, retcode=RetCode.CONFLICT, retmsg=error.code)
     if isinstance(error, (SourceContentChangedError, RecentMessageCursorStaleError)):
         return _result(False, status_code=409, retcode=RetCode.CONFLICT, retmsg=str(error))
     if isinstance(error, RecentMessageReadLimitError):
@@ -82,9 +85,9 @@ async def memory_capabilities(memory_id: str, db: AsyncSession = Depends(get_asy
                     "supported": recent.get("managed_revisions_supported", False),
                     "managed": recent.get("managed", False),
                     "activation_scope": "memory_bank",
-                    "ordinary_writes_after_activation": False,
+                    "ordinary_writes_after_activation": recent.get("coordinated_writes_supported", False),
                     "coordinated_state_changes": True,
-                    "managed_delete_supported": False,
+                    "managed_delete_supported": recent.get("managed_delete_supported", False),
                     "adoption_required": True,
                     "max_content_bytes": 65535,
                     "max_content_tokens": 8192,
@@ -94,6 +97,22 @@ async def memory_capabilities(memory_id: str, db: AsyncSession = Depends(get_asy
                     "history": True,
                 },
                 "source_withdrawals": {"supported": recent.get("managed_revisions_supported", False), "requires_registered_source": True, "permanent": True, "supply_and_cleanup_separate": True},
+                "writes": {
+                    "supported": recent.get("coordinated_writes_supported", False),
+                    "append": recent.get("coordinated_writes_supported", False),
+                    "automatic_extraction": recent.get("coordinated_writes_supported", False),
+                    "fifo": recent.get("coordinated_writes_supported", False),
+                    "publication_state": "operation",
+                    "queue_replay": "stable_task_id",
+                    "untracked_legacy_tasks": "operator_attestation",
+                },
+                "deletions": {
+                    "supported": recent.get("managed_delete_supported", False),
+                    "requires_writer_drain": True,
+                    "audit_tombstone": True,
+                    "physical_erasure_certified": False,
+                    "publication_state": "operation",
+                },
             }
         )
     except Exception as error:

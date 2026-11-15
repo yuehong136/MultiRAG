@@ -16,21 +16,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import Memory
 from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemoryMutationOperation, MemoryPublicationOutbox, MemoryRevisionSource, MemorySourceState
+from api.db.memory_writer_models import MemoryWriterAdmission
 from common.asyncio_utils import finish_owned_work
 from memory.revisions.domain import (
+    ModelBinding,
     RevisionBusy,
     RevisionConflict,
     RevisionNotFound,
     RevisionPersistenceUnknown,
     RevisionValidationError,
     content_hash,
+    is_active,
     message_scope,
     positive_int,
     request_hash,
     validate_operation_id,
+    vector_dimension,
 )
 from memory.revisions.service import operation_view
 from memory.revisions.storage import ManagedMessageStore
+from memory.writes.admission import assert_activation_quiescent, invalidate_source_writers, release_writer_reservation
+from memory.writes.service import verify_approved_message
 
 Authorize = Callable[[AsyncSession, str], Awaitable[None]]
 MessageReader = Callable[[str, int], Awaitable[dict[str, Any] | None]]
@@ -67,6 +73,24 @@ def _raw_snapshot(memory_id: str, source_id: int, message: dict[str, Any] | None
         raise RevisionConflict("invalid_source_content")
     state = "forgotten" if message.get("forget_at") not in (None, "", "-") else "active" if message.get("status") in (True, 1, "1") else "inactive"
     return {"managed": False, "memory_id": memory_id, "source_id": source_id, "source_revision": None, "generation": None, "state": state, "content_sha256": content_hash(content), "scope": scope}
+
+
+def _fifo_source_snapshot(memory_id: str, source_id: int, message: dict[str, Any]) -> dict[str, Any]:
+    """Bind retries to a fixed source without retaining its forgotten body."""
+    if "content" in message:
+        return _raw_snapshot(memory_id, source_id, message)
+    if (
+        message.get("message_id") != source_id
+        or message.get("message_type") != "raw"
+        or "source_id" not in message
+        or isinstance(message["source_id"], bool)
+        or message["source_id"] not in (None, 0, "0", "")
+    ):
+        raise RevisionConflict("raw_source_required")
+    digest = message.get("content_sha256")
+    if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise RevisionValidationError("invalid_source_hash")
+    return {"memory_id": memory_id, "source_id": source_id, "content_sha256": digest, "scope": message_scope(message, memory_id)}
 
 
 class SourceService:
@@ -114,6 +138,7 @@ class SourceService:
     async def _bank(self, memory_id: str, *, create: bool = False, deleting: bool = False) -> ManagedMemoryState:
         await self._memory(memory_id, lock=create)
         if create:
+            await assert_activation_quiescent(self.db, memory_id=memory_id, tenant_id=self.tenant_id)
             await self.db.execute(
                 insert(ManagedMemoryState)
                 .values(memory_id=memory_id, tenant_id=self.tenant_id, generation=1, state="active", reserved_bytes=0, updated_at=datetime.now(UTC))
@@ -280,7 +305,14 @@ class SourceService:
         operation_id = "source-sync:" + digest
         if await self._operation(source.memory_id, operation_id) is None:
             permanent = source.state in _PERMANENT
+            prior = await self.db.get(MemoryPublicationOutbox, prior_outbox_id, populate_existing=True)
+            inherited = list(prior.payload.get("dependent_outboxes", [])) if prior is not None else []
+            writer_cleanup_ids = list(prior.payload.get("writer_cleanup_ids", [])) if prior is not None else []
             targets, dependencies = await self._tracked_source_targets(source.memory_id, source.source_message_id) if permanent else ([source.source_message_id], [])
+            if permanent:
+                writers = await invalidate_source_writers(self.db, memory_id=source.memory_id, tenant_id=self.tenant_id, source_id=source.source_message_id)
+                targets = sorted(set(targets) | set(writers["message_ids"]))
+                dependencies = list(dict.fromkeys([*dependencies, *writers["outbox_ids"]]))
             self.db.add(
                 MemoryMutationOperation(
                     memory_id=source.memory_id,
@@ -309,7 +341,8 @@ class SourceService:
                         "source_generation": source.generation,
                         "message_ids": targets,
                         "status": source.state == "active",
-                        "dependent_outboxes": list(dict.fromkeys([*dependencies, prior_outbox_id])),
+                        "dependent_outboxes": list(dict.fromkeys([*dependencies, *inherited, prior_outbox_id])),
+                        "writer_cleanup_ids": writer_cleanup_ids,
                     },
                     receipt={},
                 )
@@ -321,6 +354,8 @@ class SourceService:
         operation_id = "entry-sync:" + digest
         if await self._operation(entry.memory_id, operation_id) is None:
             dependencies = await self._state_dependencies(entry.memory_id, entry_ids={entry.entry_id})
+            prior = await self.db.get(MemoryPublicationOutbox, prior_outbox_id, populate_existing=True)
+            inherited = list(prior.payload.get("dependent_outboxes", [])) if prior is not None else []
             self.db.add(
                 MemoryMutationOperation(
                     memory_id=entry.memory_id,
@@ -353,7 +388,7 @@ class SourceService:
                         "message_ids": [entry.current_message_id],
                         "status": entry.state == "active",
                         "forget": entry.state == "withdrawn",
-                        "dependent_outboxes": list(dict.fromkeys([*dependencies, prior_outbox_id])),
+                        "dependent_outboxes": list(dict.fromkeys([*dependencies, *inherited, prior_outbox_id])),
                     },
                     receipt={},
                 )
@@ -395,6 +430,7 @@ class SourceService:
         reason: str,
         _request_sha256: str | None = None,
         _legacy_baseline: dict[str, Any] | None = None,
+        _require_quiescent: bool = False,
     ) -> dict[str, Any]:
         validate_operation_id(operation_id)
         positive_int(source_id, "invalid_source_id")
@@ -437,6 +473,9 @@ class SourceService:
                 raise RevisionConflict("expected_source_revision_mismatch")
             source.generation += 1
             source.state, source.updated_at = "forgotten", datetime.now(UTC)
+            writers = await invalidate_source_writers(self.db, memory_id=memory_id, tenant_id=self.tenant_id, source_id=source_id)
+            if _require_quiescent and writers["active_operation_ids"]:
+                raise RevisionBusy("fifo_source_has_active_writer")
             refs = list(await self.db.scalars(select(MemoryRevisionSource).where(MemoryRevisionSource.memory_id == memory_id, MemoryRevisionSource.source_message_id == source_id)))
             pairs = {(ref.entry_id, ref.revision) for ref in refs}
             entry_ids = {entry_id for entry_id, _ in pairs}
@@ -456,7 +495,7 @@ class SourceService:
             for entry in entries:
                 if (entry.entry_id, entry.current_revision) in pairs:
                     entry.state, entry.generation = "withdrawn", entry.generation + 1
-            targets = {source_id}
+            targets = {source_id, *writers["message_ids"]}
             if entry_ids:
                 revisions = list(
                     await self.db.scalars(
@@ -474,7 +513,11 @@ class SourceService:
                         revision.message_snapshot = {key: value for key, value in revision.message_snapshot.items() if key not in {"content", "content_embed", "reason"}}
             pending = await self._invalidate_pending(memory_id, entry_ids, revision_pairs=pairs, permanent=True)
             _, tracked_dependencies = await self._tracked_source_targets(memory_id, source_id)
-            pending = list(dict.fromkeys([*pending, *tracked_dependencies]))
+            pending = list(dict.fromkeys([*pending, *tracked_dependencies, *writers["outbox_ids"]]))
+            if _require_quiescent and pending:
+                dependencies = await self.db.scalars(select(MemoryPublicationOutbox).where(MemoryPublicationOutbox.memory_id == memory_id, MemoryPublicationOutbox.id.in_(pending)).with_for_update())
+                if any(row.receipt.get("active_attempts") for row in dependencies):
+                    raise RevisionBusy("fifo_source_has_active_writer")
             operation = MemoryMutationOperation(
                 memory_id=memory_id,
                 operation_id=operation_id,
@@ -504,6 +547,150 @@ class SourceService:
             result = await self._view(operation)
         return result
 
+    async def evict_source(self, memory_id: str, source_raw: dict[str, Any], operation_id: str, *, storage: ManagedMessageStore) -> dict[str, Any]:
+        """Retire the fixed, unchanged source closure before reporting FIFO capacity."""
+        validate_operation_id(operation_id)
+        source_id = positive_int(source_raw.get("message_id"), "invalid_source_id")
+        expected = _fifo_source_snapshot(memory_id, source_id, source_raw)
+        digest = request_hash({"kind": "fifo_source_eviction", "actor": self.actor_id, "memory": memory_id, "source": source_id, "hash": expected["content_sha256"], "scope": expected["scope"]})
+        replay = await self._replay(memory_id, operation_id, digest)
+        if replay is not None:
+            return await self.reconcile_operation(memory_id, operation_id, storage=storage)
+        current = _raw_snapshot(memory_id, source_id, await self.message_reader(memory_id, source_id))
+        if current["content_sha256"] != expected["content_sha256"] or current["scope"] != expected["scope"]:
+            raise RevisionConflict("fifo_source_changed")
+        expected = current
+        source = await self.get_source_state(memory_id, source_id)
+        await self.withdraw_source(
+            memory_id,
+            source_id,
+            operation_id=operation_id,
+            expected_source_revision=source["source_revision"] if source["managed"] else 1,
+            reason="capacity_fifo",
+            _request_sha256=digest,
+            _legacy_baseline=expected,
+            _require_quiescent=True,
+        )
+        return await self.reconcile_operation(memory_id, operation_id, storage=storage)
+
+    async def _adopt_generated_entry(self, memory_id: str, physical: dict[str, Any], raw: dict[str, Any] | None) -> MemoryEntryRevision:
+        """Register one drained, approved fact inside its management operation."""
+        message_id = positive_int(physical.get("message_id"), "invalid_message_id")
+        source_id = positive_int(physical.get("source_id"), "raw_ancestor_required")
+        observed = _raw_snapshot(memory_id, source_id, raw)
+        source = await self._source(memory_id, source_id, lock=True)
+        if source is None or source.state != "active" or observed["state"] != "active" or source.content_sha256 != observed["content_sha256"] or source.scope != observed["scope"]:
+            raise RevisionConflict("generated_source_changed")
+        admissions = list(
+            await self.db.scalars(
+                select(MemoryWriterAdmission)
+                .where(MemoryWriterAdmission.memory_id == memory_id, MemoryWriterAdmission.message_ids.contains([message_id]))
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+        )
+        if len(admissions) != 1:
+            raise RevisionConflict("entry_adoption_required")
+        producer = admissions[0]
+        if producer.tenant_id != self.tenant_id or producer.kind != "extract" or producer.publication_state != "ready" or producer.source_message_id != source_id:
+            raise RevisionConflict("entry_adoption_required")
+        if producer.active_token is not None or producer.state == "active":
+            raise RevisionBusy("generated_writer_still_inflight")
+        outbox = await self.db.scalar(
+            select(MemoryPublicationOutbox)
+            .where(MemoryPublicationOutbox.memory_id == memory_id, MemoryPublicationOutbox.operation_id == producer.operation_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if outbox is None or outbox.tenant_id != self.tenant_id or outbox.state != "ready" or outbox.payload.get("approved") is not True:
+            raise RevisionConflict("entry_adoption_required")
+        if outbox.receipt.get("active_attempts"):
+            raise RevisionBusy("generated_writer_still_inflight")
+        payload = outbox.payload
+        approved = [item for item in payload.get("messages", []) if isinstance(item, dict) and item.get("message_id") == message_id]
+        binding_value, source_binding = payload.get("model_binding"), payload.get("source_binding")
+        if len(approved) != 1 or not isinstance(binding_value, dict) or not isinstance(source_binding, dict):
+            raise RevisionConflict("generated_approval_missing")
+        if (
+            source_binding.get("source_id") != source_id
+            or source_binding.get("revision") != source.source_revision
+            or source_binding.get("content_sha256") != source.content_sha256
+            or source_binding.get("scope") != source.scope
+            or message_scope(physical, memory_id) != source.scope
+        ):
+            raise RevisionConflict("generated_source_changed")
+        binding = ModelBinding(**binding_value)
+        verify_approved_message(physical, approved[0], active=is_active(physical))
+        if binding.dimension != vector_dimension(physical):
+            raise RevisionConflict("generated_model_dimension_changed")
+        entry = MemoryEntry(
+            entry_id=uuid4().hex,
+            memory_id=memory_id,
+            tenant_id=self.tenant_id,
+            legacy_message_id=message_id,
+            current_revision=1,
+            next_revision=2,
+            current_message_id=message_id,
+            generation=1,
+            state="active" if is_active(physical) else "inactive",
+        )
+        snapshot = {key: deepcopy(value) for key, value in physical.items() if key not in {"content", "content_embed"}}
+        snapshot.update(model_binding=binding.to_dict(), embedding_dimension=binding.dimension)
+        revision = MemoryEntryRevision(
+            entry_id=entry.entry_id,
+            revision=1,
+            memory_id=memory_id,
+            tenant_id=self.tenant_id,
+            message_id=message_id,
+            parent_revision=None,
+            content=physical["content"],
+            content_sha256=content_hash(physical["content"]),
+            origin="generated_adoption",
+            assessment={"kind": "unknown", "verification_status": "unverified"},
+            message_snapshot=snapshot,
+        )
+        self.db.add(entry)
+        await self.db.flush()
+        self.db.add(revision)
+        await self.db.flush()
+        self.db.add(
+            MemoryRevisionSource(
+                entry_id=entry.entry_id,
+                revision=1,
+                memory_id=memory_id,
+                source_message_id=source_id,
+                source_revision=source.source_revision,
+                source_generation=source.generation,
+                content_sha256=source.content_sha256,
+                relation="context",
+                locator={"kind": "memory_message", "memory_id": memory_id, "message_id": source_id},
+            )
+        )
+        await self.db.flush()
+        return revision
+
+    async def _redact_generated_messages(self, memory_id: str, message_ids: set[int]) -> None:
+        """Erase only forgotten facts from a completed extraction's shared plan."""
+        for producer in await self.db.scalars(select(MemoryWriterAdmission).where(MemoryWriterAdmission.memory_id == memory_id)):
+            if not message_ids.intersection(producer.message_ids):
+                continue
+            outbox = await self.db.scalar(
+                select(MemoryPublicationOutbox)
+                .where(
+                    MemoryPublicationOutbox.memory_id == memory_id,
+                    MemoryPublicationOutbox.operation_id == producer.operation_id,
+                )
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            if outbox is None:
+                continue
+            payload = deepcopy(outbox.payload)
+            payload["messages"] = [
+                {key: value for key, value in item.items() if key not in {"content", "content_embed"}} if item.get("message_id") in message_ids else item for item in payload.get("messages", [])
+            ]
+            outbox.payload = payload
+
     async def change_physical_state(self, memory_id: str, message_id: int, *, operation_id: str, status: bool | None = None, forget: bool = False) -> dict[str, Any]:
         validate_operation_id(operation_id)
         positive_int(message_id, "invalid_message_id")
@@ -518,6 +705,7 @@ class SourceService:
             raise RevisionNotFound("message_not_found")
         scope = message_scope(physical, memory_id)
         raw_state = _raw_snapshot(memory_id, message_id, physical) if physical.get("message_type") == "raw" else None
+        ancestor = None if raw_state is not None else await self.message_reader(memory_id, positive_int(physical.get("source_id"), "raw_ancestor_required"))
         if physical.get("message_type") == "raw" and forget:
             snapshot = await self.get_source_state(memory_id, message_id)
             return await self.withdraw_source(
@@ -535,6 +723,7 @@ class SourceService:
             if existing is not None:
                 return await self._view(existing)
             entry_identity: dict[str, Any] = {}
+            writer_cleanup_ids: list[int] = []
             if physical.get("message_type") == "raw":
                 source = await self._source(memory_id, message_id, lock=True)
                 if source is None:
@@ -558,11 +747,14 @@ class SourceService:
                 refs = list(await self.db.scalars(select(MemoryRevisionSource).where(MemoryRevisionSource.memory_id == memory_id, MemoryRevisionSource.source_message_id == message_id)))
                 pending = await self._invalidate_pending(memory_id, {ref.entry_id for ref in refs})
                 pending.extend(await self._state_dependencies(memory_id, source_id=message_id))
+                writers = await invalidate_source_writers(self.db, memory_id=memory_id, tenant_id=self.tenant_id, source_id=message_id, permanent=False)
+                pending.extend(writers["outbox_ids"])
+                writer_cleanup_ids = writers["message_ids"]
                 source_generation = source.generation
             else:
                 revision = await self.db.scalar(select(MemoryEntryRevision).where(MemoryEntryRevision.memory_id == memory_id, MemoryEntryRevision.message_id == message_id))
                 if revision is None:
-                    raise RevisionConflict("entry_adoption_required")
+                    revision = await self._adopt_generated_entry(memory_id, physical, ancestor)
                 refs = list(
                     await self.db.scalars(
                         select(MemoryRevisionSource)
@@ -592,6 +784,7 @@ class SourceService:
                         version.content = None
                         version.assessment = {key: value for key, value in version.assessment.items() if key in {"kind", "verification_status"}}
                         version.message_snapshot = {key: value for key, value in version.message_snapshot.items() if key not in {"content", "content_embed", "reason"}}
+                    await self._redact_generated_messages(memory_id, {version.message_id for version in versions})
                 entry_identity = {
                     "entry_id": entry.entry_id,
                     "revision": entry.current_revision,
@@ -630,6 +823,7 @@ class SourceService:
                         "source_id": message_id if physical.get("message_type") == "raw" else None,
                         "source_generation": source_generation,
                         "dependent_outboxes": list(dict.fromkeys(pending)),
+                        "writer_cleanup_ids": writer_cleanup_ids,
                     },
                     receipt={},
                 )
@@ -671,6 +865,15 @@ class SourceService:
             if row.lease_token == token:
                 row.lease_token, row.lease_until = None, None
 
+    async def _refresh_source_writers(self, row: MemoryPublicationOutbox, source: MemorySourceState) -> bool:
+        writers = await invalidate_source_writers(self.db, memory_id=row.memory_id, tenant_id=self.tenant_id, source_id=source.source_message_id, permanent=source.state in _PERMANENT)
+        payload = deepcopy(row.payload)
+        targets = "message_ids" if payload.get("action") == "withdraw_source" else "writer_cleanup_ids"
+        payload[targets] = sorted(set(payload.get(targets, [])) | set(writers["message_ids"]))
+        payload["dependent_outboxes"] = list(dict.fromkeys([*payload.get("dependent_outboxes", []), *writers["outbox_ids"]]))
+        row.payload = payload
+        return bool(writers["active_operation_ids"])
+
     async def _reconcile_once(self, memory_id: str, operation_id: str, *, storage: ManagedMessageStore, token: str) -> dict[str, Any]:
         validate_operation_id(operation_id)
         async with self._write(operation_id):
@@ -708,6 +911,9 @@ class SourceService:
                     if source is not None:
                         operation.result = {**operation.result, "reconciliation_operation_id": await self._queue_source_sync(bank, source, row.id)}
                     return await self._view(operation)
+                if await self._refresh_source_writers(row, source):
+                    operation.index_sync_status, operation.error_code = "unknown", "older_publication_still_inflight"
+                    return await self._view(operation)
             entry = await self._entry_fence(row)
             if entry is not None and not self._same_entry_generation(row, entry):
                 row.state = "stale"
@@ -725,6 +931,7 @@ class SourceService:
                 and item.message_id is not None
                 and (item.state == "redacted" or item.payload.get("published") is not True)
             ]
+            retired_ids.extend(positive_int(value, "invalid_cleanup_message_id") for value in payload.get("writer_cleanup_ids", []))
             if payload.get("forget") and row.entry_id is not None:
                 retired_ids.extend(await self.db.scalars(select(MemoryEntryRevision.message_id).where(MemoryEntryRevision.entry_id == row.entry_id)))
         try:
@@ -738,7 +945,11 @@ class SourceService:
             for offset in range(0, len(values), 100):
                 await finish_owned_work(storage.delete(values[offset : offset + 100]))
             if payload["action"] != "withdraw_source" and not payload.get("forget"):
-                await finish_owned_work(storage.set_status(payload["message_ids"][0], payload["status"]))
+                target_id = payload["message_ids"][0]
+                canceled_pending_raw = payload["status"] is False and target_id in payload.get("writer_cleanup_ids", [])
+                already_absent = canceled_pending_raw and await finish_owned_work(self.message_reader(memory_id, target_id)) is None
+                if not already_absent:
+                    await finish_owned_work(storage.set_status(target_id, payload["status"]))
         except Exception:
             async with self._write(operation_id):
                 row = await self.db.get(MemoryPublicationOutbox, outbox_id, with_for_update=True, populate_existing=True)
@@ -762,6 +973,12 @@ class SourceService:
                     if source is not None:
                         operation.result = {**operation.result, "reconciliation_operation_id": await self._queue_source_sync(bank, source, row.id)}
                     return await self._view(operation)
+                target_field = "message_ids" if payload.get("action") == "withdraw_source" else "writer_cleanup_ids"
+                if await self._refresh_source_writers(row, source) or set(row.payload.get(target_field, [])) != set(payload.get(target_field, [])):
+                    row.state, row.lease_token, row.lease_until = "unknown", None, None
+                    operation.index_sync_status, operation.error_code = "unknown", "source_cleanup_inventory_changed"
+                    return await self._view(operation)
+                payload = deepcopy(row.payload)
             entry = await self._entry_fence(row)
             if entry is not None and not self._same_entry_generation(row, entry):
                 row.state, row.lease_token, row.lease_until = "unknown", None, None
@@ -778,12 +995,7 @@ class SourceService:
                 operation.index_sync_status, operation.error_code = "unknown", "older_publication_still_inflight"
                 return await self._view(operation)
             for dependency in dependencies:
-                if not dependency.receipt.get("reservation_released"):
-                    reserved = dependency.payload.get("reserved_bytes", 0)
-                    if type(reserved) is not int or not 0 <= reserved <= bank.reserved_bytes:
-                        raise RevisionConflict("reservation_accounting_mismatch")
-                    bank.reserved_bytes -= reserved
-                    dependency.receipt = {**dependency.receipt, "reservation_released": True}
+                await release_writer_reservation(self.db, memory_id=memory_id, tenant_id=self.tenant_id, outbox=dependency, bank=bank)
             row.state, row.lease_token, row.lease_until = "ready", None, None
             bank.capacity_generation += 1
             row.receipt = {**row.receipt, "confirmed_at": datetime.now(UTC).isoformat(), "scope": "tracked_projections_and_bounded_inventory"}

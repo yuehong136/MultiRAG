@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
@@ -20,32 +18,18 @@ from api.db.services.memory_service import MemoryService
 from api.db.services.tenant_llm_service import PreparedTenantLLM
 from common.asyncio_utils import finish_owned_work
 from common.exceptions import NotFoundException
-from core.utils.redis_conn import REDIS_CONN
-from memory.revisions.domain import ModelBinding, RevisionConflict, RevisionPersistenceUnknown, RevisionValidationError, positive_int
+from memory.revisions.domain import ModelBinding, RevisionConflict, RevisionNotFound, RevisionPersistenceUnknown, RevisionValidationError
+from memory.revisions.identifiers import MEMORY_COUNTER_KEY, allocate_message_id
 from memory.revisions.projection import reconcile_operation as reconcile_projection
 from memory.revisions.service import RevisionService
 from memory.revisions.sources import SourceService
 from memory.revisions.storage import ManagedMessageStore
 from memory.services.messages import MessageService
+from memory.writes.legacy_state import LegacyStateService
+from memory.writes.providers import embedding_binding
+from memory.writes.retention import FifoRetentionService
 
-_COUNTER_KEY = "id_generator:memory"
-_ALLOCATE_ID = """
-local current = redis.call('GET', KEYS[1]) or '1'
-if not string.match(current, '^%d+$') then
-    return redis.error_reply('Invalid memory counter')
-end
-current = string.gsub(current, '^0+', '')
-if current == '' then current = '0' end
-local minimum = ARGV[1]
-if string.len(current) < string.len(minimum)
-   or (string.len(current) == string.len(minimum) and current < minimum) then
-    redis.call('SET', KEYS[1], minimum)
-elseif redis.call('EXISTS', KEYS[1]) == 0 then
-    redis.call('SET', KEYS[1], current)
-end
-redis.call('INCRBY', KEYS[1], 1)
-return redis.call('GET', KEYS[1])
-"""
+_COUNTER_KEY = MEMORY_COUNTER_KEY
 
 
 class LegacyStateReconciliationRequired(RevisionConflict):
@@ -58,30 +42,12 @@ class LegacyStateReconciliationRequired(RevisionConflict):
 
 async def _allocate_message_id(*, minimum_message_id: int) -> int:
     """Allocate exactly with Redis integer arithmetic, including above 2**53."""
-    positive_int(minimum_message_id, "invalid_message_id")
-    if minimum_message_id == 2**63 - 1:
-        raise RevisionValidationError("message_id_exhausted")
-    value = await finish_owned_work(asyncio.to_thread(REDIS_CONN.REDIS.eval, _ALLOCATE_ID, 1, _COUNTER_KEY, str(minimum_message_id)))
-    if isinstance(value, bytes):
-        value = value.decode("ascii")
-    if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
-        raise RuntimeError("Memory ID allocation was not confirmed")
-    return positive_int(int(value), "invalid_message_id")
+    return await allocate_message_id(minimum_message_id=minimum_message_id, counter_key=_COUNTER_KEY)
 
 
 def _model_reference(prepared: PreparedTenantLLM, dimension: int) -> ModelBinding:
     """Persist an opaque config fingerprint and public model identity, never credentials."""
-    config = prepared.model_config
-    # Usage counters and audit timestamps change on every successful embedding;
-    # only identity and provider-construction inputs define this preparation.
-    fields = ("id", "tenant_id", "llm_factory", "llm_name", "mdl_type", "model_type", "api_key", "api_base", "region", "max_tokens", "instance_id")
-    encoded = json.dumps({field: config.get(field) for field in fields}, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-    return ModelBinding(
-        tenant_model_id=config.get("id"),
-        model_reference=f"{config['llm_name']}@{config['llm_factory']}",
-        dimension=dimension,
-        config_reference=hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
-    )
+    return embedding_binding(prepared, dimension)
 
 
 async def _authorize(db: AsyncSession, memory_id: str, *, tenant_id: str, actor_id: str) -> MemoryReadBinding:
@@ -180,7 +146,67 @@ async def list_revisions(db: AsyncSession, memory_id: str, entry_id: str, *, act
     return await service.list_revisions(memory_id, entry_id, limit=limit, cursor=cursor)
 
 
+async def _operation_kind(db: AsyncSession, memory_id: str, operation_id: str) -> str | None:
+    kind = await db.scalar(select(MemoryMutationOperation.kind).where(MemoryMutationOperation.memory_id == memory_id, MemoryMutationOperation.operation_id == operation_id))
+    await _release_read_transaction(db)
+    return kind
+
+
+async def append_message(db: AsyncSession, memory_id: str, message: dict[str, Any], *, actor_id: str, operation_id: str) -> dict[str, Any]:
+    from api.db.joint_services import memory_write_runtime
+
+    if not memory_write_runtime.supports_coordinated_writes():
+        raise RevisionValidationError("coordinated_writes_backend_unsupported")
+    return await memory_write_runtime.append_message(db, memory_id, message, actor_id=actor_id, operation_id=operation_id)
+
+
+async def delete_memory(db: AsyncSession, memory_id: str, *, actor_id: str, operation_id: str) -> dict[str, Any]:
+    from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
+    from memory.revisions.deletion import MemoryDeletionService
+
+    if await _operation_kind(db, memory_id, operation_id) != "delete_memory":
+        binding = await require_memory(db, memory_id, actor_id=actor_id)
+        if not supports_coordinated_writes():
+            raise RevisionValidationError("coordinated_delete_backend_unsupported")
+        await _require_backend(ManagedMessageStore(binding.tenant_id, memory_id))
+    service = MemoryDeletionService(db, actor_id=actor_id)
+    await service.request_delete(memory_id, operation_id=operation_id)
+    return await service.reconcile_operation(memory_id, operation_id)
+
+
+async def _fifo_service(db: AsyncSession, memory_id: str, actor_id: str) -> FifoRetentionService:
+    from memory.writes.providers import MemoryWriteProviders
+
+    binding = await require_memory(db, memory_id, actor_id=actor_id)
+    provider = MemoryWriteProviders(db, tenant_id=binding.tenant_id, actor_id=actor_id)
+    return FifoRetentionService(db, tenant_id=binding.tenant_id, actor_id=actor_id, authorize=provider.authorize)
+
+
+async def _legacy_state_service(db: AsyncSession, memory_id: str, actor_id: str) -> LegacyStateService:
+    from memory.writes.providers import MemoryWriteProviders
+
+    binding = await require_memory(db, memory_id, actor_id=actor_id)
+    provider = MemoryWriteProviders(db, tenant_id=binding.tenant_id, actor_id=actor_id)
+    return LegacyStateService(db, tenant_id=binding.tenant_id, actor_id=actor_id, authorize=provider.authorize, storage=ManagedMessageStore(binding.tenant_id, memory_id))
+
+
 async def get_operation(db: AsyncSession, memory_id: str, operation_id: str, *, actor_id: str) -> dict[str, Any]:
+    kind = await _operation_kind(db, memory_id, operation_id)
+    if kind == "delete_memory":
+        from memory.revisions.deletion import MemoryDeletionService
+
+        return await MemoryDeletionService(db, actor_id=actor_id).get_operation(memory_id, operation_id)
+    if kind in {"append_raw", "extract"}:
+        from api.db.joint_services.memory_write_runtime import service_for
+
+        writer = await service_for(db, memory_id, actor_id=actor_id)
+        return await writer.operation(memory_id, operation_id)
+    if kind == "fifo_evict":
+        retention = await _fifo_service(db, memory_id, actor_id)
+        return await retention.get_operation(memory_id, operation_id)
+    if kind == "legacy_state":
+        legacy = await _legacy_state_service(db, memory_id, actor_id)
+        return await legacy.get_operation(memory_id, operation_id)
     service, _ = await _components(db, memory_id, actor_id)
     operation = await service.get_operation(memory_id, operation_id)
     metadata = await db.scalar(
@@ -199,7 +225,7 @@ async def _reconcile(db: AsyncSession, service: RevisionService, store: ManagedM
     await _release_read_transaction(db)
     if operation.get("index_sync_status") == "ready":
         return operation
-    if kind in {"withdraw_source", "change_state", "delete_memory", "adopt_source"}:
+    if kind in {"withdraw_source", "change_state", "adopt_source"}:
         source_service = _sources(db, service, store, actor_id)
         return await source_service.reconcile_operation(memory_id, operation_id, storage=store)
 
@@ -210,6 +236,26 @@ async def _reconcile(db: AsyncSession, service: RevisionService, store: ManagedM
 
 
 async def reconcile_operation(db: AsyncSession, memory_id: str, operation_id: str, *, actor_id: str) -> dict[str, Any]:
+    kind = await _operation_kind(db, memory_id, operation_id)
+    if kind == "delete_memory":
+        from memory.revisions.deletion import MemoryDeletionService
+
+        return await MemoryDeletionService(db, actor_id=actor_id).reconcile_operation(memory_id, operation_id)
+    if kind in {"append_raw", "extract"}:
+        from api.db.joint_services.memory_write_runtime import service_for, update_task_result
+
+        writer = await service_for(db, memory_id, actor_id=actor_id)
+        result = await writer.reconcile(memory_id, operation_id)
+        if kind == "extract":
+            await update_task_result(db, memory_id, operation_id, result)
+        return result
+    if kind == "fifo_evict":
+        retention = await _fifo_service(db, memory_id, actor_id)
+        binding = await require_memory(db, memory_id, actor_id=actor_id)
+        return await retention.reconcile_operation(memory_id, operation_id, ManagedMessageStore(binding.tenant_id, memory_id))
+    if kind == "legacy_state":
+        legacy = await _legacy_state_service(db, memory_id, actor_id)
+        return await legacy.reconcile(memory_id, operation_id)
     service, store = await _components(db, memory_id, actor_id)
     return await _reconcile(db, service, store, memory_id, operation_id, actor_id)
 
@@ -280,9 +326,33 @@ async def is_managed(db: AsyncSession, memory_id: str, *, actor_id: str) -> bool
 
 
 async def change_legacy_message_state(db: AsyncSession, memory_id: str, message_id: int, *, actor_id: str, status: bool | None = None, forget: bool = False) -> bool | None:
-    """Return None for the unchanged unmanaged path; coordinate managed changes."""
+    """Coordinate strict-backend writes; preserve non-strict legacy behavior."""
     if not await is_managed(db, memory_id, actor_id=actor_id):
-        return None
+        from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
+
+        if not supports_coordinated_writes():
+            return None
+        legacy = await _legacy_state_service(db, memory_id, actor_id)
+        operation_id = "legacy-state:" + uuid4().hex
+        try:
+            operation = await legacy.change(memory_id, message_id, operation_id=operation_id, status=status, forget=forget)
+        except RevisionPersistenceUnknown as error:
+            raise LegacyStateReconciliationRequired(operation_id, error.code) from error
+        except RevisionConflict as error:
+            try:
+                await legacy.get_operation(memory_id, operation_id)
+            except RevisionNotFound:
+                raise error
+            except Exception as read_error:
+                raise LegacyStateReconciliationRequired(operation_id, "state_change_reconciliation_unconfirmed") from read_error
+            raise LegacyStateReconciliationRequired(operation_id, error.code) from error
+        except (RevisionNotFound, RevisionValidationError, NotFoundException):
+            raise
+        except Exception as error:
+            raise LegacyStateReconciliationRequired(operation_id, "state_change_reconciliation_unconfirmed") from error
+        if operation["index_sync_status"] != "ready":
+            raise LegacyStateReconciliationRequired(operation_id, operation.get("error_code") or "state_change_requires_reconciliation")
+        return True
     service, store = await _components(db, memory_id, actor_id)
     sources = _sources(db, service, store, actor_id)
     operation_id = "legacy-state:" + uuid4().hex

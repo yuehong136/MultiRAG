@@ -24,6 +24,8 @@ class ManagedMemoryState(Base):
     capacity_generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     state: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
     reserved_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    delete_permissions: Mapped[str | None] = mapped_column(String(16))
+    delete_operation_id: Mapped[str | None] = mapped_column(String(128))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
 

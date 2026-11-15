@@ -8,8 +8,14 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from api.db.memory_revision_models import MemoryMutationOperation, MemoryPublicationOutbox, MemorySourceState
+from memory.revisions import sources as source_module
 from memory.revisions.domain import RevisionConflict, content_hash
 from memory.revisions.sources import SourceService, _raw_snapshot
+
+
+@pytest.fixture(autouse=True)
+def no_new_source_writers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(source_module, "invalidate_source_writers", AsyncMock(return_value={"message_ids": [], "outbox_ids": [], "active_operation_ids": []}))
 
 
 class Session:
@@ -107,13 +113,17 @@ async def test_raw_legacy_forget_uses_same_idempotency_digest_on_retry(monkeypat
     assert withdrawal.call_args.kwargs["_request_sha256"] == digest
 
 
-async def test_legacy_raw_forget_registers_and_tombstones_under_one_public_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("writer_ids", [[], [7, 8]])
+async def test_legacy_raw_forget_registers_and_tombstones_under_one_public_commit(monkeypatch: pytest.MonkeyPatch, writer_ids: list[int]) -> None:
     db = Session()
     created: list[Any] = []
     db.add = created.append  # type: ignore[attr-defined]
     db.scalars = AsyncMock(return_value=[])  # type: ignore[attr-defined]
     raw = {"memory_id": "bank", "message_id": 1, "message_type": "raw", "source_id": 0, "user_id": "", "agent_id": "agent", "session_id": "session", "content": "original", "status": True}
     svc = service(db, AsyncMock(return_value=raw))
+    monkeypatch.setattr(
+        source_module, "invalidate_source_writers", AsyncMock(return_value={"message_ids": writer_ids, "outbox_ids": ["append-outbox"] if writer_ids else [], "active_operation_ids": []})
+    )
     monkeypatch.setattr(svc, "_replay", AsyncMock(return_value=None))
     monkeypatch.setattr(svc, "get_source_state", AsyncMock(return_value={"managed": False, "source_revision": None}))
     monkeypatch.setattr(svc, "adopt_source", AsyncMock(side_effect=AssertionError("Auxiliary source adoption would lose the public recovery handle")))
@@ -131,7 +141,8 @@ async def test_legacy_raw_forget_registers_and_tombstones_under_one_public_commi
     outbox = next(row for row in created if isinstance(row, MemoryPublicationOutbox))
     assert baseline.source_revision == 1 and baseline.generation == 2 and baseline.state == "forgotten"
     assert len(operations) == 1 and operations[0].operation_id == outbox.operation_id == result["operation_id"] == "legacy-public"
-    assert outbox.payload["message_ids"] == [1] and result["stop_supply"] == "withdrawn"
+    assert outbox.payload["message_ids"] == [1, *writer_ids] and result["stop_supply"] == "withdrawn"
+    assert outbox.payload["dependent_outboxes"] == (["append-outbox"] if writer_ids else [])
     assert db.commits == 1
 
 

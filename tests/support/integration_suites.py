@@ -52,6 +52,10 @@ DATABASE_TESTS = frozenset(
         "test_mcp_interaction_repository.py",
         "test_mcp_interaction_schema.py",
         "test_memory_revision_repository.py",
+        "test_memory_bank_deletion.py",
+        "test_memory_append_repository.py",
+        "test_memory_fifo_retention.py",
+        "test_memory_writer_operators.py",
         "test_llm_embedding_inputs.py",
         "test_llm_tool_capability.py",
         "test_model_config_resolution.py",
@@ -200,6 +204,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_metadata_web_consumers.py",
                 "test_metadata_config_contract.py",
                 "test_memory_revision_web_consumer.py",
+                "test_memory_writer_web_consumer.py",
                 "test_shared_chunk_owner_contract.py",
                 "test_sandbox_provider_settings.py",
             )
@@ -212,8 +217,11 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
-        if path.name == "test_memory_revision_repository.py":
+        if path.name in {"test_memory_revision_repository.py", "test_memory_bank_deletion.py", "test_memory_append_repository.py", "test_memory_fifo_retention.py", "test_memory_writer_operators.py"}:
             required.add("postgresql")
+            continue
+        if path.name in {"test_memory_authorization.py", "test_memory_revisions_http.py", "test_memory_revision_web_consumer.py", "test_memory_writes_http.py", "test_memory_writer_web_consumer.py"}:
+            required.update(("postgresql", "redis", "milvus"))
             continue
         if path.name == "test_milvus_query_order.py":
             required.add("milvus")
