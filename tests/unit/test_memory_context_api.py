@@ -1,5 +1,6 @@
 """Public contracts for optional provenance and bounded memory reads."""
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -39,8 +40,9 @@ def test_capabilities_are_authorized_before_reading_backend_features(client: Tes
         calls.append("authorization")
         raise NotFoundException("Memory not found.")
 
-    def backend() -> dict[str, Any]:
+    def backend(**options: Any) -> dict[str, Any]:
         calls.append("backend")
+        assert options == {"tenant_id": "tenant-unit", "memory_id": "m"}
         return {"pagination": "live_seek_cursor"}
 
     monkeypatch.setattr(memory_context_service, "require_memory", denied)
@@ -48,8 +50,9 @@ def test_capabilities_are_authorized_before_reading_backend_features(client: Tes
     denied_response = client.get("/api/v1/memories/m/capabilities")
     assert denied_response.status_code == 404 and calls == ["authorization"]
 
-    async def allowed(db: AsyncSession, memory_id: str, *, actor_id: str) -> None:
+    async def allowed(db: AsyncSession, memory_id: str, *, actor_id: str) -> Any:
         calls.append("authorization")
+        return SimpleNamespace(tenant_id="tenant-unit")
 
     monkeypatch.setattr(memory_context_service, "require_memory", allowed)
     data = client.get("/api/v1/memories/m/capabilities").json()["data"]

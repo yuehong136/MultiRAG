@@ -1,6 +1,6 @@
 # Milvus 升级与恢复
 
-当前目标为 **Milvus 3.0.6 + PyMilvus 3.0.3**。SDK 的
+本仓默认组合为 **Milvus 3.0.6 + PyMilvus 3.0.3**。SDK 的
 [3.0.3 发布说明](https://github.com/milvus-io/pymilvus/releases/tag/v3.0.3)
 明确推荐这一组合；服务版本来自
 [3.0.6 正式发布](https://github.com/milvus-io/milvus/releases/tag/v3.0.6)。
@@ -17,6 +17,17 @@
 本仓 Standalone 当前依赖为 etcd 3.5.25 和 MinIO RELEASE.2024-12-18T13-15-44Z；
 服务升级不顺带更换这些依赖、MQ 或启用 Storage V3/LoonFFI，也不修改集合字段、embedding 模型或索引策略。
 存储格式与 schema 变更另见 [数据能力准备](milvus-3-upgrade-readiness.md)。
+
+官方 3.0.6 Compose 仍固定 etcd 3.5.25 和 MinIO RELEASE.2024-12-18T13-15-44Z，
+并未选用各依赖独立发布的最新版本。镜像来源需另行区分：
+
+| 组件 | 本仓现有部署来源 | 官方 3.0.6 Compose |
+| --- | --- | --- |
+| etcd | `quay.io/coreos/etcd:v3.5.25` | 相同 |
+| MinIO | `minio/minio:RELEASE.2024-12-18T13-15-44Z` | `milvusdb/minio:RELEASE.2024-12-18T13-15-44Z` |
+
+相同 release 标签不保证跨仓库镜像内容相同；已核对的 ARM64 配置 digest 不同。
+升级现有 Milvus 时保留原对象存储，镜像来源替换另作数据、S3 接口和恢复验证。
 
 **3.0.6 镜像以 `milvus:milvus` 用户运行。**
 其 [官方 Compose](https://github.com/milvus-io/milvus/releases/download/v3.0.6/milvus-standalone-docker-compose.yaml)

@@ -185,6 +185,26 @@ class MilvusConnection(MilvusConnectionBase):
             consistency_level="Strong",
         )
 
+    def query_management_rows(self, select_fields: list[str], index_name: str, memory_id: str, limit: int) -> list[dict[str, Any]]:
+        """Strict physical inventory, including inactive/forgotten rows and vectors."""
+        if not index_name or not memory_id or type(limit) is not int or not 1 <= limit <= 10000:
+            raise ValueError("An owning index, memory and bounded management limit are required")
+        name = _message_collection_name(index_name, memory_id)
+        if not utility.has_collection(name, using=self._using):
+            return []
+        collection = Collection(name, using=self._using)
+        collection.load()
+        return collection.query(
+            expr=self._build_filter_expr({}, memory_id, hide_forgotten=False),
+            output_fields=self._prepare_output_fields(collection, select_fields),
+            limit=limit,
+            consistency_level="Strong",
+        )
+
+    def index_exists_strict(self, index_name: str, memory_id: str) -> bool:
+        """Check physical absence without treating a failed metadata RPC as absence."""
+        return utility.has_collection(_message_collection_name(index_name, memory_id), using=self._using)
+
     @staticmethod
     def field_keyword(field_name: str) -> bool:
         """Check if a field is a keyword field. Message storage does not use keyword fields."""
@@ -329,6 +349,7 @@ class MilvusConnection(MilvusConnectionBase):
         hide_forgotten: bool = True,
         *,
         strict: bool = False,
+        eligibility_by_memory: dict[str, dict[str, list[int]]] | None = None,
     ) -> tuple[list[dict], int]:
         """
         Search messages in Milvus.
@@ -363,6 +384,13 @@ class MilvusConnection(MilvusConnectionBase):
 
                 # Build filter expression with hide_forgotten support
                 filter_expr = self._build_filter_expr(condition, memory_id, hide_forgotten)
+                exclusions = (eligibility_by_memory or {}).get(memory_id, {})
+                for name, field in (("message_ids", "message_id"), ("source_ids", "source_id")):
+                    values = exclusions.get(name, [])
+                    if any(type(value) is not int or value <= 0 for value in values):
+                        raise ValueError("Invalid managed message exclusion")
+                    if values:
+                        filter_expr = f"({filter_expr}) and {field} not in {json.dumps(values)}"
 
                 # Convert select fields to Milvus field names
                 milvus_select_fields = self._prepare_output_fields(collection, select_fields)
@@ -384,6 +412,7 @@ class MilvusConnection(MilvusConnectionBase):
                                     limit=limit,
                                     expr=filter_expr if filter_expr else None,
                                     output_fields=milvus_select_fields,
+                                    **({"consistency_level": "Strong"} if strict else {}),
                                 )
                                 for hits in search_results:
                                     for hit in hits:
@@ -403,6 +432,7 @@ class MilvusConnection(MilvusConnectionBase):
                             output_fields=milvus_select_fields,
                             limit=limit,
                             offset=offset,
+                            **({"consistency_level": "Strong"} if strict else {}),
                         )
                         results.extend(query_results)
                         total_hits += len(query_results)
@@ -421,6 +451,10 @@ class MilvusConnection(MilvusConnectionBase):
 
     def search_strict(self, **kwargs: Any) -> tuple[list[dict], int]:
         """Use the existing retrieval algorithm while propagating storage failures."""
+        return self.search(**kwargs, strict=True)
+
+    def search_managed(self, **kwargs: Any) -> tuple[list[dict], int]:
+        """Apply SQL-derived eligibility before the existing retrieval limit."""
         return self.search(**kwargs, strict=True)
 
     def _build_filter_expr(self, condition: dict, memory_id: str, hide_forgotten: bool = True) -> str:
@@ -567,7 +601,7 @@ class MilvusConnection(MilvusConnectionBase):
             collection.load()
 
             try:
-                results = collection.query(expr=f'id == "{doc_id}"', output_fields=["*"], limit=1)
+                results = collection.query(expr=f"id == {json.dumps(doc_id)}", output_fields=["*"], limit=1, consistency_level="Strong")
                 if results:
                     return self.get_message_from_milvus_doc(results[0])
             except Exception as e:

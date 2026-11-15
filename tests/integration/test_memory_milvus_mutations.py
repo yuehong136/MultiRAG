@@ -115,6 +115,8 @@ def test_full_upsert_and_fallback_update_preserve_fields(memory_collection: dict
     env, row = memory_collection, memory_row
     replacement = {**row, "content": "complete replacement", "content_embed": [0.0, 1.0], "user_id": "updated subject"}
     assert env["store"].insert([replacement], env["index"], env["bank"]) == []
+    legacy = env["store"].get(row["id"], env["index"], [env["bank"]])
+    assert legacy is not None and legacy["content"] == "complete replacement" and legacy["content_embed"] == [0.0, 1.0]
     observed = _read(env, row["id"])
     assert observed["content_ltks"] == "complete replacement" and observed["q_2_vec"] == [0.0, 1.0]
     for field in ("memory_id", "message_id", "user_id", "agent_id", "session_id", "valid_at"):

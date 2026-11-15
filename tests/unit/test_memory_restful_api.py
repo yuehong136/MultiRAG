@@ -15,9 +15,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.apps.services import memory_api_service
+from api.apps.services import memory_api_service, memory_revision_service
 from api.db.db_models import get_db
 from api.utils.api_utils import async_current_user
 from common.constants import RetCode
@@ -167,7 +168,13 @@ def test_memory_update_runs_off_loop(client, monkeypatch):
     _assert_sync_facade(records, off_loop=True)
 
 
-def test_memory_delete_runs_off_loop(client, monkeypatch):
+async def _unmanaged_bank(db: AsyncSession, memory_id: str, *, actor_id: str) -> bool:
+    assert isinstance(db, AsyncSession) and memory_id == "m-1" and actor_id == "user-unit"
+    return False
+
+
+def test_memory_delete_runs_off_loop(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(memory_revision_service, "is_managed", _unmanaged_bank)
     records: list[dict] = []
     monkeypatch.setattr(memory_api_service, "delete_memory", lambda s, mid, *, user_id: _record(records, s) or True)
 
@@ -197,7 +204,8 @@ def test_memory_detail_messages_runs_off_loop(client, monkeypatch):
     _assert_sync_facade(records, off_loop=True)
 
 
-def test_message_ops_run_off_loop(client, monkeypatch):
+def test_message_ops_run_off_loop(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(memory_revision_service, "is_managed", _unmanaged_bank)
     records: list[dict] = []
     forgotten: list[tuple] = []
     monkeypatch.setattr(memory_api_service, "forget_message", lambda s, mid, msg_id, *, user_id: _record(records, s) or forgotten.append((mid, msg_id)) or True)

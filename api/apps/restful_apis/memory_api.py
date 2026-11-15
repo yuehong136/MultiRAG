@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.apps.services import memory_api_service, memory_context_service
+from api.apps.services.memory_revision_service import LegacyStateReconciliationRequired
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from api.db.db_models import get_async_db
 from api.identity.principal import AuthenticationSource
@@ -25,6 +26,7 @@ from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import RetCode
 from common.exceptions import ArgumentException, NotFoundException
+from memory.revisions.domain import RevisionConflict
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -113,11 +115,13 @@ async def update_memory(memory_id: str, request_body: UpdateMemoryRequest, user:
 
 
 @router.delete("/memories/{memory_id}", summary="删除Memory", response_description="成功删除Memory")
-async def delete_memory(memory_id: str, user: Principal = Depends(async_current_user)) -> JSONResponse:
+async def delete_memory(memory_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
     try:
         # msg_store 索引删除与 DB 交错：整块在工作线程 + 自开短会话执行
-        await memory_api_service.delete_memory_async(memory_id, user_id=user.id)
+        await memory_api_service.delete_memory_async(memory_id, user_id=user.id, db=db)
         return get_json_result(data=True)
+    except RevisionConflict as error:
+        return get_json_result(data=False, retmsg=error.code, retcode=RetCode.CONFLICT)
     except NotFoundException as e:
         logger.error(e)
         return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
@@ -239,12 +243,17 @@ async def add_message(
 async def forget_message(
     memory_id: str,
     message_id: int,
+    db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
     try:
         # DB 读 + msg_store 更新交错：整块在工作线程 + 自开短会话执行
-        await memory_api_service.forget_message_async(memory_id, message_id, user_id=user.id)
+        await memory_api_service.forget_message_async(memory_id, message_id, user_id=user.id, db=db)
         return get_json_result(data=True)
+    except LegacyStateReconciliationRequired as error:
+        return get_json_result(data={"operation_id": error.operation_id, "error_code": error.code, "requires_reconciliation": True}, retmsg=error.code, retcode=RetCode.CONFLICT)
+    except RevisionConflict as error:
+        return get_json_result(data=False, retmsg=error.code, retcode=RetCode.CONFLICT)
     except NotFoundException as e:
         logger.error(e)
         return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
@@ -258,17 +267,22 @@ async def update_message(
     memory_id: str,
     message_id: int,
     request_body: UpdateMessageRequest,
+    db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
     if not isinstance(request_body.status, bool):
         return get_error_argument_result("Status must be a boolean.")
     try:
         # DB 读 + msg_store 更新交错：整块在工作线程 + 自开短会话执行
-        update_succeed = await memory_api_service.update_message_status_async(memory_id, message_id, request_body.status, user_id=user.id)
+        update_succeed = await memory_api_service.update_message_status_async(memory_id, message_id, request_body.status, user_id=user.id, db=db)
         if update_succeed:
             return get_json_result(data=update_succeed)
         else:
             return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg=f"Failed to set status for message '{message_id}' in memory '{memory_id}'.")
+    except LegacyStateReconciliationRequired as error:
+        return get_json_result(data={"operation_id": error.operation_id, "error_code": error.code, "requires_reconciliation": True}, retmsg=error.code, retcode=RetCode.CONFLICT)
+    except RevisionConflict as error:
+        return get_json_result(data=False, retmsg=error.code, retcode=RetCode.CONFLICT)
     except NotFoundException as e:
         logger.error(e)
         return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
