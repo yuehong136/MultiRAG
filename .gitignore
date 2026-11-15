@@ -247,6 +247,7 @@ docs/*
 !docs/references/
 !docs/channel-program/
 !docs/enterprise-identity-mcp/
+!docs/model-gateway/
 !docs/ragflow-porting/
 !docs/run-platform/
 !docs/skills/
