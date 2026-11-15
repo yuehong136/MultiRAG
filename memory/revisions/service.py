@@ -134,6 +134,9 @@ class RevisionService:
     async def _bank(self, memory_id: str, *, create: bool = False) -> tuple[Memory, ManagedMemoryState]:
         memory = await self._memory(memory_id, lock=create)
         if create:
+            from memory.writes.admission import assert_activation_quiescent
+
+            await assert_activation_quiescent(self.db, memory_id=memory_id, tenant_id=self.tenant_id)
             await self.db.execute(
                 insert(ManagedMemoryState)
                 .values(memory_id=memory_id, tenant_id=self.tenant_id, generation=1, state="active", reserved_bytes=0, updated_at=datetime.now(UTC))

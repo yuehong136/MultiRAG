@@ -6,11 +6,15 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tests.integration.test_memory_authorization import memory_api as memory_api
 from tests.integration.test_memory_revisions_http import revision_api as revision_api
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.resource_journal import ResourceJournal
 from tests.support.web_consumer import pinned_web_checkout, private_consumer_file
+
+pytestmark = pytest.mark.external_consumer
 
 
 def test_pinned_web_memory_revision_client(revision_api: dict[str, Any], tmp_path: Path) -> None:
@@ -39,9 +43,11 @@ def test_pinned_web_memory_revision_client(revision_api: dict[str, Any], tmp_pat
     command = ["node", "--import", "tsx", "scripts/consumers/memory-revisions.ts", str(configuration)]
     journal.event("reserve-memory-web-consumer", web_sha=web_sha, memory_id=revision_api["memory_id"], result_file=str(output))
     try:
+        private_consumer_file(output, "", journal, owned)
         completed = subprocess.run(command, cwd=checkout, env={**os.environ, "TSX_TSCONFIG_PATH": "tsconfig.app.json"}, text=True, capture_output=True, timeout=180)
         assert completed.returncode == 0, completed.stdout + completed.stderr
         receipt = json.loads(output.read_text())
+        assert receipt["passed"] is True
         journal.event("memory-web-consumer-complete", web_sha=web_sha, receipt=receipt)
     finally:
         for path in owned:

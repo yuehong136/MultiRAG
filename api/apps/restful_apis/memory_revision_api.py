@@ -11,10 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import get_async_db
+from api.identity.principal import AuthenticationSource
 from api.utils.api_utils import Principal, async_current_user
 from common.constants import RetCode
 from common.exceptions import NotFoundException
 from memory.revisions.domain import RevisionConflict, RevisionNotFound, RevisionPersistenceUnknown, RevisionValidationError
+from memory.revisions.identifiers import wire_message_identifiers
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -43,6 +45,28 @@ class AdoptEntryRequest(MemoryCommand):
 
 class AdoptSourceRequest(MemoryCommand):
     expected_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class MemoryAppendRequest(MemoryCommand):
+    user_input: str = Field(max_length=65535)
+    agent_response: str = Field(max_length=65535)
+    agent_id: str = Field(max_length=256)
+    session_id: str = Field(max_length=256)
+    user_id: str = Field(default="", max_length=256)
+
+    @field_validator("agent_id", "session_id", "user_id")
+    @classmethod
+    def bounded_identity(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 256:
+            raise ValueError("Identity must fit 256 UTF-8 bytes")
+        return value
+
+    @model_validator(mode="after")
+    def bounded_conversation(self) -> Self:
+        content = f"User Input: {self.user_input}\nAgent Response: {self.agent_response}"
+        if len(content.encode("utf-8")) > 65535:
+            raise ValueError("Recorded conversation must fit 65535 UTF-8 bytes")
+        return self
 
 
 class ExactTextPatch(BaseModel):
@@ -93,13 +117,7 @@ class WithdrawSourceRequest(MemoryCommand):
 
 def _wire_data(value: Any, key: str = "") -> Any:
     """Keep physical identifiers exact in JavaScript clients."""
-    if type(value) is int and key in {"message_id", "source_id", "source_message_id", "current_message_id", "legacy_message_id"}:
-        return str(value)
-    if isinstance(value, dict):
-        return {name: _wire_data(item, name) for name, item in value.items()}
-    if isinstance(value, list):
-        return [_wire_data(item) for item in value]
-    return value
+    return wire_message_identifiers(value, key)
 
 
 def _result(data: Any, *, status_code: int = 200, retcode: RetCode = RetCode.SUCCESS, retmsg: str = "success") -> JSONResponse:
@@ -112,6 +130,8 @@ def _command_result(data: dict[str, Any]) -> JSONResponse:
         or data.get("index_sync_status") == "ready"
         or data.get("status") in {"ready", "succeeded", "completed", "failed", "conflict", "rejected", "stale", "canceled", "redacted"}
     )
+    if data.get("kind") == "append_raw" and data.get("queue_state") not in {"submitted", "not_required"}:
+        complete = data.get("status") in {"failed", "conflict", "rejected", "stale", "canceled", "redacted"}
     return _result(data, status_code=200 if complete else 202)
 
 
@@ -131,6 +151,29 @@ def _command_error(error: Exception, *, operation_id: str | None = None) -> JSON
         )
     logger.error("Memory revision request failed (%s)", type(error).__name__)
     return _result(False, status_code=500, retcode=RetCode.SERVER_ERROR, retmsg="Internal server error")
+
+
+@router.post("/memories/{memory_id}/messages", summary="Append a recorded conversation with a stable operation ID")
+async def append_message(memory_id: str, request_body: MemoryAppendRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
+    from api.apps.services import memory_revision_service as service
+
+    message = request_body.model_dump(exclude={"operation_id"})
+    if user.authentication.source is not AuthenticationSource.SDK_API_TOKEN:
+        message["user_id"] = user.id
+    try:
+        return _command_result(await service.append_message(db, memory_id, message, actor_id=user.id, operation_id=request_body.operation_id))
+    except Exception as error:
+        return _command_error(error, operation_id=request_body.operation_id)
+
+
+@router.post("/memories/{memory_id}/deletions", summary="Stop, drain and reconcile a memory-bank deletion")
+async def delete_memory(memory_id: str, request_body: MemoryCommand, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
+    from api.apps.services import memory_revision_service as service
+
+    try:
+        return _command_result(await service.delete_memory(db, memory_id, actor_id=user.id, operation_id=request_body.operation_id))
+    except Exception as error:
+        return _command_error(error, operation_id=request_body.operation_id)
 
 
 @router.post("/memories/{memory_id}/entries", summary="Explicitly adopt a derived memory for versioned editing")

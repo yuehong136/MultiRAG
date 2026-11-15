@@ -85,12 +85,24 @@ class ManagedMessageStore:
 
     async def measure_bytes(self) -> int:
         def measure() -> int:
-            rows = self._require("query_management_rows")(_FIELDS.copy(), self.index, self.memory_id, _MAX_PHYSICAL_ROWS)
-            if len(rows) >= _MAX_PHYSICAL_ROWS:
-                raise RevisionCapacityError("physical_inventory_incomplete")
-            return sum(MessageService.calculate_message_size(message) for message in self._decode(rows))
+            return sum(MessageService.calculate_message_size(message) for message in self._inventory())
 
         return await finish_owned_work(asyncio.to_thread(measure))
+
+    def _inventory(self) -> list[dict[str, Any]]:
+        rows = self._require("query_management_rows")(_FIELDS.copy(), self.index, self.memory_id, _MAX_PHYSICAL_ROWS)
+        if len(rows) >= _MAX_PHYSICAL_ROWS:
+            raise RevisionCapacityError("physical_inventory_incomplete")
+        return self._decode(rows)
+
+    async def inventory(self) -> list[dict[str, Any]]:
+        return await finish_owned_work(asyncio.to_thread(self._inventory))
+
+    async def ensure_index(self, memory_id: str, dimension: int) -> None:
+        if memory_id != self.memory_id:
+            raise RevisionValidationError("memory_binding_mismatch")
+        positive_int(dimension, "invalid_embedding_dimension")
+        await finish_owned_work(asyncio.to_thread(self._require("ensure_memory_index"), self.index, self.memory_id, dimension))
 
     async def source_dependents(self, source_id: int) -> list[int]:
         positive_int(source_id, "invalid_source_id")

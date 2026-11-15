@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from api.apps.services import memory_revision_service
+from api.db.db_models import Memory
 from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemoryMutationOperation, MemoryPublicationOutbox, MemoryRevisionSource, MemorySourceState
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import settings
@@ -260,7 +261,7 @@ def test_withdrawal_stops_supply_before_cleanup_and_blocks_late_legacy_rows(revi
     assert reenabling["retcode"] != 0
 
 
-def test_temporary_state_changes_keep_management_controls_and_permanent_delete_is_guarded(revision_api: dict[str, Any]) -> None:
+def test_temporary_state_changes_keep_management_controls_and_bank_delete_retains_its_receipt(revision_api: dict[str, Any]) -> None:
     env = revision_api
     mid, entry = adopt(env)
     result(api_request(env, "PUT", f"/messages/{mid}:900", json={"status": False}))
@@ -285,12 +286,19 @@ def test_temporary_state_changes_keep_management_controls_and_permanent_delete_i
     visible = [item for raw in administrative for item in raw.get("extract", []) if str(item["message_id"]) == current_id]
     assert len(visible) == 1 and visible[0]["status"] is False and visible[0]["content"] == current["current"]["content"]
     management = result(api_request(env, "GET", f"/memories/{mid}/messages", params={"limit": 20}))
-    assert all(message["message_id"] != int(current_id) for message in management["messages"])
+    assert all(str(message["message_id"]) != current_id for message in management["messages"])
     result(api_request(env, "PUT", f"/messages/{mid}:{current_id}", json={"status": True}))
     assert MessageService.get_by_message_id(mid, int(current_id), env["tenants"]["personal"])
-    denied = api_request(env, "DELETE", f"/memories/{mid}")
-    assert denied.json()["retcode"] != 0
-    assert result(api_request(env, "GET", f"/memories/{mid}/entries/{entry}"))["current_revision"] == 2
+    deleted = api_request(env, "DELETE", f"/memories/{mid}")
+    assert deleted.status_code == 200 and deleted.json()["retcode"] == 0
+    with Session(env["engine"]) as db:
+        assert db.get(Memory, mid) is None
+        operation_id = db.scalar(sa.select(MemoryMutationOperation.operation_id).where(MemoryMutationOperation.memory_id == mid, MemoryMutationOperation.kind == "delete_memory"))
+        assert operation_id is not None
+    receipt = result(api_request(env, "GET", f"/memories/{mid}/operations/{operation_id}"))
+    assert receipt["lifecycle"] == "deleted" and receipt["tracked_cleanup_confirmed"] is True
+    assert receipt["physical_cleanup_complete"] is False
+    assert api_request(env, "GET", f"/memories/{mid}/entries/{entry}").status_code == 404
 
 
 def test_unregistered_source_registration_is_explicit_and_hash_checked(revision_api: dict[str, Any]) -> None:

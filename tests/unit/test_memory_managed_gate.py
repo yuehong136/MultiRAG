@@ -175,3 +175,33 @@ def test_managed_eligibility_is_applied_before_top_n(monkeypatch: pytest.MonkeyP
     monkeypatch.setitem(settings.__dict__, "msgStoreConn", Store())
     assert [item["message_id"] for item in MessageService.search_message(["bank"], {}, ["owner"], [], 1)] == [98]
     assert calls[0]["limit"] == 1 and calls[0]["eligibility_by_memory"]["bank"]["source_ids"] == [2]
+
+
+@pytest.mark.parametrize("state", ["pending", "published", "canceled"])
+def test_writer_publication_gate_applies_without_managed_activation(monkeypatch: pytest.MonkeyPatch, state: str) -> None:
+    snapshot = gate.ManagedReadSnapshot(writers={("bank", 10): ("owner", state), ("bank", 11): ("owner", "ready")})
+    use(monkeypatch, snapshot)
+    assert gate.filter_messages(["owner"], ["bank"], [row(10), row(11), row(12)]) == [row(11), row(12)]
+    assert gate.filter_messages(["owner"], ["bank"], [row(10, message_type="raw")], management_metadata=True) == []
+    assert gate.managed_query_exclusions(["owner"], ["bank"]) == {"bank": {"message_ids": [10], "source_ids": []}}
+    assert gate.requires_guarded_read("owner", "bank") is True
+
+
+def test_unmanaged_fifo_source_tombstone_blocks_unknown_late_children(monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = gate.ManagedReadSnapshot(sources={("bank", 1): source("forgotten")})
+    use(monkeypatch, snapshot)
+    assert gate.is_managed("owner", "bank") is False
+    assert gate.requires_guarded_read("owner", "bank") is True
+    assert gate.filter_messages(["owner"], ["bank"], [row(1, message_type="raw", source_id=0), row(999, source=1), row(1000, source=2)]) == [row(1000, source=2)]
+    assert gate.managed_query_exclusions(["owner"], ["bank"]) == {"bank": {"message_ids": [1], "source_ids": [1]}}
+
+
+def test_unmanaged_direct_get_does_not_bypass_withdrawal_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    use(monkeypatch, gate.ManagedReadSnapshot(sources={("bank", 1): source("forgotten")}))
+
+    class Store:
+        def get(self, *args: Any) -> dict[str, Any]:
+            return row(999, source=1)
+
+    monkeypatch.setitem(settings.__dict__, "msgStoreConn", Store())
+    assert MessageService.get_by_message_id("bank", 999, "owner") is None

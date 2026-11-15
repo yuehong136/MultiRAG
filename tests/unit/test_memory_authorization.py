@@ -35,8 +35,9 @@ async def test_rejected_write_never_reaches_queue(async_db: Any, memories: None,
 
 
 async def test_write_deduplicates_before_queue(async_db: Any, memories: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def queue(db: Any, ids: list[str], message: dict) -> tuple[bool, str]:
+    async def queue(db: Any, ids: list[str], message: dict[str, Any], *, actor_id: str, operation_id: str | None, operation_results: list[dict[str, Any]] | None) -> tuple[bool, str]:
         assert ids == ["own", "team"]
+        assert actor_id == "user" and operation_id is None and operation_results is None
         return True, "queued"
 
     monkeypatch.setattr(service, "queue_save_to_memory_task", queue)

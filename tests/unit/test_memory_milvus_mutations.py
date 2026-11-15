@@ -7,6 +7,7 @@ from typing import Any
 
 import grpc
 import pytest
+from pymilvus import DataType
 from pymilvus.client.grpc_handler import GrpcHandler
 from pymilvus.decorators import retry_on_rpc_failure
 from pymilvus.exceptions import MilvusException
@@ -112,6 +113,19 @@ def test_insert_replaces_complete_row_without_delete_or_insert(mutation_store: t
     assert value == original_input
     assert collection.rows["bank_1"] == store.map_message_to_milvus_fields(value)
     assert len(collection.calls) == 1 and collection.calls[0][1]["partial_update"] is False
+
+
+@pytest.mark.parametrize("exists", [True, False])
+def test_admitted_index_creation_validates_existing_dimension(mutation_store: tuple[Any, MutationCollection], monkeypatch: pytest.MonkeyPatch, exists: bool) -> None:
+    store, collection = mutation_store
+    created: list[tuple[str, int]] = []
+    collection.schema = SimpleNamespace(fields=[SimpleNamespace(dtype=DataType.FLOAT_VECTOR, name="q_2_vec", params={"dim": 2})])
+    monkeypatch.setattr(milvus_conn.utility, "has_collection", lambda *args, **kwargs: exists)
+    monkeypatch.setattr(store, "_create_message_collection", lambda name, dimension: created.append((name, dimension)))
+    store.ensure_memory_index("memory_owner", "bank", 2)
+    assert len(created) == (0 if exists else 1)
+    with pytest.raises(ValueError, match="dimension"):
+        store.ensure_memory_index("memory_owner", "bank", 3)
 
 
 @pytest.mark.parametrize("change", [{"id": "foreign_1"}, {"memory_id": "foreign"}, {"message_id": True}, {"content_embed": []}])

@@ -289,8 +289,9 @@ def test_capabilities_distinguish_native_live_seek_and_bounded_read(store: Messa
         "activation_scope": "memory_bank",
         "legacy_writes_supported": True,
         "managed_revisions_supported": False,
+        "coordinated_writes_supported": False,
         "managed_delete_supported": False,
-        "managed_delete_blocked_reason": "blocked_until_writer_coordination",
+        "managed_delete_blocked_reason": "backend_missing_coordinated_writer_capabilities",
     }
     assert MessageService.get_recent_read_capabilities() == {
         **management,

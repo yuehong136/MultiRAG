@@ -9,13 +9,14 @@
 import asyncio
 from collections.abc import Callable
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
-from api.db.db_models import Memory, db_connection
+from api.db.db_models import Memory, async_db_connection, db_connection
 from api.db.joint_services.memory_message_service import (
     get_memory_size_cache,
     judge_system_prompt_is_default,
@@ -181,11 +182,13 @@ def update_memory(db: Session, memory_id: str, new_settings: dict, *, user_id: s
     memory_dict["memory_type"] = get_memory_type_human(current_memory.memory_type)
 
     update_dict = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, update_dict, strict=True)
+    binding_backfills: set[str] = set()
     for model_key in ("llm_id", "embd_id"):
         if model_key not in update_dict:
             continue
         tenant_key = f"tenant_{model_key}"
-        current_id = memory_dict.get(tenant_key)
+        stored_id = memory_dict.get(tenant_key)
+        current_id = stored_id
         if current_id is None and memory_dict.get(model_key):
             try:
                 current_id = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, {model_key: memory_dict[model_key]}).get(tenant_key)
@@ -194,7 +197,12 @@ def update_memory(db: Session, memory_id: str, new_settings: dict, *, user_id: s
                 current_id = None
         if current_id is not None and current_id == update_dict[tenant_key]:
             update_dict.pop(model_key)
-            update_dict.pop(tenant_key)
+            if stored_id is not None:
+                update_dict.pop(tenant_key)
+            else:
+                # Persist the freshly authorized owner binding for a legacy
+                # name-only row without treating it as a new embedding model.
+                binding_backfills.add(tenant_key)
 
     to_update = {}
     for k, v in update_dict.items():
@@ -207,8 +215,21 @@ def update_memory(db: Session, memory_id: str, new_settings: dict, *, user_id: s
     if not to_update:
         return True, memory_dict
 
+    from api.db.memory_revision_models import ManagedMemoryState
+    from api.db.memory_writer_models import MemoryWriterAdmission
+    from memory.revisions.domain import RevisionConflict
+
+    locked = db.scalar(select(Memory).where(Memory.id == memory_id, Memory.tenant_id == current_memory.tenant_id).execution_options(populate_existing=True).with_for_update())
+    if locked is None:
+        raise NotFoundException("Memory not found.")
+    _require_memory_access(db, user_id, memory_id)
+    lifecycle = db.scalar(select(ManagedMemoryState.state).where(ManagedMemoryState.memory_id == memory_id))
+    active_writer = db.scalar(select(MemoryWriterAdmission.operation_id).where(MemoryWriterAdmission.memory_id == memory_id, MemoryWriterAdmission.active_token.is_not(None)).limit(1))
+    if lifecycle not in {None, "active"} or active_writer is not None:
+        raise RevisionConflict("memory_change_requires_writer_quiescence")
+
     memory_size = get_memory_size_cache(current_memory.tenant_id, memory_id)
-    not_allowed_update = [f for f in ["tenant_embd_id", "embd_id", "memory_type"] if f in to_update and memory_size > 0]
+    not_allowed_update = [f for f in ["tenant_embd_id", "embd_id", "memory_type"] if f in to_update and f not in binding_backfills and memory_size > 0]
     if not_allowed_update:
         raise ArgumentException(f"Can't update {not_allowed_update} when memory isn't empty.")
 
@@ -225,6 +246,7 @@ def delete_memory(db: Session, memory_id: str, *, user_id: str) -> bool:
     """删除Memory"""
     memory = _require_memory_access(db, user_id, memory_id)
     from api.db.memory_revision_models import ManagedMemoryState
+    from api.db.memory_writer_models import MemoryWriterFence
     from memory.revisions.domain import RevisionConflict
 
     locked = db.scalar(select(Memory).where(Memory.id == memory_id, Memory.tenant_id == memory.tenant_id).execution_options(populate_existing=True).with_for_update())
@@ -233,6 +255,8 @@ def delete_memory(db: Session, memory_id: str, *, user_id: str) -> bool:
     _require_memory_access(db, user_id, memory_id)
     if db.scalar(select(ManagedMemoryState.memory_id).where(ManagedMemoryState.memory_id == memory_id)) is not None:
         raise RevisionConflict("managed_memory_delete_requires_writer_coordination")
+    if db.scalar(select(MemoryWriterFence.memory_id).where(MemoryWriterFence.memory_id == memory_id)) is not None:
+        raise RevisionConflict("memory_delete_requires_writer_coordination")
     tenant_id = locked.tenant_id
     if MemoryService.delete_memory(db, memory_id) != 1:
         raise RuntimeError("Memory deletion was not confirmed")
@@ -296,7 +320,9 @@ def get_memory_messages(db: Session, memory_id: str, agent_ids: list[str], keywo
     return {"messages": messages, "storage_type": memory.storage_type}
 
 
-async def add_message(db: AsyncSession, memory_ids: list[str], message_dict: dict, *, user_id: str) -> tuple[bool, str]:
+async def add_message(
+    db: AsyncSession, memory_ids: list[str], message_dict: dict[str, Any], *, user_id: str, operation_id: str | None = None, operation_results: list[dict[str, Any]] | None = None
+) -> tuple[bool, str]:
     """
     添加消息到Memory，并投递后台任务提取结构化记忆。
 
@@ -314,7 +340,7 @@ async def add_message(db: AsyncSession, memory_ids: list[str], message_dict: dic
     accessible_ids = await db.run_sync(lambda s: [m.id for m in _accessible_memories(s, user_id, memory_ids)])  # TODO(async-phase4)
     if not memory_ids or set(accessible_ids) != set(memory_ids):
         return False, "Memory not found."
-    return await queue_save_to_memory_task(db, memory_ids, message_dict)
+    return await queue_save_to_memory_task(db, memory_ids, message_dict, actor_id=user_id, operation_id=operation_id, operation_results=operation_results)
 
 
 def forget_message(db: Session, memory_id: str, message_id: int, *, user_id: str) -> bool:
@@ -423,12 +449,31 @@ async def update_memory_async(memory_id: str, new_settings: dict, *, user_id: st
 
 async def delete_memory_async(memory_id: str, *, user_id: str, db: AsyncSession | None = None) -> bool:
     """delete_memory 的异步入口（msg_store 索引删除混轨）。"""
-    if db is not None:
-        from api.apps.services.memory_revision_service import is_managed
-        from memory.revisions.domain import RevisionConflict
+    if db is None:
+        from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
 
-        if await is_managed(db, memory_id, actor_id=user_id):
-            raise RevisionConflict("managed_memory_delete_requires_writer_coordination")
+        if supports_coordinated_writes():
+            async with async_db_connection() as owned_db:
+                return await delete_memory_async(memory_id, user_id=user_id, db=owned_db)
+    if db is not None:
+        from api.apps.services.memory_revision_service import LegacyStateReconciliationRequired, _release_read_transaction
+        from api.apps.services.memory_revision_service import delete_memory as coordinated_delete
+        from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
+        from api.db.memory_revision_models import ManagedMemoryState
+
+        if supports_coordinated_writes():
+            bank = (await db.execute(select(ManagedMemoryState.state, ManagedMemoryState.delete_operation_id).where(ManagedMemoryState.memory_id == memory_id))).one_or_none()
+            operation_id = bank.delete_operation_id if bank is not None and bank.delete_operation_id else "legacy-delete:" + uuid4().hex
+            await _release_read_transaction(db)
+            try:
+                result = await coordinated_delete(db, memory_id, actor_id=user_id, operation_id=operation_id)
+            except NotFoundException:
+                raise
+            except Exception as error:
+                raise LegacyStateReconciliationRequired(operation_id, getattr(error, "code", "memory_deletion_unconfirmed")) from error
+            if result.get("lifecycle") == "deleted" and result.get("tracked_cleanup_confirmed") is True:
+                return True
+            raise LegacyStateReconciliationRequired(operation_id, result.get("error_code") or "memory_deletion_pending")
     return await _run_with_own_session(delete_memory, memory_id, user_id=user_id)
 
 
@@ -439,6 +484,12 @@ async def get_memory_messages_async(memory_id: str, agent_ids: list[str], keywor
 
 async def forget_message_async(memory_id: str, message_id: int, *, user_id: str, db: AsyncSession | None = None) -> bool:
     """forget_message 的异步入口（DB 读 + msg_store 更新混轨）。"""
+    if db is None:
+        from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
+
+        if supports_coordinated_writes():
+            async with async_db_connection() as owned_db:
+                return await forget_message_async(memory_id, message_id, user_id=user_id, db=owned_db)
     if db is not None:
         from api.apps.services.memory_revision_service import change_legacy_message_state
 
@@ -450,6 +501,12 @@ async def forget_message_async(memory_id: str, message_id: int, *, user_id: str,
 
 async def update_message_status_async(memory_id: str, message_id: int, status: bool, *, user_id: str, db: AsyncSession | None = None) -> bool:
     """update_message_status 的异步入口（DB 读 + msg_store 更新混轨）。"""
+    if db is None:
+        from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
+
+        if supports_coordinated_writes():
+            async with async_db_connection() as owned_db:
+                return await update_message_status_async(memory_id, message_id, status, user_id=user_id, db=owned_db)
     if db is not None:
         from api.apps.services.memory_revision_service import change_legacy_message_state
 

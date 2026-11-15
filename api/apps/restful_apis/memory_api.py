@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
@@ -27,6 +27,7 @@ from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import RetCode
 from common.exceptions import ArgumentException, NotFoundException
 from memory.revisions.domain import RevisionConflict
+from memory.revisions.identifiers import wire_message_identifiers
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -103,6 +104,8 @@ async def update_memory(memory_id: str, request_body: UpdateMemoryRequest, user:
             return get_json_result(data=result)
         else:
             return get_json_result(data=False, retmsg=result, retcode=RetCode.SERVER_ERROR)
+    except RevisionConflict as error:
+        return get_json_result(data=False, retmsg=error.code, retcode=RetCode.CONFLICT)
     except NotFoundException as e:
         logger.error(e)
         return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
@@ -120,6 +123,8 @@ async def delete_memory(memory_id: str, db: AsyncSession = Depends(get_async_db)
         # msg_store 索引删除与 DB 交错：整块在工作线程 + 自开短会话执行
         await memory_api_service.delete_memory_async(memory_id, user_id=user.id, db=db)
         return get_json_result(data=True)
+    except LegacyStateReconciliationRequired as error:
+        return get_json_result(data={"operation_id": error.operation_id, "error_code": error.code, "requires_reconciliation": True}, retmsg=error.code, retcode=RetCode.CONFLICT)
     except RevisionConflict as error:
         return get_json_result(data=False, retmsg=error.code, retcode=RetCode.CONFLICT)
     except NotFoundException as e:
@@ -207,6 +212,7 @@ class AddMessageRequest(BaseModel):
     user_input: str = Field(..., description="User input message")
     agent_response: str = Field(..., description="Agent response message")
     user_id: str = Field(default="", description="External subject for API-key authentication; otherwise the authenticated user is used")
+    operation_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 
 
 class UpdateMessageRequest(BaseModel):
@@ -233,9 +239,21 @@ async def add_message(
         "agent_response": request_body.agent_response,
     }
 
-    res, msg = await memory_api_service.add_message(db, memory_ids, message_dict, user_id=user.id)
+    from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
+
+    operations: list[dict[str, Any]] = []
+    if supports_coordinated_writes():
+        res, msg = await memory_api_service.add_message(db, memory_ids, message_dict, user_id=user.id, operation_id=request_body.operation_id, operation_results=operations)
+    else:
+        if request_body.operation_id is not None:
+            return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg="This backend does not support operation-based memory appends.")
+        res, msg = await memory_api_service.add_message(db, memory_ids, message_dict, user_id=user.id)
     if res:
+        if request_body.operation_id is not None:
+            return get_json_result(retmsg=msg, data=wire_message_identifiers({"operations": operations}))
         return get_json_result(retmsg=msg)
+    if operations:
+        return get_json_result(retcode=RetCode.CONFLICT, retmsg=msg, data=wire_message_identifiers({"operations": operations, "requires_reconciliation": True}))
     return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg="Some messages failed to add. Detail:" + msg)
 
 

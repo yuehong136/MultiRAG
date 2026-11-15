@@ -9,9 +9,12 @@ from sqlalchemy.orm import Session
 from api.apps.services import memory_api_service as api
 from api.db.db_models import Memory, Task
 from api.db.joint_services import memory_message_service as mms
+from api.db.memory_revision_models import ManagedMemoryState
+from api.db.memory_writer_models import MemoryWriterAdmission
 from api.db.services.task_service import TaskService
 from common.exceptions import ArgumentException
 from core.svr import task_executor as worker
+from memory.revisions.domain import RevisionConflict
 
 
 @pytest.fixture
@@ -70,7 +73,7 @@ def test_existing_begin_at_normalization(value: Any, valid: bool) -> None:
 
 
 @pytest.fixture
-def configured_memory(monkeypatch: pytest.MonkeyPatch) -> Memory:
+def configured_memory(db: Session, monkeypatch: pytest.MonkeyPatch) -> Memory:
     memory = Memory(id="memory", tenant_id="owner", memory_type=3, embd_id="legacy@provider", tenant_embd_id=7, llm_id="chat", tenant_llm_id=8)
     monkeypatch.setattr(api, "_require_memory_access", lambda db, user_id, mid: memory)
 
@@ -82,6 +85,16 @@ def configured_memory(monkeypatch: pytest.MonkeyPatch) -> Memory:
         return values
 
     monkeypatch.setattr(api, "ensure_tenant_model_id_for_params", resolve)
+
+    def scalar(statement: Any) -> Any:
+        entity = statement.column_descriptions[0]["entity"]
+        if entity is Memory:
+            assert statement._for_update_arg is not None
+            return memory
+        assert entity in {ManagedMemoryState, MemoryWriterAdmission}
+        return None
+
+    monkeypatch.setattr(db, "scalar", scalar)
     return memory
 
 
@@ -97,6 +110,25 @@ def test_occupied_memory_still_rejects_real_change(db: Session, configured_memor
     monkeypatch.setattr(api, "get_memory_size_cache", lambda *args: 100)
     with pytest.raises(ArgumentException, match="isn't empty"):
         api.update_memory(db, "memory", settings, user_id="owner")
+
+
+@pytest.mark.parametrize("blocker", ["deleting", "active_writer"])
+def test_configuration_change_requires_actual_writer_quiescence(db: Session, configured_memory: Memory, monkeypatch: pytest.MonkeyPatch, blocker: str) -> None:
+    def scalar(statement: Any) -> Any:
+        entity = statement.column_descriptions[0]["entity"]
+        if entity is Memory:
+            assert statement._for_update_arg is not None
+            return configured_memory
+        if entity is ManagedMemoryState:
+            return "deleting" if blocker == "deleting" else None
+        assert entity is MemoryWriterAdmission
+        return "original-writer" if blocker == "active_writer" else None
+
+    monkeypatch.setattr(db, "scalar", scalar)
+    monkeypatch.setattr(api, "get_memory_size_cache", lambda *args: pytest.fail("blocked change reached message storage"))
+    monkeypatch.setattr(api.MemoryService, "update_memory", lambda *args: pytest.fail("blocked change wrote configuration"))
+    with pytest.raises(RevisionConflict, match="memory_change_requires_writer_quiescence"):
+        api.update_memory(db, "memory", {"embd_id": "other"}, user_id="owner")
 
 
 @pytest.mark.parametrize("value", [3, "raw,semantic", [1], ["unsupported"]])
@@ -121,3 +153,13 @@ def test_unusable_legacy_reference_can_be_replaced(db: Session, configured_memor
     monkeypatch.setattr(api.MemoryService, "get_by_memory_id", lambda db, mid: configured_memory)
     assert api.update_memory(db, "memory", {"embd_id": "other"}, user_id="owner")[0]
     assert changed == [{"embd_id": "other", "tenant_embd_id": 9}]
+
+
+def test_occupied_legacy_name_backfills_the_same_owner_binding(db: Session, configured_memory: Memory, monkeypatch: pytest.MonkeyPatch) -> None:
+    configured_memory.tenant_embd_id = None
+    changed: list[dict[str, Any]] = []
+    monkeypatch.setattr(api, "get_memory_size_cache", lambda *args: 100)
+    monkeypatch.setattr(api.MemoryService, "update_memory", lambda db, tenant, mid, values: changed.append(values))
+    monkeypatch.setattr(api.MemoryService, "get_by_memory_id", lambda db, mid: configured_memory)
+    assert api.update_memory(db, "memory", {"embd_id": "7"}, user_id="owner")[0] is True
+    assert changed == [{"tenant_embd_id": 7}]

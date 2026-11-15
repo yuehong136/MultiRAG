@@ -220,10 +220,14 @@ class MessageService:
     @classmethod
     def get_recent_read_capabilities(cls, *, tenant_id: str | None = None, memory_id: str | None = None) -> dict[str, Any]:
         """Describe the active connector's recent-page semantics without reading messages."""
+        from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
+
         supports_native = getattr(settings.msgStoreConn, "supports_recent_message_query", None)
         managed = bool(tenant_id and memory_id and gate.is_managed(tenant_id, memory_id))
-        native = not managed and callable(supports_native) and supports_native() is True
+        guarded = bool(tenant_id and memory_id and gate.requires_guarded_read(tenant_id, memory_id))
+        native = not guarded and callable(supports_native) and supports_native() is True
         supported = all(callable(getattr(settings.msgStoreConn, name, None)) for name in ("query_source_rows", "query_management_rows", "search_managed"))
+        coordinated = supported and supports_coordinated_writes()
         return {
             "pagination": "live_seek_cursor" if native else "bounded_scan_cursor",
             "max_page_size": MAX_RECENT_MESSAGES_PAGE_SIZE,
@@ -234,8 +238,9 @@ class MessageService:
             "activation_scope": "memory_bank",
             "legacy_writes_supported": not managed,
             "managed_revisions_supported": supported,
-            "managed_delete_supported": False,
-            "managed_delete_blocked_reason": "blocked_until_writer_coordination",
+            "coordinated_writes_supported": coordinated,
+            "managed_delete_supported": coordinated,
+            "managed_delete_blocked_reason": None if coordinated else "backend_missing_coordinated_writer_capabilities",
         }
 
     @classmethod
@@ -539,7 +544,7 @@ class MessageService:
                 keys.append(key)
             if keys != sorted(keys, reverse=True):
                 raise SourceMessageBindingError("Stored recent messages are not in the requested order")
-            return rows
+            return _supply_messages([uid], [memory_id], rows, reject_changed=True)
 
         if first is not None and last is not None:
             anchor_ids = list(dict.fromkeys([first["id"], last["id"]]))
@@ -765,7 +770,9 @@ class MessageService:
             return served[0] if served else None
         index = index_name(uid)
         doc_id = f"{memory_id}_{message_id}"
-        return settings.msgStoreConn.get(doc_id, index, [memory_id])
+        message = settings.msgStoreConn.get(doc_id, index, [memory_id])
+        messages = _supply_messages([uid], [memory_id], [message]) if message is not None else []
+        return messages[0] if messages else None
 
     @classmethod
     def _read_managed_physical(cls, memory_id: str, message_id: int, uid: str) -> list[dict[str, Any]]:

@@ -69,6 +69,10 @@ async def save_to_memory(db: Session, memory_id: str, message_dict: dict[str, An
     Returns:
         Tuple of (success, message)
     """
+    from api.db.joint_services.memory_write_runtime import save_input, supports_coordinated_writes
+
+    if supports_coordinated_writes():
+        return await save_input(memory_id, message_dict)
     memory = MemoryService.get_by_memory_id(db, memory_id)
     if not memory:
         return False, f"Memory '{memory_id}' not found."
@@ -181,6 +185,13 @@ async def save_extracted_to_memory_only(db: Session, memory_id: str, message_dic
     Returns:
         Tuple of (success, message)
     """
+    from api.db.joint_services.memory_write_runtime import handle_coordinated_task, supports_coordinated_writes
+
+    if supports_coordinated_writes():
+        if task_id is None:
+            return False, "Coordinated extraction requires a persisted task."
+        completed = await handle_coordinated_task({"id": task_id, "memory_id": memory_id, "source_id": source_message_id}, trusted_internal=True)
+        return completed, "Memory extraction is recorded by its stable task operation."
     memory = MemoryService.get_by_memory_id(db, memory_id)
     if not memory:
         msg = f"Memory '{memory_id}' not found."
@@ -452,8 +463,17 @@ def init_message_id_sequence(db: Session):
         logging.info(f"Init message_id sequence done, current max id is {max_id}.")
 
 
-def get_memory_size_cache(uid: str, memory_id: str):
+def get_memory_size_cache(uid: str, memory_id: str) -> int:
     """Get memory size from cache or calculate it."""
+    from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
+    from memory.revisions.storage import ManagedMessageStore
+
+    if supports_coordinated_writes():
+        # The ingestion ledger owns reservations; legacy cache values are not an
+        # authority for model changes or the displayed physical occupancy.
+        memory_size = sum(MessageService.calculate_message_size(row) for row in ManagedMessageStore(uid, memory_id)._inventory())
+        set_memory_size_cache(memory_id, memory_size)
+        return memory_size
     redis_key = f"memory_{memory_id}"
     if REDIS_CONN.exist(redis_key):
         return int(REDIS_CONN.get(redis_key))
@@ -525,6 +545,9 @@ async def queue_save_to_memory_task(
     message_dict: dict,
     *,
     run_context: RunContext | None = None,
+    actor_id: str | None = None,
+    operation_id: str | None = None,
+    operation_results: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, str]:
     """
     Queue save to memory tasks.
@@ -542,6 +565,11 @@ async def queue_save_to_memory_task(
     Returns:
         Tuple of (success, message)
     """
+
+    from api.db.joint_services.memory_write_runtime import queue_messages, supports_coordinated_writes
+
+    if supports_coordinated_writes():
+        return await queue_messages(db, memory_ids, message_dict, actor_id=actor_id, operation_id=operation_id, run_context=run_context, operation_results=operation_results)
 
     def new_task(_memory_id: str, _source_id: int) -> dict[str, Any]:
         return {"id": get_uuid(), "doc_id": _memory_id, "task_type": "memory", "progress": 0.0, "begin_at": datetime.now(), "digest": str(_source_id)}
@@ -653,6 +681,11 @@ async def handle_save_to_memory_task(db: Session, task_param: dict) -> tuple[boo
     Returns:
         Tuple of (success, message)
     """
+    from api.db.joint_services.memory_write_runtime import handle_coordinated_task, supports_coordinated_writes
+
+    if supports_coordinated_writes():
+        completed = await handle_coordinated_task(task_param)
+        return completed, "Memory extraction is recorded by its stable task operation."
     task = TaskService.get_by_id(db, task_param["id"])
     if not task:
         return False, f"Task {task_param['id']} is not found."

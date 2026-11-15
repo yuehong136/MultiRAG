@@ -12,14 +12,46 @@ Memory 可显式接管已有派生条目，保存修订历史，并通过操作�
 
 接管是显式操作，GET 不会接管或迁移旧数据。**首次接管会启用整个 Memory 的受管写入约束：**
 
-- 普通追加、自动提取和 FIFO 淘汰暂不支持；使用这些流程的调用者应在启用前停止并排空既有写入。
+- 具有 `writes.supported=true` 的后端通过同一协调入口处理普通追加、自动提取与 FIFO；启用前仍须停止并排空旧版本进程。
 - 已有未接管条目仍按原语义读取，不因接管一条而批量隐藏或重写。
 - 单条状态和遗忘通过协调入口执行；临时停用可以重新启用，永久来源撤回不允许重新启用。
-- 整库删除暂被拒绝，避免先删 SQL 资源、却留下无法可靠对账的在途存储写入。
+- 具有 `deletions.supported=true` 的后端先关闭写入、等待实际 IO 排空，再清理索引与 SQL；删除中立即停供。
 
-这些边界分别由 `activation_scope=memory_bank`、`ordinary_writes_after_activation=false`、
-`coordinated_state_changes=true` 和 `managed_delete_supported=false` 声明。
+这些边界分别由 `activation_scope=memory_bank`、`ordinary_writes_after_activation`、
+`coordinated_state_changes` 和 `managed_delete_supported` 声明；调用者须检查实际值。
 本阶段不提供自动退出受管模式或全库批量接管。
+
+## 普通写入与自动提取
+
+```http
+POST /api/v1/memories/{memory_id}/messages
+Content-Type: application/json
+
+{"operation_id":"append-conversation-001","user_input":"项目使用端口 8080","agent_response":"已记录","agent_id":"assistant","session_id":"session-001"}
+```
+
+服务器保存原始输入与回答组成的 RAW。Web 会话中的 `user_id` 由认证用户确定；SDK token 可提供外部主体，
+但它不授予租户或 Memory 访问权。新命令拒绝 tenant、actor、模型和验证状态等额外字段。
+旧 `POST /api/v1/messages` 保留默认信封，可提供 `operation_id` 获取可恢复的逐库操作结果。
+
+未受管和受管 Memory 均登记 writer fence、admission 与 publication outbox；普通写入不会自动接管旧条目。
+模型输出通过校验后，先保存批准内容、模型绑定和固定消息 ID，再写入 inactive 投影并读回。
+SQL 发布与物理启用均确认后，读取策略才允许供给。恢复已批准结果不会重新提取或分配新 ID。
+
+RAW 配置只保存原始记录，不创建提取任务。配置了派生记忆类型时，RAW 的批准事务登记固定 Task 和子操作；
+Redis 只传任务身份，不重复保存对话正文。相同 Task 的重投复用批准结果，不能凭队列中伪造的 actor 获得权限。
+自动提取保留真实 RAW 时间和来源；提取结果不会自行变成用户已核验的事实。
+
+追加结果提供 `raw_source_id`、`message_ids`、`extraction_task_id`、`queue_state` 与 `evicted_sources`。
+整体写入成功须同时满足 `status=ready`、`index_sync_status=ready`，且 `queue_state` 为 `not_required` 或 `submitted`。
+新命令的 `pending` / `unknown` 返回 HTTP 202，保留原操作 ID 对账；旧批量接口仍使用原信封和非零业务码。
+`submitted` 仅说明任务入队，提取是否完成要读取
+`extraction_task_id` 对应的操作。任务成功前不会把未发布的派生正文交给检索。
+
+FIFO 按 RAW 及其相关派生记录形成固定清理计划，使用稳定子操作，并在新的容量决定前核对实际占用。
+已有来源撤回、迟到写入和恢复任务都受来源状态与 generation 检查；不会为了腾出容量只删一个派生片段、遗留来源闭包。
+物理库存达到 10,000 行时明确拒绝继续，不能用不完整扫描宣布容量足够。
+若旧来源已经淘汰而后续新写入失败，`evicted_sources` 仍保留清理结果；这不是能回滚全部副作用的跨库事务。
 
 ## 接管与读取
 
@@ -131,8 +163,41 @@ Content-Type: application/json
 
 新资源使用 `retcode/retmsg/data`：404 资源不可见；409 版本、来源、容量或在途状态冲突；
 422 请求／后端能力不满足；503 SQL 提交结果未知，携带原公共 operation ID；500 其他内部错误。
-旧状态／遗忘接口保留响应信封和默认合同，受管分支返回明确冲突；未受管 Memory 保留旧行为。
+旧状态／遗忘接口保留响应信封；受管分支通过来源与版本协议执行，未完成时返回原操作 ID。
+严格后端中，未受管的旧派生条目使用独立 writer 操作，不隐式启用受管模式；目标 producer 未发布完成时拒绝修改。
+未受管 RAW 的状态或遗忘先要求显式登记来源，返回 `source_adoption_required` 时，可在来源面板登记或调用
+`.../sources/{source_id}/adoptions`，再重试原动作；这样来源闭包及在途提取才能使用同一套 generation 约束。
+配置更新会为仅有模型名称的旧记录回填当前 owner 解析出的模型 ID；相同模型的绑定回填不更换已有向量，
+实际 embedding 模型或记忆类型变化仍受非空库限制。客户端传入的外租户模型 ID 不会成为绑定依据。
 
 SQL 旁表通过正式 Alembic 迁移创建，部署前完成备份并核对当前 migration head。
 空库引导、存量升级与不兼容旁表拒绝分别验证，不能只 stamp 版本。
 相关读取预算和来源摘录见 [Memory 查询](memory-query.md)；本功能不包含 Dreaming、Wiki、启动包或摘要压缩。
+
+## 整库删除与排空
+
+```http
+POST /api/v1/memories/{memory_id}/deletions
+Content-Type: application/json
+
+{"operation_id":"delete-memory-001"}
+```
+
+严格后端支持受管和未受管库。请求先重新鉴权并锁住 Memory，关闭 writer fence、取消排队写入并停止正常读取。
+实际 active/unknown attempt 不会因租约超时被当成已经结束。清理确认后删除原 Memory SQL 行，仅保留必要的
+租户、权限、操作与审计信息；删除后仍可通过原操作 ID 读取或对账，team 权限继续依据当前成员关系核验。
+
+操作分别报告 `lifecycle`、`writer_drain`、`blocked_by` 和 `needs_operator_reconciliation`。
+只有 `lifecycle=deleted` 且 `tracked_cleanup_confirmed=true` 表示本协议追踪的清理完成。
+`physical_cleanup_complete=false`、`untraceable_copies=true` 不承诺备份、客户端副本和未受控历史副本消失。
+Web 删除对话框在等待排空或清理中保持未完成状态，并允许对同一操作重试；关闭页面后的自动恢复不在当前保证内。
+
+升级部署时，先备份、应用 Alembic 迁移，再停止旧 API/worker，确认旧远程调用结束后统一切换。
+不能混用绕过 admission 的旧进程与新进程。历史 Task 即使 `progress=1` 也不构成旧 IO 排空证据，删除时会作为
+未追踪任务阻断。管理员可通过 [memory_writer_admin.py](../../scripts/memory_writer_admin.py) 先 `audit`，
+独立确认进程及远程请求均已结束后，再以精确 generation、任务集合哈希或 attempt/token 进行 `attest-legacy`
+或 `attest-attempt`。命令须通过 [登记入口](../development.md#事前登记验证命令) 执行，提供 evidence reference
+及显式 `--confirm-all-selected-io-settled`；不提供普通用户 HTTP 放行开关。
+
+管理员声明只是有审计的人工证据，不是程序证明 IO 已结束。新任务、generation 或 attempt 改变时旧声明失效。
+对实际 attempt 的声明仅解除选定的在途阻断，保留原发布状态；随后仍须使用原操作对账，不能据声明直接显示成功。

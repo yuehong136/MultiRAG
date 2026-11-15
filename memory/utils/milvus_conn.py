@@ -205,6 +205,19 @@ class MilvusConnection(MilvusConnectionBase):
         """Check physical absence without treating a failed metadata RPC as absence."""
         return utility.has_collection(_message_collection_name(index_name, memory_id), using=self._using)
 
+    def ensure_memory_index(self, index_name: str, memory_id: str, dimension: int) -> None:
+        """Create once within an admitted writer and reject incompatible vectors."""
+        if not index_name or not memory_id or type(dimension) is not int or dimension <= 0:
+            raise ValueError("An owning memory and supported vector dimension are required")
+        name = _message_collection_name(index_name, memory_id)
+        if not utility.has_collection(name, using=self._using):
+            self._create_message_collection(name, dimension)
+        collection = Collection(name, using=self._using)
+        vectors = [field for field in collection.schema.fields if field.dtype == DataType.FLOAT_VECTOR]
+        if len(vectors) != 1 or vectors[0].name != f"q_{dimension}_vec" or vectors[0].params.get("dim") != dimension:
+            raise ValueError("Memory embedding dimension does not match the existing collection")
+        collection.load()
+
     @staticmethod
     def field_keyword(field_name: str) -> bool:
         """Check if a field is a keyword field. Message storage does not use keyword fields."""
