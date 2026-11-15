@@ -23,6 +23,8 @@ from typing import Any, TypedDict
 from common import settings
 from common.constants import MemoryType
 from common.doc_store.doc_store_base import MatchExpr, OrderByExpr
+from memory.revisions import gate
+from memory.revisions.domain import RevisionConflict
 
 MAX_RECENT_MESSAGES_SCAN = 10_000
 MAX_RECENT_MESSAGES_PAGE_SIZE = 100
@@ -188,22 +190,52 @@ def _matches_recent_condition(message: dict[str, Any], condition: dict[str, Any]
     return message.get("forget_at") in (None, "", "-")
 
 
-def index_name(uid: str):
+def index_name(uid: str) -> str:
     return f"memory_{uid}"
+
+
+def _search_normal_messages(tenant_ids: list[str], bank_ids: list[str], *, strict: bool = False, **kwargs: Any) -> tuple[Any, int]:
+    eligibility = gate.managed_query_exclusions(tenant_ids, bank_ids)
+    search = settings.msgStoreConn.search
+    if eligibility:
+        search = getattr(settings.msgStoreConn, "search_managed", None)
+        if not callable(search):
+            raise RevisionConflict("managed_query_backend_unsupported")
+        kwargs["eligibility_by_memory"] = eligibility
+    elif strict:
+        strict_search = getattr(settings.msgStoreConn, "search_strict", None)
+        if callable(strict_search):
+            search = strict_search
+    return search(**kwargs)
+
+
+def _supply_messages(tenant_ids: list[str], bank_ids: list[str], messages: list[dict[str, Any]], *, reject_changed: bool = False) -> list[dict[str, Any]]:
+    served = gate.filter_messages(tenant_ids, bank_ids, messages)
+    if reject_changed and len(served) != len(messages):
+        raise RevisionConflict("managed_candidates_changed_during_read")
+    return served
 
 
 class MessageService:
     @classmethod
-    def get_recent_read_capabilities(cls) -> dict[str, Any]:
+    def get_recent_read_capabilities(cls, *, tenant_id: str | None = None, memory_id: str | None = None) -> dict[str, Any]:
         """Describe the active connector's recent-page semantics without reading messages."""
         supports_native = getattr(settings.msgStoreConn, "supports_recent_message_query", None)
-        native = callable(supports_native) and supports_native() is True
+        managed = bool(tenant_id and memory_id and gate.is_managed(tenant_id, memory_id))
+        native = not managed and callable(supports_native) and supports_native() is True
+        supported = all(callable(getattr(settings.msgStoreConn, name, None)) for name in ("query_source_rows", "query_management_rows", "search_managed"))
         return {
             "pagination": "live_seek_cursor" if native else "bounded_scan_cursor",
             "max_page_size": MAX_RECENT_MESSAGES_PAGE_SIZE,
             "max_scan_messages": None if native else MAX_RECENT_MESSAGES_SCAN,
             "change_detection": "first_last_boundary" if native else "full_candidate_digest",
             "snapshot_isolation": False,
+            "managed": managed,
+            "activation_scope": "memory_bank",
+            "legacy_writes_supported": not managed,
+            "managed_revisions_supported": supported,
+            "managed_delete_supported": False,
+            "managed_delete_blocked_reason": "blocked_until_writer_coordination",
         }
 
     @classmethod
@@ -213,22 +245,26 @@ class MessageService:
 
     @classmethod
     def create_index(cls, uid: str, memory_id: str, vector_size: int):
+        gate.assert_legacy_write_allowed(uid, memory_id)
         index = index_name(uid)
         return settings.msgStoreConn.create_idx(index, memory_id, vector_size)
 
     @classmethod
     def delete_index(cls, uid: str, memory_id: str):
+        gate.assert_legacy_write_allowed(uid, memory_id)
         index = index_name(uid)
         return settings.msgStoreConn.delete_idx(index, memory_id)
 
     @classmethod
     def insert_message(cls, messages: list[dict], uid: str, memory_id: str):
+        gate.assert_legacy_write_allowed(uid, memory_id)
         index = index_name(uid)
         [m.update({"id": f"{memory_id}_{m['message_id']}", "status": 1 if m["status"] else 0}) for m in messages]
         return settings.msgStoreConn.insert(messages, index, memory_id)
 
     @classmethod
     def update_message(cls, condition: dict, update_dict: dict, uid: str, memory_id: str):
+        gate.assert_legacy_write_allowed(uid, memory_id)
         index = index_name(uid)
         if "status" in update_dict:
             update_dict["status"] = 1 if update_dict["status"] else 0
@@ -236,6 +272,7 @@ class MessageService:
 
     @classmethod
     def delete_message(cls, condition: dict, uid: str, memory_id: str):
+        gate.assert_legacy_write_allowed(uid, memory_id)
         index = index_name(uid)
         return settings.msgStoreConn.delete(condition, index, memory_id)
 
@@ -255,7 +292,11 @@ class MessageService:
         Returns raw messages with their extracted content attached.
         """
         index = index_name(uid)
-        filter_dict = {}
+        managed = gate.is_managed(uid, memory_id)
+        management_query = getattr(settings.msgStoreConn, "search_strict", None) if managed else settings.msgStoreConn.search
+        if not callable(management_query):
+            raise RevisionConflict("managed_management_read_unsupported")
+        filter_dict: dict[str, Any] = {}
         if agent_ids:
             filter_dict["agent_id"] = agent_ids
         if keywords:
@@ -279,7 +320,7 @@ class MessageService:
         order_by.desc("valid_at")
 
         # Query raw messages only (message_type == "raw")
-        res, total_count = settings.msgStoreConn.search(
+        res, total_count = management_query(
             select_fields=select_fields,
             highlight_fields=[],
             condition={**filter_dict, "message_type": MemoryType.RAW.name.lower()},
@@ -296,28 +337,32 @@ class MessageService:
             return {"message_list": [], "total_count": 0}
 
         raw_msg_mapping = settings.msgStoreConn.get_fields(res, select_fields)
-        raw_messages = list(raw_msg_mapping.values())
+        raw_messages = gate.filter_messages([uid], [memory_id], list(raw_msg_mapping.values()), management_metadata=True)
+        if not raw_messages:
+            return {"message_list": [], "total_count": 0, "total_count_is_exact": False}
 
         # Query extracted messages for the raw messages
         extract_filter = {"source_id": [r["message_id"] for r in raw_messages]}
-        extract_res, _ = settings.msgStoreConn.search(
+        extract_res, extract_count = management_query(
             select_fields=extract_select_fields,
             highlight_fields=[],
             condition=extract_filter,
             match_expressions=[],
             order_by=order_by,
             offset=0,
-            limit=512,
+            limit=MAX_RECENT_MESSAGES_SCAN if managed else 512,
             index_names=index,
             memory_ids=[memory_id],
             agg_fields=[],
             hide_forgotten=False,
         )
         extract_msg = settings.msgStoreConn.get_fields(extract_res, extract_select_fields)
+        if managed and (len(extract_msg) >= MAX_RECENT_MESSAGES_SCAN or extract_count > len(extract_msg)):
+            raise RecentMessageReadLimitError("Management extract scan is incomplete; narrow the source selection")
 
         # Group extracted messages by source_id
-        grouped_extract_msg = {}
-        for msg in extract_msg.values():
+        grouped_extract_msg: dict[int, list[dict[str, Any]]] = {}
+        for msg in gate.filter_messages([uid], [memory_id], list(extract_msg.values()), management_body=True):
             source_id = msg.get("source_id")
             if source_id:
                 if source_id not in grouped_extract_msg:
@@ -347,7 +392,9 @@ class MessageService:
         condition_dict = _recent_message_condition(agent_id, session_id, message_type=message_type, user_id=user_id, status=status)
         order_by = OrderByExpr()
         order_by.desc("valid_at")
-        res, total_count = settings.msgStoreConn.search(
+        res, total_count = _search_normal_messages(
+            uid_list,
+            memory_ids,
             select_fields=[
                 "message_id",
                 "message_type",
@@ -392,7 +439,7 @@ class MessageService:
                 "content",
             ],
         )
-        return list(doc_mapping.values())
+        return _supply_messages(uid_list, memory_ids, list(doc_mapping.values()), reject_changed=True)
 
     @classmethod
     def get_recent_page(
@@ -419,7 +466,7 @@ class MessageService:
             raise ValueError(f"Page size must be between 1 and {MAX_RECENT_MESSAGES_PAGE_SIZE}")
         condition = _recent_message_condition(agent_id, session_id, message_type=message_type, user_id=user_id, status=status)
         query_digest = _message_digest({"tenant": uid, "memory": memory_id, "condition": condition, "limit": limit})
-        if cls.get_recent_read_capabilities()["pagination"] == "live_seek_cursor":
+        if cls.get_recent_read_capabilities(tenant_id=uid, memory_id=memory_id)["pagination"] == "live_seek_cursor":
             return cls._get_recent_seek_page(uid, memory_id, condition, limit, cursor, query_digest)
         offset, expected_digest = _decode_recent_cursor(cursor, query_digest) if cursor is not None else (0, None)
         order_by = OrderByExpr().desc("valid_at").desc("message_id")
@@ -460,6 +507,7 @@ class MessageService:
             and (user_id is None or message.get("user_id") == user_id)
             and (status is None or message.get("status") in ((1, True, "1") if status else (0, False, "0")))
         ]
+        messages = _supply_messages([uid], [memory_id], messages)
         messages.sort(key=lambda message: (str(message.get("valid_at") or ""), _message_id(message["message_id"])), reverse=True)
         messages_digest = _message_digest(messages)
         if expected_digest is not None and expected_digest != messages_digest:
@@ -533,7 +581,7 @@ class MessageService:
                 if message.get("memory_id") != memory_id or message_id not in unique_ids or message_id in sources:
                     raise SourceMessageBindingError("Stored source does not match the requested memory/message identity")
                 sources[message_id] = {field: message[field] for field in _MESSAGE_FIELDS if field in message}
-            return sources
+            return {int(message["message_id"]): message for message in _supply_messages([uid], [memory_id], list(sources.values()))}
         for message_id in unique_ids:
             message = cls.get_by_message_id(memory_id, message_id, uid)
             if not message:
@@ -541,7 +589,7 @@ class MessageService:
             if message.get("memory_id") != memory_id or _message_id(message.get("message_id")) != message_id:
                 raise SourceMessageBindingError("Stored source does not match the requested memory/message identity")
             sources[message_id] = {field: message[field] for field in _MESSAGE_FIELDS if field in message}
-        return sources
+        return {int(message["message_id"]): message for message in _supply_messages([uid], [memory_id], list(sources.values()))}
 
     @classmethod
     def search_message(
@@ -561,11 +609,10 @@ class MessageService:
 
         order_by = OrderByExpr()
         order_by.desc("valid_at")
-        search = settings.msgStoreConn.search
-        strict_search = getattr(settings.msgStoreConn, "search_strict", None) if strict else None
-        if callable(strict_search):
-            search = strict_search
-        res, total_count = search(
+        res, total_count = _search_normal_messages(
+            uid_list,
+            memory_ids,
+            strict=strict,
             select_fields=[
                 "message_id",
                 "message_type",
@@ -610,7 +657,7 @@ class MessageService:
                 "content",
             ],
         )
-        return list(docs.values())
+        return _supply_messages(uid_list, memory_ids, list(docs.values()), reject_changed=True)
 
     @staticmethod
     def calculate_message_size(message: dict):
@@ -647,7 +694,7 @@ class MessageService:
             return {}
 
         docs = settings.msgStoreConn.get_fields(res, ["memory_id", "content", "content_embed"])
-        size_dict = {}
+        size_dict: dict[str, int] = {}
         for doc in docs.values():
             if size_dict.get(doc["memory_id"]):
                 size_dict[doc["memory_id"]] += cls.calculate_message_size(doc)
@@ -657,6 +704,7 @@ class MessageService:
 
     @classmethod
     def pick_messages_to_delete_by_fifo(cls, memory_id: str, uid: str, size_to_delete: int):
+        gate.assert_legacy_write_allowed(uid, memory_id)
         select_fields = ["message_id", "content", "content_embed"]
         _index_name = index_name(uid)
 
@@ -700,6 +748,7 @@ class MessageService:
 
     @classmethod
     def get_missing_field_messages(cls, memory_id: str, uid: str, field_name: str):
+        gate.assert_legacy_write_allowed(uid, memory_id)
         select_fields = ["message_id", "content"]
         _index_name = index_name(uid)
         res = settings.msgStoreConn.get_missing_field_message(select_fields=select_fields, index_name=_index_name, memory_id=memory_id, field_name=field_name)
@@ -710,9 +759,32 @@ class MessageService:
 
     @classmethod
     def get_by_message_id(cls, memory_id: str, message_id: int, uid: str):
+        if gate.is_managed(uid, memory_id):
+            messages = cls._read_managed_physical(memory_id, message_id, uid)
+            served = _supply_messages([uid], [memory_id], messages)
+            return served[0] if served else None
         index = index_name(uid)
         doc_id = f"{memory_id}_{message_id}"
         return settings.msgStoreConn.get(doc_id, index, [memory_id])
+
+    @classmethod
+    def _read_managed_physical(cls, memory_id: str, message_id: int, uid: str) -> list[dict[str, Any]]:
+        query = getattr(settings.msgStoreConn, "query_source_rows", None)
+        if not callable(query):
+            raise RevisionConflict("managed_read_backend_unsupported")
+        fields = [*_MESSAGE_FIELDS, "content_embed", "id"]
+        rows = list(settings.msgStoreConn.get_fields(query(fields, [message_id], index_name(uid), memory_id), fields).values())
+        if any(row.get("memory_id") != memory_id or _message_id(row.get("message_id")) != message_id for row in rows) or len(rows) > 1:
+            raise SourceMessageBindingError("Managed physical read returned an unrequested message")
+        return rows
+
+    @classmethod
+    def get_management_message(cls, memory_id: str, message_id: int, uid: str) -> dict[str, Any] | None:
+        """Caller-authorized management view; permanent source withdrawal still hides text."""
+        if not gate.is_managed(uid, memory_id):
+            return cls.get_by_message_id(memory_id, message_id, uid)
+        rows = gate.filter_messages([uid], [memory_id], cls._read_managed_physical(memory_id, message_id, uid), management_body=True)
+        return rows[0] if rows else None
 
     @classmethod
     def get_max_message_id(cls, uid_list: list[str], memory_ids: list[str]):

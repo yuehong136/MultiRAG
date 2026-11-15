@@ -1,9 +1,7 @@
 import functools
 import hashlib
-import inspect
 import logging
 import os
-import sys
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -4385,7 +4383,7 @@ def ensure_skill_deferred_constraints(bind: Any) -> None:
                 bind.execute(sa.schema.AddConstraint(constraint))
 
 
-def models_in_fk_creation_order() -> list[type[BaseModel]]:
+def models_in_fk_creation_order() -> list[type[Base]]:
     """按外键拓扑序返回全部映射模型类——父表一定排在引用它的子表之前。
 
     `init_database_tables` 是逐张 `Table.create()` 建表，而 `inspect.getmembers`
@@ -4399,8 +4397,7 @@ def models_in_fk_creation_order() -> list[type[BaseModel]]:
     `metadata.sorted_tables` 是 SQLAlchemy 依据外键算出的拓扑序，用它排序即可
     一次修好，也自动覆盖以后任何新增的带外键模型。
     """
-    members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
-    models = [obj for _, obj in members if obj is not BaseModel and issubclass(obj, BaseModel)]
+    models = [mapper.class_ for mapper in Base.registry.mappers]
     creation_order = {table: index for index, table in enumerate(Base.metadata.sorted_tables)}
     # 未映射到具体 Table 的（抽象基类等）排到末尾，保持原有的宽松行为
     return sorted(models, key=lambda model: creation_order.get(getattr(model, "__table__", None), len(creation_order)))
@@ -4584,6 +4581,11 @@ def with_retry(max_retries=3, retry_delay=1.0):
         return wrapper
 
     return decorator
+
+
+# Extension tables share this metadata without expanding the legacy model file.
+# Importing the module (rather than its classes) also permits its Base import.
+from api.db import memory_revision_models as _memory_revision_models  # noqa: F401
 
 
 class PostgreSQLDatabaseLock:

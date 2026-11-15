@@ -42,6 +42,8 @@ from common.doc_store.doc_store_base import FusionExpr
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, format_iso_8601_to_ymd_hms, timestamp_to_date
 from core.utils.redis_conn import REDIS_CONN
+from memory.revisions.domain import RevisionConflict
+from memory.revisions.gate import assert_legacy_write_allowed
 from memory.services.messages import MessageService, SourceMessageBindingError
 from memory.services.query import MsgTextQuery, get_vector
 from memory.utils.msg_util import get_json_result_from_llm_response
@@ -72,6 +74,10 @@ async def save_to_memory(db: Session, memory_id: str, message_dict: dict[str, An
         return False, f"Memory '{memory_id}' not found."
 
     tenant_id = memory.tenant_id
+    try:
+        await finish_owned_work(asyncio.to_thread(assert_legacy_write_allowed, tenant_id, memory_id))
+    except RevisionConflict:
+        return False, "Managed memory requires coordinated writes; legacy append is disabled."
     conversation_time = timestamp_to_date(current_timestamp())
     extracted_content = (
         await extract_by_llm(
@@ -189,6 +195,10 @@ async def save_extracted_to_memory_only(db: Session, memory_id: str, message_dic
         return True, msg
 
     tenant_id = memory.tenant_id
+    try:
+        await finish_owned_work(asyncio.to_thread(assert_legacy_write_allowed, tenant_id, memory_id))
+    except RevisionConflict:
+        return False, "Managed memory requires coordinated writes; legacy extraction is disabled."
     if not isinstance(source_message_id, int) or isinstance(source_message_id, bool) or source_message_id <= 0:
         return False, "Source raw message does not match the memory task."
     try:
@@ -312,6 +322,11 @@ def _embed_and_save_messages(embedding_model: LLMBundle, memory: Memory, message
     不触碰关系型 DB（用量记账自开短连接）；进度上报经 report 回调注入——任务轨携带
     db+task_id，请求轨为 no-op。因而异步轨可将其整体放进工作线程执行。
     """
+    try:
+        assert_legacy_write_allowed(memory.tenant_id, memory.id)
+    except RevisionConflict:
+        report(-1, "Managed memory requires coordinated writes; legacy append and FIFO are disabled.")
+        return False, "Managed memory requires coordinated writes; legacy append and FIFO are disabled."
     report(0.65, "Prepared embedding model.")
     vector_list, _ = embedding_model.encode([msg["content"] for msg in message_list])
     for idx, msg in enumerate(message_list):
@@ -554,6 +569,12 @@ async def queue_save_to_memory_task(
         )
         if not memory:
             not_found_memory.append(memory_id)
+            continue
+
+        try:
+            await finish_owned_work(asyncio.to_thread(assert_legacy_write_allowed, memory.tenant_id, memory.id))
+        except RevisionConflict:
+            failed_memory.append({"memory_id": memory_id, "fail_msg": "Managed memory requires coordinated writes; legacy append is disabled."})
             continue
 
         raw_message_id = await asyncio.to_thread(REDIS_CONN.generate_auto_increment_id, namespace="memory")

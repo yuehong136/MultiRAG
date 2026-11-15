@@ -29,7 +29,7 @@ GET /api/v1/memories/{memory_id}/messages?message_type=raw&user_id=subject&statu
 | `pagination` | 读取方式 | 变化检测 |
 | --- | --- | --- |
 | `live_seek_cursor` | 在已确认支持的 Milvus 3.x / SDK 3.x 上使用原生双字段排序与范围过滤，每次读取当前页及一个后继项 | 续页重读首条和上一页末条边界，边界记录消失或变化时返回 409；不检测整个集合的变化 |
-| `bounded_scan_cursor` | 其他当前连接通过有界完整读取排序 | 游标绑定完整候选集指纹；集合变化时返回 409 |
+| `bounded_scan_cursor` | 其他当前连接及已启用修订的受管 Memory，通过有界完整读取与资格检查后排序 | 游标绑定完整候选集指纹；集合变化时返回 409 |
 
 原生分页从上一页末尾的 `(valid_at, message_id)` 继续，不使用大 offset。中间记录的并发新增、修改或删除仍可能影响后续结果；已翻过区域的新消息不会自动出现在后续页。它不提供跨请求快照。
 
@@ -57,6 +57,7 @@ GET /api/v1/messages/search?memory_id={memory_id}&query=project%20decision&inclu
 | `mismatch` | 类型、身份、父引用或必要字段无法匹配 |
 
 这一路径提供诊断，不把已存在的派生记录自动删除。来源不可用时不会附带其正文。`verification=provenance_only` 表示引用关系检查，不证明记忆内容为事实。
+显式启用 [修订与来源撤回](memory-revisions.md) 后，正常供给另受持久来源状态和当前版本约束；诊断不能绕过该约束读取撤回正文。
 
 ## 分段读取原始来源
 

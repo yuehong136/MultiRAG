@@ -51,6 +51,7 @@ DATABASE_TESTS = frozenset(
         "test_identity_schema.py",
         "test_mcp_interaction_repository.py",
         "test_mcp_interaction_schema.py",
+        "test_memory_revision_repository.py",
         "test_llm_embedding_inputs.py",
         "test_llm_tool_capability.py",
         "test_model_config_resolution.py",
@@ -198,6 +199,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_session_upload_cleanup.py",
                 "test_metadata_web_consumers.py",
                 "test_metadata_config_contract.py",
+                "test_memory_revision_web_consumer.py",
                 "test_shared_chunk_owner_contract.py",
                 "test_sandbox_provider_settings.py",
             )
@@ -210,6 +212,9 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
+        if path.name == "test_memory_revision_repository.py":
+            required.add("postgresql")
+            continue
         if path.name == "test_milvus_query_order.py":
             required.add("milvus")
             continue

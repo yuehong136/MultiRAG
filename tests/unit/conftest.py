@@ -265,3 +265,15 @@ def fake_kb():
         return obj
 
     return _make
+
+
+@pytest.fixture(autouse=True)
+def unmanaged_memory_read_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legacy unit cases explicitly have no managed SQL state; production always queries SQL.
+
+    Managed-policy tests override this boundary with durable-state snapshots or
+    storage errors. No missing-table/resource exception is ignored by production.
+    """
+    from memory.revisions import gate
+
+    monkeypatch.setattr(gate, "_load_policy", lambda memory_ids, messages: gate.ManagedReadSnapshot())

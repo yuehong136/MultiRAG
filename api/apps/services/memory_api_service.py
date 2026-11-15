@@ -10,6 +10,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -223,9 +224,20 @@ def update_memory(db: Session, memory_id: str, new_settings: dict, *, user_id: s
 def delete_memory(db: Session, memory_id: str, *, user_id: str) -> bool:
     """删除Memory"""
     memory = _require_memory_access(db, user_id, memory_id)
-    MemoryService.delete_memory(db, memory_id)
-    if MessageService.has_index(memory.tenant_id, memory_id):
-        MessageService.delete_message({"memory_id": memory_id}, memory.tenant_id, memory_id)
+    from api.db.memory_revision_models import ManagedMemoryState
+    from memory.revisions.domain import RevisionConflict
+
+    locked = db.scalar(select(Memory).where(Memory.id == memory_id, Memory.tenant_id == memory.tenant_id).execution_options(populate_existing=True).with_for_update())
+    if locked is None:
+        raise NotFoundException("Memory not found.")
+    _require_memory_access(db, user_id, memory_id)
+    if db.scalar(select(ManagedMemoryState.memory_id).where(ManagedMemoryState.memory_id == memory_id)) is not None:
+        raise RevisionConflict("managed_memory_delete_requires_writer_coordination")
+    tenant_id = locked.tenant_id
+    if MemoryService.delete_memory(db, memory_id) != 1:
+        raise RuntimeError("Memory deletion was not confirmed")
+    if MessageService.has_index(tenant_id, memory_id):
+        MessageService.delete_message({"memory_id": memory_id}, tenant_id, memory_id)
     return True
 
 
@@ -383,7 +395,7 @@ def get_message_content(db: Session, memory_id: str, message_id: int, *, user_id
     """获取消息内容"""
     memory = _require_memory_access(db, user_id, memory_id)
 
-    res = MessageService.get_by_message_id(memory_id, message_id, memory.tenant_id)
+    res = MessageService.get_management_message(memory_id, message_id, memory.tenant_id)
     if res:
         return res
     raise NotFoundException(f"Message '{message_id}' in memory '{memory_id}' not found.")
@@ -409,8 +421,14 @@ async def update_memory_async(memory_id: str, new_settings: dict, *, user_id: st
     return await _run_with_own_session(update_memory, memory_id, new_settings, user_id=user_id)
 
 
-async def delete_memory_async(memory_id: str, *, user_id: str) -> bool:
+async def delete_memory_async(memory_id: str, *, user_id: str, db: AsyncSession | None = None) -> bool:
     """delete_memory 的异步入口（msg_store 索引删除混轨）。"""
+    if db is not None:
+        from api.apps.services.memory_revision_service import is_managed
+        from memory.revisions.domain import RevisionConflict
+
+        if await is_managed(db, memory_id, actor_id=user_id):
+            raise RevisionConflict("managed_memory_delete_requires_writer_coordination")
     return await _run_with_own_session(delete_memory, memory_id, user_id=user_id)
 
 
@@ -419,13 +437,25 @@ async def get_memory_messages_async(memory_id: str, agent_ids: list[str], keywor
     return await _run_with_own_session(get_memory_messages, memory_id, agent_ids, keywords, page, page_size, user_id=user_id)
 
 
-async def forget_message_async(memory_id: str, message_id: int, *, user_id: str) -> bool:
+async def forget_message_async(memory_id: str, message_id: int, *, user_id: str, db: AsyncSession | None = None) -> bool:
     """forget_message 的异步入口（DB 读 + msg_store 更新混轨）。"""
+    if db is not None:
+        from api.apps.services.memory_revision_service import change_legacy_message_state
+
+        result = await change_legacy_message_state(db, memory_id, message_id, actor_id=user_id, forget=True)
+        if result is not None:
+            return result
     return await _run_with_own_session(forget_message, memory_id, message_id, user_id=user_id)
 
 
-async def update_message_status_async(memory_id: str, message_id: int, status: bool, *, user_id: str) -> bool:
+async def update_message_status_async(memory_id: str, message_id: int, status: bool, *, user_id: str, db: AsyncSession | None = None) -> bool:
     """update_message_status 的异步入口（DB 读 + msg_store 更新混轨）。"""
+    if db is not None:
+        from api.apps.services.memory_revision_service import change_legacy_message_state
+
+        result = await change_legacy_message_state(db, memory_id, message_id, actor_id=user_id, status=status)
+        if result is not None:
+            return result
     return await _run_with_own_session(update_message_status, memory_id, message_id, status, user_id=user_id)
 
 

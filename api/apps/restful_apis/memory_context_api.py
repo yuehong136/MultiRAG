@@ -71,13 +71,29 @@ def _read_error(error: Exception) -> JSONResponse:
 @router.get("/memories/{memory_id}/capabilities", summary="Read available memory query capabilities")
 async def memory_capabilities(memory_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
     try:
-        await memory_context_service.require_memory(db, memory_id, actor_id=user.id)
-        recent = await asyncio.to_thread(MessageService.get_recent_read_capabilities)
+        binding = await memory_context_service.require_memory(db, memory_id, actor_id=user.id)
+        recent = await asyncio.to_thread(MessageService.get_recent_read_capabilities, tenant_id=binding.tenant_id, memory_id=memory_id)
         return _result(
             {
                 "recent_messages": {"filters": ["message_type", "user_id", "agent_id", "session_id", "status"], **recent},
                 "sources": {"verification": "provenance_only", "snapshot_only": True, "max_excerpt_chars": 8192, "continuation_requires_authorization": True},
                 "context": {"modes": ["query"], "max_budget_tokens": 32768, "max_candidates": 100, "token_count_is_estimate": True, "mutates_memory": False},
+                "revisions": {
+                    "supported": recent.get("managed_revisions_supported", False),
+                    "managed": recent.get("managed", False),
+                    "activation_scope": "memory_bank",
+                    "ordinary_writes_after_activation": False,
+                    "coordinated_state_changes": True,
+                    "managed_delete_supported": False,
+                    "adoption_required": True,
+                    "max_content_bytes": 65535,
+                    "max_content_tokens": 8192,
+                    "max_reason_chars": 1024,
+                    "manual_assessment": "user_asserted",
+                    "publication_state": "operation",
+                    "history": True,
+                },
+                "source_withdrawals": {"supported": recent.get("managed_revisions_supported", False), "requires_registered_source": True, "permanent": True, "supply_and_cleanup_separate": True},
             }
         )
     except Exception as error:

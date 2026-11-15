@@ -7,6 +7,7 @@ LLMBundle facade 剥离（断言经变异验证）；embed_and_save 同步孪生
 
 import threading
 import types
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 from api.apps.services import memory_api_service
 from api.db.joint_services import memory_message_service as mms
 from api.db.services.llm_service import LLMBundle
+from memory.revisions.domain import RevisionConflict
 
 
 class _FakeBundle(LLMBundle):
@@ -87,6 +89,30 @@ async def test_queue_save_reports_missing_memory(async_db, monkeypatch):
 
     assert ok is False
     assert "['ghost'] not found" in msg
+
+
+@pytest.mark.parametrize("path", ["queue", "save", "extract"])
+async def test_async_legacy_write_gate_runs_off_loop_with_only_plain_identity(async_db: AsyncSession, db: Session, queue_stubs: dict[str, object], monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    event_loop_thread = threading.get_ident()
+    seen: list[tuple[str, str]] = []
+
+    def reject(tenant_id: str, memory_id: str) -> None:
+        assert threading.get_ident() != event_loop_thread
+        assert type(tenant_id) is str and type(memory_id) is str
+        seen.append((tenant_id, memory_id))
+        raise RevisionConflict("managed_memory_requires_coordinated_write")
+
+    monkeypatch.setattr(mms, "assert_legacy_write_allowed", reject)
+    message: dict[str, Any] = {"agent_id": "agent", "session_id": "session", "user_input": "input", "agent_response": "response"}
+    if path == "queue":
+        result = await mms.queue_save_to_memory_task(async_db, ["mem1"], message)
+    elif path == "save":
+        result = await mms.save_to_memory(db, "mem1", message)
+    else:
+        result = await mms.save_extracted_to_memory_only(db, "mem1", message, 1)
+    assert result[0] is False and "Managed memory requires coordinated writes" in result[1]
+    assert seen == [("tenant-unit", "mem1")]
+    assert "bundle_db_at_use" not in queue_stubs and "task_rows" not in queue_stubs
 
 
 async def test_queue_save_collects_embed_failures(async_db, queue_stubs, monkeypatch):

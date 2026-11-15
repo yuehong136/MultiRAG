@@ -284,7 +284,16 @@ def native_store(monkeypatch: pytest.MonkeyPatch) -> NativeMessageStore:
 
 
 def test_capabilities_distinguish_native_live_seek_and_bounded_read(store: MessageStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    management = {
+        "managed": False,
+        "activation_scope": "memory_bank",
+        "legacy_writes_supported": True,
+        "managed_revisions_supported": False,
+        "managed_delete_supported": False,
+        "managed_delete_blocked_reason": "blocked_until_writer_coordination",
+    }
     assert MessageService.get_recent_read_capabilities() == {
+        **management,
         "pagination": "bounded_scan_cursor",
         "max_page_size": 100,
         "max_scan_messages": MAX_RECENT_MESSAGES_SCAN,
@@ -293,6 +302,7 @@ def test_capabilities_distinguish_native_live_seek_and_bounded_read(store: Messa
     }
     monkeypatch.setitem(settings.__dict__, "msgStoreConn", NativeMessageStore([]))
     assert MessageService.get_recent_read_capabilities() == {
+        **management,
         "pagination": "live_seek_cursor",
         "max_page_size": 100,
         "max_scan_messages": None,
@@ -691,6 +701,27 @@ def test_milvus_search_keeps_legacy_empty_result_but_strict_chain_propagates(fai
         MessageService.search_message(["bank"], {}, ["owner"], [failing_milvus_search], 5, strict=True)
 
 
+@pytest.mark.parametrize("vector", [False, True])
+def test_strict_milvus_query_and_ann_use_strong_without_changing_legacy_default(milvus_recent_store: tuple[Any, Any, list[dict[str, Any]]], monkeypatch: pytest.MonkeyPatch, vector: bool) -> None:
+    from types import SimpleNamespace
+
+    from common.doc_store.doc_store_base import MatchDenseExpr
+
+    store, module, calls = milvus_recent_store
+
+    def read(**kwargs: Any) -> list[Any]:
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(module, "Collection", lambda name, using: SimpleNamespace(load=lambda: None, search=read, query=read))
+    monkeypatch.setitem(settings.__dict__, "msgStoreConn", store)
+    matches = [MatchDenseExpr("q_2_vec", [1.0, 0.0], "float", "cosine")] if vector else []
+    MessageService.search_message(["bank"], {}, ["owner"], matches, 5)
+    MessageService.search_message(["bank"], {}, ["owner"], matches, 5, strict=True)
+    assert "consistency_level" not in calls[0]
+    assert calls[1]["consistency_level"] == "Strong"
+
+
 def test_strict_search_uses_ordinary_propagating_connector_when_no_hook(store: MessageStore, monkeypatch: pytest.MonkeyPatch) -> None:
     def unavailable(**kwargs: Any) -> tuple[list[dict[str, Any]], int]:
         raise RuntimeError("connector unavailable")
@@ -736,3 +767,10 @@ def test_ob_search_sql_failure_already_propagates_through_strict_service(monkeyp
     monkeypatch.setitem(settings.__dict__, "msgStoreConn", store)
     with pytest.raises(RuntimeError, match="controlled OB SQL failure"):
         MessageService.search_message(["bank"], {}, ["owner"], [MatchDenseExpr("q_2_vec", [1.0, 0.0], "float", "cosine")], 5, strict=True)
+
+
+def test_legacy_milvus_get_reads_strong_and_encodes_physical_id(milvus_recent_store: tuple[Any, Any, list[dict[str, Any]]]) -> None:
+    store, _, calls = milvus_recent_store
+    store.get('bank_1" or true', "memory_owner", ["bank"])
+    assert calls[0]["expr"] == 'id == "bank_1\\" or true"'
+    assert calls[0]["consistency_level"] == "Strong"
