@@ -4376,6 +4376,113 @@ class SkillOperation(BaseModel):
     revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default="1")
 
 
+class GatewayModel(BaseModel):
+    """MultiRAG-owned public model name served by the model gateway.
+
+    ``model_id`` is the numeric TenantLLM identity. It is deliberately not a
+    foreign key: deletion protection for active rows lives in
+    ``model_deletion_policy``, and inactive rows may outlive their model.
+    """
+
+    __tablename__ = "t_ai_gateway_models"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "name", name="uq_gateway_models_tenant_name"),
+        sa.CheckConstraint("status IN ('active', 'inactive')", name="ck_gateway_models_status"),
+        sa.CheckConstraint("model_type IN ('chat', 'embedding', 'rerank')", name="ck_gateway_models_type"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    model_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    model_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class GatewayKey(BaseModel):
+    """MultiRAG-owned caller credential for the model gateway.
+
+    Only the SHA-256 digest of the key is stored. ``id`` is the public key
+    identifier that request logs refer to; names are unique among keys that
+    have not been revoked, so a rotated key can reuse its name.
+    """
+
+    __tablename__ = "t_ai_gateway_keys"
+    __table_args__ = (
+        sa.CheckConstraint("status IN ('active', 'disabled', 'revoked')", name="ck_gateway_keys_status"),
+        sa.Index("uq_gateway_keys_tenant_name_live", "tenant_id", "name", unique=True, postgresql_where=text("status <> 'revoked'")),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    secret_hash: Mapped[str] = mapped_column(sa.CHAR(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    allow_all_models: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
+    allowed_model_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class GatewayRequestLog(BaseModel):
+    """One row per model gateway call, written after the call ends.
+
+    Request and response bodies are never stored. Token counts are NULL when
+    the upstream did not report usage; NULL is not zero. ``key_name`` and
+    ``tags`` are snapshots, so renaming a key does not rewrite history.
+    """
+
+    __tablename__ = "t_ai_gateway_request_logs"
+    __table_args__ = (
+        sa.CheckConstraint("usage_source IN ('reported', 'estimated', 'unavailable')", name="ck_gateway_request_logs_usage_source"),
+        sa.Index("ix_gateway_request_logs_tenant_started", "tenant_id", "started_at"),
+        sa.Index("ix_gateway_request_logs_key_started", "key_id", "started_at"),
+        sa.Index("ix_gateway_request_logs_model_started", "gateway_model_id", "started_at"),
+        {"schema": "usr_ai"},
+    )
+
+    # Append-heavy table: the four inherited timestamp columns keep their names
+    # but drop their single-column indexes; queries use the started_at indexes.
+    create_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=get_utc_now)
+    update_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=get_utc_now)
+    create_time: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=get_timestamp_ms)
+    update_time: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=get_timestamp_ms)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    key_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    key_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    gateway_model_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    upstream_model_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    upstream_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    endpoint: Mapped[str] = mapped_column(String(32), nullable=False)
+    stream: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    prompt_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    usage_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    usage_source: Mapped[str] = mapped_column(String(16), nullable=False, default="unavailable", server_default="unavailable")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    first_token_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tags: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
 def ensure_skill_deferred_constraints(bind: Any) -> None:
     """Install the two circular references after single-table bootstrap has finished."""
     for model in (SkillSpace, Skill):

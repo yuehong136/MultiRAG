@@ -25,6 +25,7 @@ MultiRAG 的当前生产后端使用 Python、FastAPI、SQLAlchemy 和 uv。
 | 新增或修改测试 | [写测试](docs/development.md#写测试)；优先复用 unit 假件与 integration scratch 库 |
 | 启动 / 运行诊断 / 部署 / MCP | [服务与运行](docs/development.md#服务与运行)、[Docker](docker/README.md)、[MCP](mcp/README.md) |
 | Channel | 修改 `api/channels/`、`api/channel_control/`、`api/channel_execution/`、`api/channel_runtime/` 时读 [Channel README](docs/channel-program/README.md)，按协议更新账本，提交标题带对应 CHN ID |
+| 模型网关 | 修改 `api/model_gateway/` 或 `api/apps/restful_apis/model_gateway_api.py` 时读 [Model Gateway README](docs/model-gateway/README.md)；只经 `catalog` 读取模型配置，不依赖 `core/llm` |
 | EIM / Run Platform | 分别从 [EIM README](docs/enterprise-identity-mcp/README.md)、[Run Platform README](docs/run-platform/README.md) 定位当前任务和契约，不扩展相邻任务 |
 | 跟进指定 RAGFlow commit / PR | 使用项目 [port-ragflow-commit](.agents/skills/port-ragflow-commit/SKILL.md) Skill |
 | 修改协作指令 / Skills / 派工示例 | [维护协作指令](docs/development.md#维护协作指令) |

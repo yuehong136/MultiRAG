@@ -1,13 +1,34 @@
 # MultiRAG 模型网关（Model Gateway）
 
-> 状态：**设计提案，尚未实现**
-> 最后核验：2026-11-15（MultiRAG `6b9da46b`）
+> 状态：**P1 最小闭环已实现；P2 限额与 P3 尚未实现**（见第 10 节）
+> 最后核验：2026-11-15
 > 维护范围：把已登记的模型以标准模型接口对外提供、API Key、调用记录与用量、限额
 
 本目录是模型网关的权威文档入口。它不替代模型连接与目录的合同
 （[MODEL_PROVIDERS](../../api/db/services/MODEL_PROVIDERS.md)）、模型删除保护
 （[模型配置生命周期](../model-provider-lifecycle.md)），也不改变既有 RAG SDK 接口。
-本文中的表、目录、接口和配置项在实现前都是提案；「现状」一节是当前代码事实。
+第 7 节的限额和第 10 节标为未实现的内容仍是提案，其余描述当前实现。
+
+## 0. 启用与运行
+
+网关默认关闭。启用后有两部分：主 API 里的管理接口，和独立的数据面进程。
+
+```bash
+MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
+```
+
+数据面进程不做数据库引导：三张表由主 API 启动时的 schema 引导创建，所以升级后先启动一次主 API。
+主 API 进程也要带同一个开关，管理接口才可用。配置段是 `model_gateway`
+（`common/app_config.py` 的 `ModelGatewayConfig`）：监听地址默认 `127.0.0.1:9390`，
+另有请求体上限和四个超时。未启用时管理路由返回 404，数据面进程拒绝启动。
+
+最小使用路径：
+
+1. 在模型管理里登记一个自部署模型（已有功能）。
+2. `POST /api/v1/model-gateway/models` 把它发布为公开模型名。
+3. `POST /api/v1/model-gateway/keys` 创建 Key，响应里的 `key` 只出现这一次。
+4. 调用方把 SDK 的 `base_url` 指向 `http://<网关地址>/v1`，用这把 Key 调用。
+5. `GET /api/v1/model-gateway/logs` 和 `/usage` 查看调用记录和用量。
 
 ## 1. 定位
 
@@ -71,8 +92,8 @@
 |---|---|
 | `id` | 公开标识（key_id），用于调用记录关联和管理接口；不是秘密 |
 | `tenant_id` | 所属租户 |
-| `name` | 必填，租户内唯一 |
-| `description`、`tags` | 可空。`tags` 是字符串键值，限制数量和长度 |
+| `name` | 必填，在未撤销的 Key 之间租户内唯一；撤销后名称可以再用，方便轮换 |
+| `description`、`tags` | 可空。`tags` 是字符串键值，最多 16 项 |
 | `secret_hash` | 整串 Key 的 SHA-256 |
 | `status` | `active` / `disabled` / `revoked`；撤销不可恢复 |
 | `expires_at` | 可空 |
@@ -100,7 +121,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 | `client_ip`、`tags` | 来源地址；调用时的 Key 标签快照，可空 |
 
 不保存请求和响应正文。索引围绕 `(tenant_id, started_at)`、`(key_id, started_at)`、
-`(gateway_model_id, started_at)`。
+`(gateway_model_id, started_at)`。未通过 Key 认证的请求不写调用记录。
 
 ## 4. 数据面：HTTP 透传
 
@@ -128,13 +149,18 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
   （见 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)），
   它的返回形态也不适合标准协议（见第 2 节）。
 
-代价是网关需要知道每个厂商的上游地址规则。首期只收录走 OpenAI `/v1/...` 形态的自部署厂商：
-`VLLM`、`OpenAI-API-Compatible`、`Xinference`、`LocalAI`、`LM-Studio`。
+代价是网关需要知道每个厂商的上游地址规则（`api/model_gateway/catalog.py` 的规则表）。目前收录：
 
-- 上游根地址用 `common/url_utils.py` 的 `ensure_api_version()` 得到，再拼端点路径。
+| 厂商 | 上游根地址 |
+|---|---|
+| `VLLM`、`OpenAI-API-Compatible`、`Xinference`、`LocalAI`、`LM-Studio` | 登记的地址经 `common/url_utils.py` 的 `ensure_api_version()` 补上版本段 |
+| `OpenAI` | 登记的地址原样使用；留空时为 `https://api.openai.com/v1` |
+
 - 上游模型名去掉登记时追加的 `___` 后缀。
-- 这两条与 `core/llm` 里对应驱动的现有行为一致，用契约测试钉住：同一条模型配置，
-  网关算出的地址和模型名必须与驱动一致。
+- 这些规则与 `core/llm` 里对应驱动的现有行为一致，用契约测试钉住
+  （`tests/unit/test_model_gateway_catalog.py`）：同一条模型配置，网关算出的地址和模型名必须与驱动一致。
+- 网关不改写请求参数。驱动为某些模型做的参数裁剪（例如去掉不被支持的采样参数）不会发生在网关里；
+  上游拒绝时，它的错误原样返回给调用方。
 - rerank 的上游路径各厂商不一致，逐个收录。
 - 发布时就校验厂商是否在收录范围内，派发前再校验一次。
 
@@ -155,23 +181,30 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 - **流式用量**：强制让上游返回用量尾块。客户端自己没有要求时，仅含用量的尾块由网关消费，不转发给客户端。
 - **响应里的 `model`**：首期原样返回上游值（见第 11 节的未决事项）。
 - **不重试、不回退**：一次请求对应一次上游调用。
-- **客户端断开**：取消上游请求并关闭连接，调用记录标记为客户端断开，用量标为 `unavailable`。
+- **客户端断开**：关闭上游连接，调用记录的状态码记 499、`error_type` 为 `client_closed`，用量标为 `unavailable`。
+- **流中失败**：状态码已经发出，所以以一条 `data: {"error": ...}` 事件结束流；调用记录保留已发出的状态码，
+  `error_type` 为 `upstream_error`。
 - **超时**：连接、首响应、流空闲和总时长分别配置。
 
 ### 错误约定
 
 错误体统一为 `{"error": {"message", "type", "param", "code"}}`，每个响应都带 `x-request-id`。
 
-| 情况 | 状态码 |
-|---|---|
-| Key 无效、过期、停用或撤销 | 401 |
-| Key 无权访问该模型 | 403 |
-| 公开模型不存在或未启用 | 404 |
-| 触发网关限流或配额（第二阶段） | 429 |
-| 上游返回 401 / 403 | 502，`code` 为 `upstream_auth_error`，避免调用方误以为是自己的 Key 有问题 |
-| 上游返回其他 4xx | 原样返回 |
-| 上游 5xx、连接失败 | 502 |
-| 上游超时 | 504 |
+| 情况 | 状态码 | `code` |
+|---|---|---|
+| Key 格式错误、不存在或秘密不匹配 | 401 | `invalid_api_key` |
+| Key 已停用或撤销；Key 已过期 | 401 | `api_key_disabled`；`api_key_expired`（仅在秘密校验通过后才区分原因） |
+| 请求体不是 JSON 对象；缺少 `model` | 400 | `invalid_json`；`missing_model` |
+| 公开模型的类型与端点不符 | 400 | `model_endpoint_mismatch` |
+| Key 无权访问该模型 | 403 | `model_not_allowed` |
+| 公开模型不存在或未启用 | 404 | `model_not_found` |
+| 请求体超过上限 | 413 | `request_too_large` |
+| 触发网关限流或配额（第二阶段） | 429 | 见第 7 节 |
+| 上游返回 401 / 403 | 502 | `upstream_auth_error`，避免调用方误以为是自己的 Key 有问题 |
+| 上游返回其他 4xx | 原样返回 | 上游的错误体，保留 `Retry-After` |
+| 上游 5xx；连接失败 | 502 | `upstream_error`；`upstream_unreachable` |
+| 已发布的模型当前不可用（被停用、厂商不在收录范围） | 503 | `model_unavailable` |
+| 上游超时 | 504 | `upstream_timeout` |
 
 ## 5. 认证与授权
 
@@ -223,12 +256,16 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 | `GET /api/v1/model-gateway/logs` | 查询调用记录 |
 | `GET /api/v1/model-gateway/usage` | 按 Key、模型、日期或 `end_user` 汇总用量 |
 
-开关是 `common/app_config.py` 里新增的 `model_gateway` 配置段，`enabled` 默认关闭。
-关闭时管理路由返回 404，数据面进程拒绝启动。Web 管理页面属于独立 Web 仓库的后续工作。
+目前只能发布 `chat` 和 `embedding` 两类模型；发布和重新启用时都会校验目标模型可用且厂商在收录范围内。
+调用记录按页查询（每页最多 100 条），用量汇总默认取最近 7 天，日期按 UTC 划分。
+汇总里的 token 只累计用量已知的调用，`usage_unknown` 给出未计入的调用数。
+Web 管理页面属于独立 Web 仓库的后续工作。
 
 ## 9. 与 RAGFlow 跟进的隔离
 
-网关代码放在 `api/model_gateway/`。它对现有文件的改动限于下表，全部是追加：
+网关代码放在 `api/model_gateway/`：`catalog`（目录桥）、`keys`、`store`（数据面持久化）、`relay`、
+`usage`、`app` 和 `server`（数据面进程）、`management` 和 `schemas`（管理操作）。
+它对现有文件的改动限于下表，全部是追加：
 
 | 文件 | 改动 |
 |---|---|
@@ -237,7 +274,8 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 | `common/app_config.py` | 新增 `model_gateway` 配置段 |
 | `api/db/services/model_deletion_policy.py` | `collect_blocking_model_references()` 增加一类引用：有效的公开模型 |
 | `api/apps/restful_apis/model_gateway_api.py` | 新文件，管理路由 |
-| `pyproject.toml` | 新增 import-linter 契约 |
+| `pyproject.toml` | 新增 import-linter 契约；把 `api/model_gateway` 纳入 mypy 严格检查范围 |
+| `tests/support/integration_suites.py` | 登记集成测试文件 |
 | [模型配置生命周期](../model-provider-lifecycle.md) | 引用表增加「有效的公开模型」一行 |
 
 不修改：`core/llm/*`、`api/db/services/llm_service.py`、`api/db/services/tenant_llm_service.py`、
@@ -265,7 +303,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 
 | 阶段 | 内容 | 完成证据 |
 |---|---|---|
-| P1 最小闭环 | 三张表和迁移；管理接口；数据面的 `/v1/models`、`/v1/chat/completions`、`/v1/embeddings`；调用记录；Key 的有效期和启停；模型删除保护 | 通用性准则第 1、2 条成立；真实 SDK 完成普通和流式调用，并能按 Key 查到记录 |
+| P1 最小闭环（**已实现**） | 三张表和迁移；管理接口；数据面的 `/v1/models`、`/v1/chat/completions`、`/v1/embeddings`；调用记录；Key 的有效期和启停；模型删除保护 | 通用性准则第 1、2 条成立；真实 SDK 完成普通和流式调用，并能按 Key 查到记录 |
 | P2 管控 | 限流、并发和软配额；用量汇总；记录保留与清理；rerank | 限额按维度生效；多把 Key 不能绕过模型级上限 |
 | P3 按需 | 非 OpenAI 协议厂商；`/v1/responses`、`/v1/messages`；多部署与回退；正文日志（手动开启）；按日汇总；管理审计；严格预算；Web 页面 | 每项单独立项和验收 |
 
@@ -275,8 +313,13 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
   错误映射。上游用受控的假服务，不依赖真实模型。
 - **集成**：scratch 库上的建表和迁移；删除保护返回 409；调用记录独立读回。
 - **契约**：同一条模型配置，网关与 `core/llm` 驱动算出的上游地址和模型名一致。
-- **消费者**：用真实的 OpenAI Python SDK 调用网关。该 SDK 的 embeddings 默认请求 base64 编码，
-  必须覆盖。最终验收再接一个真实的自部署模型。
+- **消费者**：集成测试用真实的 OpenAI Python SDK 调用网关。该 SDK 的 embeddings 默认请求 base64 编码，
+  已覆盖。
+- **真实上游**：`tests/manual/model_gateway_live.py` 在 scratch 库里登记环境变量给出的模型，经网关做一次
+  普通调用和一次流式调用，并读回调用记录。它不随测试套件运行；每接入一类新的上游，手动跑一次。
+
+对应的测试文件：`tests/unit/test_model_gateway_*.py`（Key、用量、目录契约、数据面、管理路由）和
+`tests/integration/test_model_gateway.py`（迁移两条引导路径、SQL 持久化、Key 生命周期、用量汇总、删除保护）。
 
 通用性验收单列：说明和标签为空时照常调用和统计；改名不改写历史；标签不能改变授权和路由；
 撤销 Key 后历史仍可查；全程不需要创建组织、应用或项目记录。

@@ -373,6 +373,22 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+# 模型网关对同协议上游走 HTTP 透传，不经过模型驱动；读取模型配置只走
+# api.model_gateway.catalog -> api.db.services.model_provider_service 一条边
+# （设计见 docs/model-gateway/README.md）。先约束直接导入，与上面几条一致。
+name = "模型网关不依赖模型驱动、Agent、路由层与 RAG 模型服务"
+type = "forbidden"
+source_modules = ["api.model_gateway"]
+forbidden_modules = [
+    "core.llm",
+    "agent",
+    "api.apps",
+    "api.db.services.llm_service",
+    "api.db.joint_services",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
 name = "deepdoc（文档解析）不依赖 api/agent/workflow*"
 type = "forbidden"
 source_modules = ["deepdoc"]
@@ -488,7 +504,7 @@ python_version = "3.12"
 # 仅限 POSIX 的 scripts/secure_leave_e2e.py（fcntl、os.getpgid 等）照常受检；CI 不受影响。
 # 代价同 CI 现状：`sys.platform == "win32"` 分支视为不可达而不检查，可临时加 --platform win32。
 platform = "linux"
-files = ["common", "api/utils", "api/identity", "api/run_platform", "scripts"]
+files = ["common", "api/utils", "api/identity", "api/run_platform", "api/model_gateway", "scripts"]
 exclude = [
     "^server/", "^internal/", "^tests/", "^docker/", "^temp/", "^tmp/",
     # 燃尽目标：SaaS 连接器与向量库后端存量类型问题较多（各约 60/30 个），
@@ -519,6 +535,11 @@ disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = ["api.run_platform", "api.run_platform.*"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["api.model_gateway", "api.model_gateway.*"]
 check_untyped_defs = true
 disallow_untyped_defs = true
 

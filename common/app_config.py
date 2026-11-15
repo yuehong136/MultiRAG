@@ -936,6 +936,24 @@ class ChannelsConfig(_Section):
         return self
 
 
+class ModelGatewayConfig(_Section):
+    """model_gateway section：模型网关开关与数据面进程参数（设计见 docs/model-gateway/README.md）。"""
+
+    # 关闭时管理路由返回 404，数据面进程拒绝启动
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    http_port: int = 9390
+    # 请求体上限（字节）；超过返回 413，不转发
+    max_request_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    connect_timeout_seconds: float = Field(default=10.0, gt=0)
+    # 等待上游返回响应头的上限；非流式请求的响应头在生成结束后才到，所以要给足
+    first_response_timeout_seconds: float = Field(default=600.0, gt=0)
+    # 流式响应中两次数据之间的最长间隔
+    stream_idle_timeout_seconds: float = Field(default=120.0, gt=0)
+    # 单次请求从派发到结束的总时长上限
+    total_timeout_seconds: float = Field(default=3600.0, gt=0)
+
+
 # ---------------------------------------------------------------------------
 # 根模型
 # ---------------------------------------------------------------------------
@@ -972,6 +990,7 @@ class AppConfig(BaseModel):
     observability: ObservabilityConfig = ObservabilityConfig()
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     identity: IdentityConfig = Field(default_factory=IdentityConfig)
+    model_gateway: ModelGatewayConfig = Field(default_factory=ModelGatewayConfig)
 
     _raw: dict[str, Any] = PrivateAttr(default_factory=dict)
 

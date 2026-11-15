@@ -10,5 +10,11 @@ uv run python -m pytest tests/manual/test_llm_async_performance.py -q  # 需要 
 uv run python -m pytest tests/manual/test_upload_concurrent_performance.py -q  # 需要运行中的服务器
 ```
 
+模型网关的真实上游验证是一个脚本，不经过 pytest（输入见脚本开头的说明）：
+
+```bash
+uv run python tests/manual/model_gateway_live.py   # 需要真实模型服务的地址与凭据
+```
+
 - 常规单元测试请写到 `tests/unit/`（纯净、无网络、外部依赖全部 monkeypatch）
 - 需要真实服务的自动化测试写到 `tests/integration/` 并打 `@pytest.mark.integration`
