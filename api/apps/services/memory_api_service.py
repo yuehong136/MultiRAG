@@ -351,14 +351,32 @@ def search_message(db: Session, filter_dict: dict, params: dict, *, user_id: str
     return query_message(db, {**filter_dict, "memory_id": accessible_ids}, params)
 
 
-def get_messages(db: Session, memory_ids: list[str], agent_id: str = "", session_id: str = "", limit: int = 10, *, user_id: str) -> list[dict]:
+def get_messages(
+    db: Session,
+    memory_ids: list[str],
+    agent_id: str = "",
+    session_id: str = "",
+    limit: int = 10,
+    *,
+    user_id: str,
+    message_type: str | None = None,
+    subject_id: str | None = None,
+    status: bool | None = None,
+) -> list[dict]:
     """获取最近的消息"""
     memory_list = _accessible_memories(db, user_id, _split_filter_values(memory_ids))
     if not memory_list:
         return []
     memory_ids = [memory.id for memory in memory_list]
     uids = [memory.tenant_id for memory in memory_list]
-    return MessageService.get_recent_messages(uids, memory_ids, agent_id, session_id, limit)
+    options: dict[str, Any] = {}
+    if message_type is not None:
+        options["message_type"] = message_type
+    if subject_id is not None:
+        options["user_id"] = subject_id
+    if status is not None:
+        options["status"] = status
+    return MessageService.get_recent_messages(uids, memory_ids, agent_id, session_id, limit, **options)
 
 
 def get_message_content(db: Session, memory_id: str, message_id: int, *, user_id: str) -> dict:
@@ -416,9 +434,26 @@ async def search_message_async(filter_dict: dict, params: dict, *, user_id: str)
     return await _run_with_own_session(search_message, filter_dict, params, user_id=user_id)
 
 
-async def get_messages_async(memory_ids: list[str], agent_id: str = "", session_id: str = "", limit: int = 10, *, user_id: str) -> Any:
+async def get_messages_async(
+    memory_ids: list[str],
+    agent_id: str = "",
+    session_id: str = "",
+    limit: int = 10,
+    *,
+    user_id: str,
+    message_type: str | None = None,
+    subject_id: str | None = None,
+    status: bool | None = None,
+) -> Any:
     """get_messages 的异步入口（DB 读 + msg_store 最近消息混轨）。"""
-    return await _run_with_own_session(get_messages, memory_ids, agent_id, session_id, limit, user_id=user_id)
+    options: dict[str, Any] = {}
+    if message_type is not None:
+        options["message_type"] = message_type
+    if subject_id is not None:
+        options["subject_id"] = subject_id
+    if status is not None:
+        options["status"] = status
+    return await _run_with_own_session(get_messages, memory_ids, agent_id, session_id, limit, user_id=user_id, **options)
 
 
 async def get_message_content_async(memory_id: str, message_id: int, *, user_id: str) -> Any:

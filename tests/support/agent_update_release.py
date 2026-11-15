@@ -202,7 +202,7 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
                 keys = list(arguments[3 : 3 + int(arguments[2])])
             elif command in {"DEL", "UNLINK"}:
                 keys = list(arguments[1:])
-            elif command in {"SET", "SETEX", "PSETEX", "SETNX", "HSET", "HMSET", "HDEL", "LPUSH", "RPUSH", "SADD", "ZADD", "INCR", "XADD", "EXPIRE", "PEXPIRE"}:
+            elif command in {"SET", "SETEX", "PSETEX", "SETNX", "HSET", "HMSET", "HDEL", "LPUSH", "RPUSH", "SADD", "ZADD", "INCR", "INCRBY", "XADD", "EXPIRE", "PEXPIRE"}:
                 keys = list(arguments[1:2])
             with lock:
                 for raw_key in keys:
