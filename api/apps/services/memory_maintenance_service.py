@@ -7,8 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.apps.services.memory_context_service import require_memory
 from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
 from common.token_utils import encoder
+from memory.maintenance.checkpoints import IncrementalCheckpoints
 from memory.maintenance.execution import ExecutionService
+from memory.maintenance.incremental import DiscoveryService
 from memory.maintenance.jobs import JobService
+from memory.maintenance.profiles import analysis_identity
 from memory.maintenance.provider import MaintenanceAnalyst
 from memory.maintenance.publication import PublicationService
 from memory.maintenance.snapshots import MaintenanceSnapshots
@@ -36,16 +39,35 @@ async def _bindings(db: AsyncSession, memory_id: str, actor_id: str) -> tuple[Me
 
 async def jobs(db: AsyncSession, memory_id: str, *, actor_id: str) -> JobService:
     provider, _, snapshots = await _bindings(db, memory_id, actor_id)
+    return _jobs(provider, snapshots)
+
+
+def _jobs(provider: MemoryWriteProviders, snapshots: MaintenanceSnapshots) -> JobService:
+    async def identity(memory_id: str) -> dict[str, str]:
+        return await analysis_identity(provider, memory_id)
+
+    checkpoints = IncrementalCheckpoints(provider.db, tenant_id=provider.tenant_id, identity=identity)
     return JobService(
-        db,
+        provider.db,
         tenant_id=provider.tenant_id,
-        actor_id=actor_id,
+        actor_id=provider.actor_id,
         authorize=provider.authorize,
         snapshotter=snapshots.snapshot,
         validate_inputs=snapshots.validate,
         analyzer=MaintenanceAnalyst(provider).analyze,
         count_tokens=count_tokens,
+        validate_binding=checkpoints.validate,
+        checkpoint=checkpoints.checkpoint,
     )
+
+
+async def discoveries(db: AsyncSession, memory_id: str, *, actor_id: str) -> DiscoveryService:
+    provider, _, snapshots = await _bindings(db, memory_id, actor_id)
+
+    async def identity(mid: str) -> dict[str, str]:
+        return await analysis_identity(provider, mid)
+
+    return DiscoveryService(db, jobs=_jobs(provider, snapshots), identity=identity, validate_entry=snapshots._ready_entry)
 
 
 async def executions(db: AsyncSession, memory_id: str, *, actor_id: str) -> ExecutionService:

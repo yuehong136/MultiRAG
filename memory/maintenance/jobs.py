@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
@@ -117,9 +117,12 @@ class JobService(WriterCoordinator):
         validate_inputs: InputValidator,
         analyzer: Analyzer,
         count_tokens: Callable[[str], int],
+        validate_binding: Callable[[MemoryMaintenanceJob, dict[str, Any]], Awaitable[None]] | None = None,
+        checkpoint: Callable[[MemoryMaintenanceJob, list[MemoryMaintenanceInput], AnalysisResult], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(db, tenant_id=tenant_id, actor_id=actor_id, authorize=authorize)
         self.snapshotter, self.validate_inputs, self.analyzer, self.count_tokens = snapshotter, validate_inputs, analyzer, count_tokens
+        self.validate_binding, self.checkpoint = validate_binding, checkpoint
 
     async def _memory_fence(self, memory_id: str) -> tuple[Any, MemoryWriterFence]:
         memory, fence = await super()._memory_fence(memory_id)
@@ -196,7 +199,16 @@ class JobService(WriterCoordinator):
         return job, inputs, active
 
     async def create(
-        self, memory_id: str, *, operation_id: str, source_ids: list[int], entry_ids: list[str], policy: str = "general", input_budget_tokens: int = 16384, output_budget_tokens: int = 4096
+        self,
+        memory_id: str,
+        *,
+        operation_id: str,
+        source_ids: list[int],
+        entry_ids: list[str],
+        policy: str = "general",
+        input_budget_tokens: int = 16384,
+        output_budget_tokens: int = 4096,
+        job_id: str | None = None,
     ) -> dict[str, Any]:
         validate_operation_id(operation_id)
         request = canonical_request(source_ids, entry_ids, policy, input_budget_tokens, output_budget_tokens)
@@ -221,7 +233,7 @@ class JobService(WriterCoordinator):
                     raise RevisionConflict("operation_request_mismatch")
                 return await self._job_view(previous, await self._inputs(previous))
             job = MemoryMaintenanceJob(
-                job_id=uuid4().hex,
+                job_id=identifier(job_id) if job_id is not None else uuid4().hex,
                 memory_id=memory_id,
                 tenant_id=self.tenant_id,
                 actor_id=self.actor_id,
@@ -238,6 +250,8 @@ class JobService(WriterCoordinator):
                 estimated_input_tokens=manifest["estimated_input_tokens"],
                 receipt={},
             )
+            if self.validate_binding is not None:
+                await self.validate_binding(job, manifest)
             self.db.add(job)
             await self.db.flush()
             inputs = [MemoryMaintenanceInput(job_id=job.job_id, memory_id=memory_id, tenant_id=self.tenant_id, **item) for item in manifest["inputs"]]
@@ -316,6 +330,8 @@ class JobService(WriterCoordinator):
 
         async with self._write(operation_id):
             job, inputs = await self._locked(memory_id, job_id)
+            if self.validate_binding is not None:
+                await self.validate_binding(job, manifest_for_job(job, inputs))
             await require_execution_permit(self.db, job, operation_id, execution_claim_token, token, start=True)
             row = await self._row(memory_id, operation_id, lock=True)
             if (
@@ -397,6 +413,8 @@ class JobService(WriterCoordinator):
             for item in inputs:
                 if item.coverage == "included":
                     item.coverage = "analyzed"
+            if self.checkpoint is not None:
+                await self.checkpoint(job, inputs, result)
             self._record_attempt(job, operation_id, token, result, None)
             job.state, job.model_reference, job.config_reference = "ready", result["model_reference"], result["config_reference"]
             job.error_code, job.updated_at = None, datetime.now(UTC)

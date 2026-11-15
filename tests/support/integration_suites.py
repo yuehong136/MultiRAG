@@ -59,6 +59,7 @@ DATABASE_TESTS = frozenset(
         "test_memory_maintenance_repository.py",
         "test_memory_maintenance_publication.py",
         "test_memory_maintenance_execution.py",
+        "test_memory_incremental_repository.py",
         "test_memory_operation_inbox.py",
         "test_llm_embedding_inputs.py",
         "test_llm_tool_capability.py",
@@ -210,6 +211,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_memory_revision_web_consumer.py",
                 "test_memory_writer_web_consumer.py",
                 "test_memory_dreaming_web_consumer.py",
+                "test_memory_incremental_http.py",
                 "test_shared_chunk_owner_contract.py",
                 "test_sandbox_provider_settings.py",
             )
@@ -231,6 +233,7 @@ def required_services(paths: list[Path]) -> set[str]:
             "test_memory_maintenance_repository.py",
             "test_memory_maintenance_publication.py",
             "test_memory_maintenance_execution.py",
+            "test_memory_incremental_repository.py",
             "test_memory_operation_inbox.py",
         }:
             required.add("postgresql")
@@ -242,6 +245,7 @@ def required_services(paths: list[Path]) -> set[str]:
             "test_memory_writes_http.py",
             "test_memory_writer_web_consumer.py",
             "test_memory_dreaming_http.py",
+            "test_memory_incremental_http.py",
             "test_memory_dreaming_web_consumer.py",
             "test_memory_maintenance_worker_cli.py",
         }:

@@ -1,0 +1,417 @@
+[
+  {
+    "case_id": "old_event_new_source",
+    "title": "新入源的旧事件不被时间水位跳过",
+    "sources": [
+      {
+        "source_id": 940,
+        "content": "来源正在人工处理，暂不可选。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      },
+      {
+        "source_id": 503,
+        "content": "补录：去年约定的服务端口为8080。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1",
+        "valid_at": "2025-01-01 00:00:00"
+      },
+      {
+        "source_id": 9,
+        "content": "已分析的来源。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1",
+        "valid_at": "2026-11-15 00:00:00"
+      },
+      {
+        "source_id": 81,
+        "content": "另一个worker处理中。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      }
+    ],
+    "entries": [],
+    "states": {
+      "9": "covered",
+      "81": "inflight",
+      "940": "blocked"
+    },
+    "max_sources": 1,
+    "expected": {
+      "selected_ids": [
+        503
+      ],
+      "counts": {
+        "active": 4,
+        "covered": 1,
+        "inflight": 1,
+        "blocked": 1,
+        "eligible": 1
+      },
+      "has_more": false
+    },
+    "upstream_basis": [
+      "https://github.com/openclaw/openclaw/blob/81ca4f4d712a67c012c7dc0311e0fa37ac576490/extensions/memory-core/src/session-ingestion.test.ts#L76",
+      "https://github.com/agentscope-ai/ReMe/blob/b13034ba2ff7339bb03df4fa4ee130b47a731c6c/tests/unit/test_dream_checkpoint_versions.py#L46"
+    ],
+    "semantic_review": "这里仅证明补录来源的事件时间不是已处理水位；不证明补录端口陈述属实。",
+    "manual_semantic_review_required": true,
+    "publication_performed": false,
+    "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "exact_principal_partition",
+    "title": "同主体跨会话联合，不把空身份当通配符",
+    "sources": [
+      {
+        "source_id": 44,
+        "content": "Bob在处理独立项目。",
+        "user_id": "bob",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      },
+      {
+        "source_id": 15,
+        "content": "Alice第二会话补充同一项目决定。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s2"
+      },
+      {
+        "source_id": 11,
+        "content": "Alice第一会话提出项目问题。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      },
+      {
+        "source_id": 51,
+        "content": "另一个agent的独立记忆。",
+        "user_id": "alice",
+        "agent_id": "other",
+        "session_id": "s1"
+      },
+      {
+        "source_id": 22,
+        "content": "没有user标签的独立来源。",
+        "user_id": "",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      },
+      {
+        "source_id": 60,
+        "content": "Alice已分析的上下文锚点。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "context"
+      }
+    ],
+    "entries": [],
+    "states": {
+      "60": "covered"
+    },
+    "max_sources": 32,
+    "context_ids": [
+      60
+    ],
+    "batch_size": 3,
+    "expected": {
+      "selected_ids": [
+        11,
+        15,
+        22,
+        44,
+        51
+      ],
+      "primary_batches": [
+        [
+          11,
+          15
+        ],
+        [
+          22
+        ],
+        [
+          44
+        ],
+        [
+          51
+        ]
+      ],
+      "context_batches": [
+        [
+          60
+        ],
+        [],
+        [],
+        []
+      ]
+    },
+    "upstream_basis": [
+      "https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/tests/test_consolidation_write_scopes.py#L319",
+      "https://github.com/openclaw/openclaw/blob/81ca4f4d712a67c012c7dc0311e0fa37ac576490/extensions/memory-core/src/dreaming-consolidation-projects.test.ts#L62"
+    ],
+    "semantic_review": "只检查可信user/agent隔离及session可联合；没有推断这些人的陈述互相等价。",
+    "manual_semantic_review_required": true,
+    "publication_performed": false,
+    "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "valid_empty_is_analyzed_not_published",
+    "title": "有效空提案可记已分析，不伪造记忆或发布",
+    "sources": [
+      {
+        "source_id": 7,
+        "content": "本次测试临时用彩色纸记笔记，不代表长期偏好。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      }
+    ],
+    "entries": [],
+    "reference_proposals": [],
+    "expected": {
+      "candidate_count": 0,
+      "covered_ids": [
+        7
+      ],
+      "publication_performed": false
+    },
+    "upstream_basis": [
+      "https://github.com/agentscope-ai/ReMe/blob/b13034ba2ff7339bb03df4fa4ee130b47a731c6c/tests/unit/test_auto_dream.py#L375",
+      "https://github.com/agentscope-ai/ReMe/blob/b13034ba2ff7339bb03df4fa4ee130b47a731c6c/reme/steps/evolve/dream/extract.py#L315"
+    ],
+    "semantic_review": "空结果通过结构契约仅代表模型完成了本轮分析，不代表没有遗漏，也不是答案准确率或事实验证。",
+    "manual_semantic_review_required": true,
+    "publication_performed": false,
+    "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "invalid_host_plan_has_no_coverage",
+    "title": "歧义patch及恶意跨主体回包都应被宿主拒绝",
+    "sources": [
+      {
+        "source_id": 41,
+        "content": "Alice说明主入口端口需要调整，备份约定保持。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      },
+      {
+        "source_id": 42,
+        "content": "Bob讨论的是另一个入口。",
+        "user_id": "bob",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      }
+    ],
+    "entries": [
+      {
+        "entry_id": "endpoint",
+        "content": "主入口9000，备用9000；备份02:00。",
+        "source_ids": [
+          41
+        ]
+      }
+    ],
+    "variants": [
+      {
+        "proposals": [
+          {
+            "action": "patch",
+            "target_entry_id": "endpoint",
+            "patch": {
+              "old_text": "9000",
+              "new_text": "8080"
+            },
+            "source_input_ids": [
+              "source-41"
+            ],
+            "reason": "这个字面片段在目标出现多次。"
+          }
+        ],
+        "expected_error": "patch_ambiguous"
+      },
+      {
+        "proposals": [
+          {
+            "action": "add",
+            "content": "Alice和Bob使用同一个入口。",
+            "message_type": "semantic",
+            "source_input_ids": [
+              "source-41",
+              "source-42"
+            ],
+            "reason": "恶意把两个可信身份的来源混成一条。"
+          }
+        ],
+        "expected_error": "maintenance_evidence_principal_mismatch"
+      }
+    ],
+    "expected": {
+      "covered_ids": [],
+      "publication_performed": false
+    },
+    "upstream_basis": [
+      "https://github.com/openclaw/openclaw/blob/81ca4f4d712a67c012c7dc0311e0fa37ac576490/extensions/memory-core/src/dreaming-consolidation.test.ts#L322",
+      "https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/tests/test_consolidation_batch_atomicity.py#L183"
+    ],
+    "semantic_review": "宿主拒绝不等于检测出所有语义错误；本例只钉住明确的歧义片段和跨主体来源权限。",
+    "manual_semantic_review_required": true,
+    "publication_performed": false,
+    "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "whole_source_deferred",
+    "title": "超预算RAW完整延后，不能截开头却记全覆盖",
+    "sources": [
+      {
+        "source_id": 1,
+        "content": "短来源：项目当前采用显式人工发布。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      },
+      {
+        "source_id": 2,
+        "content": "填充正文。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1",
+        "repeat": 800,
+        "suffix": "末尾唯一事实：撤回必须作用于完整来源。"
+      }
+    ],
+    "entries": [],
+    "input_budget_tokens": 1800,
+    "expected": {
+      "included_ids": [
+        1
+      ],
+      "deferred_ids": [
+        2
+      ],
+      "deferred_reason": "input_budget",
+      "covered_ids": []
+    },
+    "upstream_basis": [
+      "https://github.com/agentscope-ai/ReMe/blob/b13034ba2ff7339bb03df4fa4ee130b47a731c6c/tests/unit/test_auto_dream.py#L1350",
+      "https://github.com/agentscope-ai/ReMe/blob/b13034ba2ff7339bb03df4fa4ee130b47a731c6c/tests/unit/test_auto_dream.py#L1396"
+    ],
+    "semantic_review": "此处使用字符数替代token计数验证生产快照的完整输入预算分支；不宣称真实tokenizer硬上限或长来源已被分析。",
+    "manual_semantic_review_required": true,
+    "publication_performed": false,
+    "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "repeated_context_preserves_primary_and_siblings",
+    "title": "重复上下文不吞独立输入，局部修订保留同条其他事实",
+    "sources": [
+      {
+        "source_id": 10,
+        "content": "端口9000；备份每天02:00。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "old"
+      },
+      {
+        "source_id": 20,
+        "content": "端口纠正为8080；备份每天02:00不变。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "new"
+      },
+      {
+        "source_id": 30,
+        "content": "对象存储开启版本化。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "later"
+      }
+    ],
+    "entries": [
+      {
+        "entry_id": "service",
+        "content": "端口9000；备份每天02:00。",
+        "source_ids": [
+          10
+        ]
+      }
+    ],
+    "states": {
+      "10": "covered"
+    },
+    "context_ids": [
+      10
+    ],
+    "max_sources": 32,
+    "batch_size": 2,
+    "reference_proposals": [
+      {
+        "action": "patch",
+        "target_entry_id": "service",
+        "patch": {
+          "old_text": "端口9000",
+          "new_text": "端口8080"
+        },
+        "source_input_ids": [
+          "source-10",
+          "source-20"
+        ],
+        "reason": "新会话只纠正端口，保留备份事实。"
+      },
+      {
+        "action": "add",
+        "content": "对象存储开启版本化。",
+        "message_type": "semantic",
+        "source_input_ids": [
+          "source-30"
+        ],
+        "reason": "保留另一条独立且有来源的事实，等待人工审核。"
+      }
+    ],
+    "expected": {
+      "selected_ids": [
+        20,
+        30
+      ],
+      "primary_batches": [
+        [
+          20
+        ],
+        [
+          30
+        ]
+      ],
+      "context_batches": [
+        [
+          10
+        ],
+        [
+          10
+        ]
+      ],
+      "candidate_contents": [
+        "端口8080；备份每天02:00。",
+        "对象存储开启版本化。"
+      ],
+      "new_covered_ids": [
+        20,
+        30
+      ],
+      "context_new_covered_ids": []
+    },
+    "upstream_basis": [
+      "https://github.com/agentscope-ai/ReMe/blob/b13034ba2ff7339bb03df4fa4ee130b47a731c6c/tests/unit/test_auto_dream.py#L1049",
+      "https://github.com/openclaw/openclaw/blob/81ca4f4d712a67c012c7dc0311e0fa37ac576490/extensions/memory-core/src/dreaming-consolidation.test.ts#L322"
+    ],
+    "semantic_review": "手工提案是机制回归输入；保留了指定兄弟事实不代表生成模型在开放任务中一定能完整总结。",
+    "manual_semantic_review_required": true,
+    "publication_performed": false,
+    "answer_accuracy_measured": false
+  }
+]
