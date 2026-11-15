@@ -256,7 +256,7 @@ async def test_dry_run_never_allocates_embeds_or_persists(service: RevisionServi
 
 async def test_new_revision_captures_reenabled_source_generation_without_rewriting_history(service: RevisionService, monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot = message()
-    ref = MemoryRevisionSource(entry_id="entry", revision=1, memory_id="bank", source_message_id=1, source_revision=1, source_generation=1, content_sha256="hash")
+    ref = MemoryRevisionSource(entry_id="entry", revision=1, memory_id="bank", source_message_id=1, source_revision=1, source_generation=1, content_sha256="hash", locator={})
     source = MemorySourceState(
         memory_id="bank",
         source_message_id=1,

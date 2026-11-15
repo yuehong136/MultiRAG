@@ -172,7 +172,7 @@ Content-Type: application/json
 
 SQL 旁表通过正式 Alembic 迁移创建，部署前完成备份并核对当前 migration head。
 空库引导、存量升级与不兼容旁表拒绝分别验证，不能只 stamp 版本。
-相关读取预算和来源摘录见 [Memory 查询](memory-query.md)；本功能不包含 Dreaming、Wiki、启动包或摘要压缩。
+相关读取预算和来源摘录见 [Memory 查询](memory-query.md)；候选整理与审核发布见 [Dreaming 维护](memory-maintenance.md)。Wiki、启动包或摘要压缩不包含在这些能力中。
 
 ## 整库删除与排空
 

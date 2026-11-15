@@ -774,7 +774,12 @@ class SourceService:
                 entry.generation += 1
                 entry.state = "withdrawn" if forget else "active" if status else "inactive"
                 entry.updated_at = datetime.now(UTC)
+                from memory.maintenance.lifecycle import invalidate_for_entry
+
+                maintenance = await invalidate_for_entry(self.db, memory_id=memory_id, tenant_id=self.tenant_id, entry_id=entry.entry_id, permanent=forget)
                 pending = await self._invalidate_pending(memory_id, {entry.entry_id}, permanent=forget)
+                pending.extend(maintenance["outbox_ids"])
+                writer_cleanup_ids = maintenance["message_ids"]
                 pending.extend(await self._state_dependencies(memory_id, entry_ids={entry.entry_id}))
                 if forget:
                     versions = list(

@@ -192,6 +192,14 @@ async def _legacy_state_service(db: AsyncSession, memory_id: str, actor_id: str)
 
 async def get_operation(db: AsyncSession, memory_id: str, operation_id: str, *, actor_id: str) -> dict[str, Any]:
     kind = await _operation_kind(db, memory_id, operation_id)
+    if kind == "dream_publish":
+        from api.apps.services.memory_maintenance_service import publications
+
+        return await (await publications(db, memory_id, actor_id=actor_id)).get_operation(memory_id, operation_id)
+    if kind == "dream_analyze":
+        from api.apps.services.memory_maintenance_service import jobs
+
+        return await (await jobs(db, memory_id, actor_id=actor_id)).operation(memory_id, operation_id)
     if kind == "delete_memory":
         from memory.revisions.deletion import MemoryDeletionService
 
@@ -237,6 +245,24 @@ async def _reconcile(db: AsyncSession, service: RevisionService, store: ManagedM
 
 async def reconcile_operation(db: AsyncSession, memory_id: str, operation_id: str, *, actor_id: str) -> dict[str, Any]:
     kind = await _operation_kind(db, memory_id, operation_id)
+    if kind == "dream_publish":
+        from api.apps.services.memory_maintenance_service import publications
+
+        return await (await publications(db, memory_id, actor_id=actor_id)).reconcile(memory_id, operation_id)
+    if kind == "dream_publish_item":
+        raise RevisionConflict("reconcile_parent_publication_operation")
+    if kind == "dream_analyze":
+        from api.apps.services.memory_maintenance_service import jobs
+        from api.db.memory_writer_models import MemoryWriterAdmission
+
+        job_service = await jobs(db, memory_id, actor_id=actor_id)
+        admission = await db.get(MemoryWriterAdmission, (memory_id, operation_id))
+        job_id = admission.request_metadata.get("job_id") if admission is not None and admission.tenant_id == job_service.tenant_id else None
+        await _release_read_transaction(db)
+        if not isinstance(job_id, str):
+            raise RevisionNotFound("maintenance_job_not_found")
+        await job_service.run(memory_id, job_id, operation_id=operation_id)
+        return await job_service.operation(memory_id, operation_id)
     if kind == "delete_memory":
         from memory.revisions.deletion import MemoryDeletionService
 

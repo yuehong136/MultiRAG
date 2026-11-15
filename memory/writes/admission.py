@@ -254,6 +254,10 @@ async def invalidate_source_writers(db: AsyncSession, *, memory_id: str, tenant_
     outbox_ids: list[str] = []
     active_operation_ids: list[str] = []
     for row in rows:
+        # A reviewed batch can contain independent published items. Its own
+        # lifecycle hook cancels an unpublished batch or retires affected items.
+        if row.kind == "dream_publish":
+            continue
         if not permanent and row.publication_state in {"published", "ready"}:
             continue
         if row.active_token is not None or row.state in {"active", "unknown"}:
@@ -277,7 +281,14 @@ async def invalidate_source_writers(db: AsyncSession, *, memory_id: str, tenant_
         if operation is not None:
             operation.status, operation.index_sync_status, operation.error_code = "stale", "cleanup_pending", "source_withdrawn" if permanent else "source_state_changed"
             operation.result = {key: value for key, value in operation.result.items() if key in {"raw_source_id", "extraction_task_id", "queue_state", "evicted_sources"}}
-    return {"outbox_ids": outbox_ids, "message_ids": sorted(ids), "active_operation_ids": active_operation_ids}
+    from memory.maintenance.lifecycle import invalidate_for_source
+
+    maintenance = await invalidate_for_source(db, memory_id=memory_id, tenant_id=tenant_id, source_id=source_id, permanent=permanent)
+    return {
+        "outbox_ids": list(dict.fromkeys([*outbox_ids, *maintenance["outbox_ids"]])),
+        "message_ids": sorted(ids | set(maintenance["message_ids"])),
+        "active_operation_ids": list(dict.fromkeys([*active_operation_ids, *maintenance["active_operation_ids"]])),
+    }
 
 
 class WriterCoordinator:

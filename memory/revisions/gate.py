@@ -121,7 +121,9 @@ def _load_policy(memory_ids: list[str], messages: list[dict[str, Any]] | None) -
                 entry.current_message_id,
                 entry.state,
                 revision.content_sha256,
-                revision.parent_revision is None or (revision.entry_id, revision.revision) in ready,
+                ((revision.entry_id, revision.revision) in ready and writers.get((revision.memory_id, revision.message_id)) == (banks[revision.memory_id][0], "ready"))
+                if revision.origin == "consolidated"
+                else (revision.parent_revision is None or (revision.entry_id, revision.revision) in ready),
                 tuple(references.get((revision.entry_id, revision.revision), ())),
             )
             for revision, entry in revisions

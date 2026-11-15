@@ -181,6 +181,9 @@ class MemoryDeletionService:
                 source.state, source.generation = "deleted", source.generation + 1
             for entry in await self.db.scalars(select(MemoryEntry).where(MemoryEntry.memory_id == memory_id).order_by(MemoryEntry.entry_id).with_for_update()):
                 entry.state, entry.generation = "withdrawn", entry.generation + 1
+            from memory.maintenance.lifecycle import invalidate_for_bank
+
+            await invalidate_for_bank(self.db, memory_id=memory_id, tenant_id=bank.tenant_id)
             prior = await self._outboxes(memory_id)
             for row in prior:
                 row.state, row.error_code = "redacted", "memory_deletion_requested"

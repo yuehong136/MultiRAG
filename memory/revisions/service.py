@@ -311,6 +311,9 @@ class RevisionService:
         target = await self._revision(entry_id, revision)
         expected_scope = message_scope(target.message_snapshot, target.memory_id)
         for ref in refs:
+            reference_scope = ref.locator.get("scope", expected_scope)
+            if not isinstance(reference_scope, dict) or set(reference_scope) != {"user_id", "agent_id", "session_id"}:
+                raise RevisionConflict("source_scope_invalid")
             statement = select(MemorySourceState).where(
                 MemorySourceState.memory_id == ref.memory_id, MemorySourceState.source_message_id == ref.source_message_id, MemorySourceState.tenant_id == self.tenant_id
             )
@@ -321,7 +324,7 @@ class RevisionService:
                 or state.source_revision != ref.source_revision
                 or (require_generation and state.generation != ref.source_generation)
                 or state.content_sha256 != ref.content_sha256
-                or state.scope != expected_scope
+                or state.scope != reference_scope
             ):
                 raise RevisionConflict("source_state_changed")
             if captured_generations is not None:
