@@ -1,16 +1,7 @@
 {
-  "name": "PaddleOCR_Local",
+  "name": "PaddleOCR",
   "url_suffix": {
     "ocr": "layout-parsing"
   },
-  "class": "local",
-  "models": [
-    {
-      "name": "PaddleOCR-VL",
-      "max_tokens": 16384,
-      "model_types": [
-        "ocr"
-      ]
-    }
-  ]
+  "class": "local"
 }

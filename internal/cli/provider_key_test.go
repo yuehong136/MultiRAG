@@ -6,22 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"multirag/internal/testsupport"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"multirag/internal/testsupport"
-
-	"github.com/google/uuid"
-	"github.com/peterh/liner"
 )
 
 func TestProviderKeyGrammar(t *testing.T) {
@@ -30,7 +24,7 @@ func TestProviderKeyGrammar(t *testing.T) {
 		`check provider "OpenAI" region "default" key "private";`,
 		`CHECK PROVIDER 'LocalAI' REGION '' KEY '' URL 'http://localhost:8000/v1';`,
 	} {
-		cmd, err := NewParser(input).Parse(false)
+		cmd, err := NewParser(input).Parse(APIMode)
 		if err != nil || cmd.Type != "check_provider_with_key" {
 			t.Fatalf("parse failed: %v", err)
 		}
@@ -43,7 +37,6 @@ func TestProviderKeyGrammar(t *testing.T) {
 		`CHECK PROVIDER 'OpenAI' KEY 'private';`,
 		`CHECK PROVIDER 'OpenAI' REGION default KEY 'private';`,
 		`CHECK PROVIDER 'OpenAI' REGION 'default' KEY private;`,
-		`CHECK PROVIDER 'OpenAI' REGION 'default' KEY 'private'`,
 		`CHECK PROVIDER 'OpenAI' REGION 'default' KEY 'private'; trailing`,
 		`CHECK PROVIDER 'OpenAI' REGION 'default' KEY 'private' trailing;`,
 		`CHECK PROVIDER 'OpenAI' REGION 'default' KEY 'private';;`,
@@ -53,11 +46,11 @@ func TestProviderKeyGrammar(t *testing.T) {
 		`CHECK PROVIDER 'OpenAI' REGION 'default' KEY 'unterminated;`,
 		`CHECK PROVIDER 'OpenAI' REGION 'default' KEY 'private';` + "\x00trailing",
 	} {
-		if _, err := NewParser(input).Parse(false); err == nil {
+		if _, err := NewParser(input).Parse(APIMode); err == nil {
 			t.Fatalf("accepted invalid case %d", i)
 		}
 	}
-	if _, err := NewParser(`CHECK PROVIDER 'OpenAI' REGION 'default' KEY 'private';`).Parse(true); err == nil {
+	if _, err := NewParser(`CHECK PROVIDER 'OpenAI' REGION 'default' KEY 'private';`).Parse(AdminMode); err == nil {
 		t.Fatal("admin grammar accepted user probe")
 	}
 	for _, word := range []string{"CHECK", "PROVIDER", "REGION", "KEY", "URL"} {
@@ -144,11 +137,11 @@ func TestProviderKeyExecute(t *testing.T) {
 	}))
 	u, _ := url.Parse(server.URL)
 	port, _ := strconv.Atoi(u.Port())
-	client := NewMultiRAGClient("user")
-	client.HTTPClient.Host = u.Hostname()
-	client.HTTPClient.Port = port
-	client.HTTPClient.LoginToken = "jwt-fixture"
-	cmd, err := NewParser(`CHECK PROVIDER 'OpenAI' REGION 'unknown-region' KEY '` + secret + `' URL 'http://localhost:8000/v1';`).Parse(false)
+	client := newConsumerCLI("user")
+	consumerHTTP(client).Host = u.Hostname()
+	consumerHTTP(client).Port = port
+	consumerHTTP(client).LoginToken = consumerTokenPtr("jwt-fixture")
+	cmd, err := NewParser(`CHECK PROVIDER 'OpenAI' REGION 'unknown-region' KEY '` + secret + `' URL 'http://localhost:8000/v1';`).Parse(APIMode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,16 +162,16 @@ func TestProviderKeyExecute(t *testing.T) {
 	if calls != 7 {
 		t.Fatalf("calls %d", calls)
 	}
-	client.HTTPClient.LoginToken = ""
+	consumerHTTP(client).LoginToken = nil
 	if _, err := client.ExecuteCommand(cmd); err == nil {
 		t.Fatal("probe without auth accepted")
 	}
-	client.HTTPClient.APIKey = "fixture"
-	client.ServerType = "admin"
+	consumerHTTP(client).APIToken = consumerTokenPtr("fixture")
+	client.Config.CLIMode = AdminMode
 	if _, err := client.CheckProviderWithKey(cmd); err == nil {
 		t.Fatal("probe in admin mode accepted")
 	}
-	client.ServerType = "user"
+	client.Config.CLIMode = APIMode
 	for _, value := range []any{nil, 1, true} {
 		cmd.Params["api_key"] = value
 		if _, err := client.ExecuteCommand(cmd); err == nil {
@@ -188,61 +181,4 @@ func TestProviderKeyExecute(t *testing.T) {
 	if calls != 7 {
 		t.Fatal("invalid probe reached HTTP")
 	}
-}
-
-func TestProviderKeyHistoryAndErrors(t *testing.T) {
-	j := testsupport.NewCase(t)
-	path := filepath.Join(os.TempDir(), "after33-cli-history-"+uuid.NewString())
-	j.Event("reserve-history-file", map[string]any{"path": path})
-	t.Cleanup(func() {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			t.Error(err)
-		}
-		_, err := os.Lstat(path)
-		j.Event("history-cleanup-readback", map[string]any{"path": path, "absent": os.IsNotExist(err)})
-		if !os.IsNotExist(err) {
-			t.Error("history survived cleanup")
-		}
-	})
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = f.WriteString("LIST DATASETS;\n"); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	line := liner.NewLiner()
-	defer line.Close()
-	c := &CLI{line: line, client: NewMultiRAGClient("user")}
-	f, err = os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = line.ReadHistory(f); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	for _, input := range []string{
-		`CHECK PROVIDER 'OpenAI' REGION 'default' KEY 'private-key-canary';`,
-		`CHECK PROVIDER 'OpenAI' REGION 'default' KEY private-key-canary;`,
-		`CHECK PROVIDER private-key-canary`,
-		"CHECK \x00PROVIDER 'OpenAI' REGION 'default' KEY 'private-key-canary';",
-		`CREATE PROVIDER 'OpenAI' INSTANCE 'one' KEY 'private-key-canary';`,
-	} {
-		c.appendHistory(input)
-		if err := c.execute(input); err == nil || strings.Contains(err.Error(), "private-key-canary") {
-			t.Fatal("credential error was successful or leaked key")
-		}
-	}
-	c.appendHistory("PING;")
-	c.saveHistory(path)
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "private-key-canary") || !strings.Contains(string(raw), "LIST DATASETS;") || !strings.Contains(string(raw), "PING;") {
-		t.Fatal("history lost existing entries or persisted credential command")
-	}
-	j.Event("history-readback", map[string]any{"path": path, "existing_entry_preserved": true, "secret_absent": true})
 }

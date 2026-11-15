@@ -1,88 +1,125 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package dao
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
+	"errors"
 
 	"gorm.io/gorm"
+
 	"multirag/internal/entity"
 )
 
-// UserCanvasVersionDAO reads version data without loading DSL for list requests.
+// ErrUserCanvasVersionNotFound is returned when a version lookup by id or
+// canvas id yields no rows. Service and handler layers map this to a 404.
+var ErrUserCanvasVersionNotFound = errors.New("user_canvas_version: not found")
+
+// UserCanvasVersionDAO persists and queries UserCanvasVersion rows.
+//
+// One UserCanvasVersion row is created on every agent publish (§2.9); rows
+// are append-only and never updated. Cascade delete of a parent canvas
+// removes all child versions via DeleteByCanvasID.
 type UserCanvasVersionDAO struct{}
 
-func NewUserCanvasVersionDAO() *UserCanvasVersionDAO { return &UserCanvasVersionDAO{} }
-
-// AgentVersionSummary retains the published flag and description used by current consumers.
-type AgentVersionSummary struct {
-	ID           string  `json:"id"`
-	UserCanvasID string  `json:"user_canvas_id"`
-	Title        *string `json:"title"`
-	Description  *string `json:"description"`
-	Release      bool    `json:"release"`
-	entity.BaseModel
+// NewUserCanvasVersionDAO returns a zero-value DAO. The struct is stateless
+// so callers can share a single instance or create their own.
+func NewUserCanvasVersionDAO() *UserCanvasVersionDAO {
+	return &UserCanvasVersionDAO{}
 }
 
-func (d *UserCanvasVersionDAO) ListByCanvasID(ctx context.Context, canvasID string) ([]*AgentVersionSummary, error) {
-	rows := []*AgentVersionSummary{}
-	err := DB.WithContext(ctx).Model(&entity.UserCanvasVersion{}).
-		Select("id,user_canvas_id,title,description,release,create_time,update_time,create_date,update_date").
-		Where("user_canvas_id = ?", canvasID).Order("update_time DESC").Order("id DESC").Find(&rows).Error
-	return rows, err
+// Create inserts a new version row. The caller assigns ID, UserCanvasID,
+// Title, Description, DSL. CreateTime/UpdateTime are stamped by the
+// BaseModel BeforeCreate hook.
+func (dao *UserCanvasVersionDAO) Create(v *entity.UserCanvasVersion) error {
+	return DB.Create(v).Error
 }
 
-func (d *UserCanvasVersionDAO) GetByCanvasID(ctx context.Context, canvasID, versionID string) (*entity.UserCanvasVersion, error) {
-	var row struct {
-		entity.UserCanvasVersion
-		DSL json.RawMessage `gorm:"column:dsl"`
-	}
-	if err := DB.WithContext(ctx).Model(&entity.UserCanvasVersion{}).Where("id = ? AND user_canvas_id = ?", versionID, canvasID).First(&row).Error; err != nil {
+// GetByID fetches a single version by primary key. Returns
+// ErrUserCanvasVersionNotFound when the row is absent so callers can map
+// to a 404 instead of inspecting gorm.ErrRecordNotFound directly.
+func (dao *UserCanvasVersionDAO) GetByID(id string) (*entity.UserCanvasVersion, error) {
+	var v entity.UserCanvasVersion
+	err := DB.Where("id = ?", id).First(&v).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserCanvasVersionNotFound
+		}
 		return nil, err
 	}
-	if len(row.DSL) > 0 {
-		d := json.NewDecoder(bytes.NewReader(row.DSL))
-		d.UseNumber()
-		if err := d.Decode(&row.UserCanvasVersion.DSL); err != nil {
-			return nil, err
+	return &v, nil
+}
+
+// ListByCanvasID returns every version of the given canvas, ordered by
+// create_time DESC so the most recent publish appears first.
+func (dao *UserCanvasVersionDAO) ListByCanvasID(canvasID string) ([]*entity.UserCanvasVersion, error) {
+	var vs []*entity.UserCanvasVersion
+	err := DB.Where("user_canvas_id = ?", canvasID).
+		Order("create_time DESC").
+		Find(&vs).Error
+	return vs, err
+}
+
+// GetLatest returns the most recently created version of canvasID, or
+// ErrUserCanvasVersionNotFound when the canvas has never been published.
+func (dao *UserCanvasVersionDAO) GetLatest(canvasID string) (*entity.UserCanvasVersion, error) {
+	var v entity.UserCanvasVersion
+	err := DB.Where("user_canvas_id = ?", canvasID).
+		Order("create_time DESC").
+		First(&v).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserCanvasVersionNotFound
 		}
+		return nil, err
 	}
-	return &row.UserCanvasVersion, nil
+	return &v, nil
 }
 
-// AccessibleCanvas excludes disabled owners/tenants and invited or revoked memberships.
-func (d *UserCanvasVersionDAO) AccessibleCanvas(ctx context.Context, userID, canvasID string) (*entity.UserCanvas, error) {
-	var row entity.UserCanvas
-	err := accessibleCanvasQuery(ctx, userID, canvasID).
-		Select("t_ai_user_canvases.id,t_ai_user_canvases.user_id,t_ai_user_canvases.permission").First(&row).Error
-	return &row, err
+// Delete removes a single version by id. No-op when the row is absent.
+func (dao *UserCanvasVersionDAO) Delete(id string) error {
+	return DB.Where("id = ?", id).Delete(&entity.UserCanvasVersion{}).Error
 }
 
-// AgentCanvas preserves numeric model identifiers in stored DSL without float conversion.
-type AgentCanvas struct {
-	entity.UserCanvas
-	DSL json.RawMessage `gorm:"column:dsl" json:"dsl"`
+// DeleteTx is the transactional variant of Delete. Used by
+// service.AgentService.DeleteVersion so the version-row removal and the
+// (future) parent-canvas stat update land in one atomic write.
+func (dao *UserCanvasVersionDAO) DeleteTx(tx *gorm.DB, id string) error {
+	return tx.Where("id = ?", id).Delete(&entity.UserCanvasVersion{}).Error
 }
 
-func accessibleCanvasQuery(ctx context.Context, userID, canvasID string) *gorm.DB {
-	return DB.WithContext(ctx).Model(&entity.UserCanvas{}).
-		Joins("JOIN t_ai_users AS owner ON owner.id = t_ai_user_canvases.user_id AND owner.status = ? AND owner.is_active = ?", "1", true).
-		Joins("JOIN t_ai_tenants AS tenant ON tenant.id = t_ai_user_canvases.user_id AND tenant.status = ?", "1").
-		Where("t_ai_user_canvases.id = ?", canvasID).
-		Where("EXISTS (SELECT 1 FROM t_ai_users AS actor WHERE actor.id = ? AND actor.status = ? AND actor.is_active = ?)", userID, "1", true).
-		Where("t_ai_user_canvases.user_id = ? OR (t_ai_user_canvases.permission = ? AND EXISTS (SELECT 1 FROM t_ai_user_tenants AS membership WHERE membership.user_id = ? AND membership.tenant_id = t_ai_user_canvases.user_id AND membership.status = ? AND membership.role IN ?))", userID, "team", userID, "1", []string{"normal", "admin"})
+// DeleteByCanvasID removes every version of the given canvas. Called from
+// the service layer when the parent canvas is deleted to enforce the
+// §2.9 cascade rule. Returns the number of rows actually deleted.
+func (dao *UserCanvasVersionDAO) DeleteByCanvasID(canvasID string) (int64, error) {
+	res := DB.Where("user_canvas_id = ?", canvasID).Delete(&entity.UserCanvasVersion{})
+	return res.RowsAffected, res.Error
 }
 
-func (d *UserCanvasVersionDAO) LoadAccessibleCanvas(ctx context.Context, userID, canvasID string) (*AgentCanvas, error) {
-	var row AgentCanvas
-	err := accessibleCanvasQuery(ctx, userID, canvasID).Select("t_ai_user_canvases.*").First(&row).Error
-	return &row, err
+// DeleteByCanvasIDTx is the transactional variant of DeleteByCanvasID.
+// Used by service.AgentService.DeleteAgent so the cascade runs atomically
+// with the parent canvas row removal.
+func (dao *UserCanvasVersionDAO) DeleteByCanvasIDTx(tx *gorm.DB, canvasID string) (int64, error) {
+	res := tx.Where("user_canvas_id = ?", canvasID).Delete(&entity.UserCanvasVersion{})
+	return res.RowsAffected, res.Error
 }
 
-// CountTenantDocuments follows the knowledgebase owner rather than the uploader.
-func (d *UserCanvasVersionDAO) CountTenantDocuments(ctx context.Context, tenantID string) (int64, error) {
-	var count int64
-	err := DB.WithContext(ctx).Model(&entity.Document{}).
-		Joins("JOIN t_ai_knowledgebases AS kb ON kb.id = t_ai_documents.kb_id").Where("kb.tenant_id = ?", tenantID).Count(&count).Error
-	return count, err
+// CreateTx is the transactional variant of Create. Used by
+// service.AgentService.PublishAgent so the new version row and the
+// parent canvas update land in one atomic write.
+func (dao *UserCanvasVersionDAO) CreateTx(tx *gorm.DB, v *entity.UserCanvasVersion) error {
+	return tx.Create(v).Error
 }

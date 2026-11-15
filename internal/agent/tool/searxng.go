@@ -63,8 +63,7 @@ type searxngEnvelope struct {
 // meta-search tool (plan §2.11.4 row 16, §5 Phase 3 第 2 批). It calls
 // a self-hosted SearXNG instance via the shared HTTPHelper.
 type SearXNGTool struct {
-	helper  *HTTPHelper
-	resolve Resolver
+	helper *HTTPHelper
 }
 
 // NewSearXNGTool returns a SearXNGTool using the default HTTPHelper.
@@ -137,17 +136,7 @@ func (s *SearXNGTool) InvokableRun(ctx context.Context, argsJSON string, _ ...to
 	}
 
 	endpoint := buildSearXNGURL(p.BaseURL, p.Query, p.MaxResults)
-	var resp *http.Response
-	var err error
-	if s.resolve == nil {
-		resp, err = s.helper.DoUntrusted(ctx, http.MethodGet, endpoint, "", "", nil)
-	} else {
-		host, ip, resolveErr := s.resolve(endpoint)
-		if resolveErr != nil {
-			return searxngErrJSON(resolveErr), resolveErr
-		}
-		resp, err = s.helper.DoPinned(ctx, http.MethodGet, endpoint, "", "", nil, host, ip)
-	}
+	resp, err := s.helper.Do(ctx, http.MethodGet, endpoint, "", "", nil)
 	if err != nil {
 		return searxngErrJSON(err), err
 	}
@@ -177,7 +166,3 @@ func searxngJSON(env searxngEnvelope) string {
 func searxngErrJSON(err error) string {
 	return searxngJSON(searxngEnvelope{Error: err.Error()})
 }
-
-// WithResolver injects an operator-owned resolver for explicitly trusted private
-// search deployments. Model arguments cannot change this policy.
-func (s *SearXNGTool) WithResolver(resolve Resolver) *SearXNGTool { s.resolve = resolve; return s }

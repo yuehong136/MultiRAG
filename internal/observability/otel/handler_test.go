@@ -122,7 +122,7 @@ func TestOtelHandler_RecordsError(t *testing.T) {
 	for _, ev := range span.Events() {
 		if ev.Name == "exception" {
 			for _, kv := range ev.Attributes {
-				if string(kv.Key) == "exception.message" && kv.Value.AsString() == "component execution failed" {
+				if string(kv.Key) == "exception.message" && kv.Value.AsString() == "kaboom" {
 					foundException = true
 				}
 			}

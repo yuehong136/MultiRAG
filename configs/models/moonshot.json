@@ -1,6 +1,5 @@
 {
   "name": "Moonshot",
-  "tags": "LLM",
   "url": {
     "default": "https://api.moonshot.cn/v1"
   },

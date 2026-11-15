@@ -14,17 +14,17 @@ func TestProviderBalanceAuthenticatesAndRejectsFalseSuccess(t *testing.T) {
 		}{{`{"code":0,"data":{"balance":0,"currency":"USD"}}`, true}, {`{"data":{"balance":0}}`, false}, {`{"code":403,"message":"denied"}`, false}, {`{"code":0}`, false}} {
 			t.Run(credential+test.body, func(t *testing.T) {
 				client := skillTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-					if r.Method != "GET" || r.URL.Path != "/api/v1/providers/Novita/instances/one/balance" || r.Header.Get("Authorization") != "Bearer test-credential" || r.ContentLength != 0 {
+					if r.Method != "GET" || r.URL.Path != "/api/v1/providers/Novita/instances/one/balance" || r.Header.Get("Authorization") != map[string]string{"api": "Bearer test-credential", "login": "test-credential"}[credential] || r.ContentLength != 0 {
 						t.Error("balance request lost auth/path")
 					}
 					fmt.Fprint(w, test.body)
 				})
 				if credential == "login" {
-					client.APIKey = ""
-					client.LoginToken = "test-credential"
+					client.APIToken = nil
+					client.LoginToken = consumerTokenPtr("test-credential")
 				}
-				c := &MultiRAGClient{HTTPClient: client, ServerType: "user"}
-				cmd, err := NewParser(`SHOW BALANCE FROM 'Novita' 'one';`).Parse(false)
+				c := consumerCLIWithHTTP(client)
+				cmd, err := NewParser(`SHOW BALANCE FROM 'Novita' 'one';`).Parse(APIMode)
 				if err != nil {
 					t.Fatal(err)
 				}

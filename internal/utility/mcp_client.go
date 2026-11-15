@@ -1,3 +1,33 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
+// Package mcpclient is a minimal Model Context Protocol (MCP) client used by
+// the Go MCP-management endpoints to list a remote server's tools during
+// import and the "test" endpoint. It implements just enough of the spec to
+// negotiate a session and call tools/list:
+//
+//   - streamable-HTTP transport (spec 2025-03-26): single endpoint, JSON-RPC
+//     requests via POST, responses either as application/json or as an SSE
+//     stream sharing the same connection.
+//   - SSE transport (spec 2024-11-05, legacy): server returns an "endpoint"
+//     event whose data is the URL the client POSTs JSON-RPC requests to;
+//     responses are pushed back on the same SSE stream.
+//
+// The full Python implementation lives in common/mcp_tool_call_conn.py; this
+// is a reduced port focused on tools/list discovery.
 package utility
 
 import (
@@ -6,530 +36,845 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"mime"
 	"net/http"
-	"net/textproto"
 	"net/url"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
+// Transport identifiers. Mirrors common.constants.MCPServerType.
 const (
 	TransportSSE            = "sse"
 	TransportStreamableHTTP = "streamable-http"
-	mcpProtocolVersion      = "2025-03-26"
-	mcpMaxResponse          = 1 << 20
-	mcpMaxStream            = 8 << 20
-	mcpMaxPages             = 32
-	mcpMaxTools             = 2000
 )
 
-var (
-	ErrMCPProtocol   = errors.New("Invalid MCP discovery response.")
-	ErrMCPConnection = errors.New("MCP connection failed; check the endpoint and authentication settings.")
+const (
+	protocolVersion = "2025-03-26"
+	clientName      = "multirag-go"
+	clientVersion   = "1.0.0"
+	jsonRPCVersion  = "2.0"
 )
 
-// Tool preserves the advertised descriptor for callers that cache tool metadata.
+// Tool is the subset of an MCP Tool descriptor returned by tools/list.
+// Extra fields surfaced by the server are preserved in Raw so callers can
+// round-trip them into variables.tools without losing data.
 type Tool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	InputSchema map[string]any `json:"inputSchema"`
-	Raw         map[string]any `json:"-"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	InputSchema map[string]interface{} `json:"inputSchema,omitempty"`
+	Raw         map[string]interface{} `json:"-"`
 }
 
-// FetchOptions describes discovery only. No command or tool execution is supported.
+// FetchOptions controls a single tools/list discovery call.
 type FetchOptions struct {
-	URL        string
-	ServerType string
-	Headers    map[string]string
-	Variables  map[string]string
-	Timeout    time.Duration
+	URL         string
+	ServerType  string
+	Headers     map[string]string
+	Variables   map[string]string
+	Timeout     time.Duration
+	HTTPClient  *http.Client
+	pinHostname string
+	pinIP       string
 }
 
-// FetchTools owns the HTTP transport and closes all session and response state.
-// There is deliberately no injectable public client that bypasses URL safety.
+// FetchTools opens a connection to the MCP server described by opts and
+// returns the tools advertised by tools/list. URL safety / DNS pinning is
+// performed here so callers get the same SSRF guarantees the Python path
+// has via pin_dns_global + assert_url_is_safe.
 func FetchTools(ctx context.Context, opts FetchOptions) ([]Tool, error) {
+	if opts.URL == "" {
+		return nil, errors.New("Invalid url.")
+	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = 10 * time.Second
 	}
-	if opts.Timeout > 60*time.Second {
-		opts.Timeout = 60 * time.Second
+
+	hostname, resolvedIP, err := AssertURLSafe(ctx, opts.URL)
+	if err != nil {
+		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	opts.pinHostname = hostname
+	opts.pinIP = resolvedIP
+	if opts.HTTPClient == nil {
+		opts.HTTPClient = PinnedHTTPClient(hostname, resolvedIP, opts.Timeout)
+	}
+
+	headers, headerErr := renderHeaders(opts.Headers, opts.Variables)
+	if headerErr != nil {
+		return nil, headerErr
+	}
+
+	connectCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
-	if opts.ServerType != TransportSSE && opts.ServerType != TransportStreamableHTTP {
-		return nil, errors.New("Unsupported MCP server type.")
+
+	switch strings.ToLower(opts.ServerType) {
+	case TransportStreamableHTTP:
+		return fetchToolsStreamableHTTP(connectCtx, opts.URL, headers, opts.HTTPClient)
+	case TransportSSE:
+		return fetchToolsSSE(connectCtx, opts.URL, headers, opts.HTTPClient)
+	default:
+		return nil, fmt.Errorf("Unsupported MCP server type.")
 	}
-	host, ip, err := AssertURLSafe(ctx, opts.URL)
-	if err != nil {
-		return nil, err
-	}
-	client := PinnedHTTPClient(host, ip, opts.Timeout)
-	defer client.CloseIdleConnections()
-	tools, err := fetchMCPTools(ctx, opts, client)
-	if err != nil && ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	return tools, err
 }
 
-func renderMCPHeaders(raw, variables map[string]string) (http.Header, error) {
-	headers := http.Header{}
-	if len(raw) > 64 {
-		return nil, errors.New("Invalid MCP headers.")
+// renderHeaders applies ${name} substitution to header keys and values using
+// the supplied variables map, mirroring the Template.safe_substitute pass in
+// common/mcp_tool_call_conn.py. Empty keys (after substitution) are dropped.
+func renderHeaders(raw map[string]string, vars map[string]string) (map[string]string, error) {
+	rendered := map[string]string{}
+	for k, v := range raw {
+		nk := substituteTemplate(k, vars)
+		nv := substituteTemplate(v, vars)
+		if strings.TrimSpace(nk) == "" {
+			continue
+		}
+		lower := strings.ToLower(nk)
+		if strings.ContainsAny(nk, " \t\r\n:") || strings.ContainsAny(nv, "\r\n") {
+			return nil, errors.New("invalid MCP header")
+		}
+		switch lower {
+		case "host", "content-length", "content-type", "accept", "connection", "transfer-encoding", "mcp-session-id", "mcp-protocol-version":
+			return nil, errors.New("reserved MCP header")
+		}
+		rendered[nk] = nv
 	}
-	size := 0
-	for key, value := range raw {
-		key, value = substituteMCPTemplate(key, variables), substituteMCPTemplate(value, variables)
-		size += len(key) + len(value)
-		if key == "" || len(key) > 128 || size > 16<<10 || strings.ContainsAny(value, "\r\n\x00") {
-			return nil, errors.New("Invalid MCP headers.")
-		}
-		for _, r := range key {
-			if r > 127 || !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", r)) {
-				return nil, errors.New("Invalid MCP headers.")
-			}
-		}
-		canonical := textproto.CanonicalMIMEHeaderKey(key)
-		switch canonical {
-		case "Host", "Connection", "Proxy-Authorization", "Proxy-Connection", "Transfer-Encoding", "Content-Length", "Content-Type", "Accept", "Mcp-Session-Id", "Mcp-Protocol-Version", "Upgrade", "Te", "Trailer":
-			return nil, errors.New("Invalid MCP headers.")
-		}
-		if _, exists := headers[canonical]; exists {
-			return nil, errors.New("Invalid MCP headers.")
-		}
-		headers.Set(canonical, value)
-	}
-	return headers, nil
+	return rendered, nil
 }
 
-// Supports Python Template's $name, ${name} and $$ forms without interpreting
-// unknown variables or evaluating user supplied text.
-func substituteMCPTemplate(value string, vars map[string]string) string {
-	var out strings.Builder
-	for i := 0; i < len(value); {
-		if value[i] != '$' || i+1 == len(value) {
-			out.WriteByte(value[i])
-			i++
-			continue
+// substituteTemplate replaces ${name} occurrences (Python string.Template
+// safe-substitute semantics) with values from vars. Unknown keys are left
+// in place, matching safe_substitute's behavior.
+func substituteTemplate(s string, vars map[string]string) string {
+	if vars == nil || !strings.Contains(s, "${") {
+		return s
+	}
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		idx := strings.Index(s[i:], "${")
+		if idx == -1 {
+			b.WriteString(s[i:])
+			break
 		}
-		start := i
-		i++
-		if value[i] == '$' {
-			out.WriteByte('$')
-			i++
-			continue
+		b.WriteString(s[i : i+idx])
+		i += idx + 2
+		end := strings.Index(s[i:], "}")
+		if end == -1 {
+			b.WriteString("${")
+			b.WriteString(s[i:])
+			break
 		}
-		braced := value[i] == '{'
-		if braced {
-			i++
-		}
-		begin := i
-		for i < len(value) && (value[i] == '_' || value[i] >= 'a' && value[i] <= 'z' || value[i] >= 'A' && value[i] <= 'Z' || i > begin && value[i] >= '0' && value[i] <= '9') {
-			i++
-		}
-		key := value[begin:i]
-		if key == "" || braced && (i == len(value) || value[i] != '}') {
-			out.WriteString(value[start:i])
-			continue
-		}
-		if braced {
-			i++
-		}
-		if replacement, ok := vars[key]; ok {
-			out.WriteString(replacement)
+		key := s[i : i+end]
+		i += end + 1
+		if val, ok := vars[key]; ok {
+			b.WriteString(val)
 		} else {
-			out.WriteString(value[start:i])
+			b.WriteString("${")
+			b.WriteString(key)
+			b.WriteString("}")
 		}
 	}
-	return out.String()
+	return b.String()
 }
 
-type mcpRequest struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      *int   `json:"id,omitempty"`
-	Method  string `json:"method"`
-	Params  any    `json:"params,omitempty"`
+// jsonRPCRequest is a JSON-RPC 2.0 request envelope.
+type jsonRPCRequest struct {
+	JSONRPC string      `json:"jsonrpc"`
+	ID      interface{} `json:"id,omitempty"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
 }
 
-type mcpWireResponse struct {
+// jsonRPCResponse is a JSON-RPC 2.0 response. Either Result or Error is set.
+type jsonRPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Method  string          `json:"method"`
-	Result  json.RawMessage `json:"result"`
-	Error   json.RawMessage `json:"error"`
+	ID      interface{}     `json:"id,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *jsonRPCError   `json:"error,omitempty"`
+	Method  string          `json:"method,omitempty"`
 }
 
-func parseMCPResponse(body []byte, id int) (json.RawMessage, bool, error) {
-	var response mcpWireResponse
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	if decoder.Decode(&response) != nil || response.JSONRPC != "2.0" {
-		return nil, false, ErrMCPProtocol
-	}
-	var extra any
-	if decoder.Decode(&extra) != io.EOF {
-		return nil, false, ErrMCPProtocol
-	}
-	if response.Method != "" && len(response.ID) == 0 && len(response.Result) == 0 && len(response.Error) == 0 {
-		return nil, true, nil
-	}
-	if response.Method != "" || string(response.ID) != strconv.Itoa(id) || len(response.Error) != 0 || len(response.Result) == 0 || string(response.Result) == "null" {
-		return nil, false, ErrMCPProtocol
-	}
-	var result map[string]json.RawMessage
-	if json.Unmarshal(response.Result, &result) != nil || result == nil {
-		return nil, false, ErrMCPProtocol
-	}
-	return response.Result, false, nil
+type jsonRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }
 
-func fetchMCPTools(ctx context.Context, opts FetchOptions, client *http.Client) ([]Tool, error) {
-	headers, err := renderMCPHeaders(opts.Headers, opts.Variables)
+func initializeParams() map[string]interface{} {
+	return map[string]interface{}{
+		"protocolVersion": protocolVersion,
+		"capabilities":    map[string]interface{}{},
+		"clientInfo": map[string]interface{}{
+			"name":    clientName,
+			"version": clientVersion,
+		},
+	}
+}
+
+// ---------- streamable-HTTP transport ----------
+
+const sessionHeader = "Mcp-Session-Id"
+
+func fetchToolsStreamableHTTP(ctx context.Context, endpoint string, headers map[string]string, client *http.Client) ([]Tool, error) {
+	sessionID, initRes, err := streamableSend(ctx, client, endpoint, "", headers, jsonRPCRequest{
+		JSONRPC: jsonRPCVersion,
+		ID:      0,
+		Method:  "initialize",
+		Params:  initializeParams(),
+	}, true)
 	if err != nil {
 		return nil, err
 	}
-	var call func(context.Context, mcpRequest) (json.RawMessage, error)
-	var sessionID string
-	var protocol string
-	if opts.ServerType == TransportStreamableHTTP {
-		call = func(ctx context.Context, request mcpRequest) (json.RawMessage, error) {
-			result, session, err := mcpStreamableSend(ctx, client, opts.URL, sessionID, protocol, headers, request)
-			if session != "" {
-				if sessionID != "" && sessionID != session {
-					return nil, ErrMCPProtocol
-				}
-				sessionID = session
-			}
-			return result, err
-		}
+	if initRes.Error != nil {
+		return nil, formatMCPError("initialize", initRes.Error)
+	}
+	var initialization struct {
+		Protocol     string                 `json:"protocolVersion"`
+		Capabilities map[string]interface{} `json:"capabilities"`
+		Server       struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
+	if json.Unmarshal(initRes.Result, &initialization) != nil || initialization.Protocol != protocolVersion || initialization.Capabilities == nil || initialization.Server.Name == "" || initialization.Server.Version == "" {
+		return nil, errors.New("invalid MCP initialization result")
+	}
+
+	if sessionID != "" {
 		defer func() {
-			if sessionID != "" {
-				// Request cancellation still releases a negotiated remote session;
-				// this bounded close cannot keep the parent request alive indefinitely.
-				closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
-				req, _ := http.NewRequestWithContext(closeCtx, http.MethodDelete, opts.URL, nil)
-				req.Header = headers.Clone()
-				req.Header.Set("Mcp-Session-Id", sessionID)
-				if protocol != "" {
-					req.Header.Set("MCP-Protocol-Version", protocol)
-				}
-				if res, err := client.Do(req); err == nil {
-					res.Body.Close()
-				}
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			request, err := http.NewRequestWithContext(cleanupCtx, http.MethodDelete, endpoint, nil)
+			if err != nil {
+				return
+			}
+			for key, value := range headers {
+				request.Header.Set(key, value)
+			}
+			request.Header.Set(sessionHeader, sessionID)
+			request.Header.Set("Mcp-Protocol-Version", protocolVersion)
+			response, err := client.Do(request)
+			if err == nil {
+				response.Body.Close()
 			}
 		}()
-	} else if opts.ServerType == TransportSSE {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, opts.URL, nil)
-		if err != nil {
-			return nil, ErrMCPConnection
-		}
-		request.Header = headers.Clone()
-		request.Header.Set("Accept", "text/event-stream")
-		res, err := client.Do(request)
-		if err != nil {
-			return nil, mcpConnectionError(ctx)
-		}
-		defer res.Body.Close()
-		media, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type"))
-		if res.StatusCode != http.StatusOK || media != "text/event-stream" {
-			return nil, ErrMCPConnection
-		}
-		stream := newMCPSSEReader(res.Body)
-		data, err := readMCPSSEEndpoint(stream)
-		if err != nil {
-			return nil, ErrMCPProtocol
-		}
-		base, _ := url.Parse(opts.URL)
-		target, err := url.Parse(string(data))
-		if err != nil {
-			return nil, ErrMCPProtocol
-		}
-		target = base.ResolveReference(target)
-		if target.User != nil || target.Fragment != "" || !sameMCPOrigin(base, target) {
-			return nil, ErrMCPProtocol
-		}
-		call = func(ctx context.Context, request mcpRequest) (json.RawMessage, error) {
-			body, _ := json.Marshal(request)
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
-			if err != nil {
-				return nil, ErrMCPConnection
-			}
-			req.Header = headers.Clone()
-			req.Header.Set("Content-Type", "application/json")
-			response, err := client.Do(req)
-			if err != nil {
-				return nil, mcpConnectionError(ctx)
-			}
-			_, readErr := readMCPBody(response.Body)
-			response.Body.Close()
-			if response.StatusCode < 200 || response.StatusCode >= 300 || readErr != nil {
-				return nil, ErrMCPConnection
-			}
-			if request.ID == nil {
-				return nil, nil
-			}
-			return readMCPSSEReply(stream, *request.ID)
-		}
-	} else {
-		return nil, errors.New("Unsupported MCP server type.")
 	}
-	id := 0
-	initial, err := call(ctx, mcpRequest{JSONRPC: "2.0", ID: &id, Method: "initialize", Params: map[string]any{"protocolVersion": mcpProtocolVersion, "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "multirag-go", "version": "1.0.0"}}})
-	if err != nil {
+
+	if _, _, err := streamableSend(ctx, client, endpoint, sessionID, headers, jsonRPCRequest{
+		JSONRPC: jsonRPCVersion,
+		Method:  "notifications/initialized",
+	}, false); err != nil {
 		return nil, err
 	}
-	var init struct {
-		ProtocolVersion string         `json:"protocolVersion"`
-		Capabilities    map[string]any `json:"capabilities"`
-		ServerInfo      map[string]any `json:"serverInfo"`
-	}
-	if json.Unmarshal(initial, &init) != nil || init.Capabilities == nil || init.ServerInfo == nil {
-		return nil, ErrMCPProtocol
-	}
-	serverName, validName := init.ServerInfo["name"].(string)
-	serverVersion, validVersion := init.ServerInfo["version"].(string)
-	if !validName || !validVersion || strings.TrimSpace(serverName) == "" || strings.TrimSpace(serverVersion) == "" {
-		return nil, ErrMCPProtocol
-	}
-	switch init.ProtocolVersion {
-	case "2024-11-05", "2025-03-26", "2025-06-18":
-		protocol = init.ProtocolVersion
-	default:
-		return nil, ErrMCPProtocol
-	}
-	if _, err = call(ctx, mcpRequest{JSONRPC: "2.0", Method: "notifications/initialized"}); err != nil {
-		return nil, err
-	}
-	tools := []Tool{}
+
+	tools := make([]Tool, 0)
 	seen := map[string]bool{}
-	cursors := map[string]bool{}
 	cursor := ""
-	for page := 0; page < mcpMaxPages; page++ {
-		id++
-		params := map[string]any{}
+	for page := 0; page < 64; page++ {
+		var params interface{}
 		if cursor != "" {
-			params["cursor"] = cursor
+			params = map[string]interface{}{"cursor": cursor}
 		}
-		raw, err := call(ctx, mcpRequest{JSONRPC: "2.0", ID: &id, Method: "tools/list", Params: params})
+		_, listRes, err := streamableSend(ctx, client, endpoint, sessionID, headers, jsonRPCRequest{JSONRPC: jsonRPCVersion, ID: page + 1, Method: "tools/list", Params: params}, true)
 		if err != nil {
 			return nil, err
 		}
-		var result struct {
-			Tools      []map[string]any `json:"tools"`
-			NextCursor json.RawMessage  `json:"nextCursor"`
+		if listRes.Error != nil {
+			return nil, formatMCPError("tools/list", listRes.Error)
 		}
-		if json.Unmarshal(raw, &result) != nil || result.Tools == nil {
-			return nil, ErrMCPProtocol
+		rows, err := parseToolsResult(listRes.Result)
+		if err != nil {
+			return nil, err
 		}
-		for _, descriptor := range result.Tools {
-			name, ok := descriptor["name"].(string)
-			schema, schemaOK := descriptor["inputSchema"].(map[string]any)
-			if !ok || name == "" || len(name) > 128 || strings.TrimSpace(name) != name || seen[name] || !schemaOK || schema["type"] != "object" {
-				return nil, ErrMCPProtocol
-			}
-			description := ""
-			if value, exists := descriptor["description"]; exists {
-				description, ok = value.(string)
-				if !ok {
-					return nil, ErrMCPProtocol
-				}
-			}
-			seen[name] = true
-			tools = append(tools, Tool{Name: name, Description: description, InputSchema: schema, Raw: descriptor})
-			if len(tools) > mcpMaxTools {
-				return nil, ErrMCPProtocol
-			}
+		tools = append(tools, rows...)
+		var next struct {
+			Cursor string `json:"nextCursor"`
 		}
-		if len(result.NextCursor) == 0 {
+		if err := json.Unmarshal(listRes.Result, &next); err != nil {
+			return nil, errors.New("invalid MCP cursor")
+		}
+		if next.Cursor == "" {
 			return tools, nil
 		}
-		if json.Unmarshal(result.NextCursor, &cursor) != nil || cursor == "" || len(cursor) > 4096 || cursors[cursor] {
-			return nil, ErrMCPProtocol
+		if seen[next.Cursor] {
+			return nil, errors.New("MCP cursor repeated")
 		}
-		cursors[cursor] = true
+		seen[next.Cursor] = true
+		cursor = next.Cursor
 	}
-	return nil, ErrMCPProtocol
+	return nil, errors.New("MCP pagination exceeds limit")
 }
 
-func sameMCPOrigin(left, right *url.URL) bool {
-	port := func(u *url.URL) string {
-		if u.Port() != "" {
-			return u.Port()
-		}
-		if u.Scheme == "https" {
-			return "443"
-		}
-		return "80"
+// streamableSend POSTs a JSON-RPC payload to the streamable-HTTP endpoint.
+// When expectResponse is false (notifications), the response body is not
+// parsed. The session id returned by the initial initialize call is
+// propagated via the Mcp-Session-Id header per the spec.
+func streamableSend(ctx context.Context, client *http.Client, endpoint, sessionID string, headers map[string]string, payload jsonRPCRequest, expectResponse bool) (string, *jsonRPCResponse, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshal MCP request: %w", err)
 	}
-	return left.Scheme == right.Scheme && strings.EqualFold(left.Hostname(), right.Hostname()) && port(left) == port(right)
-}
-
-func mcpConnectionError(ctx context.Context) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return ErrMCPConnection
-}
-
-func readMCPBody(body io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(body, mcpMaxResponse+1))
-	if err != nil || len(data) > mcpMaxResponse {
-		return nil, ErrMCPProtocol
-	}
-	return data, nil
-}
-
-func mcpStreamableSend(ctx context.Context, client *http.Client, endpoint, session, protocol string, headers http.Header, payload mcpRequest) (json.RawMessage, string, error) {
-	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, "", ErrMCPConnection
+		return "", nil, fmt.Errorf("build MCP request: %w", err)
 	}
-	req.Header = headers.Clone()
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if session != "" {
-		req.Header.Set("Mcp-Session-Id", session)
+	if payload.Method != "initialize" {
+		req.Header.Set("Mcp-Protocol-Version", protocolVersion)
 	}
-	if protocol != "" {
-		req.Header.Set("MCP-Protocol-Version", protocol)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
-	res, err := client.Do(req)
+	if sessionID != "" {
+		req.Header.Set(sessionHeader, sessionID)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", mcpConnectionError(ctx)
+		return "", nil, mapMCPConnectionError(err)
 	}
-	defer res.Body.Close()
-	newSession := res.Header.Get("Mcp-Session-Id")
-	if len(newSession) > 256 {
-		return nil, "", ErrMCPProtocol
-	}
-	for _, r := range newSession {
-		if r < 33 || r > 126 {
-			return nil, "", ErrMCPProtocol
+	defer resp.Body.Close()
+
+	if !expectResponse {
+		if resp.StatusCode >= 400 {
+			return "", nil, fmt.Errorf("MCP server returned HTTP %d for %s", resp.StatusCode, payload.Method)
 		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		return resp.Header.Get(sessionHeader), nil, nil
 	}
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, newSession, ErrMCPConnection
+
+	if resp.StatusCode >= 400 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		return "", nil, fmt.Errorf("MCP server returned HTTP %d for %s", resp.StatusCode, payload.Method)
 	}
-	if payload.ID == nil {
-		_, err := readMCPBody(res.Body)
-		return nil, newSession, err
+
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	sid := resp.Header.Get(sessionHeader)
+	if sessionID == "" {
+		sessionID = sid
 	}
-	media, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type"))
-	if media == "text/event-stream" {
-		result, err := readMCPSSEReply(newMCPSSEReader(res.Body), *payload.ID)
-		return result, newSession, err
+	if strings.Contains(contentType, "text/event-stream") {
+		r, err := readJSONRPCFromSSE(resp.Body, payload.ID)
+		if err != nil {
+			return "", nil, err
+		}
+		return sessionID, r, nil
 	}
-	if media != "application/json" {
-		return nil, newSession, ErrMCPProtocol
-	}
-	data, err := readMCPBody(res.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
 	if err != nil {
-		return nil, newSession, err
+		return "", nil, fmt.Errorf("read MCP response: %w", err)
 	}
-	result, notification, err := parseMCPResponse(data, *payload.ID)
-	if notification {
-		return nil, newSession, ErrMCPProtocol
+	if len(raw) > 8<<20 {
+		return "", nil, errors.New("MCP response exceeds limit")
 	}
-	return result, newSession, err
+	parsed, err := parseJSONRPC(raw, payload.ID)
+	if err != nil {
+		return "", nil, err
+	}
+	return sessionID, parsed, nil
 }
 
-// The scanner limits each line; total wire bytes and each complete event also
-// have explicit bounds, including comment-only or notification-only streams.
-type mcpSSEReader struct {
-	scanner *bufio.Scanner
-	bytes   int
+// ---------- SSE transport ----------
+
+func fetchToolsSSE(ctx context.Context, endpoint string, headers map[string]string, client *http.Client) ([]Tool, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	streamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build SSE request: %w", err)
+	}
+	streamReq.Header.Set("Accept", "text/event-stream")
+	streamReq.Header.Set("Cache-Control", "no-cache")
+	for k, v := range headers {
+		streamReq.Header.Set(k, v)
+	}
+	streamResp, err := client.Do(streamReq)
+	if err != nil {
+		return nil, mapMCPConnectionError(err)
+	}
+	if streamResp.StatusCode >= 400 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(streamResp.Body, 1<<20))
+		streamResp.Body.Close()
+		return nil, fmt.Errorf("MCP SSE handshake returned HTTP %d", streamResp.StatusCode)
+	}
+
+	stream := newSSEReader(streamResp.Body)
+	defer streamResp.Body.Close()
+
+	postURL, err := waitForEndpoint(ctx, stream, endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	// The endpoint event can hand us an arbitrary absolute URL. A
+	// malicious public SSE server could point us at 127.0.0.1 or any
+	// other internal host to bounce the POST phase through us. Re-run
+	// the SSRF guard against the resolved URL, and — when the host
+	// differs from the original SSE host — swap in a fresh pinned
+	// client so the dial-time IP override still applies.
+	postClient := client
+	original, originalErr := url.Parse(endpoint)
+	next, nextErr := url.Parse(postURL)
+	if originalErr != nil || nextErr != nil || !strings.EqualFold(original.Scheme, next.Scheme) || !strings.EqualFold(original.Host, next.Host) || next.User != nil || next.Fragment != "" {
+		return nil, errors.New("cross-origin MCP endpoint refused")
+	}
+	if postHost, postIP, vErr := AssertURLSafe(ctx, postURL); vErr != nil {
+		return nil, vErr
+	} else if u, perr := url.Parse(postURL); perr == nil && u.Hostname() != "" {
+		if u.Hostname() != originalHost(endpoint) {
+			postClient = PinnedHTTPClient(postHost, postIP, sseTimeoutFrom(ctx))
+		}
+	}
+
+	pending := newPendingResponses()
+	streamDone := make(chan error, 1)
+	go func() {
+		streamDone <- stream.dispatch(ctx, pending)
+	}()
+	defer func() { cancel(); streamResp.Body.Close(); <-streamDone }()
+
+	postOnce := func(payload jsonRPCRequest) error {
+		body, _ := json.Marshal(payload)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, postURL, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("build SSE POST: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := postClient.Do(req)
+		if err != nil {
+			return mapMCPConnectionError(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+			return fmt.Errorf("MCP server returned HTTP %d for %s", resp.StatusCode, payload.Method)
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		return nil
+	}
+
+	// Register the waiter BEFORE issuing the POST so a fast server that
+	// pushes its response before our wait() call doesn't drop the delivery.
+	initWaiter := pending.register(0)
+	if err := postOnce(jsonRPCRequest{JSONRPC: jsonRPCVersion, ID: 0, Method: "initialize", Params: initializeParams()}); err != nil {
+		pending.cancel(0)
+		return nil, err
+	}
+	initRes, err := pending.await(ctx, initWaiter, streamDone)
+	if err != nil {
+		return nil, err
+	}
+	if initRes.Error != nil {
+		return nil, formatMCPError("initialize", initRes.Error)
+	}
+	var initialization struct {
+		Protocol     string                 `json:"protocolVersion"`
+		Capabilities map[string]interface{} `json:"capabilities"`
+		Server       struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
+	if json.Unmarshal(initRes.Result, &initialization) != nil || initialization.Protocol != protocolVersion || initialization.Capabilities == nil || initialization.Server.Name == "" || initialization.Server.Version == "" {
+		return nil, errors.New("invalid MCP initialization result")
+	}
+
+	if err := postOnce(jsonRPCRequest{JSONRPC: jsonRPCVersion, Method: "notifications/initialized"}); err != nil {
+		return nil, err
+	}
+	tools := make([]Tool, 0)
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 0; page < 64; page++ {
+		id := page + 1
+		var params interface{}
+		if cursor != "" {
+			params = map[string]interface{}{"cursor": cursor}
+		}
+		waiter := pending.register(id)
+		if err := postOnce(jsonRPCRequest{JSONRPC: jsonRPCVersion, ID: id, Method: "tools/list", Params: params}); err != nil {
+			pending.cancel(id)
+			return nil, err
+		}
+		response, err := pending.await(ctx, waiter, streamDone)
+		if err != nil {
+			return nil, err
+		}
+		if response.Error != nil {
+			return nil, formatMCPError("tools/list", response.Error)
+		}
+		rows, err := parseToolsResult(response.Result)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, rows...)
+		var next struct {
+			Cursor string `json:"nextCursor"`
+		}
+		if json.Unmarshal(response.Result, &next) != nil {
+			return nil, errors.New("invalid MCP cursor")
+		}
+		if next.Cursor == "" {
+			return tools, nil
+		}
+		if seen[next.Cursor] {
+			return nil, errors.New("MCP cursor repeated")
+		}
+		seen[next.Cursor] = true
+		cursor = next.Cursor
+	}
+	return nil, errors.New("MCP pagination exceeds limit")
 }
 
-func newMCPSSEReader(reader io.Reader) *mcpSSEReader {
-	scanner := bufio.NewScanner(io.LimitReader(reader, mcpMaxStream+1))
-	scanner.Buffer(make([]byte, 4096), mcpMaxResponse)
-	return &mcpSSEReader{scanner: scanner}
-}
-func (s *mcpSSEReader) next() (string, []byte, error) {
-	event := ""
-	data := []byte{}
-	for s.scanner.Scan() {
-		line := s.scanner.Text()
-		s.bytes += len(line) + 1
-		if s.bytes > mcpMaxStream {
-			return "", nil, ErrMCPProtocol
+// waitForEndpoint reads SSE events until an "endpoint" event arrives and
+// returns the URL to POST JSON-RPC requests to. The data may be either a
+// fully-qualified URL or a path; relative paths are resolved against the
+// original SSE endpoint.
+func waitForEndpoint(ctx context.Context, stream *sseReader, base string) (string, error) {
+	for {
+		event, err := stream.nextEvent(ctx)
+		if err != nil {
+			return "", err
 		}
-		if line == "" {
-			if len(data) > 0 || event != "" {
-				return event, bytes.TrimSuffix(data, []byte("\n")), nil
+		if event == nil {
+			return "", errors.New("MCP SSE stream closed before sending endpoint event")
+		}
+		if (event.event == "message" || event.event == "") && strings.TrimSpace(event.data) != "" {
+			if _, err := parseJSONRPC([]byte(event.data), nil); err != nil {
+				return "", err
 			}
-			continue
+		}
+		if event.event == "endpoint" {
+			ref := strings.TrimSpace(event.data)
+			if ref == "" {
+				return "", errors.New("MCP SSE endpoint event has empty data")
+			}
+			baseURL, err := url.Parse(base)
+			if err != nil {
+				return "", fmt.Errorf("parse MCP SSE base url: %w", err)
+			}
+			rel, err := url.Parse(ref)
+			if err != nil {
+				return "", fmt.Errorf("parse MCP SSE endpoint data: %w", err)
+			}
+			return baseURL.ResolveReference(rel).String(), nil
+		}
+		// Other events (heartbeats, message) before endpoint are ignored.
+	}
+}
+
+// originalHost extracts the hostname from the original SSE endpoint so the
+// caller can detect when the server-advertised post URL has moved to a
+// different host (and a fresh pinned client is required).
+func originalHost(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// sseTimeoutFrom recovers a non-zero timeout from the request context so
+// the freshly-pinned post-phase client has the same deadline as the rest
+// of the SSE flow.
+func sseTimeoutFrom(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		if d := time.Until(deadline); d > 0 {
+			return d
+		}
+	}
+	return 10 * time.Second
+}
+
+// pendingResponses correlates outstanding JSON-RPC ids with channels that
+// receive the corresponding response from the SSE dispatcher.
+type pendingResponses struct {
+	mu      sync.Mutex
+	waiters map[string]chan *jsonRPCResponse
+}
+
+func newPendingResponses() *pendingResponses {
+	return &pendingResponses{waiters: map[string]chan *jsonRPCResponse{}}
+}
+
+// pendingWaiter is the handle returned by register; the caller passes it to
+// await once the request has been sent.
+type pendingWaiter struct {
+	key string
+	ch  chan *jsonRPCResponse
+}
+
+// register reserves a waiter slot for the given JSON-RPC id BEFORE the
+// request is sent, so a server that responds before await() is called still
+// has somewhere to deliver to.
+func (p *pendingResponses) register(id interface{}) pendingWaiter {
+	key := normalizeID(id)
+	ch := make(chan *jsonRPCResponse, 1)
+	p.mu.Lock()
+	p.waiters[key] = ch
+	p.mu.Unlock()
+	return pendingWaiter{key: key, ch: ch}
+}
+
+// cancel drops a previously registered waiter. Used when the POST fails so
+// a late server delivery cannot block forever in the waiters map.
+func (p *pendingResponses) cancel(id interface{}) {
+	key := normalizeID(id)
+	p.mu.Lock()
+	delete(p.waiters, key)
+	p.mu.Unlock()
+}
+
+// await blocks until the registered waiter's response arrives, the SSE
+// stream closes, or ctx expires.
+func (p *pendingResponses) await(ctx context.Context, w pendingWaiter, streamDone <-chan error) (*jsonRPCResponse, error) {
+	defer func() {
+		p.mu.Lock()
+		delete(p.waiters, w.key)
+		p.mu.Unlock()
+	}()
+	select {
+	case res := <-w.ch:
+		return res, nil
+	case err := <-streamDone:
+		if err == nil {
+			return nil, errors.New("MCP SSE stream closed before response arrived")
+		}
+		return nil, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (p *pendingResponses) deliver(res *jsonRPCResponse) {
+	key := normalizeID(res.ID)
+	p.mu.Lock()
+	ch, ok := p.waiters[key]
+	p.mu.Unlock()
+	if !ok {
+		return
+	}
+	select {
+	case ch <- res:
+	default:
+	}
+}
+
+func normalizeID(id interface{}) string {
+	switch v := id.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case json.Number:
+		return v.String()
+	case float64:
+		return fmt.Sprintf("%v", v)
+	default:
+		b, _ := json.Marshal(v)
+		return string(b)
+	}
+}
+
+// ---------- SSE parsing ----------
+
+type sseEvent struct {
+	event string
+	data  string
+}
+
+type sseReader struct {
+	rd *bufio.Reader
+}
+
+func newSSEReader(r io.Reader) *sseReader {
+	return &sseReader{rd: bufio.NewReaderSize(io.LimitReader(r, (8<<20)+1), 64*1024)}
+}
+
+// nextEvent returns the next SSE event (event: + data:) from the stream, or
+// nil when the stream is closed cleanly.
+func (s *sseReader) nextEvent(ctx context.Context) (*sseEvent, error) {
+	ev := &sseEvent{}
+	var dataLines []string
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		line, err := s.rd.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				if len(dataLines) > 0 || ev.event != "" {
+					ev.data = strings.Join(dataLines, "\n")
+					return ev, nil
+				}
+				return nil, nil
+			}
+			return nil, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			if len(dataLines) == 0 && ev.event == "" {
+				continue
+			}
+			ev.data = strings.Join(dataLines, "\n")
+			return ev, nil
 		}
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
-		field, value, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		value = strings.TrimPrefix(value, " ")
-		switch field {
-		case "event":
-			event = value
-		case "data":
-			data = append(data, value...)
-			data = append(data, '\n')
-			if len(data) > mcpMaxResponse {
-				return "", nil, ErrMCPProtocol
+		if idx := strings.Index(line, ":"); idx >= 0 {
+			field := line[:idx]
+			value := strings.TrimPrefix(line[idx+1:], " ")
+			switch field {
+			case "event":
+				ev.event = value
+			case "data":
+				dataLines = append(dataLines, value)
 			}
 		}
 	}
-	return "", nil, ErrMCPProtocol
 }
 
-// Named heartbeat events may precede the endpoint. Only protocol messages are
-// parsed; their malformed envelopes must not be hidden as keepalive traffic.
-func readMCPSSEEndpoint(stream *mcpSSEReader) ([]byte, error) {
-	for count := 0; count < 128; count++ {
-		event, data, err := stream.next()
+// dispatch reads events off the SSE stream and forwards JSON-RPC responses
+// to the matching waiter. It returns when the stream closes.
+func (s *sseReader) dispatch(ctx context.Context, pending *pendingResponses) error {
+	for {
+		ev, err := s.nextEvent(ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if event == "endpoint" {
-			if len(data) == 0 {
-				return nil, ErrMCPProtocol
-			}
-			return data, nil
+		if ev == nil {
+			return nil
 		}
-		if event == "" || event == "message" {
-			if len(data) == 0 {
-				continue
-			}
-			_, notification, err := parseMCPResponse(data, 0)
-			if err != nil || !notification {
-				return nil, ErrMCPProtocol
-			}
+		if ev.event != "" && ev.event != "message" {
+			continue
 		}
+		raw := []byte(ev.data)
+		if len(bytes.TrimSpace(raw)) == 0 {
+			continue
+		}
+		parsed, err := parseJSONRPC(raw, nil)
+		if err != nil {
+			return err
+		}
+		if parsed.Method != "" && parsed.ID == nil {
+			// Server-initiated notification; nothing to deliver.
+			continue
+		}
+		pending.deliver(parsed)
 	}
-	return nil, ErrMCPProtocol
 }
 
-func readMCPSSEReply(stream *mcpSSEReader, id int) (json.RawMessage, error) {
-	for count := 0; count < 128; count++ {
-		event, data, err := stream.next()
+// readJSONRPCFromSSE consumes a single JSON-RPC response off an inline SSE
+// stream returned by a streamable-HTTP POST. The response with matching id
+// is returned; everything else is skipped.
+func readJSONRPCFromSSE(r io.Reader, wantID interface{}) (*jsonRPCResponse, error) {
+	stream := newSSEReader(r)
+	for {
+		ev, err := stream.nextEvent(context.Background())
 		if err != nil {
 			return nil, err
 		}
-		if event != "" && event != "message" || len(data) == 0 {
+		if ev == nil {
+			return nil, errors.New("MCP SSE response stream closed before response arrived")
+		}
+		if ev.event != "" && ev.event != "message" {
 			continue
 		}
-		result, notification, err := parseMCPResponse(data, id)
+		raw := []byte(ev.data)
+		if len(bytes.TrimSpace(raw)) == 0 {
+			continue
+		}
+		parsed, err := parseJSONRPC(raw, nil)
 		if err != nil {
 			return nil, err
 		}
-		if notification {
-			continue
+		if normalizeID(parsed.ID) == normalizeID(wantID) {
+			return parsed, nil
 		}
-		return result, nil
 	}
-	return nil, ErrMCPProtocol
+}
+
+// ---------- shared helpers ----------
+
+func parseJSONRPC(raw []byte, wantID interface{}) (*jsonRPCResponse, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var response *jsonRPCResponse
+	if err := dec.Decode(&response); err != nil {
+		return nil, fmt.Errorf("parse MCP response: %w", err)
+	}
+	if response == nil || response.JSONRPC != jsonRPCVersion {
+		return nil, errors.New("invalid JSON-RPC envelope")
+	}
+	if err := dec.Decode(new(interface{})); err != io.EOF {
+		return nil, errors.New("trailing JSON-RPC data")
+	}
+	if response.Method != "" && wantID == nil {
+		return response, nil
+	}
+	if response.ID == nil || (wantID != nil && normalizeID(response.ID) != normalizeID(wantID)) {
+		return nil, errors.New("unexpected JSON-RPC response identity")
+	}
+	if (len(response.Result) == 0) == (response.Error == nil) {
+		return nil, errors.New("JSON-RPC result or error required")
+	}
+	return response, nil
+}
+
+func parseToolsResult(raw json.RawMessage) ([]Tool, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("missing tools result")
+	}
+	var envelope struct {
+		Tools []map[string]interface{} `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, fmt.Errorf("parse tools result: %w", err)
+	}
+	if envelope.Tools == nil {
+		return nil, errors.New("tools must be an array")
+	}
+	tools := make([]Tool, 0, len(envelope.Tools))
+	for _, raw := range envelope.Tools {
+		name, _ := raw["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			return nil, errors.New("tool name is required")
+		}
+		desc, _ := raw["description"].(string)
+		var schema map[string]interface{}
+		if s, ok := raw["inputSchema"].(map[string]interface{}); ok {
+			schema = s
+		} else {
+			return nil, errors.New("tool schema must be an object")
+		}
+		tools = append(tools, Tool{
+			Name:        name,
+			Description: desc,
+			InputSchema: schema,
+			Raw:         raw,
+		})
+	}
+	return tools, nil
+}
+
+func formatMCPError(method string, e *jsonRPCError) error {
+	if e == nil {
+		return fmt.Errorf("MCP %s failed", method)
+	}
+	return fmt.Errorf("MCP %s failed (%d): %s", method, e.Code, e.Message)
+}
+
+// mapMCPConnectionError surfaces the same wording the Python session uses
+// when a low-level connection fails (authentication / network).
+func mapMCPConnectionError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("timeout connecting to MCP server: %w", err)
+	}
+	return fmt.Errorf("MCP connection failed: %w", err)
 }

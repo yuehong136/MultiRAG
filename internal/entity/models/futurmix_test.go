@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,7 +18,13 @@ func TestFuturMixChatAndSSE(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer controlled-key" || r.URL.Path != "/v1/chat/completions" {
 			t.Error("endpoint/key")
 		}
-		if r.Header.Get("Accept") == "text/event-stream" {
+		var body struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body.Stream {
 			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":\n"+"data: {\"reasoning_content\":\"thought\",\"content\":\"answer\"}}]}\n\n"+"data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n")
 		} else {
 			fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"thought"},"finish_reason":"stop"}]}`)
@@ -25,15 +32,15 @@ func TestFuturMixChatAndSSE(t *testing.T) {
 	}))
 	defer server.Close()
 	key := "controlled-key"
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	history := []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "q"}}
 	driver, err := NewModelFactory().CreateModelDriver("FuturMix", map[string]string{"default": server.URL}, URLSuffix{Chat: "v1/chat/completions"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	name := "m"
-	result, err := NewChatModel(driver, &name, api).ChatWithMessages(history, nil)
-	if err != nil || *result.Answer != "answer" || *result.ReasoningContent != "thought" {
+	result, err := NewChatModel(driver, &name, api).ModelDriver.ChatWithMessages(*NewChatModel(driver, &name, api).ModelName, history, NewChatModel(driver, &name, api).APIConfig, nil)
+	if err != nil || *result.Answer != "answer" || *result.ReasonContent != "thought" {
 		t.Fatal(result, err)
 	}
 	var chunks []string
@@ -67,7 +74,7 @@ func TestFuturMixRawFailures(t *testing.T) {
 		server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 		key := "key"
 		driver := NewFuturMixModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
-		if result, err := driver.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil); err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
+		if result, err := driver.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: &key}, nil); err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
 			t.Fatal(result, err)
 		}
 		server.Close()
@@ -77,7 +84,7 @@ func TestFuturMixRawFailures(t *testing.T) {
 		key := "key"
 		driver := NewFuturMixModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 		done := false
-		err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(c, r *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
+		err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: &key}, nil, func(c, r *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
 		if err == nil || done || strings.Contains(err.Error(), "private-secret") {
 			t.Fatal(err, done)
 		}
@@ -99,11 +106,10 @@ func TestFuturMixStreamLifecycle(t *testing.T) {
 			}))
 			defer server.Close()
 			driver := NewFuturMixModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
-			driver.streamIdleTimeout = 40 * time.Millisecond
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
 			defer cancel()
 			want := errors.New("sender stopped")
-			err := driver.ChatStreamlyWithSender("m", messages, &APIConfig{APIKey: &key, Context: ctx}, nil, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender("m", messages, &APIConfig{ApiKey: &key, Context: ctx}, nil, func(c, r *string) error {
 				if mode == "sender" {
 					return want
 				}
@@ -133,7 +139,7 @@ func TestFuturMixConcurrentInstances(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				result, err := driver.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &id}, nil)
+				result, err := driver.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: &id}, nil)
 				if err != nil || *result.Answer != id {
 					t.Error(result, err)
 				}

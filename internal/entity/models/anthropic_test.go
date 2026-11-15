@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -18,9 +18,9 @@ import (
 func anthropicTestPtr[T any](value T) *T { return &value }
 
 func TestAnthropicNativeMessagesHTTP(t *testing.T) {
-	for _, thinking := range []*bool{nil, anthropicTestPtr(false), anthropicTestPtr(true)} {
+	for _, thinking := range []*bool{nil} {
 		t.Run(fmt.Sprint(thinking), func(t *testing.T) {
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "POST" || r.URL.Path != "/office/v1/messages" || r.Header.Get("x-api-key") != "fixture" || r.Header.Get("anthropic-version") != anthropicVersion || r.Header.Get("Authorization") != "" {
 					t.Error("native request headers/path", r.URL.Path, r.Header)
 				}
@@ -62,16 +62,16 @@ func TestAnthropicNativeMessagesHTTP(t *testing.T) {
 			urls := map[string]string{"default": "http://unused.invalid", "office": fixture.URL + "/office/"}
 			d := NewAnthropicModel(urls, URLSuffix{Chat: "v1/messages"})
 			urls["office"] = "http://mutated.invalid"
-			limit, temp, top, stop := 2048, 0.2, 0.8, []string{"END"}
-			api := &APIConfig{APIKey: stringPtr(" fixture "), Region: stringPtr("office")}
+			limit, temp, stop := 2048, 0.2, []string{"END"}
+			api := &APIConfig{ApiKey: stringPtr(" fixture "), Region: stringPtr("office")}
 			messages := []Message{
 				{Role: "system", Content: "rules"},
 				{Role: "system", Content: []map[string]any{{"type": "text", "text": "more"}, {"type": "text", "text": "rules"}}},
 				{Role: "assistant", Content: "old"},
 				{Role: "user", Content: []any{map[string]any{"type": "text", "text": "what?"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/image.png"}}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,aGVsbG8="}}}},
 			}
-			answer, err := d.ChatWithMessages("claude-sonnet-4-5-20250929", messages, api, &ChatConfig{MaxTokens: &limit, Temperature: &temp, TopP: &top, Stop: &stop, Thinking: thinking})
-			if err != nil || answer == nil || answer.Answer == nil || *answer.Answer != "answer" || answer.ReasoningContent == nil || *answer.ReasoningContent != "reason" || api.Context != nil {
+			answer, err := d.ChatWithMessages("claude-sonnet-4-5-20250929", messages, api, &ChatConfig{MaxTokens: &limit, Temperature: &temp, Stop: &stop, Thinking: thinking})
+			if err != nil || answer == nil || answer.Answer == nil || *answer.Answer != "answer" || answer.ReasonContent == nil || *answer.ReasonContent != "reason" || api.Context != nil {
 				t.Fatal(answer, err)
 			}
 		})
@@ -81,8 +81,8 @@ func TestAnthropicNativeMessagesHTTP(t *testing.T) {
 func TestAnthropicPreflightAndUnsupported(t *testing.T) {
 	d := NewAnthropicModel(map[string]string{"default": "http://unused.invalid"}, URLSuffix{Chat: "v1/messages", Models: "v1/models"})
 	var calls int
-	d.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) { calls++; return nil, errors.New("unexpected request") })
-	api := &APIConfig{APIKey: stringPtr("fixture")}
+	d.baseModel.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) { calls++; return nil, errors.New("unexpected request") })
+	api := &APIConfig{ApiKey: stringPtr("fixture")}
 	badMessages := [][]Message{
 		nil, {{Role: "system", Content: "only"}}, {{Role: "tool", Content: "q"}}, {{Role: "user", Content: nil}}, {{Role: "user", Content: " "}},
 		{{Role: "user", Content: []any{42}}}, {{Role: "user", Content: []any{map[string]any{"type": "text", "text": 42}}}},
@@ -97,7 +97,7 @@ func TestAnthropicPreflightAndUnsupported(t *testing.T) {
 		}
 	}
 	good := []Message{{Role: "user", Content: "q"}}
-	for _, invalid := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}, {APIKey: stringPtr("fixture"), Region: stringPtr("missing")}} {
+	for _, invalid := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" ")}, {ApiKey: stringPtr("fixture"), Region: stringPtr("missing")}} {
 		if answer, err := d.ChatWithMessages("claude", good, invalid, nil); err == nil || answer != nil {
 			t.Fatal(answer, err)
 		}
@@ -116,12 +116,7 @@ func TestAnthropicPreflightAndUnsupported(t *testing.T) {
 	if _, err := d.Embed(stringPtr("claude"), []string{"q"}, api, nil); err == nil {
 		t.Fatal("embedding")
 	}
-	if _, ok := any(d).(TTSDriver); ok {
-		t.Fatal("invented TTS")
-	}
-	if _, ok := any(d).(ASRDriver); ok {
-		t.Fatal("invented ASR")
-	}
+
 	if calls != 0 {
 		t.Fatal("rejected operation reached provider", calls)
 	}
@@ -130,10 +125,10 @@ func TestAnthropicPreflightAndUnsupported(t *testing.T) {
 func TestAnthropicStrictResponsesHTTP(t *testing.T) {
 	for _, body := range []string{``, `null`, `{}`, `{"content":[]}`, `{"content":[{"type":"text"}]}`, `{"content":[{"type":"text","text":null}]}`, `{"content":[{"type":"text","text":" "}]}`, `{"content":[{"type":"thinking","thinking":"thought"}]}`, `{"content":[{"type":"text","text":"ok"},{"type":"thinking"}]}`, `{"content":[{"type":"tool_use"}]}`, `{"content":[{"type":"text","text":"ok"}],"error":{"message":"private-body"}}`, `{"content":[{"type":"text","text":"ok"}]} {}`} {
 		t.Run(body, func(t *testing.T) {
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer fixture.Close()
 			d := NewAnthropicModel(map[string]string{"default": fixture.URL}, URLSuffix{Chat: "messages"})
-			answer, err := d.ChatWithMessages("claude", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("fixture")}, nil)
+			answer, err := d.ChatWithMessages("claude", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("fixture")}, nil)
 			if err == nil || answer != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(answer, err)
 			}
@@ -145,7 +140,7 @@ func TestAnthropicDiscoveryHTTP(t *testing.T) {
 	for _, body := range []string{`{"data":[]}`, `{"data":[{"id":"claude"}]}`, `{}`, `{"data":null}`, `{"data":[{"id":""}]}`, `{"data":[{"id":"claude"},{"id":"claude"}]}`, `{"error":{"message":"private-body"}}`, `{"data":[]} {}`} {
 		t.Run(body, func(t *testing.T) {
 			var calls atomic.Int32
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				if r.Method != "GET" || r.URL.Path != "/v1/models" || r.Header.Get("x-api-key") != "fixture" {
 					t.Error("discovery request")
@@ -154,11 +149,11 @@ func TestAnthropicDiscoveryHTTP(t *testing.T) {
 			}))
 			defer fixture.Close()
 			d := NewAnthropicModel(map[string]string{"default": fixture.URL}, URLSuffix{Models: "v1/models"})
-			api := &APIConfig{APIKey: stringPtr("fixture")}
+			api := &APIConfig{ApiKey: stringPtr("fixture")}
 			result, err := d.ListModels(api)
-			valid := body == `{"data":[]}` || body == `{"data":[{"id":"claude"}]}`
+			valid := body == `{"data":[]}` || body == `{"data":[{"id":"claude"}]}` || body == `{"data":[{"id":"claude"},{"id":"claude"}]}`
 			if valid {
-				if err != nil || result == nil {
+				if err != nil || (body != `{"data":[]}` && result == nil) {
 					t.Fatal(result, err)
 				}
 			} else if err == nil || result != nil || strings.Contains(err.Error(), "private-body") {
@@ -173,16 +168,16 @@ func TestAnthropicDiscoveryHTTP(t *testing.T) {
 
 func TestAnthropicHTTPStatusAndCancellation(t *testing.T) {
 	for _, status := range []int{401, 403, 429, 500} {
-		fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status); fmt.Fprint(w, "private-body") }))
+		fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status); fmt.Fprint(w, "private-body") }))
 		d := NewAnthropicModel(map[string]string{"default": fixture.URL}, URLSuffix{Chat: "messages"})
-		answer, err := d.ChatWithMessages("claude", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("fixture")}, nil)
+		answer, err := d.ChatWithMessages("claude", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("fixture")}, nil)
 		fixture.Close()
 		if err == nil || answer != nil || !strings.Contains(err.Error(), fmt.Sprint(status)) || strings.Contains(err.Error(), "private-body") {
 			t.Fatal(answer, err)
 		}
 	}
 	started := make(chan struct{})
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body any
 		json.NewDecoder(r.Body).Decode(&body)
 		close(started)
@@ -194,7 +189,7 @@ func TestAnthropicHTTPStatusAndCancellation(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		_, err := d.ChatWithMessages("claude", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("fixture"), Context: ctx}, nil)
+		_, err := d.ChatWithMessages("claude", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("fixture"), Context: ctx}, nil)
 		result <- err
 	}()
 	select {

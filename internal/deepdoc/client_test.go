@@ -45,7 +45,9 @@ func TestDLAGroupingAndMultipart(t *testing.T) {
 	}))
 	client := NewClientWithURL(server.URL)
 	result, err := client.DLA(context.Background(), [][]byte{[]byte("JPEG"), []byte("JPEG")})
-	if err != nil || len(result) != 2 || len(result[0]) != 2 || len(result[1]) != 0 || result[0][1].Type != "table" {
+	// Original DLA returns a flat region list and one empty result for an
+	// image with no detections, rather than the retired per-image wrapper.
+	if err != nil || len(result) != 3 || result[1].Type != "table" || result[2] != (DLAResult{}) {
 		t.Fatal(result, err)
 	}
 	for _, method := range []func(context.Context, [][]byte) ([][]byte, error){client.OCR, client.TSR} {
@@ -87,7 +89,7 @@ func TestDLAFailuresAreNotEmptyDetections(t *testing.T) {
 		}
 	}
 	status.Store(200)
-	reply.Store(strings.Repeat("x", maxResponseBytes+1))
+	reply.Store(strings.Repeat("x", (20<<20)+1))
 	count.Store(0)
 	if _, err := client.DLA(context.Background(), [][]byte{[]byte("JPEG")}); err == nil || count.Load() != 1 {
 		t.Fatal("oversize response accepted", err, count.Load())

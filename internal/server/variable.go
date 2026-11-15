@@ -19,19 +19,19 @@ package server
 import (
 	"context"
 	"fmt"
+	"multirag/internal/common"
 	"multirag/internal/utility"
+	"strings"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
-
-	"multirag/internal/common"
 )
 
 // Variables holds all runtime variables that can be changed during system operation
 // Unlike Config, these can be modified at runtime
 type Variables struct {
-	SecretKey string `json:"secret_key"`
+	//SecretKey string `json:"secret_key"`
 }
 
 // VariableStore interface for persistent storage (e.g., Redis)
@@ -43,12 +43,15 @@ type VariableStore interface {
 
 var (
 	globalVariables *Variables
+	variablesOnce   sync.Once
 	variablesMu     sync.RWMutex
 )
 
 const (
+	// DefaultSecretKey is used when no secret key is found in storage
+	DefaultSecretKey = "infiniflow-token"
 	// SecretKeyRedisKey is the Redis key for storing secret key
-	SecretKeyRedisKey = "multirag:system:secret_key"
+	SecretKeyRedisKey = "ragflow:system:secret_key"
 	// SecretKeyTTL is the TTL for secret key in Redis (0 = no expiration)
 	SecretKeyTTL = 0
 )
@@ -56,65 +59,78 @@ const (
 // InitVariables initializes all runtime variables from persistent storage
 // This should be called after Config and Cache are initialized
 func InitVariables(store VariableStore) error {
-	variablesMu.Lock()
-	defer variablesMu.Unlock()
-	if globalVariables != nil && globalVariables.SecretKey != "" {
-		return nil
-	}
-	if cfg := GetConfig(); cfg != nil && len(cfg.Server.SecretKey) >= 32 {
-		globalVariables = &Variables{SecretKey: cfg.Server.SecretKey}
-		return nil
-	}
-	generatedKey, err := utility.GenerateSecretKey()
-	if err != nil {
-		return fmt.Errorf("failed to generate secret key")
-	}
-	secretKey, err := GetOrCreateKey(store, SecretKeyRedisKey, generatedKey)
-	if err != nil {
-		return fmt.Errorf("failed to initialize secret key: %w", err)
-	}
-	globalVariables = &Variables{SecretKey: secretKey}
-	return nil
+	var initErr error
+	variablesOnce.Do(func() {
+		globalVariables = &Variables{}
+
+		//// secret key
+		//generatedKey, err := utility.GenerateSecretKey()
+		//if err != nil {
+		//	initErr = fmt.Errorf("failed to generate secret key: %w", err)
+		//}
+		//
+		//// Initialize SecretKey
+		//secretKey, err := GetOrCreateKey(store, SecretKeyRedisKey, generatedKey)
+		//if err != nil {
+		//	initErr = fmt.Errorf("failed to initialize secret key: %w", err)
+		//} else {
+		//	globalVariables.SecretKey = secretKey
+		//	common.Info("Secret key initialized from store")
+		//}
+
+		common.Info("Server variables initialized successfully")
+	})
+	return initErr
 }
 
 // GetVariables returns the global variables instance
-func GetVariables() *Variables {
-	variablesMu.RLock()
-	defer variablesMu.RUnlock()
-	if globalVariables == nil {
-		return nil
-	}
-	snapshot := *globalVariables
-	return &snapshot
-}
+//func GetVariables() *Variables {
+//	variablesMu.RLock()
+//	defer variablesMu.RUnlock()
+//	return globalVariables
+//}
 
 // GetSecretKey returns the current secret key
-func GetSecretKey() string {
-	variablesMu.RLock()
-	defer variablesMu.RUnlock()
-	if globalVariables == nil {
-		return ""
+func GetSecretKey(store VariableStore) (string, error) {
+	if globalConfig == nil {
+		return "", fmt.Errorf("server config is not initialized")
 	}
-	return globalVariables.SecretKey
+	if globalConfig.Server.SecretKey != nil {
+		if strings.TrimSpace(*globalConfig.Server.SecretKey) == "" {
+			return "", fmt.Errorf("configured secret key is empty")
+		}
+		return *globalConfig.Server.SecretKey, nil
+	}
+
+	generatedKey, err := utility.GenerateSecretKey()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate secret key: %w", err)
+	}
+
+	secretKey, err := GetOrCreateKey(store, SecretKeyRedisKey, generatedKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to get secret key: %w", err)
+	}
+	return secretKey, nil
 }
 
 // SetSecretKey updates the secret key at runtime
-func SetSecretKey(key string) {
-	variablesMu.Lock()
-	defer variablesMu.Unlock()
-	if globalVariables != nil {
-		globalVariables.SecretKey = key
-		common.Info("Secret key updated at runtime")
-	}
-}
+//func SetSecretKey(key string) {
+//	variablesMu.Lock()
+//	defer variablesMu.Unlock()
+//	if globalVariables != nil {
+//		globalVariables.SecretKey = key
+//		common.Info("Secret key updated at runtime")
+//	}
+//}
 
 // GetOrCreateKey gets a key from store, or creates it if not exists
 // - If key exists in store, returns the stored value
-// - If absent, atomically persists the candidate and returns the actual winner
+// - If key doesn't exist, calls createFn to generate value, stores it, and returns it
 // - Uses SetNX to ensure atomic creation (only one caller succeeds when key doesn't exist)
 func GetOrCreateKey(store VariableStore, key string, newValue string) (string, error) {
-	if newValue == "" {
-		return "", fmt.Errorf("empty candidate")
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(newValue) == "" {
+		return "", fmt.Errorf("key and candidate value are required")
 	}
 	if store == nil {
 		err := fmt.Errorf("store is nil")
@@ -140,7 +156,7 @@ func GetOrCreateKey(store VariableStore, key string, newValue string) (string, e
 
 	// Try to set with NX (only if not exists) - ensures atomicity
 	if store.SetNX(key, newValue, SecretKeyTTL) {
-		common.Warn("SECURITY WARNING: Using auto-generated SECRET_KEY.")
+		common.Info("New value stored successfully", zap.String("key", key))
 		return newValue, nil
 	}
 
@@ -148,7 +164,7 @@ func GetOrCreateKey(store VariableStore, key string, newValue string) (string, e
 	value, err = store.Get(key)
 	if err != nil {
 		common.Warn("Failed to get key after SetNX", zap.String("key", key), zap.Error(err))
-		return "", fmt.Errorf("failed to read shared secret after creation race")
+		return "", err
 	}
 
 	if value != "" {
@@ -156,16 +172,13 @@ func GetOrCreateKey(store VariableStore, key string, newValue string) (string, e
 		return value, nil
 	}
 
-	// A losing candidate is never a shared signing key.
-	return "", fmt.Errorf("shared secret missing after creation race")
+	// A candidate that was not persisted must never become a signing key.
+	return "", fmt.Errorf("key was not persisted")
 }
 
 // RefreshVariables refreshes all variables from storage
 // Call this when you want to reload variables from persistent storage
 func RefreshVariables(store VariableStore) error {
-	if cfg := GetConfig(); cfg != nil && len(cfg.Server.SecretKey) >= 32 {
-		return nil
-	}
 	if store == nil {
 		return fmt.Errorf("store is nil")
 	}
@@ -184,7 +197,7 @@ func RefreshVariables(store VariableStore) error {
 		return err
 	}
 	if secretKey != "" {
-		globalVariables.SecretKey = secretKey
+		//globalVariables.SecretKey = secretKey
 		common.Info("Secret key refreshed from store")
 	}
 
@@ -250,9 +263,9 @@ func SaveToStorage(store VariableStore) error {
 	}
 
 	// Save SecretKey
-	if !store.Set(SecretKeyRedisKey, globalVariables.SecretKey, SecretKeyTTL) {
-		return fmt.Errorf("failed to save secret key to store")
-	}
+	//if !store.Set(SecretKeyRedisKey, globalVariables.SecretKey, SecretKeyTTL) {
+	//	return fmt.Errorf("failed to save secret key to store")
+	//}
 
 	common.Info("Variables saved to storage")
 	return nil

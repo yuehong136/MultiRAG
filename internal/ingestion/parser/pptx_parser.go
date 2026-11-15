@@ -1,131 +1,80 @@
+//
+// Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
 package parser
 
 import (
-	"encoding/xml"
 	"fmt"
-	"io"
-	"path"
-	"strings"
+
+	officeOxide "github.com/yfedoseev/office_oxide/go"
 )
 
-type relationship struct {
-	ID     string `xml:"Id,attr"`
-	Target string `xml:"Target,attr"`
-	Type   string `xml:"Type,attr"`
-	Mode   string `xml:"TargetMode,attr"`
-}
-type relationships struct {
-	XMLName xml.Name       `xml:"Relationships"`
-	Items   []relationship `xml:"Relationship"`
+type PPTXParser struct {
+	libType string
 }
 
-func resolvePart(a *officeArchive, rels relationships, id, base, kind string) (string, error) {
-	for _, r := range rels.Items {
-		if r.ID != id {
-			continue
-		}
-		if r.Mode == "External" || !strings.HasSuffix(r.Type, "/"+kind) {
-			return "", fmt.Errorf("invalid %s relationship", kind)
-		}
-		target := path.Clean(path.Join(base, r.Target))
-		if strings.HasPrefix(r.Target, "/") {
-			target = strings.TrimPrefix(path.Clean(r.Target), "/")
-		}
-		if a.files[target] == nil {
-			return "", fmt.Errorf("missing %s relationship target", kind)
-		}
-		return target, nil
+func NewPPTXParser(libType string) (*PPTXParser, error) {
+	switch libType {
+	case OfficeOxide:
+		return &PPTXParser{
+			libType: OfficeOxide,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported PPTX library type: %s", libType)
 	}
-	return "", fmt.Errorf("missing %s relationship %q", kind, id)
 }
-func parsePPTX(a *officeArchive) (*Result, error) {
-	var presentation struct {
-		XMLName xml.Name `xml:"presentation"`
-		Slides  []struct {
-			ID string `xml:"http://schemas.openxmlformats.org/officeDocument/2006/relationships id,attr"`
-		} `xml:"sldIdLst>sldId"`
+
+func (p *PPTXParser) Parse(filename string, data []byte) error {
+	fmt.Printf("Parsing PPTX file: %s\n", filename)
+	switch p.libType {
+	case OfficeOxide:
+		return p.OfficeOxideParse(data)
+	default:
+		return fmt.Errorf("unsupported PPTX library type: %s", p.libType)
 	}
-	if err := a.decode("ppt/presentation.xml", &presentation); err != nil {
-		return nil, err
-	}
-	var rels relationships
-	if err := a.decode("ppt/_rels/presentation.xml.rels", &rels); err != nil {
-		return nil, err
-	}
-	var plain, markdown strings.Builder
-	count := 0
-	for _, s := range presentation.Slides {
-		name, err := resolvePart(a, rels, s.ID, "ppt", "slide")
-		if err != nil {
-			return nil, err
-		}
-		data, err := a.read(name)
-		if err != nil {
-			return nil, err
-		}
-		text, err := drawingText(data)
-		if err != nil {
-			return nil, err
-		}
-		if count > 0 {
-			if err := a.emit(&plain, "\n\n"); err != nil {
-				return nil, err
-			}
-			if err := a.emit(&markdown, "\n\n---\n\n"); err != nil {
-				return nil, err
-			}
-		}
-		if err := a.emit(&plain, text); err != nil {
-			return nil, err
-		}
-		if err := a.emit(&markdown, text); err != nil {
-			return nil, err
-		}
-		count++
-	}
-	return &Result{Text: plain.String(), Markdown: markdown.String()}, nil
 }
-func drawingText(data []byte) (string, error) {
-	var lines []string
-	var b strings.Builder
-	inText := false
-	d := newOfficeXMLDecoder(data)
-	root := documentRoot{expected: "sld"}
-	for {
-		token, err := d.Token()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return "", err
-		}
-		if err := root.observe(token); err != nil {
-			return "", err
-		}
-		switch t := token.(type) {
-		case xml.StartElement:
-			if t.Name.Local == "t" {
-				inText = true
-			}
-			if t.Name.Local == "br" {
-				b.WriteByte('\n')
-			}
-		case xml.CharData:
-			if inText {
-				b.Write(t)
-			}
-		case xml.EndElement:
-			if t.Name.Local == "t" {
-				inText = false
-			}
-			if t.Name.Local == "p" {
-				lines = append(lines, b.String())
-				b.Reset()
-			}
-		}
+
+func (p *PPTXParser) OfficeOxideParse(data []byte) error {
+	doc, err := officeOxide.OpenFromBytes(data, "pptx")
+	if err != nil {
+		return err
 	}
-	if err := root.complete(); err != nil {
-		return "", err
+	defer doc.Close()
+
+	docFormat, err := doc.Format()
+	if err != nil {
+		return err
 	}
-	return strings.Join(lines, "\n"), nil
+
+	fmt.Println("Document format:", docFormat)
+
+	docContext, err := doc.PlainText()
+	if err != nil {
+		return err
+	}
+	fmt.Println("Document context:", docContext)
+
+	md, err := doc.ToMarkdown()
+	if err != nil {
+		return err
+	}
+	fmt.Println("Document Markdown:", md)
+	return nil
+}
+
+func (p *PPTXParser) String() string {
+	return "PPTXParser"
 }

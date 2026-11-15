@@ -1,12 +1,18 @@
-// Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
 
 package common
 
@@ -17,13 +23,14 @@ import (
 	"strings"
 )
 
-// QueryRewriteResult contains answer types and concrete terms from a query.
+// QueryRewriteResult holds the parsed result of a query rewrite.
 type QueryRewriteResult struct {
 	TypeKeywords []string `json:"answer_type_keywords"`
 	Entities     []string `json:"entities_from_query"`
 }
 
-// queryRewritePromptTmpl follows the GraphRAG minirag_query2kwd prompt.
+// queryRewritePromptTmpl is the system prompt template for query rewriting.
+// Matches Python: rag/graphrag/query_analyze_prompt.py::PROMPTS["minirag_query2kwd"]
 const queryRewritePromptTmpl = `---Role---
 
 You are a helpful assistant tasked with identifying both answer-type and low-level keywords in the user's query.
@@ -38,7 +45,7 @@ This pool is in the form of a dictionary, where the key represents the Type you 
 ---Instructions---
 
 - Output the keywords in JSON format.
-- The JSON should have two keys:
+- The JSON should have three keys:
   - "answer_type_keywords" for the types of the answer. In this list, the types with the highest likelihood should be placed at the forefront. No more than 3.
   - "entities_from_query" for specific entities or details. It must be extracted from the query.
 ######################
@@ -64,7 +71,7 @@ Answer type pool: {
  'BEHAVIOR': ['POSITIVE FEEDBACK', 'NEGATIVE CRITICISM'],
  'TONE': ['FORMAL', 'INFORMAL'],
  'LOCATION': ['DOWNTOWN', 'SUBURBS']
-}
+}}
 ################
 Output:
 {
@@ -93,7 +100,7 @@ Answer type pool: {
  'BEHAVIOR': ['POSITIVE THINKING', 'STRESS MANAGEMENT'],
  'TONE': ['FRIENDLY', 'PROFESSIONAL'],
  'LOCATION': ['DOWNTOWN', 'SUBURBS']
-}
+}}
 ################
 Output:
 {
@@ -110,19 +117,21 @@ Answer type pool:{TYPE_POOL}
 Output:
 `
 
-// BuildQueryRewritePrompt substitutes each template placeholder once. Braces or
-// placeholder-looking text inside either caller value are kept verbatim.
-func BuildQueryRewritePrompt(question string, typePoolJSON string) string {
-	return strings.NewReplacer("{query}", question, "{TYPE_POOL}", typePoolJSON).Replace(queryRewritePromptTmpl)
+// BuildQueryRewritePrompt builds the system prompt for query rewrite.
+func BuildQueryRewritePrompt(question string, ty2entsJSON string) string {
+	r := strings.NewReplacer(
+		"{query}", question,
+		"{TYPE_POOL}", ty2entsJSON,
+	)
+	return r.Replace(queryRewritePromptTmpl)
 }
 
-// ParseQueryRewriteResponse accepts a JSON object, optionally inside Markdown or
-// surrounding prose. It rejects multiple objects and invalid shapes instead of
-// treating malformed model output as successful empty keyword extraction.
+// ParseQueryRewriteResponse parses the LLM response and returns structured keywords.
+// Handles JSON parsing with fallback logic matching Python's json_repair behavior.
 func ParseQueryRewriteResponse(response string) (*QueryRewriteResult, error) {
 	response = strings.TrimSpace(response)
 	if json.Valid([]byte(response)) {
-		return parseQueryRewriteObject(response)
+		return tryParseJSON(response)
 	}
 	start, end, depth := -1, -1, 0
 	inString, escaped := false, false
@@ -162,10 +171,10 @@ func ParseQueryRewriteResponse(response string) (*QueryRewriteResult, error) {
 	if start < 0 || end < 0 || depth != 0 {
 		return nil, fmt.Errorf("query rewrite response contains no complete JSON object")
 	}
-	return parseQueryRewriteObject(response[start:end])
+	return tryParseJSON(response[start:end])
 }
 
-func parseQueryRewriteObject(data string) (*QueryRewriteResult, error) {
+func tryParseJSON(data string) (*QueryRewriteResult, error) {
 	decoder := json.NewDecoder(strings.NewReader(data))
 	token, err := decoder.Token()
 	if err != nil || token != json.Delim('{') {

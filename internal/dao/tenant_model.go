@@ -17,8 +17,9 @@
 package dao
 
 import (
-	"context"
 	"multirag/internal/entity"
+
+	"gorm.io/gorm"
 )
 
 // TenantModelDAO tenant model data access object
@@ -33,8 +34,33 @@ func (dao *TenantModelDAO) Create(instance *entity.TenantModel) error {
 	return DB.Create(instance).Error
 }
 
+func (dao *TenantModelDAO) CreateBatch(models []*entity.TenantModel) error {
+	if len(models) == 0 {
+		return nil
+	}
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		for _, model := range models {
+			if err := tx.Create(model).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (dao *TenantModelDAO) DeleteByModelID(modelID string) (int64, error) {
 	result := DB.Unscoped().Where("id = ?", modelID).Delete(&entity.TenantModel{})
+	return result.RowsAffected, result.Error
+}
+
+func (dao *TenantModelDAO) DeleteByProviderIDAndInstanceID(provideID, instanceID string) (int64, error) {
+	result := DB.Unscoped().Where("provider_id = ? AND instance_id = ?", provideID, instanceID).Delete(&entity.TenantModel{})
+	return result.RowsAffected, result.Error
+}
+
+func (dao *TenantModelDAO) DeleteByProviderIDAndInstanceIDAndModelName(provideID, instanceID, modelName string) (int64, error) {
+	result := DB.Unscoped().Where("provider_id = ? AND instance_id = ? AND model_name = ?", provideID, instanceID, modelName).Delete(&entity.TenantModel{})
 	return result.RowsAffected, result.Error
 }
 
@@ -49,12 +75,26 @@ func (dao *TenantModelDAO) GetByID(id string) (*entity.TenantModel, error) {
 }
 
 func (dao *TenantModelDAO) GetModelByProviderIDAndInstanceIDAndModelName(providerID, instanceID, modelName string) (*entity.TenantModel, error) {
-	return dao.GetModelByProviderIDAndInstanceIDAndModelNameWithContext(context.Background(), providerID, instanceID, modelName)
+	var model entity.TenantModel
+	err := DB.Where("provider_id = ? AND instance_id = ? AND model_name = ?", providerID, instanceID, modelName).First(&model).Error
+	if err != nil {
+		return nil, err
+	}
+	return &model, nil
 }
 
-func (dao *TenantModelDAO) GetModelByProviderIDAndInstanceIDAndModelNameWithContext(ctx context.Context, providerID, instanceID, modelName string) (*entity.TenantModel, error) {
+func (dao *TenantModelDAO) GetModelsByProviderIDAndInstanceIDAndModelName(providerID, instanceID, modelName string) ([]*entity.TenantModel, error) {
+	var models []*entity.TenantModel
+	err := DB.Where("provider_id = ? AND instance_id = ? AND model_name = ?", providerID, instanceID, modelName).Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+	return models, nil
+}
+
+func (dao *TenantModelDAO) GetByProviderIDAndInstanceIDAndModelTypeAndModelName(providerID, instanceID, modelType, modelName string) (*entity.TenantModel, error) {
 	var model entity.TenantModel
-	err := DB.WithContext(ctx).Where("provider_id = ? AND instance_id = ? AND model_name = ?", providerID, instanceID, modelName).First(&model).Error
+	err := DB.Where("provider_id = ? AND instance_id = ? AND model_type = ? AND model_name = ?", providerID, instanceID, modelType, modelName).First(&model).Error
 	if err != nil {
 		return nil, err
 	}
@@ -71,11 +111,22 @@ func (dao *TenantModelDAO) GetModelsByInstanceID(instanceID string) ([]*entity.T
 	return models, nil
 }
 
-func (d *TenantModelDAO) GetModelsByProviderIDsAndInstanceIDsWithContext(ctx context.Context, providers, instances []string) ([]*entity.TenantModel, error) {
-	rows := []*entity.TenantModel{}
-	if len(providers) == 0 || len(instances) == 0 {
-		return rows, nil
+// GetModelsByProviderIDsAndInstanceIDs returns TenantModel rows whose
+// provider_id is in providerIDs and instance_id is in instanceIDs.
+// Mirrors Python's
+// TenantModelService.get_models_by_provider_ids_and_instance_ids and is
+// used to fetch per-tenant enable/disable overrides in bulk during
+// /api/v1/models response assembly. The Go port never WRITES to
+// tenant_model, so callers must treat an empty result as "use factory
+// defaults" — see ModelProviderService.ListTenantAddedModels.
+func (dao *TenantModelDAO) GetModelsByProviderIDsAndInstanceIDs(providerIDs, instanceIDs []string) ([]*entity.TenantModel, error) {
+	models := make([]*entity.TenantModel, 0)
+	if len(providerIDs) == 0 || len(instanceIDs) == 0 {
+		return models, nil
 	}
-	err := DB.WithContext(ctx).Where("provider_id IN ? AND instance_id IN ?", providers, instances).Order("model_name, id").Find(&rows).Error
-	return rows, err
+	err := DB.Where("provider_id IN ? AND instance_id IN ?", providerIDs, instanceIDs).Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+	return models, nil
 }

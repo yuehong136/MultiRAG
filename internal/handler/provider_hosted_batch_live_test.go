@@ -1,241 +1,132 @@
 package handler_test
 
 import (
-	"bytes"
-	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net"
+	"multirag/internal/cli"
+	"multirag/internal/testsupport"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/gin-gonic/gin"
-	"multirag/internal/cli"
-	"multirag/internal/common"
-	"multirag/internal/dao"
-	"multirag/internal/entity"
-	"multirag/internal/handler"
-	"multirag/internal/server"
-	"multirag/internal/service"
 )
 
-// Controlled identity and provider edges; real registered handlers, CLI, SQL and
-// HTTP. This does not claim production auth or real cloud-provider acceptance.
 func TestHostedProviderRoutesScratchPostgres(t *testing.T) {
-	config := os.Getenv("MULTIRAG_HOSTED_PROVIDER_CONFIG")
-	if config == "" {
-		if os.Getenv("REQUIRE_SERVICES") == "1" {
-			t.Fatal("owned config required")
-		}
-		t.Skip("requires owned hosted-provider config")
+	f := newCanonicalProviderFixture(t)
+	for _, provider := range []string{"Mistral", "Jina", "Novita", "LongCat"} {
+		t.Run(provider, func(t *testing.T) { exerciseCanonicalChat(t, f, provider, "served", "one") })
 	}
-	t.Chdir(filepath.Join("..", ".."))
-	if e := common.Init("error"); e != nil {
-		t.Fatal(e)
-	}
-	if e := server.FromConfigFile(config); e != nil {
-		t.Fatal("private config invalid")
-	}
-	if !strings.HasPrefix(server.GetConfig().Database.Database, "multirag_go_models_") {
-		t.Fatal("unowned DB")
-	}
-	if e := dao.InitDB(); e != nil {
-		t.Fatal("owned DB startup failed", e)
-	}
-	pool, e := dao.DB.DB()
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer pool.Close()
-	dsn, e := dao.PostgresDSN(server.GetConfig().Database)
-	if e != nil {
-		t.Fatal("readback DSN")
-	}
-	readback, e := sql.Open("pgx", dsn)
-	if e != nil {
-		t.Fatal("readback connection")
-	}
-	defer readback.Close()
-	port, _ := strconv.Atoi(os.Getenv("MULTIRAG_HOSTED_TEST_PORT_BASE"))
-	listen := func(h http.Handler) *httptest.Server {
-		address := "127.0.0.1:0"
-		if port > 0 {
-			address = fmt.Sprintf("127.0.0.1:%d", port)
-			port++
-		}
-		l, e := net.Listen("tcp", address)
-		if e != nil {
-			t.Fatal(e)
-		}
-		s := httptest.NewUnstartedServer(h)
-		s.Listener.Close()
-		s.Listener = l
-		s.Start()
-		t.Cleanup(s.Close)
-		t.Log("owned listener", l.Addr().String())
-		return s
-	}
-	active := "1"
-	for _, id := range []string{"hosted-owner", "hosted-other"} {
-		if e := dao.DB.Create(&entity.UserTenant{ID: id, UserID: id, TenantID: id, Role: "owner", InvitedBy: id, Status: &active}).Error; e != nil {
-			t.Fatal(e)
-		}
-	}
-	var calls atomic.Int32
-	manager := dao.GetModelProviderManager()
-	for _, p := range []string{"Mistral", "Jina", "Novita", "LongCat"} {
-		provider := manager.FindProvider(p)
-		if provider == nil {
-			t.Fatal("catalog missing")
-		}
-		if e := dao.DB.Create(&entity.TenantModelProvider{ID: p, TenantID: "hosted-owner", ProviderName: p}).Error; e != nil {
-			t.Fatal(e)
-		}
-		for i := 0; i < 2; i++ {
-			key := p + strconv.Itoa(i)
-			fixture := listen(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls.Add(1)
-				if r.Header.Get("Authorization") != "Bearer "+key {
-					t.Error("credential isolation")
-				}
-				var b map[string]any
-				if e := json.NewDecoder(r.Body).Decode(&b); e != nil {
-					t.Error(e)
-				}
-				switch {
-				case strings.HasSuffix(r.URL.Path, "embeddings"):
-					if p == "Mistral" && (b["output_dimension"] != float64(2) || b["dimensions"] != nil) {
-						t.Error("Mistral native dimension missing", b)
-					}
-					data := []any{}
-					for j := range b["input"].([]any) {
-						data = append(data, map[string]any{"index": j, "embedding": []float64{0, float64(i + 1)}})
-					}
-					json.NewEncoder(w).Encode(map[string]any{"data": data})
-				case strings.HasSuffix(r.URL.Path, "rerank"):
-					fmt.Fprint(w, `{"results":[{"index":1,"relevance_score":1},{"index":0,"relevance_score":0}]}`)
-				case strings.HasSuffix(r.URL.Path, "chat/completions"):
-					if b["stream"] == true {
-						fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n")
-					} else {
-						fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
-					}
-				default:
-					t.Error("endpoint", r.URL.Path)
-					w.WriteHeader(404)
-				}
-			}))
-			extra, _ := json.Marshal(map[string]string{"region": "office", "base_url": fixture.URL + "/instance"})
-			if e := dao.DB.Create(&entity.TenantModelInstance{ID: key, ProviderID: p, InstanceName: strconv.Itoa(i), APIKey: key, Status: "active", Extra: string(extra)}).Error; e != nil {
-				t.Fatal(e)
+}
+
+func TestAdditionalCanonicalProviderConsumersHTTPCLIAndSQL(t *testing.T) {
+	f := newCanonicalProviderFixture(t)
+	for _, tc := range []struct{ provider, model string }{
+		{"HuaweiCloud", "DeepSeek-V3"}, {"ModelScope", "tenant-chat"}, {"OrcaRouter", "orcarouter/auto"},
+		{"Qiniu", "qwen3-32b"}, {"CoHere", "command-r7b-12-2024"}, {"StepFun", "step-2-16k"}, {"Baichuan", "Baichuan4"},
+	} {
+		t.Run(tc.provider+"/chat", func(t *testing.T) {
+			for _, instance := range []string{"one", "two"} {
+				t.Run(instance, func(t *testing.T) { exerciseCanonicalChat(t, f, tc.provider, tc.model, instance) })
 			}
-		}
+		})
 	}
-	svc := service.NewModelProviderService()
-	h := handler.NewProviderHandler(nil, svc)
-	gin.SetMode(gin.ReleaseMode)
-	router := gin.New()
-	router.Use(func(c *gin.Context) {
-		id := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
-		if id == "hosted-owner" || id == "hosted-other" {
-			c.Set("user", &entity.User{ID: id})
-		}
-		c.Next()
-	})
-	router.POST("/api/v1/chat/completions", h.ChatToModel)
-	router.POST("/api/v1/embeddings", h.EmbedText)
-	router.POST("/api/v1/rerank", h.RerankDocument)
-	api := listen(router)
-	request := func(path, identity string, body map[string]any, valid bool) string {
-		data, _ := json.Marshal(body)
-		req, _ := http.NewRequest("POST", api.URL+path, bytes.NewReader(data))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+identity)
-		resp, e := http.DefaultClient.Do(req)
-		if e != nil {
-			t.Fatal(e)
-		}
-		defer resp.Body.Close()
-		data, e = io.ReadAll(resp.Body)
-		if e != nil {
-			t.Fatal(e)
-		}
-		if body["stream"] == true && valid {
-			if !strings.Contains(string(data), "[DONE]") {
-				t.Fatal("stream missing done", string(data))
+	for _, tc := range []struct{ provider, model, kind string }{
+		{"HuaweiCloud", "bge-m3", "embedding"}, {"HuaweiCloud", "bge-reranker-v2-m3", "rerank"},
+		{"CoHere", "embed-v4.0", "embedding"}, {"CoHere", "rerank-v3.5", "rerank"},
+		{"Baichuan", "Baichuan-Text-Embedding", "embedding"}, {"Upstage", "solar-embedding-1-large-query", "embedding"},
+	} {
+		t.Run(tc.provider+"/"+tc.kind, func(t *testing.T) {
+			for _, instance := range []string{"one", "two"} {
+				t.Run(instance, func(t *testing.T) { exerciseCanonicalInference(t, f, tc.provider, tc.model, instance, tc.kind) })
 			}
-			return string(data)
-		}
-		var result struct{ Code common.ErrorCode }
-		if e := json.Unmarshal(data, &result); e != nil {
-			t.Fatal(e)
-		}
-		if (result.Code == common.CodeSuccess) != valid {
-			t.Fatal(path, result.Code, valid)
-		}
-		return string(data)
+		})
 	}
-	for _, p := range []string{"Mistral", "Jina", "Novita", "LongCat"} {
-		for i := 0; i < 2; i++ {
-			if p == "Mistral" || p == "Jina" {
-				model := "mistral-embed"
-				if p == "Jina" {
-					model = "jina-embeddings-v3"
-				}
-				parsed, _ := url.Parse(api.URL)
-				port, _ := strconv.Atoi(parsed.Port())
-				httpClient := cli.NewHTTPClient()
-				httpClient.Host = parsed.Hostname()
-				httpClient.Port = port
-				httpClient.APIKey = "hosted-owner"
-				client := cli.NewMultiRAGClient("user")
-				client.HTTPClient = httpClient
-				command, e := cli.NewParser(fmt.Sprintf("embed text 'a' 'b' with '%s@%d@%s' dimension 2;", model, i, p)).Parse(false)
-				if e != nil {
-					t.Fatal(e)
-				}
-				result, e := client.ExecuteUserCommand(command)
-				if e != nil {
-					t.Fatal(e)
-				}
-				rows := result.(*cli.EmbeddingsResponse).Data
-				if len(rows) != 2 || rows[1].Embedding[1] != float64(i+1) {
-					t.Fatal(rows)
-				}
-				if p == "Jina" {
-					request("/api/v1/rerank", "hosted-owner", map[string]any{"provider_name": p, "instance_name": fmt.Sprint(i), "model_name": "jina-reranker-v3", "query": "q", "documents": []string{"a", "b"}}, true)
-				}
-			} else {
-				body := map[string]any{"provider_name": p, "instance_name": fmt.Sprint(i), "model_name": manager.FindProvider(p).Models[0].Name, "message": "q"}
-				request("/api/v1/chat/completions", "hosted-owner", body, true)
-				body["stream"] = true
-				request("/api/v1/chat/completions", "hosted-owner", body, true)
+	for _, tc := range []struct{ provider, model, kind string }{
+		{"OrcaRouter", "openai/tts-1", "tts"}, {"StepFun", "step-tts-2", "tts"}, {"CoHere", "cohere-transcribe-03-2026", "speech2text"},
+	} {
+		t.Run(tc.provider+"/"+tc.kind, func(t *testing.T) {
+			for _, instance := range []string{"one", "two"} {
+				t.Run(instance, func(t *testing.T) { exerciseCanonicalMedia(t, f, tc.provider, tc.model, instance, tc.kind) })
 			}
-		}
+		})
 	}
-	snapshot := func() string {
-		var value string
-		e := readback.QueryRow(`SELECT (SELECT md5(string_agg(row_to_json(t)::text,',' ORDER BY id)) FROM tenant_model_instance t)||':'||(SELECT count(*)::text FROM tenant_model)||':'||(SELECT count(*)::text FROM tenant_model_provider)`).Scan(&value)
-		if e != nil {
-			t.Fatal(e)
-		}
-		return value
+}
+
+func TestRoot55CanonicalProviderConsumersHTTPCLIAndSQL(t *testing.T) {
+	f := newCanonicalProviderFixture(t)
+	for _, tc := range []struct{ provider, model string }{
+		{"VolcEngine", "doubao-seed-2-0-pro-260215"}, {"TokenHub", "gpt-4o-mini"}, {"xAI", "grok-4"}, {"LongCat", "LongCat-Flash-Chat"}, {"NVIDIA", "meta/llama-3.1-8b-instruct"}, {"HuggingFace", "tenant-chat"}, {"GPUStack", "tenant-chat"}, {"Azure-OpenAI", "tenant-chat"}, {"n1n", "gpt-4o-mini"}, {"lmstudio", "tenant-chat"}, {"MiniMax", "MiniMax-M2.1"}, {"Baidu", "deepseek-v3.2"},
+	} {
+		t.Run(tc.provider+"/chat", func(t *testing.T) {
+			for _, instance := range []string{"one", "two"} {
+				t.Run(instance, func(t *testing.T) { exerciseCanonicalChat(t, f, tc.provider, tc.model, instance) })
+			}
+		})
 	}
-	before, n := snapshot(), calls.Load()
-	for _, id := range []string{"", "hosted-other", "hosted-owner"} {
-		request("/api/v1/embeddings", id, map[string]any{"provider_name": "Mistral", "instance_name": "0", "model_name": "mistral-large-latest", "texts": []string{"q"}}, false)
+	for _, tc := range []struct{ provider, model, kind string }{
+		{"VolcEngine", "doubao-embedding-vision-250615", "embedding"}, {"NVIDIA", "nvidia/nv-rerankqa-mistral-4b-v3", "rerank"}, {"Gitee", "BAAI/bge-reranker-v2-m3", "rerank"}, {"Gitee", "BAAI/bge-m3", "embedding"},
+		{"Aliyun", "text-embedding-v3", "embedding"}, {"Aliyun", "gte-rerank-v2", "rerank"}, {"Bedrock", "cohere.embed-english-v3", "embedding"},
+		{"HuggingFace", "sentence-transformers/all-MiniLM-L6-v2", "embedding"}, {"GPUStack", "tenant-embed", "embedding"}, {"Azure-OpenAI", "tenant-embed", "embedding"},
+		{"n1n", "text-embedding-3-small", "embedding"}, {"n1n", "BAAI/bge-reranker-v2-m3", "rerank"}, {"Baidu", "embedding-v1", "embedding"}, {"Baidu", "qwen3-reranker-4b", "rerank"},
+		{"Mistral", "mistral-embed", "embedding"}, {"Jina", "jina-embeddings-v3", "embedding"}, {"Jina", "jina-reranker-v3", "rerank"},
+		{"TogetherAI", "intfloat/multilingual-e5-large-instruct", "embedding"}, {"Xinference", "tenant-embed", "embedding"}, {"Xinference", "tenant-rerank", "rerank"}, {"Novita", "baai/bge-reranker-v2-m3", "rerank"},
+		{"Replicate", "yxzwayne/bge-reranker-v2-m3:7f7c6e9d18336e2cbf07d88e9362d881d2fe4d6a9854ec1260f115cabc106a8c", "rerank"},
+	} {
+		t.Run(tc.provider+"/"+tc.kind, func(t *testing.T) {
+			for _, instance := range []string{"one", "two"} {
+				t.Run(instance, func(t *testing.T) { exerciseCanonicalInference(t, f, tc.provider, tc.model, instance, tc.kind) })
+			}
+		})
 	}
-	request("/api/v1/chat/completions", "hosted-owner", map[string]any{"provider_name": "Jina", "instance_name": "0", "model_name": "jina-embeddings-v3", "message": "q"}, false)
-	if snapshot() != before || calls.Load() != n {
-		t.Fatal("HTTP denial changed SQL or contacted supplier")
+}
+
+func TestRoot55UnsupportedHostedCapabilitiesHTTPCLIAndSQL(t *testing.T) {
+	f := newCanonicalProviderFixture(t)
+	var calls atomic.Int64
+	supplier := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		t.Error("unsupported native method contacted supplier")
+	}))
+	for _, tc := range []struct{ provider, kind string }{{"Mistral", "asr"}, {"Mistral", "tts"}, {"LongCat", "embedding"}, {"LongCat", "rerank"}, {"Jina", "tts"}, {"HuggingFace", "rerank"}} {
+		t.Run(tc.provider+"/"+tc.kind, func(t *testing.T) {
+			id := f.enroll(t, tc.provider, "unsupported-"+tc.kind, "private-key", supplier.URL, "unsupported-model", tc.kind)
+			before := f.snapshot(t)
+			body := map[string]any{"model_id": id}
+			path, syntax := "", ""
+			switch tc.kind {
+			case "asr":
+				path = "/api/v1/audio/transcriptions"
+				body["file"] = "UklGRiYAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQIAAAABgA=="
+				syntax = ""
+			case "tts":
+				path = "/api/v1/audio/speech"
+				body["text"] = "speak"
+				syntax = fmt.Sprintf("TTS WITH '%s' TEXT 'speak';", id)
+			case "embedding":
+				path = "/api/v1/embeddings"
+				body["texts"] = []string{"q"}
+				syntax = fmt.Sprintf("EMBED TEXT 'q' WITH '%s';", id)
+			case "rerank":
+				path = "/api/v1/rerank"
+				body["query"] = "q"
+				body["documents"] = []string{"a"}
+				syntax = fmt.Sprintf("RERANK QUERY 'q' DOCUMENT 'a' WITH '%s' TOP 1;", id)
+			}
+			_, failed, _ := f.request(t, "owner", "POST", path, body)
+			if providerEnvelopeError(failed) == nil || !strings.Contains(fmt.Sprint(failed["message"]), "no such method") {
+				t.Fatal("unsupported native HTTP capability did not reach original method", failed["message"])
+			}
+			if syntax != "" {
+				cmd, err := cli.NewParser(syntax).Parse(cli.APIMode)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = f.cli(t, "owner").ExecuteCommand(cmd); err == nil {
+					t.Fatal("unsupported CLI capability succeeded")
+				}
+			}
+			if f.snapshot(t) != before || calls.Load() != 0 {
+				t.Fatal("unsupported operation had SQL/provider effects")
+			}
+		})
 	}
-	t.Log("actual CLI embedding plus chat, SSE and rerank handlers; independent denial SQL snapshot and zero supplier calls passed")
 }

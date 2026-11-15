@@ -222,10 +222,6 @@ func (t *TushareTool) InvokableRun(ctx context.Context, argsJSON string, _ ...to
 			fmt.Errorf("tushare: %s", msg)
 	}
 
-	if raw.Data == nil {
-		err := fmt.Errorf("tushare: missing result data")
-		return tushareErrJSON(err), err
-	}
 	env := tushareEnvelope{Error: ""}
 	if raw.Data != nil {
 		env.Fields = raw.Data.Fields

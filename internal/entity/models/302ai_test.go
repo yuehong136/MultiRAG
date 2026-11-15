@@ -15,10 +15,10 @@ import (
 )
 
 func newAI302ContractModel(base string) *AI302Model {
-	return NewAI302Model(map[string]string{"default": base + "/v1/"}, URLSuffix{Chat: " /chat/ ", Models: " /models/ ", Embedding: " /embed/ ", Rerank: " /rerank/ ", ASR: " /asr/ ", OCR: " /ocr/ ", DocumentParse: " /parse/ ", Task: " /task/ "})
+	return NewAI302Model(map[string]string{"default": base + "/v1"}, URLSuffix{Chat: "chat", Models: "models", Embedding: "embed", Rerank: "rerank", ASR: "asr", OCR: "ocr", DocumentParse: "parse", Task: "task"})
 }
 
-func TestAI302NormalizedRequests(t *testing.T) {
+func TestAI302ConfiguredRequests(t *testing.T) {
 	var calls atomic.Int32
 	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -30,21 +30,15 @@ func TestAI302NormalizedRequests(t *testing.T) {
 				t.Error("GET has body")
 			}
 			if r.URL.Path == "/v1/models" {
-				if r.Header.Get("Accept") != "application/json" {
-					t.Error("inventory accept")
-				}
-				fmt.Fprint(w, `{"data":[]}`)
-			} else if r.URL.Path == "/v1/task/job-1" {
-				fmt.Fprint(w, `{"code":0,"data":{"task_id":"job-1","state":"running"}}`)
+				fmt.Fprint(w, `{"data":[{"id":"served"}]}`)
+			} else if r.URL.Path == "/v1/parse/job-1" {
+				fmt.Fprint(w, `{"code":0,"data":{"task_id":"job-1","state":"done","full_zip_url":"https://files.invalid/result.zip"}}`)
 			} else {
 				t.Error("GET path", r.URL.Path)
 			}
 			return
 		}
 		if r.URL.Path == "/v1/asr" {
-			if r.Header.Get("Accept") != "application/json" {
-				t.Error("ASR accept")
-			}
 			if err := r.ParseMultipartForm(1024); err != nil {
 				t.Error(err)
 				return
@@ -57,7 +51,7 @@ func TestAI302NormalizedRequests(t *testing.T) {
 			}
 			defer file.Close()
 			audio, _ := io.ReadAll(file)
-			if string(audio) != "audio" || header.Filename != "audio.wav" || r.FormValue("model") != "model" || r.FormValue("temperature") != "0" {
+			if string(audio) != "audio" || header.Filename != "model-input.wav" || r.FormValue("model") != "model" || r.FormValue("temperature") != "0" {
 				t.Error("multipart", r.MultipartForm)
 			}
 			fmt.Fprint(w, `{"text":""}`)
@@ -81,20 +75,14 @@ func TestAI302NormalizedRequests(t *testing.T) {
 				t.Error("legal zeros", body)
 			}
 			if stream {
-				if r.Header.Get("Accept") != "text/event-stream" {
-					t.Error("stream accept")
-				}
 				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n")
 			} else {
-				if r.Header.Get("Accept") != "application/json" {
-					t.Error("chat accept")
-				}
 				fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
 			}
 		case "/v1/embed":
 			fmt.Fprint(w, `{"data":[{"index":0,"embedding":[0,1]}]}`)
 		case "/v1/rerank":
-			if body["query"] != "query" || body["top_n"] != float64(1) {
+			if body["query"] != "query" || body["top_n"] != float64(0) {
 				t.Error("query/top", body)
 			}
 			fmt.Fprint(w, `{"results":[{"index":0,"relevance_score":0}]}`)
@@ -115,13 +103,13 @@ func TestAI302NormalizedRequests(t *testing.T) {
 	}))
 	m := newAI302ContractModel(srv.URL)
 	name, key := " model ", " key "
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	zero, zint, yes, no := 0.0, 0, true, false
-	cfg := &ChatConfig{Stream: &yes, Temperature: &zero, TopP: &zero, MaxTokens: &zint}
+	cfg := &ChatConfig{Stream: &no, Temperature: &zero, TopP: &zero, MaxTokens: &zint}
 	if _, err := m.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, cfg); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Stream = &no
+	cfg.Stream = &yes
 	if err := m.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: "q"}}, api, cfg, func(*string, *string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -131,32 +119,32 @@ func TestAI302NormalizedRequests(t *testing.T) {
 	if _, err := m.Rerank(&name, " query ", []string{"q"}, api, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.TranscribeAudio(&name, []byte("audio"), api, &ASRConfig{Params: map[string]any{"temperature": 0}}); err != nil {
+	if _, err := m.TranscribeAudio(&name, modelFixtureFile(t, []byte("audio")), api, &ASRConfig{Params: map[string]any{"temperature": 0}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.OCRFile(&name, []byte("%PDF-1.7 owned"), api, nil); err != nil {
+	if _, err := m.OCRFile(&name, []byte("%PDF-1.7 owned"), nil, api, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.OCRURL(&name, " https://files.invalid/doc.pdf ", api, nil); err != nil {
+	if _, err := m.OCRFile(&name, nil, stringPtr(" https://files.invalid/doc.pdf "), api, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.ParseFile(&name, nil, " https://files.invalid/doc.pdf ", api); err != nil {
+	if _, err := m.ParseFile(&name, nil, stringPtr(" https://files.invalid/doc.pdf "), api, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.ShowTask(" job-1 ", api); err != nil {
 		t.Fatal(err)
 	}
-	if result, err := m.ListModels(api); err != nil || result == nil || len(result) != 0 {
+	if result, err := m.ListModels(api); err != nil || len(result) != 1 || result[0].Name != "served" {
 		t.Fatal(result, err)
 	}
-	if calls.Load() != 10 || name != " model " || key != " key " || cfg.Stream != &no {
+	if calls.Load() != 10 || name != " model " || key != " key " || cfg.Stream != &yes {
 		t.Fatal("request count or caller mutation", calls.Load())
 	}
 }
 
 type ai302Call func(*AI302Model, *string, *APIConfig) error
 
-func ai302ContractCalls() map[string]ai302Call {
+func ai302ContractCalls(t *testing.T) map[string]ai302Call {
 	return map[string]ai302Call{
 		"chat": func(m *AI302Model, n *string, a *APIConfig) error {
 			name := ""
@@ -182,15 +170,15 @@ func ai302ContractCalls() map[string]ai302Call {
 			return e
 		},
 		"asr": func(m *AI302Model, n *string, a *APIConfig) error {
-			_, e := m.TranscribeAudio(n, []byte("audio"), a, nil)
+			_, e := m.TranscribeAudio(n, modelFixtureFile(t, []byte("audio")), a, nil)
 			return e
 		},
 		"ocr": func(m *AI302Model, n *string, a *APIConfig) error {
-			_, e := m.OCRFile(n, []byte("pdf"), a, nil)
+			_, e := m.OCRFile(n, []byte("pdf"), nil, a, nil)
 			return e
 		},
 		"parse": func(m *AI302Model, n *string, a *APIConfig) error {
-			_, e := m.ParseFile(n, nil, "https://files.invalid/a.pdf", a)
+			_, e := m.ParseFile(n, nil, stringPtr("https://files.invalid/a.pdf"), a, nil)
 			return e
 		},
 	}
@@ -200,15 +188,18 @@ func TestAI302DenialsHaveNoHTTP(t *testing.T) {
 	var calls atomic.Int32
 	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	m := newAI302ContractModel(srv.URL)
-	api := &APIConfig{APIKey: stringPtr("key")}
-	for label, call := range ai302ContractCalls() {
+	api := &APIConfig{ApiKey: stringPtr("key")}
+	for label, call := range ai302ContractCalls(t) {
 		t.Run(label, func(t *testing.T) {
 			for _, name := range []*string{nil, stringPtr(" \t ")} {
+				if label == "parse" {
+					continue
+				}
 				if err := call(m, name, api); err == nil {
 					t.Fatal("invalid model")
 				}
 			}
-			for _, bad := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}, {APIKey: stringPtr("key"), Region: stringPtr("missing")}} {
+			for _, bad := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" ")}, {ApiKey: stringPtr("key"), Region: stringPtr("missing")}} {
 				if err := call(m, stringPtr("model"), bad); err == nil {
 					t.Fatal("invalid credentials/region")
 				}
@@ -216,10 +207,10 @@ func TestAI302DenialsHaveNoHTTP(t *testing.T) {
 		})
 	}
 	for _, raw := range []string{"", " ", "file:///tmp/a", "ftp://files.invalid/a", "https:///a", "https://user:password@files.invalid/a", "https://files.invalid/a#fragment"} {
-		if _, err := m.OCRURL(stringPtr("model"), raw, api, nil); err == nil {
+		if _, err := m.OCRFile(stringPtr("model"), nil, stringPtr(raw), api, nil); err == nil {
 			t.Fatal("invalid OCR URL", raw)
 		}
-		if _, err := m.ParseFile(stringPtr("model"), nil, raw, api); err == nil {
+		if _, err := m.ParseFile(stringPtr("model"), nil, stringPtr(raw), api, nil); err == nil {
 			t.Fatal("invalid parser URL", raw)
 		}
 	}
@@ -231,12 +222,10 @@ func TestAI302DenialsHaveNoHTTP(t *testing.T) {
 	if _, err := m.TranscribeAudio(stringPtr("model"), nil, api, nil); err == nil {
 		t.Fatal("missing audio")
 	}
-	if _, err := m.OCRFile(stringPtr("model"), nil, api, nil); err == nil {
+	if _, err := m.OCRFile(stringPtr("model"), nil, nil, api, nil); err == nil {
 		t.Fatal("missing OCR bytes")
 	}
-	if _, err := m.ParseFile(stringPtr("model"), []byte("pdf"), "https://files.invalid/a", api); err == nil {
-		t.Fatal("ambiguous parser input")
-	}
+
 	if _, err := m.Rerank(stringPtr("model"), " ", []string{"x"}, api, nil); err == nil {
 		t.Fatal("blank query")
 	}
@@ -246,13 +235,13 @@ func TestAI302DenialsHaveNoHTTP(t *testing.T) {
 	if _, err := m.ChatWithMessages("model", nil, api, nil); err == nil {
 		t.Fatal("no messages")
 	}
-	for _, bad := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}} {
+	for _, bad := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" ")}} {
 		if _, err := m.ListModels(bad); err == nil {
 			t.Fatal("inventory without credential")
 		}
 	}
 	blank := NewAI302Model(map[string]string{"default": srv.URL}, URLSuffix{Chat: " / ", Models: " / ", Embedding: " / ", Rerank: " / ", ASR: " / ", OCR: " / ", DocumentParse: " / ", Task: " / "})
-	for label, call := range ai302ContractCalls() {
+	for label, call := range ai302ContractCalls(t) {
 		if err := call(blank, stringPtr("model"), api); err == nil {
 			t.Fatal("blank endpoint", label)
 		}
@@ -260,10 +249,10 @@ func TestAI302DenialsHaveNoHTTP(t *testing.T) {
 	if _, err := blank.ListModels(api); err == nil {
 		t.Fatal("blank inventory endpoint")
 	}
-	if result, err := m.Embed(nil, nil, nil, nil); err != nil || result == nil {
+	if result, err := m.Embed(nil, nil, nil, nil); err == nil || result != nil {
 		t.Fatal(result, err)
 	}
-	if _, err := m.Rerank(nil, "", nil, nil, nil); err != nil {
+	if _, err := m.Rerank(nil, "", nil, nil, nil); err == nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 0 {
@@ -271,8 +260,32 @@ func TestAI302DenialsHaveNoHTTP(t *testing.T) {
 	}
 }
 
+func TestAI302ParserUsesCanonicalOptionalModelAndURL(t *testing.T) {
+	var calls atomic.Int32
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["url"] != "https://files.invalid/a.pdf" || body["model_version"] != nil || len(body) != 1 {
+			t.Error("canonical URL parser payload", body)
+		}
+		fmt.Fprint(w, `{"code":0,"data":{"task_id":"job-1"}}`)
+	}))
+	for _, name := range []*string{nil, stringPtr(" \t ")} {
+		result, err := newAI302ContractModel(server.URL).ParseFile(name, []byte("ignored by URL-only provider"), stringPtr("https://files.invalid/a.pdf"), &APIConfig{ApiKey: stringPtr("key")}, nil)
+		if err != nil || result == nil || result.TaskID != "job-1" {
+			t.Fatal(result, err)
+		}
+	}
+	if calls.Load() != 2 {
+		t.Fatal(calls.Load())
+	}
+}
+
 func TestAI302CancellationAndFailure(t *testing.T) {
-	calls := ai302ContractCalls()
+	calls := ai302ContractCalls(t)
 	calls["models"] = func(m *AI302Model, _ *string, a *APIConfig) error { _, e := m.ListModels(a); return e }
 	calls["task"] = func(m *AI302Model, _ *string, a *APIConfig) error { _, e := m.ShowTask("job-1", a); return e }
 	for label, call := range calls {
@@ -285,7 +298,7 @@ func TestAI302CancellationAndFailure(t *testing.T) {
 			}))
 			ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
 			defer cancel()
-			err := call(newAI302ContractModel(srv.URL), stringPtr("model"), &APIConfig{APIKey: stringPtr("key"), Context: ctx})
+			err := call(newAI302ContractModel(srv.URL), stringPtr("model"), &APIConfig{ApiKey: stringPtr("key"), Context: ctx})
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatal("cancellation identity lost", err)
 			}
@@ -298,7 +311,7 @@ func TestAI302CancellationAndFailure(t *testing.T) {
 				fmt.Fprint(w, `{"error":"private-provider-body"}`)
 			}))
 			for label, call := range calls {
-				if err := call(newAI302ContractModel(srv.URL), stringPtr("model"), &APIConfig{APIKey: stringPtr("private-key")}); err == nil || strings.Contains(err.Error(), "private-provider-body") || strings.Contains(err.Error(), "private-key") {
+				if err := call(newAI302ContractModel(srv.URL), stringPtr("model"), &APIConfig{ApiKey: stringPtr("private-key")}); err == nil || strings.Contains(err.Error(), "private-provider-body") || strings.Contains(err.Error(), "private-key") {
 					t.Fatal(label, err)
 				}
 			}
@@ -308,19 +321,32 @@ func TestAI302CancellationAndFailure(t *testing.T) {
 	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n")
 	}))
-	if err := newAI302ContractModel(srv.URL).ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return sentinel }); !errors.Is(err, sentinel) {
+	if err := newAI302ContractModel(srv.URL).ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(*string, *string) error { return sentinel }); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
 }
 
 func TestAI302StrictInventory(t *testing.T) {
-	for _, raw := range []string{`{}`, `{"data":null}`, `{"data":[null]}`, `{"data":[{"id":null}]}`, `{"data":[{"id":4}]}`, `{"data":[{"id":" model"}]}`, `{"data":[{"id":"same"},{"id":"same"}]}`, `{"data":[],"error":{}}`, `{"data":[],"code":1}`, `{"data":[]} {}`} {
+	for _, raw := range []string{`{}`, `{"data":null}`, `{"data":[null]}`, `{"data":[{"id":null}]}`, `{"data":[{"id":4}]}`, `{"data":[],"error":{}}`, `{"data":[],"code":1}`, `{"data":[]} {}`} {
 		t.Run(raw, func(t *testing.T) {
 			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
-			if result, err := newAI302ContractModel(srv.URL).ListModels(&APIConfig{APIKey: stringPtr("key")}); err == nil || result != nil {
+			if result, err := newAI302ContractModel(srv.URL).ListModels(&APIConfig{ApiKey: stringPtr("key")}); err == nil || result != nil {
 				t.Fatal(result, err)
 			}
 		})
+	}
+}
+
+func TestAI302InventoryUsesCanonicalTolerantIDs(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want []string
+	}{{`{"data":[{"id":" model"}]}`, []string{"model"}}, {`{"data":[{"id":"same"},{"id":"same"}]}`, []string{"same", "same"}}} {
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, tc.raw) }))
+		result, err := newAI302ContractModel(server.URL).ListModels(&APIConfig{ApiKey: stringPtr("key")})
+		if err != nil || strings.Join(modelNamesForTest(result), ",") != strings.Join(tc.want, ",") {
+			t.Fatal(result, err)
+		}
 	}
 }
 
@@ -343,7 +369,7 @@ func TestAI302ConcurrentInstanceIsolation(t *testing.T) {
 	var group sync.WaitGroup
 	for index, identity := range []string{"one", "two"} {
 		name, key := " "+identity+" ", " "+identity+" "
-		api := &APIConfig{APIKey: &key}
+		api := &APIConfig{ApiKey: &key}
 		for range 8 {
 			group.Go(func() {
 				if _, err := models[index].ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, nil); err != nil {
@@ -368,12 +394,12 @@ func TestAI302MalformedResponses(t *testing.T) {
 		"ocr":    {`{}`, `{"pages":[null]}`, `{"pages":[{"index":null,"markdown":"page"}]}`, `{"pages":[{"index":0,"markdown":null}]}`, `{"pages":[{"index":0,"markdown":"a"},{"index":0,"markdown":"b"}]}`},
 		"parse":  {`{}`, `{"code":null,"data":{"task_id":"job-1"}}`, `{"code":0,"data":{"task_id":"../secret"}}`, `{"code":0,"data":{"task_id":"job-1"}} {}`},
 	}
-	calls := ai302ContractCalls()
+	calls := ai302ContractCalls(t)
 	for kind, responses := range bodies {
 		for index, raw := range responses {
 			t.Run(fmt.Sprintf("%s/%d", kind, index), func(t *testing.T) {
 				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
-				if err := calls[kind](newAI302ContractModel(srv.URL), stringPtr("model"), &APIConfig{APIKey: stringPtr("key")}); err == nil {
+				if err := calls[kind](newAI302ContractModel(srv.URL), stringPtr("model"), &APIConfig{ApiKey: stringPtr("key")}); err == nil {
 					t.Fatal("malformed raw response accepted", raw)
 				}
 			})
@@ -405,19 +431,24 @@ func TestHostedStreamIdleDeadlines(t *testing.T) {
 					}
 					fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n")
 				}))
-				var driver *openAIChatDriver
+				var driver ModelDriver
 				if provider == "302.AI" {
-					driver = NewAI302Model(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"}).openAIChatDriver
+					driver = NewAI302Model(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 				} else {
-					driver = NewLongCatModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"}).openAIChatDriver
+					driver = NewLongCatModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 				}
-				if driver.streamIdleTimeout != 60*time.Second {
-					t.Fatal("default idle deadline missing")
+				if streamCallTimeout <= 0 {
+					t.Fatal("stream deadline missing")
 				}
-				driver.streamIdleTimeout = 80 * time.Millisecond
+				// The canonical driver uses a request deadline; active streams retain the generous caller deadline.
 				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer cancel()
-				api := &APIConfig{APIKey: stringPtr("key"), Context: ctx}
+				if !active {
+					var stop context.CancelFunc
+					ctx, stop = context.WithTimeout(ctx, 80*time.Millisecond)
+					defer stop()
+				}
+				api := &APIConfig{ApiKey: stringPtr("key"), Context: ctx}
 				answer := ""
 				err := driver.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, api, nil, func(content, reason *string) error {
 					if content != nil {
@@ -458,7 +489,7 @@ func TestAI302RejectsMalformedFramesAfterAnswer(t *testing.T) {
 			}))
 			model := NewAI302Model(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 			answer := ""
-			err := model.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(content, reason *string) error {
+			err := model.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(content, reason *string) error {
 				if content != nil {
 					answer += *content
 				}

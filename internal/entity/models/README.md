@@ -1,170 +1,44 @@
-# Go model adapters
+# Go 模型驱动
 
-The Go implementation is a parallel consumer; Python remains the production backend.
-Provider catalogs live in `configs/models/`. A model's declared type and its driver's
-optional media interface must both match before the service invokes a provider.
+本目录是 Go 并行实现，Python 仍是生产后端。Go 的 provider 配置位于
+`configs/models/` 与 `configs/all_models.json`；本目录、驱动原函数和调用路线按冻结目标维护。对齐范围与具体问题修复见
+[Go 对齐记录](../../../docs/ragflow-porting/go-alignment.md) 和
+[例外记录](../../../docs/ragflow-porting/go-alignment-exceptions.md)。
 
-| Provider | Added capabilities | Wire contract |
-| --- | --- | --- |
-| Astraflow | Embedding, rerank, speech | Indexed OpenAI embeddings, `results` rerank, binary speech with `format` |
-| Groq | ASR, speech, model-specific reasoning options | Multipart ASR, binary speech with `response_format`; GPT-OSS `include_reasoning` and optional effort, Qwen/DeepSeek parsed reasoning |
-| OpenAI | ASR and speech, including streaming | Multipart ASR; JSON/text/SRT/VTT transcription; binary or `speech.audio.*` SSE speech |
-| HunYuan | Chat, reasoning, discovery, embedding | OpenAI-compatible chat/list/embedding; required key and explicit region |
-| TokenHub | Chat, reasoning, discovery, embedding | OpenAI-compatible calls; bodyless model-list GET; explicit zero options retained |
-| HuaweiCloud | Chat/vision, discovery, embedding and rerank | DeepSeek-V3 uses V1/lowercase wire ID; other models use V2 and their declared thinking shape; full indexed vectors/scores validated |
-| ModelScope | Chat and discovery | Tenant endpoint required; root or `/v1` accepted; deployment auth optional, reasoning/thinking aliases supported |
-| OrcaRouter | Chat/discovery and binary speech | `v1` routes; explicit unsupported streaming speech and other unimplemented capabilities |
-| Qiniu | Chat/vision and discovery | Model-specific thinking parameters; embedding, rerank and media remain unavailable |
-| PaddleOCR_Local | OCR from bytes | No required key; base64 `file`, PDF `fileType=0`, `layoutParsingResults[].markdown.text` |
-| 302.AI | Chat/discovery, embedding/rerank, ASR, OCR and URL parse tasks | Trimmed input identities; method-selected chat mode; bodyless authenticated inventory; authorized audio/document bytes and strict indexed results |
-| Voyage AI | Embedding and rerank | `output_dimension`, `top_k`, strict raw indices and scores; no quota-consuming discovery probe |
-| LongCat | Chat and authenticated discovery | `openai/v1/chat/completions`, bodyless `openai/v1/models` GET; strict bounded lists |
-| xAI | Chat/discovery, ASR and binary speech | Multipart `stt`; JSON `tts` with `text`, `voice_id`, `output_format.codec`; binary sender streaming, no provider SSE assumption |
-| Replicate | Chat/embedding predictions and bge rerank | Versioned `v1/predictions` with a 64-character version; JSON pair-list string `input_list`, async polling and finite raw scores |
-| Gitee | Chat, embedding, rerank, OCR and parse | Default `api.moark.ai`, `china` uses `api.moark.com`, `deprecated` uses `ai.gitee.com`; custom instance URL takes precedence |
-| ZHIPU-AI | OCR | `layout_parsing` accepts a data URL or provider-forwarded URL and returns `md_results` |
+`ModelFactory` 创建实现 `ModelDriver` 的具体驱动。驱动使用 `Message`、
+`ChatConfig`、`EmbeddingConfig`、`RerankConfig`、`ASRConfig`、`TTSConfig` 等类型；
+`ChatResponse`、`EmbeddingData`、`RerankResponse` 和媒体/任务响应保留各自含义。
+`NewChatModel`、`NewEmbeddingModel`、`NewRerankModel` 绑定模型名称与凭据，
+Eino 通过 `NewEinoChatModel` 调用已授权的 `ChatModel`。
 
-Local PaddleOCR uses its own provider identity and a tenant instance's explicit
-base URL. It has no URL OCR interface and does not fetch local files or remote
-URLs. Existing `PaddleOCR`, `MinerU` and `mineru_local` identities retain their
-cloud/local semantics; changing those names would reinterpret stored instances.
-The local provider must be admitted by catalog and service local-provider checks.
+`ModelProviderService` 在调用驱动前解析租户、provider instance、模型 ID、状态和能力。
+HTTP handler 使用请求上下文；`APIConfig.Context` 将取消传到原驱动请求方法。
+ASR HTTP 请求中的文件是上传内容，服务负责创建并清理临时文件，驱动读取该文件。
+调用者不能借模型接口读取任意服务器文件。
 
-Media adapters receive authorized bytes from the service, never arbitrary server
-file paths. Identity, credentials and endpoints cannot be overridden through media
-params. Requests use caller cancellation and bounded timeouts; response sizes are
-bounded. Binary speech preserves bytes and format, and propagates sender failures.
-OpenAI SSE requires valid complete frames, a provider terminal and at least one
-result; malformed, missing, truncated or empty streams return errors. An explicit
-empty JSON transcription remains a valid silent transcription; an explicit empty
-OCR page remains a valid blank page.
+## 各驱动的合同
 
-Embedding adapters validate the raw response before reconstruction: count,
-present/unique/ranged indices, dimensions and finite non-null values. Batches
-return no partial vectors after a later failure. Empty input makes no HTTP call.
-Rerank uses the local all-documents meaning of `top_n=0`, and retains zero scores.
+配置中的路径和供应商原方法决定请求，不存在统一的 URL 改写、自动分批、
+参数白名单或全局重排排序层。例如：
 
-The controlled HTTP tests in `afterf9_*_test.go` cover requests, malformed raw
-responses, stream termination, sender failure, deadlines and concurrent instance /
-region isolation. `MULTIRAG_MODEL_TEST_RESOURCES`, when set, records each new test
-listener's allocation intent, exact address and closed-port readback. These tests
-require no supplier account and do not establish real supplier compatibility.
+- SiliconFlow 的单次嵌入输入最多 32 条；其他驱动的请求数量按各自原方法执行。
+- Ollama 的嵌入响应是原生 `embeddings` 数组；多数其他驱动使用带 `index` 的 `data`。
+- `ParseListModel` 返回类型化目录记录，保留原来的 `owned_by` 后缀、空值过滤及元数据查询规则。
+- 重排的 `top_n` / `top_k`、原始响应字段、排序和截断行为由具体驱动决定。
+- `ModelDriver` 是完整接口；未实现的方法明确返回错误，不能用接口类型断言推断实际能力。
+- `*string` 流式 sender 不构成任意二进制音频传输协议；具体媒体方法的支持范围需单独检查。
 
-| Provider | Supported surface | Limits |
-| --- | --- | --- |
-| Ollama | Native `api/chat`, `api/tags`, batched `api/embed` | Installed-model catalog; optional key; explicitly configured OpenAI embedding endpoints remain supported |
-| FuturMix | OpenAI chat and event-framed SSE, including reasoning deltas | Static catalog; dynamic discovery, credential probes, embedding and rerank are unsupported |
-| DeepInfra | Native rerank at `v1/inference/<model>` | All raw scores must be present, finite and non-null before stable TopN selection; returned indices identify the original inputs |
-| Bedrock | Text Converse, Converse-Stream and signed foundation-model discovery | No tools, vision, reasoning history, embedding, rerank or media in this adapter |
+响应校验区分缺失/null 与合法的 `0`、`false`、显式空转录或空目录。
+明确发现的无结果成功、索引丢失、错误信封、错误终止、取消与资源泄漏问题，
+在相应原函数修复并单独记录，不恢复旧 Go 兼容入口。
 
-Bedrock stores credential JSON in the instance API key. `auth_mode` accepts
-`access_key_secret` (`bedrock_ak`, `bedrock_sk`, optional
-`bedrock_session_token`), `iam_role` (`aws_role_arn`, optional `aws_external_id`
-and `role_session_name`, using the AWS credential chain or an explicit source
-key pair), or `assume_role` (the default AWS credential chain, matching the
-existing Python mode name). `bedrock_region` supplies the region when the
-instance region is `default`; an explicit AWS instance region overrides it.
-The driver synthesizes regional AWS endpoints when no base URL is supplied.
-An explicit instance endpoint routes both runtime and discovery there, keeping
-custom instances isolated. Direct driver configuration may use a separate
-`control:<region>` endpoint. Both planes sign using service name `bedrock`.
+## 验证边界
 
-Bedrock streams require an assistant start, indexed text blocks and block stops,
-a successful `messageStop`, and clean stream completion. Provider exceptions,
-malformed frames, missing output and sender errors do not emit `[DONE]`.
-Streaming adapters use request cancellation and idle deadlines rather than a
-total completion deadline. Tests use deterministic credentials and controlled
-STS/SigV4/eventstream endpoints. They make no real AWS or IMDS requests and do
-not establish production IAM permissions or paid-provider compatibility.
+模型单测使用登记的本地 HTTP、STS/SigV4/eventstream 等受控端点。
+provider handler、服务生命周期、模型绑定及 ASR payload 测试再验证真实 HTTP/JWT、
+CLI 和隔离 MySQL 调用链。需要真实服务的测试使用项目注册运行入口及私有配置，
+不使用业务数据库。监听器、文件和数据库资源在分配前登记，并独立读回清理结果。
 
-Replicate rerank validates the full score count before stable score ordering and
-TopN selection. The bound consumer reconstructs original document order. Zero
-scores are valid; `top_n=0` means all documents. Prediction cancellation, failed
-or unknown terminal states, malformed output and cross-origin polling fail.
-Hosted OCR remains `MinerU` / `PaddleOCR`; local OCR and parsing remain
-`mineru_local` / `PaddleOCR_Local`. Catalog loading selects by provider name.
-
-`provider_fixes_test.go` supports `MULTIRAG_PROVIDER_TEST_JOURNAL` for append-only
-case identities, listener allocation intent, exact address and independent closed
-port readback. `TestProviderFixesHTTPCLIAndSQL` uses an explicitly owned PostgreSQL
-configuration and a freshly linked CLI; its opt-in environment is declared in the
-test. Controlled provider fixtures do not establish paid-provider compatibility.
-
-ModelScope is admitted through catalog loading, custom-model listing and SQL instance creation.
-An empty key is permitted only by its explicit local-deployment policy; a tenant endpoint is
-still required. The new adapters share strict raw chat/list/SSE validation, request cancellation
-and idle deadlines. Huawei rerank validates all returned scores before TopN selection; the
-bound facade restores input order. Controlled HTTP/JWT/SQL/CLI evidence is distinct from
-real supplier credentials and production validation.
-
-302.AI trims model names, rerank queries, document URLs and task IDs on copies;
-blank required identities fail before HTTP. Chat methods determine `stream` even
-when the option disagrees. Invalid stream choices or missing deltas fail even
-after text has arrived; successful terminal frames may omit their delta.
-JSON chat/discovery and multipart ASR request JSON
-responses; sender chat requests SSE. URL parsing requires a selected model and a
-public HTTP(S) URL without userinfo or fragments; task IDs use the local bounded
-alphanumeric/hyphen/underscore grammar. File-path access stays in the service
-boundary: model adapters receive bytes. Empty vector/rerank input makes no request,
-and zero scores/options remain valid.
-
-LongCat and Voyage use process-level shared pools with request-level credentials
-and copied endpoint maps. Constructors deliberately retain those startup pools
-when `http.DefaultTransport` changes later. Standard pools are cloned without
-mutating the default; chat preserves custom RoundTripper routing, while the
-provider pool uses a standard fallback with dial/TLS/header deadlines. This avoids
-a pool per request-scoped driver. 302.AI and LongCat sender streams have a
-60-second idle deadline, reset on received bytes, rather than a total stream
-duration limit. Non-streaming requests retain the 120-second call deadline.
-Controlled tests cover custom/nil defaults and
-real loopback requests, without asserting paid supplier or production behavior.
-
-Gitee model discovery is public: a bodyless GET sends no account key and returns
-raw provider IDs. Balance queries use the isolated instance endpoint and bearer
-key; missing or malformed amounts, provider errors, oversized or trailing JSON
-fail without returning a partial balance. Zero and negative balances remain valid.
-Zhipu discovery likewise returns raw IDs so they can be declared through the model
-API. Shared unsupported embedding, rerank and balance methods return
-`ErrUnsupportedCapability` with the provider and operation; optional media/parser
-interfaces continue to describe actual implemented capabilities.
-
-Instance inventory (`GET /api/v1/providers/:provider_name/instances/:instance_name/models?supported=true`)
-returns one object per discovered ID, in provider order. Each row has `name`; the
-injected catalog supplies optional `max_tokens`, `dimension`, `model_types` and
-`thinking` metadata. Unknown fields are omitted, while declared `0`, empty type
-arrays and false thinking defaults are retained. Names and aliases are lookup
-keys only: remote IDs, including namespaces, are never rewritten. An empty
-inventory is `[]`; discovery failures publish no partial inventory.
-
-The service's `ListSupportedModelsWithContext` carries request cancellation through
-SQL ownership checks and the request-local driver. Catalog lookup performs no
-provider call or model registration. Drivers keep their name-only inventory
-contract; centralized enrichment also covers shared/embedded drivers without a
-global catalog singleton. Unsupported discovery remains an error. The catalog's
-integer token limits used by inference and registration remain unchanged; JSON
-presence is tracked separately for inventory metadata. Google/Ollama keep their
-nested-empty response and multimodal/optional-thinking safeguards.
-
-SiliconFlow retains its existing `id@owned_by` inventory names. After an exact
-catalog miss, only this provider may use the ID before the final owner suffix for
-metadata lookup; other providers and the published name keep their full IDs.
-Its discovery parser rejects malformed or duplicate IDs and provider errors,
-bounds the response read, and preserves an explicit empty inventory.
-
-`TestSupportedDiscoveryMetadataHTTPAndSQL` uses `MULTIRAG_DISCOVERY_CONFIG` for a
-private local PostgreSQL admin config and creates a separately registered scratch
-database. `REQUIRE_SERVICES=1` makes missing configuration fail. It verifies actual
-JWT routing, instance endpoints/credentials, typed metadata, denial, timeout,
-cancellation and independently unchanged SQL state. `MULTIRAG_DISCOVERY_CLI` adds a
-source-built CLI consumer; provider HTTP is controlled. Case journals record exact
-resources before allocation and independent cleanup readback.
-
-
-Eino callers use `NewEinoChatModel` with a service-authorized `ChatModel`.
-Generation and streaming copy request context and options, preserve explicit
-zero values and reasoning, and reject model overrides that would bypass the
-binding. Nonempty tools and unsupported Eino message forms return
-`ErrUnsupportedCapability`. Closing a stream reader cancels its provider request,
-including a provider stalled before its first delta; callers must close readers.
-Catalog capability labels do not establish driver support or live supplier
-compatibility. Inference checks the binding type and implemented driver surface.
+这些测试不等于真实付费供应商、生产 IAM 权限、部署或线上验收；
+目录声明也不证明驱动已经支持该能力。完整通过结论以对应源码输入哈希、
+原始退出码及本次对齐记录为准。

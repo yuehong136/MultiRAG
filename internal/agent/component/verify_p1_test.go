@@ -1,6 +1,8 @@
 package component
 
 import (
+	"context"
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -31,8 +33,12 @@ func TestVerifyRegistration_P1(t *testing.T) {
 		t.Fatalf("missing P0/P1 components: %v (have %d: %v)", missing, len(names), names)
 	}
 	for _, name := range []string{"Answer", "Retrieval", "TavilySearch", "ExeSQL", "Iteration", "IterationItem"} {
-		if _, err := New(name, nil); err == nil {
-			t.Errorf("unsupported node %s must fail at construction", name)
+		node, err := New(name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out, err := node.Invoke(context.Background(), nil); out != nil || !errors.Is(err, ErrNotImplemented) {
+			t.Errorf("unsupported node %s falsely executed: %v %v", name, out, err)
 		}
 	}
 

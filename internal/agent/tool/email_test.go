@@ -125,7 +125,7 @@ func TestEmail_SendAgainstMockSMTP(t *testing.T) {
 	var portInt int
 	_, _ = fmt.Sscanf(port, "%d", &portInt)
 
-	tool := NewEmailTool().WithResolver(toolTestResolver)
+	tool := NewEmailTool()
 	args := map[string]any{
 		"smtp_host": "127.0.0.1",
 		"smtp_port": portInt,

@@ -4,495 +4,404 @@ package handler_test
 
 import (
 	"bytes"
-	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
-	"github.com/spf13/viper"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
-	"multirag/internal/common"
 	"multirag/internal/dao"
-	redisengine "multirag/internal/engine/redis"
+	engineredis "multirag/internal/engine/redis"
 	"multirag/internal/entity"
 	"multirag/internal/handler"
 	"multirag/internal/router"
 	"multirag/internal/server"
+	"multirag/internal/server/local"
 	"multirag/internal/service"
 	"multirag/internal/testsupport"
+	"multirag/internal/testsupport/scratch"
+	"multirag/internal/utility"
 )
 
-// The hook reserves every exact key before the actual public service writes it.
-// It never deletes shared Redis keys and does not replace business commands.
-type agentWireRunJournal interface {
-	Event(string, map[string]any)
-}
+func TestAgentExecutionHTTPMySQL(t *testing.T) {
+	f := scratch.New(t)
+	if err := f.DB.AutoMigrate(&entity.User{}, &entity.Tenant{}, &entity.UserTenant{}, &entity.APIToken{}, &entity.UserCanvas{}, &entity.UserCanvasVersion{}, &entity.API4Conversation{}, &entity.CanvasTemplate{}); err != nil {
+		t.Fatal(err)
+	}
+	previousDB := dao.DB
+	dao.DB = f.DB
+	t.Cleanup(func() { dao.DB = previousDB })
+	secret := f.Prefix + "-signed-fixture"
+	cfg := server.GetConfig()
+	if cfg == nil {
+		path := filepath.Join(t.TempDir(), "agent-auth.json")
+		f.Journal.Event("reserve-local-config", map[string]any{"path": path})
+		encoded, _ := json.Marshal(map[string]any{"server": map[string]any{"secret_key": secret}})
+		if err := os.WriteFile(path, encoded, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := server.FromConfigFile(path); err != nil {
+			t.Fatal(err)
+		}
+		cfg = server.GetConfig()
+	}
+	previousSecret := cfg.Server.SecretKey
+	cfg.Server.SecretKey = &secret
+	t.Cleanup(func() { cfg.Server.SecretKey = previousSecret })
+	previousLicense := local.GetAdminStatus()
+	local.SetAdminStatus(0, "isolated Agent acceptance")
+	t.Cleanup(func() { local.SetAdminStatus(previousLicense.Status, previousLicense.Reason) })
+	owner, foreign, disabled := f.Prefix+"owner", f.Prefix+"foreign", f.Prefix+"disabled"
+	team, invited, revoked := f.Prefix+"team", f.Prefix+"invited", f.Prefix+"revoked"
+	tokens := map[string]string{}
+	for _, actor := range []string{owner, foreign, disabled, team, invited, revoked} {
+		access := utility.GenerateToken()
+		active := "1"
+		if actor == disabled {
+			active = "0"
+		}
+		user := &entity.User{ID: actor, Nickname: actor, Email: actor + "@fixture.invalid", AccessToken: &access, IsActive: active}
+		if err := f.DB.Create(user).Error; err != nil {
+			t.Fatal(err)
+		}
+		token, err := utility.DumpAccessToken(access, secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens[actor] = token
+	}
+	for _, member := range []struct{ id, role, status string }{{team, "normal", "1"}, {invited, "invite", "1"}, {revoked, "normal", "0"}} {
+		status := member.status
+		if err := f.DB.Create(&entity.UserTenant{ID: utility.GenerateToken(), UserID: member.id, TenantID: owner, Role: member.role, Status: &status}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 
-type agentWireRedisReader interface {
-	Exists(context.Context, ...string) *redis.IntCmd
-}
-
-type agentWireRedisJournal struct {
-	mu   sync.Mutex
-	j    agentWireRunJournal
-	read agentWireRedisReader
-	keys map[string]bool
-}
-
-func (h *agentWireRedisJournal) DialHook(next redis.DialHook) redis.DialHook { return next }
-func (h *agentWireRedisJournal) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
-	return next
-}
-func (h *agentWireRedisJournal) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
-	return func(ctx context.Context, cmd redis.Cmder) error {
-		if key, claims := agentWireLockClaim(cmd); claims {
-			if strings.HasPrefix(key, "agent:execution:") && strings.HasSuffix(key, ":lock") {
-				id := strings.TrimSuffix(strings.TrimPrefix(key, "agent:execution:"), ":lock")
-				if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(id) {
-					return fmt.Errorf("unexpected agent key")
-				}
-				h.mu.Lock()
-				if !h.keys[key] {
-					keys := agentWireRunKeys(id)
-					h.j.Event("reserve-public-agent-run-before-redis-write", map[string]any{"run_id": id, "keys": keys})
-					count, err := h.read.Exists(ctx, keys...).Result()
-					if err != nil || count != 0 {
-						h.mu.Unlock()
-						return fmt.Errorf("owned public run key precondition failed")
-					}
-					for _, k := range keys {
-						h.keys[k] = true
-					}
-				}
-				h.mu.Unlock()
-			}
-		}
-		return next(ctx, cmd)
-	}
-}
-
-// This drives real HTTP/SSE, SQL and Redis. Principal middleware is a fixture;
-// Router.Setup JWT/API-token authentication is a separate integration concern.
-func TestAgentExecutionHTTPPostgresRedis(t *testing.T) {
-	if os.Getenv("REQUIRE_SERVICES") != "1" || os.Getenv("MULTIRAG_AGENT_EXECUTION_CONFIG") == "" {
-		t.Fatal("registered scratch config and REQUIRE_SERVICES=1 required")
-	}
-	j := testsupport.NewCase(t)
-	v := viper.New()
-	v.SetConfigFile(filepath.Join("..", "..", "configs", "service_conf.yaml"))
-	if v.ReadInConfig() != nil {
-		t.Fatal("base config required")
-	}
-	v.SetConfigFile(os.Getenv("MULTIRAG_AGENT_EXECUTION_CONFIG"))
-	if v.MergeInConfig() != nil {
-		t.Fatal("private overlay required")
-	}
-	pg := server.DatabaseConfig{Driver: "postgres", Host: v.GetString("postgresql.host"), Port: v.GetInt("postgresql.port"), Username: v.GetString("postgresql.user"), Password: v.GetString("postgresql.password"), Database: "postgres", Schema: "public"}
-	rc := server.RedisConfig{Host: v.GetString("redis.host"), Port: v.GetInt("redis.port"), Password: v.GetString("redis.password"), DB: v.GetInt("redis.db")}
-	if host, port, err := net.SplitHostPort(rc.Host); err == nil {
-		rc.Host = host
-		if _, err := fmt.Sscan(port, &rc.Port); err != nil {
-			t.Fatal("invalid Redis endpoint")
-		}
-	}
-	if rc.Port == 0 {
-		rc.Port = 6379
-	}
-	if ip := net.ParseIP(pg.Host); ip == nil || !ip.IsLoopback() {
-		t.Fatal("loopback PostgreSQL required")
-	}
-	if ip := net.ParseIP(rc.Host); ip == nil || !ip.IsLoopback() {
-		t.Fatal("loopback Redis required")
-	}
-	name := "multirag_after22_a_wire_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	j.Event("reserve-public-agent-database-before-create", map[string]any{"database": name, "schema": "public", "tables": []string{"t_ai_users", "t_ai_tenants", "t_ai_user_tenants", "t_ai_user_canvases", "t_ai_user_canvas_version"}, "sql_endpoint": net.JoinHostPort(pg.Host, fmt.Sprint(pg.Port)), "redis_endpoint": net.JoinHostPort(rc.Host, fmt.Sprint(rc.Port)), "redis_db": rc.DB})
-	dsn, err := dao.PostgresDSN(pg)
-	if err != nil {
-		t.Fatal("admin config invalid")
-	}
-	admin, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal("admin connection failed")
-	}
-	t.Cleanup(func() { admin.Close() })
-	ready, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	if admin.PingContext(ready) != nil {
-		t.Fatal("required PostgreSQL unavailable")
-	}
-	var exists bool
-	if err := admin.QueryRowContext(ready, "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", name).Scan(&exists); err != nil || exists {
-		t.Fatal("scratch database precondition")
-	}
-	t.Cleanup(func() {
-		ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
-		defer done()
-		_, drop := admin.ExecContext(ctx, `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`)
-		read := admin.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", name).Scan(&exists)
-		j.Event("public-agent-database-cleanup-readback", map[string]any{"database": name, "absent": drop == nil && read == nil && !exists})
-		if drop != nil || read != nil || exists {
-			t.Error("scratch database survived")
-		}
-	})
-	if _, err := admin.ExecContext(ready, `CREATE DATABASE "`+name+`"`); err != nil {
-		t.Fatal("create scratch database failed")
-	}
-	pg.Database = name
-	dsn, err = dao.PostgresDSN(pg)
-	if err != nil {
-		t.Fatal("scratch config invalid")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal("scratch connect failed")
-	}
-	pool, err := db.DB()
-	if err != nil {
+	apiToken := utility.GenerateAPIToken()
+	if err := f.DB.Create(&entity.APIToken{TenantID: owner, Token: apiToken}).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { pool.Close() })
-	read, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { read.Close() })
-	if err := db.AutoMigrate(&entity.User{}, &entity.Tenant{}, &entity.UserTenant{}, &entity.UserCanvas{}, &entity.UserCanvasVersion{}); err != nil {
-		t.Fatal(err)
-	}
-	before := dao.DB
-	dao.DB = db
-	t.Cleanup(func() { dao.DB = before })
-	owner := "owner"
-	j.Event("reserve-public-agent-owner-before-insert", map[string]any{"user_id": owner, "tenant_id": owner})
-	if err := db.Create(&entity.User{ID: owner, Nickname: owner, Email: "wire@example.invalid"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	status := "1"
-	if err := db.Create(&entity.Tenant{ID: owner, Status: &status}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := redisengine.Init(&rc); err != nil {
-		t.Fatal("required Redis unavailable")
-	}
-	client := redisengine.Get().GetClient()
-	t.Cleanup(func() { redisengine.Close() })
-	redisRead := redis.NewClient(&redis.Options{Addr: net.JoinHostPort(rc.Host, fmt.Sprint(rc.Port)), Password: rc.Password, DB: rc.DB})
-	t.Cleanup(func() { redisRead.Close() })
-	hook := &agentWireRedisJournal{j: j, read: redisRead, keys: map[string]bool{}}
-	client.AddHook(hook)
-	t.Cleanup(func() {
-		hook.mu.Lock()
-		keys := []string{}
-		for key := range hook.keys {
-			keys = append(keys, key)
-		}
-		hook.mu.Unlock()
-		sort.Strings(keys)
-		if len(keys) == 0 {
-			t.Error("public HTTP run did not register any Redis run keys")
-		}
-		ctx, done := context.WithTimeout(context.Background(), 5*time.Second)
-		defer done()
-		if len(keys) > 0 {
-			if client.Del(ctx, keys...).Err() != nil {
-				t.Error("owned Redis cleanup failed")
-			}
-			n, err := redisRead.Exists(ctx, keys...).Result()
-			j.Event("public-agent-redis-cleanup-readback", map[string]any{"keys": keys, "absent": err == nil && n == 0})
-			if err != nil || n != 0 {
-				t.Error("owned Redis keys survived")
-			}
-		}
-	})
 	gin.SetMode(gin.TestMode)
-	engine := gin.New()
-	engine.Use(func(c *gin.Context) {
-		if c.GetHeader("X-Test-Actor") == owner {
-			c.Set("user", &entity.User{ID: owner})
-		}
-		c.Next()
-	})
-	router.RegisterAgentExecutionRoutes(engine.Group("/api/v1"), handler.NewAgentHandler(service.NewAgentService()))
-	web := testsupport.NewHTTP(t, engine)
-	request := func(method, path, body string) (int, []byte) {
+	app := gin.New()
+	app.Use(gin.Recovery())
+	router.RegisterAgentRoutes(app.Group("/api/v1/agents", handler.NewAuthHandler().AuthMiddleware()), handler.NewAgentHandler(service.NewAgentService(), nil))
+	httpServer := testsupport.NewHTTP(t, app)
+	request := func(actor, method, path, body string) map[string]any {
 		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), method, web.URL+"/api/v1"+path, bytes.NewBufferString(body))
+		req, err := http.NewRequest(method, httpServer.URL+"/api/v1/agents"+path, strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
-		req.Header.Set("X-Test-Actor", owner)
+		if actor != "" {
+			credential := tokens[actor]
+			if actor == "api" {
+				credential = apiToken
+			}
+			req.Header.Set("Authorization", "Bearer "+credential)
+		}
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := web.Client().Do(req)
+		response, err := httpServer.Client().Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
-		raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		defer response.Body.Close()
+		raw, err := io.ReadAll(response.Body)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return resp.StatusCode, raw
-	}
-	dsl := `{"components":{"begin":{"obj":{"component_name":"Begin","params":{}},"downstream":["message"],"upstream":[]},"message":{"obj":{"component_name":"Message","params":{"text":"Echo {{sys.query}}"}},"downstream":[],"upstream":["begin"]}}}`
-	j.Event("reserve-public-agent-create-in-owned-table", map[string]any{"database": name, "table": "t_ai_user_canvases", "owner_id": owner})
-	_, raw := request("POST", "/agents", `{"title":"wire","dsl":`+dsl+`}`)
-	var created struct {
-		Code common.ErrorCode `json:"code"`
-		Data struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if json.Unmarshal(raw, &created) != nil || created.Code != common.CodeSuccess || created.Data.ID == "" {
-		t.Fatalf("create HTTP: %s", raw)
-	}
-	id := created.Data.ID
-	var stored string
-	if err := read.QueryRow("SELECT title FROM t_ai_user_canvases WHERE id=$1 AND user_id=$2", id, owner).Scan(&stored); err != nil || stored != "wire" {
-		t.Fatal("independent HTTP create readback", err)
-	}
-	_, raw = request("POST", "/agents/"+id+"/run", `{"query":"wire"}`)
-	var runID string
-	messages, finished := 0, false
-	for _, line := range strings.Split(string(raw), "\n") {
-		if !strings.HasPrefix(line, "data: ") {
-			continue
+		if bytes.Contains(raw, []byte("[DONE]")) || strings.Contains(response.Header.Get("Content-Type"), "event-stream") {
+			t.Fatal("synthetic SSE")
 		}
-		var event service.AgentRunEvent
-		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event) != nil {
-			t.Fatal("invalid SSE")
+		var result map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&result); err != nil {
+			t.Fatalf("invalid HTTP JSON: %d %s", response.StatusCode, raw)
 		}
-		if event.RunID == "" || !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(event.RunID) {
-			t.Fatal("invalid SSE run identity")
+		return result
+	}
+	success := func(result map[string]any) map[string]any {
+		t.Helper()
+		if result["code"] != json.Number("0") {
+			t.Fatal("HTTP operation failed", result)
 		}
-		if runID == "" {
-			runID = event.RunID
-			j.Event("public-agent-http-run-observed", map[string]any{"canvas_id": id, "run_id": runID, "database": name, "owner_id": owner})
-		} else if runID != event.RunID {
-			t.Fatal("SSE run identity changed")
+		data, _ := result["data"].(map[string]any)
+		return data
+	}
+	denied := func(result map[string]any) {
+		t.Helper()
+		if result["code"] == json.Number("0") {
+			t.Fatal("unexpected HTTP success", result)
 		}
-		if event.Event == "message" {
-			messages++
-			if event.Data["content"] != "Echo wire" {
-				t.Fatal(event)
+	}
+	denied(request("", "POST", "", `{"title":"unowned","dsl":{}}`))
+	if result := request(disabled, "POST", "", `{"title":"disabled","dsl":{}}`); result["code"] == json.Number("0") {
+		t.Error("disabled actor created Agent")
+	}
+	created := success(request(owner, "POST", "", `{"title":"target","canvas_category":"agent_canvas","user_id":"forged","dsl":{"version":1,"exact":9007199254740993,"components":{}}}`))
+	id := created["id"].(string)
+	var storedOwner, category, dsl string
+	if err := f.Read.QueryRow("SELECT user_id, canvas_category, dsl FROM user_canvas WHERE id = ?", id).Scan(&storedOwner, &category, &dsl); err != nil || storedOwner != owner || category != "agent_canvas" || !strings.Contains(dsl, "9007199254740993") {
+		t.Fatalf("create readback mismatch: %s %s %s %v", storedOwner, category, dsl, err)
+	}
+	denied(request(owner, "POST", "", `{"title":"target","dsl":{}}`))
+	denied(request(foreign, "GET", "/"+id, ""))
+	denied(request(foreign, "PUT", "/"+id, `{"dsl":{"forged":true}}`))
+	success(request("api", "GET", "/"+id, ""))
+	listing := success(request(owner, "GET", "", ""))
+	if listing["total"] != json.Number("1") {
+		t.Fatal("actual list mismatch", listing)
+	}
+	denied(request(owner, "GET", "?orderby=id%20DESC%3BSELECT%201", ""))
+	published := success(request(owner, "POST", "/"+id+"/publish", `{"title":"released","description":"exact target","dsl":{"version":2,"exact":9007199254740993,"snapshot":"frozen"}}`))
+	version := published["id"].(string)
+	var title, description string
+	var release bool
+	if err := f.Read.QueryRow("SELECT title,description,`release`,dsl FROM user_canvas WHERE id = ?", id).Scan(&title, &description, &release, &dsl); err != nil || title != "released" || description != "exact target" || !release || !strings.Contains(dsl, "9007199254740993") {
+		t.Fatal("publish override readback", err, title, description, release, dsl)
+	}
+	success(request(owner, "PUT", "/"+id, `{"dsl":{"version":2,"snapshot":"draft"}}`))
+	snapshot := success(request(owner, "GET", "/"+id+"/versions/"+version, ""))
+	if snapshot["dsl"].(map[string]any)["snapshot"] != "frozen" || snapshot["dsl"].(map[string]any)["exact"] != json.Number("9007199254740993") {
+		t.Fatal("immutable snapshot/precision changed", snapshot)
+	}
+	other := success(request(owner, "POST", "", `{"title":"other","dsl":{}}`))["id"].(string)
+	denied(request(owner, "GET", "/"+other+"/versions/"+version, ""))
+	denied(request(owner, "DELETE", "/"+other+"/versions/"+version, ""))
+	shared := success(request(owner, "POST", "", `{"title":"shared target","permission":"team","dsl":{}}`))["id"].(string)
+	success(request(team, "GET", "/"+shared, ""))
+	denied(request(team, "GET", "/"+id, ""))
+	denied(request(invited, "GET", "/"+shared, ""))
+	denied(request(revoked, "GET", "/"+shared, ""))
+	denied(request(team, "DELETE", "/"+shared, ""))
+	denied(request(invited, "GET", "?owner_ids="+owner, ""))
+	t.Run("templates_and_tags", func(t *testing.T) {
+		for i, templateID := range []string{"template-old", "template-new"} {
+			row := entity.CanvasTemplate{ID: templateID, Title: entity.JSONMap{"zh": "标题", "en": "Title"}, Description: entity.JSONMap{"en": "Description"}, DSL: entity.JSONMap{"exact": json.Number("9007199254740993")}}
+			if err := f.DB.Create(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := f.DB.Model(&row).Update("create_time", i+1).Error; err != nil {
+				t.Fatal(err)
 			}
 		}
-		if event.Event == "workflow_finished" {
-			finished = true
+		denied(request("", "GET", "/templates", ""))
+		for _, actor := range []string{owner, foreign, "api"} {
+			result := request(actor, "GET", "/templates", "")
+			rows, ok := result["data"].([]any)
+			if result["code"] != json.Number("0") || !ok || len(rows) != 2 {
+				t.Fatal("authenticated template catalogue shape", result)
+			}
+			for i, templateID := range []string{"template-new", "template-old"} {
+				row := rows[i].(map[string]any)
+				if row["id"] != templateID || row["title"].(map[string]any)["zh"] != "标题" || row["description"].(map[string]any)["en"] != "Description" || row["dsl"].(map[string]any)["exact"] != json.Number("9007199254740993") {
+					t.Fatal("template locale, exact DSL or newest-first order changed", row)
+				}
+			}
 		}
-		if event.Event == "error" {
-			t.Fatal(event)
+		var beforeDSL, beforeTags string
+		if err := f.Read.QueryRow("SELECT dsl,tags FROM user_canvas WHERE id=?", id).Scan(&beforeDSL, &beforeTags); err != nil {
+			t.Fatal(err)
+		}
+		for _, actor := range []string{foreign, invited, revoked, team} {
+			denied(request(actor, "PUT", "/"+id+"/tags", `{"tags":["denied"]}`))
+		}
+		denied(request(owner, "PUT", "/"+id+"/tags", `{"tags":{"invalid":"type"}}`))
+		var tags string
+		if err := f.Read.QueryRow("SELECT tags FROM user_canvas WHERE id=?", id).Scan(&tags); err != nil || tags != beforeTags {
+			t.Fatal("denied tags changed SQL", err)
+		}
+		success(request(owner, "PUT", "/"+id+"/tags", `{"tags":[" ML ","ml","Data,Science","中文"]}`))
+		if err := f.Read.QueryRow("SELECT tags,dsl FROM user_canvas WHERE id=?", id).Scan(&tags, &dsl); err != nil || tags != "ML,Data Science,中文" || dsl != beforeDSL {
+			t.Fatal("native tag normalization or unrelated DSL changed", err)
+		}
+		success(request("api", "PUT", "/"+id+"/tags", `{"tags":[]}`))
+		if err := f.Read.QueryRow("SELECT tags FROM user_canvas WHERE id=?", id).Scan(&tags); err != nil || tags != "" {
+			t.Fatal("API-token explicit empty tags did not clear", err)
+		}
+		// The frozen access rule permits an active team member to edit a team canvas.
+		success(request(team, "PUT", "/"+shared+"/tags", `{"tags":["shared"]}`))
+		if err := f.Read.QueryRow("SELECT tags FROM user_canvas WHERE id=?", shared).Scan(&tags); err != nil || tags != "shared" {
+			t.Fatal("target shared-canvas tag access changed", err)
+		}
+	})
+
+	session := success(request(owner, "POST", "/"+id+"/sessions", `{"name":"real session","dsl":{"version":2,"exact":9007199254740993}}`))
+	sessionID := session["id"].(string)
+	var dialog, sessionOwner, message string
+	if err := f.Read.QueryRow("SELECT dialog_id,user_id,message,dsl FROM api_4_conversation WHERE id = ?", sessionID).Scan(&dialog, &sessionOwner, &message, &dsl); err != nil || dialog != id || sessionOwner != owner || message != "[]" || !strings.Contains(dsl, "9007199254740993") {
+		t.Fatal("session persistence readback", err, dialog, sessionOwner, message, dsl)
+	}
+	denied(request(foreign, "GET", "/"+id+"/sessions/"+sessionID, ""))
+	denied(request(foreign, "DELETE", "/"+id+"/sessions/"+sessionID, ""))
+	list := request(owner, "GET", "/"+id+"/sessions", "")
+	if list["code"] != json.Number("0") {
+		t.Fatal(list)
+	}
+	for _, raw := range list["data"].([]any) {
+		if _, exists := raw.(map[string]any)["dsl"]; exists {
+			t.Fatal("default DSL query changed")
 		}
 	}
-	if runID == "" || messages != 1 || !finished {
-		t.Fatalf("real HTTP SSE missing output: %s", raw)
+	withDSL := request(owner, "GET", "/"+id+"/sessions?dsl=true", "")
+	if withDSL["code"] != json.Number("0") || withDSL["data"].([]any)[0].(map[string]any)["dsl"] == nil {
+		t.Fatal("explicit DSL query ignored", withDSL)
 	}
-	registered, err := hook.registeredRunKeys(runID)
-	if err != nil {
+	var before int
+	if err := f.Read.QueryRow("SELECT count(*) FROM api_4_conversation").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	j.Event("public-agent-http-run-reservations-verified", map[string]any{"canvas_id": id, "run_id": runID, "keys": registered})
-	persisted, err := redisRead.Get(t.Context(), "agent:execution:"+runID).Bytes()
-	if err != nil {
+	for _, action := range []struct{ method, path, body string }{{"POST", "/" + id + "/run", ""}, {"POST", "/" + id + "/run?version=" + version, ""}, {"POST", "/chat/completions", fmt.Sprintf(`{"agent_id":%q,"query":"hello","stream":true}`, id)}, {"POST", "/rerun", fmt.Sprintf(`{"id":%q,"dsl":{},"component_id":"begin"}`, id)}, {"GET", "/" + id + "/webhook/logs", ""}, {"GET", "/tags", ""}} {
+		result := request(owner, action.method, action.path, action.body)
+		denied(result)
+		if !strings.Contains(fmt.Sprint(result["message"]), "not implemented") {
+			t.Fatal("unsupported capability not explicit", result)
+		}
+	}
+	var after int
+	if err := f.Read.QueryRow("SELECT count(*) FROM api_4_conversation").Scan(&after); err != nil || after != before {
+		t.Fatal("unsupported execution wrote sessions")
+	}
+	if len(f.ObjectKeys(t)) != 0 {
+		t.Fatal("unsupported execution wrote objects")
+	}
+	if err := f.DB.Create(&entity.APIToken{TenantID: foreign, Token: apiToken}).Error; err != nil {
 		t.Fatal(err)
 	}
-	var record struct {
-		Status   string `json:"status"`
-		ActorID  string `json:"actor_id"`
-		CanvasID string `json:"canvas_id"`
+	denied(request("api", "GET", "/prompts", ""))
+	if err := f.DB.Where("tenant_id = ? AND token = ?", foreign, apiToken).Delete(&entity.APIToken{}).Error; err != nil {
+		t.Fatal(err)
 	}
-	if json.Unmarshal(persisted, &record) != nil || record.Status != "succeeded" || record.ActorID != owner || record.CanvasID != id {
-		t.Fatal("independent HTTP Redis readback")
+	success(request("api", "GET", "/prompts", ""))
+
+	f.Journal.Event("reserve-sql-trigger", map[string]any{"database": f.Database, "trigger": "agent_block_publish"})
+	if err := f.DB.Exec("CREATE TRIGGER agent_block_publish BEFORE UPDATE ON user_canvas FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'controlled publish failure'").Error; err != nil {
+		t.Fatal(err)
 	}
-	if n, err := redisRead.Exists(t.Context(), "agent:cp:"+runID, "agent:execution:"+runID+":lock").Result(); err != nil || n != 0 {
-		t.Fatal("HTTP terminal resources survived")
+	denied(request(owner, "POST", "/"+id+"/publish", `{}`))
+	if err := f.DB.Exec("DROP TRIGGER agent_block_publish").Error; err != nil {
+		t.Fatal(err)
 	}
-	_, raw = request("POST", "/agents/"+id+"/run?version=unknown", `{}`)
-	var rejected struct {
-		Code common.ErrorCode `json:"code"`
+	var versions int
+	if err := f.Read.QueryRow("SELECT count(*) FROM user_canvas_version WHERE user_canvas_id = ?", id).Scan(&versions); err != nil || versions != 1 {
+		t.Fatal("failed publish left snapshot", err, versions)
 	}
-	if json.Unmarshal(raw, &rejected) != nil || rejected.Code != common.CodeArgumentError {
-		t.Fatalf("unsupported query: %s", raw)
+	success(request(owner, "DELETE", "/"+id+"/sessions/"+sessionID, ""))
+	denied(request(foreign, "DELETE", "/"+id, ""))
+	success(request(owner, "DELETE", "/"+id, ""))
+	if err := f.Read.QueryRow("SELECT count(*) FROM user_canvas_version WHERE user_canvas_id = ?", id).Scan(&versions); err != nil || versions != 0 {
+		t.Fatal("delete left snapshots", err, versions)
 	}
+	f.Journal.Event("agent-http-sql-acceptance", map[string]any{"canonical_target": "fcebcebe1e0e798b42c18e5593747cd20eb4c757", "http": true, "independent_sql_readback": true, "real_provider": false, "execution_supported": false})
 }
 
-// go-redis encodes a nonzero-TTL SetNX as SET key value [PX|EX ttl] NX.
-// Look only at command options; a value or expiry argument spelled NX does
-// not make an ordinary SET into a lock claim.
-func agentWireLockClaim(cmd redis.Cmder) (string, bool) {
-	args := cmd.Args()
-	if len(args) < 3 {
-		return "", false
+func TestAgentLogsRedisHTTP(t *testing.T) {
+	f := scratch.New(t)
+	if err := f.DB.AutoMigrate(&entity.User{}, &entity.APIToken{}, &entity.UserTenant{}, &entity.UserCanvas{}); err != nil {
+		t.Fatal(err)
 	}
-	key, ok := args[1].(string)
-	if !ok {
-		return "", false
-	}
-	switch strings.ToLower(cmd.Name()) {
-	case "setnx":
-		return key, len(args) == 3
-	case "set":
-		nx := false
-		for i := 3; i < len(args); i++ {
-			var option string
-			switch value := args[i].(type) {
-			case string:
-				option = value
-			case []byte:
-				option = string(value)
-			default:
-				return "", false
-			}
-			switch strings.ToUpper(option) {
-			case "NX":
-				if nx {
-					return "", false
-				}
-				nx = true
-			case "EX", "PX", "EXAT", "PXAT":
-				if i+1 >= len(args) {
-					return "", false
-				}
-				i++
-			case "KEEPTTL", "GET":
-			default:
-				return "", false
-			}
+	previousDB := dao.DB
+	dao.DB = f.DB
+	t.Cleanup(func() { dao.DB = previousDB })
+	cfg := server.GetConfig()
+	if cfg == nil {
+		path := filepath.Join(t.TempDir(), "agent-log-auth.json")
+		f.Journal.Event("reserve-local-config", map[string]any{"path": path})
+		if err := os.WriteFile(path, []byte(`{"server":{"secret_key":"isolated-agent-log-config"}}`), 0600); err != nil {
+			t.Fatal(err)
 		}
-		return key, nx
-	default:
-		return "", false
-	}
-}
-
-func agentWireRunKeys(runID string) []string {
-	return []string{"agent:execution:" + runID, "agent:execution:" + runID + ":cancel", "agent:execution:" + runID + ":lock", "agent:cp:" + runID}
-}
-
-func (h *agentWireRedisJournal) registeredRunKeys(runID string) ([]string, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	expected := agentWireRunKeys(runID)
-	for _, key := range expected {
-		if !h.keys[key] {
-			return nil, fmt.Errorf("public run %s has an unregistered key %s", runID, key)
+		if err := server.FromConfigFile(path); err != nil {
+			t.Fatal(err)
 		}
+		cfg = server.GetConfig()
 	}
-	if len(h.keys) < 4 {
-		return nil, fmt.Errorf("no complete public run key reservation")
-	}
-	return expected, nil
-}
-
-type agentWireFakeJournal struct{ events []map[string]any }
-
-func (j *agentWireFakeJournal) Event(event string, fields map[string]any) {
-	value := map[string]any{"event": event}
-	for key, item := range fields {
-		value[key] = item
-	}
-	j.events = append(j.events, value)
-}
-
-type agentWireFakeRedisReader struct {
-	calls int
-	keys  []string
-	count int64
-	err   error
-}
-
-func (r *agentWireFakeRedisReader) Exists(ctx context.Context, keys ...string) *redis.IntCmd {
-	r.calls++
-	r.keys = append([]string(nil), keys...)
-	result := redis.NewIntCmd(ctx, "exists")
-	result.SetVal(r.count)
-	result.SetErr(r.err)
-	return result
-}
-
-func TestAgentWireRedisJournalReservesActualSetNXBeforeNext(t *testing.T) {
-	const runID = "0123456789abcdef0123456789abcdef"
-	key := "agent:execution:" + runID + ":lock"
-	cases := []struct {
-		name    string
-		args    []any
-		reserve bool
-	}{
-		{"actual SET PX NX", []any{"set", key, "token", "px", int64((6 * time.Minute).Milliseconds()), "nx"}, true},
-		{"actual SET EX NX", []any{"SET", key, "token", "EX", int64(360), "NX"}, true},
-		{"SET NX before expiry", []any{"set", key, "token", "NX", "PX", int64(1000)}, true},
-		{"legacy SETNX", []any{"setnx", key, "token"}, true},
-		{"ordinary SET", []any{"set", key, "token", "PX", int64(1000)}, false},
-		{"NX value is not option", []any{"set", key, "NX"}, false},
-		{"NX expiry argument is not option", []any{"set", key, "token", "PX", "NX"}, false},
-		{"ordinary SET GET", []any{"set", key, "token", "GET"}, false},
-		{"XX is not NX", []any{"set", key, "token", "EX", int64(60), "XX"}, false},
-		{"unrelated namespace", []any{"set", "other:lock", "token", "NX"}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			journal := &agentWireFakeJournal{}
-			read := &agentWireFakeRedisReader{}
-			hook := &agentWireRedisJournal{j: journal, read: read, keys: map[string]bool{}}
-			nextCalled := false
-			sentinel := errors.New("next sentinel")
-			next := func(_ context.Context, actual redis.Cmder) error {
-				nextCalled = true
-				if actual.Args()[1] != tc.args[1] {
-					t.Fatal("hook changed business command")
-				}
-				if tc.reserve {
-					if read.calls != 1 || len(journal.events) != 1 {
-						t.Fatalf("next reached before reservation/probe: %d %+v", read.calls, journal.events)
-					}
-					if journal.events[0]["event"] != "reserve-public-agent-run-before-redis-write" || journal.events[0]["run_id"] != runID {
-						t.Fatal("wrong reservation event")
-					}
-					if _, err := hook.registeredRunKeys(runID); err != nil {
-						t.Fatal(err)
-					}
-					expectedKeys := []string{"agent:execution:" + runID, "agent:execution:" + runID + ":cancel", "agent:execution:" + runID + ":lock", "agent:cp:" + runID}
-					registered, ok := journal.events[0]["keys"].([]string)
-					if !ok || strings.Join(registered, "|") != strings.Join(expectedKeys, "|") || strings.Join(read.keys, "|") != strings.Join(expectedKeys, "|") {
-						t.Fatalf("wrong four-key reservation/probe before next: registered=%v probed=%v", registered, read.keys)
-					}
-				} else if read.calls != 0 || len(journal.events) != 0 || len(hook.keys) != 0 {
-					t.Fatal("ordinary SET was incorrectly treated as run allocation")
-				}
-				return sentinel
-			}
-			err := hook.ProcessHook(next)(context.Background(), redis.NewStatusCmd(context.Background(), tc.args...))
-			if !nextCalled || !errors.Is(err, sentinel) {
-				t.Fatalf("next result not preserved: %v", err)
-			}
-		})
-	}
-}
-
-func TestAgentWireRedisJournalRefusesOccupiedRunBeforeNext(t *testing.T) {
-	const runID = "0123456789abcdef0123456789abcdef"
-	for _, read := range []*agentWireFakeRedisReader{{count: 1}, {err: errors.New("probe unavailable")}} {
-		hook := &agentWireRedisJournal{j: &agentWireFakeJournal{}, read: read, keys: map[string]bool{}}
-		nextCalled := false
-		err := hook.ProcessHook(func(context.Context, redis.Cmder) error { nextCalled = true; return nil })(context.Background(), redis.NewStatusCmd(context.Background(), "set", "agent:execution:"+runID+":lock", "token", "PX", int64(360000), "NX"))
-		if err == nil || nextCalled || len(hook.keys) != 0 {
-			t.Fatalf("failed reservation reached write: %v next=%v", err, nextCalled)
+	previousSecret := cfg.Server.SecretKey
+	secret := f.Prefix + "logs"
+	cfg.Server.SecretKey = &secret
+	t.Cleanup(func() { cfg.Server.SecretKey = previousSecret })
+	priorLicense := local.GetAdminStatus()
+	local.SetAdminStatus(0, "isolated log acceptance")
+	t.Cleanup(func() { local.SetAdminStatus(priorLicense.Status, priorLicense.Reason) })
+	tokens := map[string]string{}
+	for _, actor := range []string{"owner", "foreign"} {
+		access := utility.GenerateToken()
+		id := f.Prefix + actor
+		if err := f.DB.Create(&entity.User{ID: id, Nickname: id, Email: id + "@fixture.invalid", AccessToken: &access}).Error; err != nil {
+			t.Fatal(err)
 		}
+		token, err := utility.DumpAccessToken(access, secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens[actor] = token
+	}
+	canvasID := f.Prefix + "canvas"
+	if err := f.DB.Create(&entity.UserCanvas{ID: canvasID, UserID: f.Prefix + "owner"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	f.Journal.Event("reserve-redis-client", map[string]any{"redis_db": f.Config.Redis.DB, "purpose": "Agent log reader"})
+	if engineredis.Get() != nil {
+		t.Fatal("Agent Redis acceptance requires a fresh process")
+	}
+	if err := engineredis.Init(&f.Config.Redis); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engineredis.Close() })
+	app := gin.New()
+	router.RegisterAgentRoutes(app.Group("/api/v1/agents", handler.NewAuthHandler().AuthMiddleware()), handler.NewAgentHandler(service.NewAgentService(), nil))
+	httpServer := testsupport.NewHTTP(t, app)
+	messageID := f.Prefix + "trace"
+	key := canvasID + "-" + messageID + "-logs"
+	f.Journal.Event("reserve-redis-key", map[string]any{"key": key, "redis_db": f.Config.Redis.DB})
+	if count, err := f.Redis.Exists(t.Context(), key).Result(); err != nil || count != 0 {
+		t.Fatal("log key precondition")
+	}
+	fetch := func(actor string) map[string]any {
+		t.Helper()
+		req, _ := http.NewRequest("GET", httpServer.URL+"/api/v1/agents/"+canvasID+"/logs/"+messageID, nil)
+		req.Header.Set("Authorization", "Bearer "+tokens[actor])
+		response, err := httpServer.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var result map[string]any
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if err := f.Redis.Set(t.Context(), key, `{"node":"actual persisted logs"}`, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	result := fetch("owner")
+	if result["code"] != float64(0) || result["data"].(map[string]any)["node"] != "actual persisted logs" {
+		t.Fatal("real logs not returned", result)
+	}
+	result = fetch("foreign")
+	if result["code"] == float64(0) || strings.Contains(fmt.Sprint(result), "actual persisted logs") {
+		t.Fatal("foreign logs disclosed", result)
+	}
+	if err := f.Redis.Set(t.Context(), key, `broken`, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if result = fetch("owner"); result["code"] == float64(0) {
+		t.Fatal("corrupt logs became empty success", result)
+	}
+	if err := f.Redis.Del(t.Context(), key).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if result = fetch("owner"); result["code"] != float64(0) || len(result["data"].(map[string]any)) != 0 {
+		t.Fatal("missing logs contract", result)
+	}
+	if err := engineredis.Get().GetClient().Close(); err != nil {
+		t.Fatal(err)
+	}
+	if result = fetch("owner"); result["code"] == float64(0) {
+		t.Fatal("failed logs backend became empty success", result)
 	}
 }

@@ -26,18 +26,18 @@ import (
 	"fmt"
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	"multirag/internal/engine"
 	"multirag/internal/engine/elasticsearch"
-	redisengine "multirag/internal/engine/redis"
+	"multirag/internal/engine/redis"
 	"multirag/internal/entity"
 	"multirag/internal/server"
-	"multirag/internal/service"
 	"multirag/internal/utility"
 	"net/http"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -45,52 +45,51 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// Service errors
-var (
-	ErrInvalidToken = errors.New("invalid token")
-	ErrNotAdmin     = errors.New("user is not admin")
-	ErrUserInactive = errors.New("user is inactive")
-)
-
 // Service admin service layer
 type Service struct {
-	userDAO           *dao.UserDAO
-	licenseDAO        *dao.LicenseDAO
-	timeRecordDAO     *dao.TimeRecordDAO
-	systemSettingsDAO *dao.SystemSettingsDAO
-	tenantDAO         *dao.TenantDAO
-	userTenantDAO     *dao.UserTenantDAO
-	tenantLLMDAO      *dao.TenantLLMDAO
-	fileDAO           *dao.FileDAO
-	documentDAO       *dao.DocumentDAO
-	taskDAO           *dao.TaskDAO
-	kbDAO             *dao.KnowledgebaseDAO
-	canvasDAO         *dao.UserCanvasDAO
-	chatDAO           *dao.ChatDAO
-	chatSessionDAO    *dao.ChatSessionDAO
-	apiTokenDAO       *dao.APITokenDAO
-	api4ConvDAO       *dao.API4ConversationDAO
+	userDAO             *dao.UserDAO
+	licenseDAO          *dao.LicenseDAO
+	timeRecordDAO       *dao.TimeRecordDAO
+	systemSettingsDAO   *dao.SystemSettingsDAO
+	tenantDAO           *dao.TenantDAO
+	userTenantDAO       *dao.UserTenantDAO
+	tenantLLMDAO        *dao.TenantLLMDAO
+	fileDAO             *dao.FileDAO
+	documentDAO         *dao.DocumentDAO
+	taskDAO             *dao.TaskDAO
+	kbDAO               *dao.KnowledgebaseDAO
+	canvasDAO           *dao.UserCanvasDAO
+	chatDAO             *dao.ChatDAO
+	chatSessionDAO      *dao.ChatSessionDAO
+	apiTokenDAO         *dao.APITokenDAO
+	api4ConvDAO         *dao.API4ConversationDAO
+	llmDAO              *dao.LLMDAO
+	ingestionTaskDAO    *dao.IngestionTaskDAO
+	ingestionTaskLogDao *dao.IngestionTaskLogDAO
 }
 
 // NewService create admin service
 func NewService() *Service {
 	return &Service{
-		userDAO:           dao.NewUserDAO(),
-		licenseDAO:        dao.NewLicenseDAO(),
-		timeRecordDAO:     dao.NewTimeRecordDAO(),
-		systemSettingsDAO: dao.NewSystemSettingsDAO(),
-		tenantDAO:         dao.NewTenantDAO(),
-		userTenantDAO:     dao.NewUserTenantDAO(),
-		tenantLLMDAO:      dao.NewTenantLLMDAO(),
-		fileDAO:           dao.NewFileDAO(),
-		documentDAO:       dao.NewDocumentDAO(),
-		taskDAO:           dao.NewTaskDAO(),
-		kbDAO:             dao.NewKnowledgebaseDAO(),
-		canvasDAO:         dao.NewUserCanvasDAO(),
-		chatDAO:           dao.NewChatDAO(),
-		chatSessionDAO:    dao.NewChatSessionDAO(),
-		apiTokenDAO:       dao.NewAPITokenDAO(),
-		api4ConvDAO:       dao.NewAPI4ConversationDAO(),
+		userDAO:             dao.NewUserDAO(),
+		licenseDAO:          dao.NewLicenseDAO(),
+		timeRecordDAO:       dao.NewTimeRecordDAO(),
+		systemSettingsDAO:   dao.NewSystemSettingsDAO(),
+		tenantDAO:           dao.NewTenantDAO(),
+		userTenantDAO:       dao.NewUserTenantDAO(),
+		tenantLLMDAO:        dao.NewTenantLLMDAO(),
+		fileDAO:             dao.NewFileDAO(),
+		documentDAO:         dao.NewDocumentDAO(),
+		taskDAO:             dao.NewTaskDAO(),
+		kbDAO:               dao.NewKnowledgebaseDAO(),
+		canvasDAO:           dao.NewUserCanvasDAO(),
+		chatDAO:             dao.NewChatDAO(),
+		chatSessionDAO:      dao.NewChatSessionDAO(),
+		apiTokenDAO:         dao.NewAPITokenDAO(),
+		api4ConvDAO:         dao.NewAPI4ConversationDAO(),
+		llmDAO:              dao.NewLLMDAO(),
+		ingestionTaskDAO:    dao.NewIngestionTaskDAO(),
+		ingestionTaskLogDao: dao.NewIngestionTaskLogDAO(),
 	}
 }
 
@@ -104,40 +103,114 @@ func (s *Service) Logout(user interface{}) error {
 	return nil
 }
 
-// ListTasks lists ingestion task summaries without document contents or logs.
-func (s *Service) ListTasks() ([]map[string]interface{}, error) {
-	tasks, err := s.taskDAO.GetAllTasks()
+// ListTasks
+func (s *Service) ListIngestionTasks() ([]map[string]interface{}, error) {
+
+	ingestionTasks, err := s.ingestionTaskDAO.GetAllTasks(0, 0)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]map[string]interface{}, 0, len(tasks))
-	for _, task := range tasks {
-		chunkCount := 0
-		if task.ChunkIDs != nil {
-			chunkCount = len(strings.Fields(*task.ChunkIDs))
+
+	showTasks := []map[string]interface{}{}
+	for _, task := range ingestionTasks {
+		var user *entity.User
+		user, err = s.userDAO.GetByTenantID(task.UserID)
+		if err != nil {
+			return nil, err
 		}
-		result = append(result, map[string]interface{}{
-			"id": task.ID, "task_type": task.TaskType, "document_id": task.DocID,
-			"chunk_count": chunkCount, "from_page": task.FromPage, "to_page": task.ToPage,
-			"priority": task.Priority, "duration": task.ProcessDuration, "progress": task.Progress,
-			"retry_count": task.RetryCount, "digest": task.Digest,
-		})
+		//var document *entity.Document
+		//document, err = s.documentDAO.GetByID(task.DocumentID)
+		//if err != nil {
+		//	return nil, err
+		//}
+
+		var showTask map[string]interface{}
+		var latestLog *entity.IngestionTaskLog
+		latestLog, err = s.ingestionTaskLogDao.LatestLogByTaskID(task.ID)
+		showTask = map[string]interface{}{
+			"id":          task.ID,
+			"user_id":     task.UserID,
+			"user":        user.Email,
+			"document_id": task.DocumentID,
+			"status":      task.Status,
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		if err == nil {
+			rawStep, exists := latestLog.Checkpoint["current_step"]
+			if !exists {
+				return nil, fmt.Errorf("task %s log has no current_step", task.ID)
+			}
+			step, parseErr := strconv.Atoi(fmt.Sprint(rawStep))
+			if parseErr != nil {
+				return nil, fmt.Errorf("task %s invalid current_step: %w", task.ID, parseErr)
+			}
+			showTask = map[string]interface{}{
+				"id":          task.ID,
+				"user_id":     task.UserID,
+				"user":        user.Email,
+				"document_id": task.DocumentID,
+				"status":      task.Status,
+				"step":        step,
+			}
+		}
+
+		showTasks = append(showTasks, showTask)
 	}
-	return result, nil
+	return showTasks, nil
+}
+
+func (s *Service) RemoveIngestionTasks(tasks []string) ([]map[string]string, error) {
+	var deletedTasks []map[string]string
+	for _, taskID := range tasks {
+		taskRecord := map[string]string{
+			"task_id": taskID,
+		}
+		_, err := s.ingestionTaskDAO.RemoveByAPIServerOrAdminServer(taskID, nil)
+		if err != nil {
+			taskRecord["remove"] = fmt.Sprintf("fail: %s", err.Error())
+		} else {
+			taskRecord["remove"] = "success"
+		}
+		deletedTasks = append(deletedTasks, taskRecord)
+	}
+	return deletedTasks, nil
+}
+
+func (s *Service) StopIngestionTasks(tasks []string) ([]*entity.IngestionTask, error) {
+	var taskResponses []*entity.IngestionTask
+	for _, taskID := range tasks {
+		task, err := s.ingestionTaskDAO.SetStoppingByAPIServer(taskID)
+		if err != nil {
+			return nil, err
+		}
+
+		if task.Status == common.STOPPING {
+			msgQueueEngine := engine.GetMessageQueueEngine()
+			err = msgQueueEngine.PublishTask("tasks.RAGFLOW", []byte(task.ID))
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		taskResponses = append(taskResponses, task)
+	}
+	return taskResponses, nil
 }
 
 // GetUserByToken get user by access token
 func (s *Service) GetUserByToken(token string) (*entity.User, error) {
 	user, err := s.userDAO.GetByAccessToken(token)
 	if err != nil {
-		return nil, ErrInvalidToken
+		return nil, common.ErrInvalidToken
 	}
 
 	if user.IsSuperuser == nil || !*user.IsSuperuser {
-		return nil, ErrNotAdmin
+		return nil, common.ErrNotAdmin
 	}
 
-	if !user.IsActive {
+	if user.IsActive != "1" {
 		return nil, fmt.Errorf("user inactive")
 	}
 
@@ -186,7 +259,10 @@ func (s *Service) CreateUser(username, password, role string) (map[string]interf
 		return nil, fmt.Errorf("Invalid email address: %s!", username)
 	}
 
-	existUser, _ := s.userDAO.GetByEmail(username)
+	existUser, lookupErr := s.userDAO.GetByEmail(username)
+	if lookupErr != nil && !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		return nil, lookupErr
+	}
 	if existUser != nil {
 		return nil, fmt.Errorf("User '%s' already exists", username)
 	}
@@ -214,9 +290,9 @@ func (s *Service) CreateUser(username, password, role string) (map[string]interf
 		Nickname:        "",
 		Password:        &hashedPassword,
 		Status:          &status,
-		IsActive:        true,
-		IsAuthenticated: true,
-		IsAnonymous:     false,
+		IsActive:        "1",
+		IsAuthenticated: "1",
+		IsAnonymous:     "0",
 		LoginChannel:    &loginChannel,
 		IsSuperuser:     &isSuperuser,
 	}
@@ -227,6 +303,7 @@ func (s *Service) CreateUser(username, password, role string) (map[string]interf
 		return nil, fmt.Errorf("failed to begin transaction: %w", tx.Error)
 	}
 
+	defer tx.Rollback()
 	// Rollback helper function
 	rollbackTx := func() {
 		if rbErr := tx.Rollback(); rbErr.Error != nil {
@@ -294,11 +371,15 @@ func (s *Service) CreateUser(username, password, role string) (map[string]interf
 		return nil, fmt.Errorf("failed to create user-tenant relation: %w", err)
 	}
 
-	// Registration and admin creation use the same current catalog and transaction.
-	if cfg != nil {
-		if err := service.InitializeAdminTenantModels(tx, tenant, cfg.UserDefaultLLM.DefaultModels); err != nil {
+	// 4. Create tenant LLM configurations
+	tenantLLMs, err := s.getInitTenantLLM(userID)
+	if err != nil {
+		rollbackTx()
+		return nil, fmt.Errorf("failed to get init tenant LLM configs: %w", err)
+	} else if len(tenantLLMs) > 0 {
+		if err := tx.Create(&tenantLLMs).Error; err != nil {
 			rollbackTx()
-			return nil, fmt.Errorf("failed to initialize tenant models: %w", err)
+			return nil, fmt.Errorf("failed to create tenant LLM configs: %w", err)
 		}
 	}
 
@@ -337,12 +418,136 @@ func (s *Service) CreateUser(username, password, role string) (map[string]interf
 	}, nil
 }
 
+// getInitTenantLLM gets initial tenant LLM configurations
+// This matches Python's get_init_tenant_llm function
+func (s *Service) getInitTenantLLM(userID string) ([]*entity.TenantLLM, error) {
+	cfg := server.GetConfig()
+	if cfg == nil {
+		return nil, fmt.Errorf("config not initialized")
+	}
+
+	var tenantLLMs []*entity.TenantLLM
+
+	// Get model configs from configuration
+	modelConfigs := []server.ModelConfig{
+		cfg.UserDefaultLLM.DefaultModels.ChatModel,
+		cfg.UserDefaultLLM.DefaultModels.EmbeddingModel,
+		cfg.UserDefaultLLM.DefaultModels.RerankModel,
+		cfg.UserDefaultLLM.DefaultModels.ASRModel,
+		cfg.UserDefaultLLM.DefaultModels.Image2TextModel,
+	}
+
+	// Track seen factories to avoid duplicates
+	seenFactories := make(map[string]bool)
+	var uniqueFactories []server.ModelConfig
+
+	for _, mc := range modelConfigs {
+		if mc.Factory == "" {
+			continue
+		}
+		if !seenFactories[mc.Factory] {
+			seenFactories[mc.Factory] = true
+			uniqueFactories = append(uniqueFactories, mc)
+		}
+	}
+
+	// Get LLMs for each unique factory
+	for _, factoryConfig := range uniqueFactories {
+		llms, err := s.llmDAO.GetByFactory(factoryConfig.Factory)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get LLMs for factory %s: %w", factoryConfig.Factory, err)
+		}
+
+		for _, llm := range llms {
+			// Determine API key and base URL based on model type
+			var apiKey, apiBase string
+			switch llm.ModelType {
+			case string(entity.ModelTypeChat):
+				apiKey = factoryConfig.APIKey
+				apiBase = factoryConfig.BaseURL
+			case string(entity.ModelTypeEmbedding):
+				apiKey = cfg.UserDefaultLLM.DefaultModels.EmbeddingModel.APIKey
+				apiBase = cfg.UserDefaultLLM.DefaultModels.EmbeddingModel.BaseURL
+				if apiKey == "" {
+					apiKey = factoryConfig.APIKey
+				}
+				if apiBase == "" {
+					apiBase = factoryConfig.BaseURL
+				}
+			case string(entity.ModelTypeRerank):
+				apiKey = cfg.UserDefaultLLM.DefaultModels.RerankModel.APIKey
+				apiBase = cfg.UserDefaultLLM.DefaultModels.RerankModel.BaseURL
+				if apiKey == "" {
+					apiKey = factoryConfig.APIKey
+				}
+				if apiBase == "" {
+					apiBase = factoryConfig.BaseURL
+				}
+			case string(entity.ModelTypeSpeech2Text):
+				apiKey = cfg.UserDefaultLLM.DefaultModels.ASRModel.APIKey
+				apiBase = cfg.UserDefaultLLM.DefaultModels.ASRModel.BaseURL
+				if apiKey == "" {
+					apiKey = factoryConfig.APIKey
+				}
+				if apiBase == "" {
+					apiBase = factoryConfig.BaseURL
+				}
+			case string(entity.ModelTypeImage2Text):
+				apiKey = cfg.UserDefaultLLM.DefaultModels.Image2TextModel.APIKey
+				apiBase = cfg.UserDefaultLLM.DefaultModels.Image2TextModel.BaseURL
+				if apiKey == "" {
+					apiKey = factoryConfig.APIKey
+				}
+				if apiBase == "" {
+					apiBase = factoryConfig.BaseURL
+				}
+			default:
+				apiKey = factoryConfig.APIKey
+				apiBase = factoryConfig.BaseURL
+			}
+
+			maxTokens := int64(8192)
+			if llm.MaxTokens > 0 {
+				maxTokens = llm.MaxTokens
+			}
+
+			llmName := llm.LLMName
+			modelType := llm.ModelType
+			tenantLLM := &entity.TenantLLM{
+				TenantID:   userID,
+				LLMFactory: factoryConfig.Factory,
+				LLMName:    &llmName,
+				ModelType:  &modelType,
+				APIKey:     &apiKey,
+				APIBase:    &apiBase,
+				MaxTokens:  maxTokens,
+				Status:     "1",
+			}
+			tenantLLMs = append(tenantLLMs, tenantLLM)
+		}
+	}
+
+	// Remove duplicates based on (tenant_id, llm_factory, llm_name)
+	seen := make(map[string]bool)
+	var uniqueLLMs []*entity.TenantLLM
+	for _, tllm := range tenantLLMs {
+		key := fmt.Sprintf("%s|%s|%s", tllm.TenantID, tllm.LLMFactory, *tllm.LLMName)
+		if !seen[key] {
+			seen[key] = true
+			uniqueLLMs = append(uniqueLLMs, tllm)
+		}
+	}
+
+	return uniqueLLMs, nil
+}
+
+// GetUserDetails get user details
 func (s *Service) GetUserDetails(username string) (map[string]interface{}, error) {
 	// Query user by email/username
 	var user entity.User
 	err := dao.DB.Where("email = ?", username).First(&user).Error
 	if err != nil {
-		return nil, ErrUserNotFound
+		return nil, common.ErrUserNotFound
 	}
 
 	return map[string]interface{}{
@@ -391,7 +596,7 @@ func (s *Service) DeleteUser(username string) (*DeleteUserResult, error) {
 	user := userList[0]
 
 	// Check if user is active - cannot delete active users
-	if user.IsActive {
+	if user.IsActive == "1" {
 		return nil, fmt.Errorf("User '%s' is active and can't be deleted. Please deactivate the user first", username)
 	}
 
@@ -400,80 +605,87 @@ func (s *Service) DeleteUser(username string) (*DeleteUserResult, error) {
 		return nil, fmt.Errorf("Cannot delete admin account")
 	}
 
+	// Get user-tenant relations
+	tenants, err := s.userTenantDAO.GetByUserIDAll(user.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user-tenant relations: %w", err)
+	}
+
+	// Find owned tenant (role = "owner")
+	var ownedTenantID string
+	for _, t := range tenants {
+		if t.Role == "owner" {
+			ownedTenantID = t.TenantID
+			break
+		}
+	}
+
 	// Start transaction for cascade delete
 	tx := dao.DB.Begin()
 	if tx.Error != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", tx.Error)
 	}
-	defer func() { _ = tx.Rollback().Error }()
 
+	defer tx.Rollback()
 	// Rollback helper function
 	rollbackTx := func() {
 		if rbErr := tx.Rollback(); rbErr.Error != nil {
 			common.Error("failed to rollback transaction", rbErr.Error)
 		}
 	}
-	// Fence deactivation/reactivation and modern provider creation with fresh
-	// ownership. Provider writers acquire Tenant before creating their rows;
-	// instance/model writers already acquire Provider/Instance respectively.
-	var lockedUser entity.User
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND email = ?", user.ID, username).Take(&lockedUser).Error; err != nil {
-		return nil, errors.New("user unavailable during deletion")
-	}
-	if lockedUser.IsActive {
-		return nil, fmt.Errorf("User '%s' is active and can't be deleted. Please deactivate the user first", username)
-	}
-	if lockedUser.IsSuperuser != nil && *lockedUser.IsSuperuser {
-		return nil, errors.New("Cannot delete admin account")
-	}
-	user = &lockedUser
-	var tenants []entity.UserTenant
-	if err := tx.Where("user_id = ?", user.ID).Find(&tenants).Error; err != nil {
-		return nil, errors.New("failed to read user tenant ownership")
-	}
-	var ownedTenantID string
-	ownedTenantIDs := []string{}
-	seenTenants := map[string]bool{}
-	for _, relation := range tenants {
-		if relation.Role != "owner" {
-			continue
-		}
-		if relation.TenantID == "" {
-			return nil, errors.New("invalid tenant ownership")
-		}
-		if ownedTenantID == "" {
-			ownedTenantID = relation.TenantID
-		}
-		if !seenTenants[relation.TenantID] {
-			ownedTenantIDs = append(ownedTenantIDs, relation.TenantID)
-			seenTenants[relation.TenantID] = true
-		}
-	}
-	sort.Strings(ownedTenantIDs)
-	if len(ownedTenantIDs) > 0 {
-		var lockedTenants []entity.Tenant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", ownedTenantIDs).Order("id").Find(&lockedTenants).Error; err != nil {
-			return nil, errors.New("failed to lock owned tenants")
-		}
-		if err := deleteOwnedTenantModelRows(tx, ownedTenantIDs); err != nil {
-			return nil, &adminModelCleanupError{cause: err}
-		}
-	}
 
 	result.DeletedDetails = append(result.DeletedDetails, "Start to delete owned tenant.")
 	// Delete owned tenant data
 	if ownedTenantID != "" {
+		var lockedTenant entity.Tenant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", ownedTenantID).First(&lockedTenant).Error; err != nil {
+			rollbackTx()
+			return nil, fmt.Errorf("failed to lock owned tenant: %w", err)
+		}
+		var providerIDs []string
+		if err := tx.Model(&entity.TenantModelProvider{}).Where("tenant_id = ?", ownedTenantID).Pluck("id", &providerIDs).Error; err != nil {
+			rollbackTx()
+			return nil, err
+		}
+		if len(providerIDs) > 0 {
+			var groupIDs []string
+			if err := tx.Model(&entity.TenantModelGroupMapping{}).Where("provider_id IN ?", providerIDs).Distinct().Pluck("group_id", &groupIDs).Error; err != nil {
+				rollbackTx()
+				return nil, err
+			}
+			for _, model := range []interface{}{&entity.TenantModelGroupMapping{}, &entity.TenantModel{}, &entity.TenantModelInstance{}} {
+				if err := tx.Where("provider_id IN ?", providerIDs).Delete(model).Error; err != nil {
+					rollbackTx()
+					return nil, fmt.Errorf("failed to delete owned model credentials: %w", err)
+				}
+			}
+			if len(groupIDs) > 0 {
+				if err := tx.Where("id IN ? AND NOT EXISTS (SELECT 1 FROM tenant_model_group_mapping WHERE group_id = tenant_model_group.id)", groupIDs).Delete(&entity.TenantModelGroup{}).Error; err != nil {
+					rollbackTx()
+					return nil, err
+				}
+			}
+			if err := tx.Where("id IN ?", providerIDs).Delete(&entity.TenantModelProvider{}).Error; err != nil {
+				rollbackTx()
+				return nil, err
+			}
+		}
+
 		// 1. Get knowledge base IDs
-		kbIDs, err := s.kbDAO.GetKBIDsByTenantIDSimple(ownedTenantID)
+		var kbIDs []string
+		err := tx.Model(&entity.Knowledgebase{}).Where("tenant_id = ?", ownedTenantID).Pluck("id", &kbIDs).Error
 		if err != nil {
-			common.Warn("failed to get knowledge base IDs", zap.Error(err))
+			rollbackTx()
+			return nil, fmt.Errorf("failed to get knowledge base IDs: %w", err)
 		}
 
 		if len(kbIDs) > 0 {
 			// 2. Get document IDs
-			docIDs, err := s.documentDAO.GetAllDocIDsByKBIDs(kbIDs)
+			var docIDs []map[string]string
+			err := tx.Model(&entity.Document{}).Select("id").Where("kb_id IN ?", kbIDs).Find(&docIDs).Error
 			if err != nil {
-				common.Warn("failed to get document IDs", zap.Error(err))
+				rollbackTx()
+				return nil, fmt.Errorf("failed to get document IDs: %w", err)
 			}
 
 			// 3. Delete tasks by document IDs
@@ -483,95 +695,117 @@ func (s *Service) DeleteUser(username string) (*DeleteUserResult, error) {
 					docIDList[i] = d["id"]
 				}
 				if delErr := tx.Unscoped().Where("doc_id IN ?", docIDList).Delete(&entity.Task{}); delErr.Error != nil {
-					common.Warn("failed to delete tasks", zap.Error(delErr.Error))
+					rollbackTx()
+					return nil, fmt.Errorf("failed to delete tasks: %w", delErr.Error)
 				}
 			}
 
 			// 4. Delete documents
 			if delErr := tx.Unscoped().Where("kb_id IN ?", kbIDs).Delete(&entity.Document{}); delErr.Error != nil {
-				common.Warn("failed to delete documents", zap.Error(delErr.Error))
+				rollbackTx()
+				return nil, fmt.Errorf("failed to delete documents: %w", delErr.Error)
 			}
 
 			// 5. Delete knowledge bases
 			if delErr := tx.Unscoped().Where("id IN ?", kbIDs).Delete(&entity.Knowledgebase{}); delErr.Error != nil {
-				common.Warn("failed to delete knowledge bases", zap.Error(delErr.Error))
+				rollbackTx()
+				return nil, fmt.Errorf("failed to delete knowledge bases: %w", delErr.Error)
 			}
 		}
 
 		// 6. Delete files
 		if delErr := tx.Unscoped().Where("tenant_id = ?", ownedTenantID).Delete(&entity.File{}); delErr.Error != nil {
-			common.Warn("failed to delete files", zap.Error(delErr.Error))
+			rollbackTx()
+			return nil, fmt.Errorf("failed to delete files: %w", delErr.Error)
 		}
 
 		// 7. Delete user canvas (agents)
 		if delErr := tx.Unscoped().Where("user_id = ?", ownedTenantID).Delete(&entity.UserCanvas{}); delErr.Error != nil {
-			common.Warn("failed to delete user canvas", zap.Error(delErr.Error))
+			rollbackTx()
+			return nil, fmt.Errorf("failed to delete user canvas: %w", delErr.Error)
 		}
 
 		// 8. Get dialog IDs
 		var dialogIDs []string
 		if pluckErr := tx.Model(&entity.Chat{}).Where("tenant_id = ?", ownedTenantID).Pluck("id", &dialogIDs); pluckErr.Error != nil {
-			common.Warn("failed to get dialog IDs", zap.Error(pluckErr.Error))
+			rollbackTx()
+			return nil, fmt.Errorf("failed to get dialog IDs: %w", pluckErr.Error)
 		}
 
 		// 9. Delete chat sessions
 		if len(dialogIDs) > 0 {
 			if delErr := tx.Unscoped().Where("dialog_id IN ?", dialogIDs).Delete(&entity.ChatSession{}); delErr.Error != nil {
-				common.Warn("failed to delete chat sessions", zap.Error(delErr.Error))
+				rollbackTx()
+				return nil, fmt.Errorf("failed to delete chat sessions: %w", delErr.Error)
 			}
 		}
 
 		// 10. Delete chats/dialogs
 		if delErr := tx.Unscoped().Where("tenant_id = ?", ownedTenantID).Delete(&entity.Chat{}); delErr.Error != nil {
-			common.Warn("failed to delete chats", zap.Error(delErr.Error))
+			rollbackTx()
+			return nil, fmt.Errorf("failed to delete chats: %w", delErr.Error)
 		}
 
 		// 11. Delete API tokens
 		if delErr := tx.Unscoped().Where("tenant_id = ?", ownedTenantID).Delete(&entity.APIToken{}); delErr.Error != nil {
-			common.Warn("failed to delete API tokens", zap.Error(delErr.Error))
+			rollbackTx()
+			return nil, fmt.Errorf("failed to delete API tokens: %w", delErr.Error)
 		}
 
 		// 12. Delete API4Conversations
 		if len(dialogIDs) > 0 {
 			if delErr := tx.Unscoped().Where("dialog_id IN ?", dialogIDs).Delete(&entity.API4Conversation{}); delErr.Error != nil {
-				common.Warn("failed to delete API4Conversations", zap.Error(delErr.Error))
+				rollbackTx()
+				return nil, fmt.Errorf("failed to delete API4Conversations: %w", delErr.Error)
 			}
 		}
 
 		var tenantLLMCount int64
-		tx.Model(&entity.TenantLLM{}).Where("tenant_id = ?", ownedTenantID).Count(&tenantLLMCount)
+		if err := tx.Model(&entity.TenantLLM{}).Where("tenant_id = ?", ownedTenantID).Count(&tenantLLMCount).Error; err != nil {
+			rollbackTx()
+			return nil, err
+		}
 		result.TenantLLMCount = int(tenantLLMCount)
 		result.DeletedDetails = append(result.DeletedDetails, fmt.Sprintf("- Deleted %d tenant-LLM records.", tenantLLMCount))
 
 		result.LangfuseCount = 0
 		result.DeletedDetails = append(result.DeletedDetails, fmt.Sprintf("- Deleted %d langfuse records.", result.LangfuseCount))
 
-		metadataTableName := fmt.Sprintf("multirag_doc_meta_%s", ownedTenantID[:32])
+		metadataTableName := fmt.Sprintf("multirag_doc_meta_%s", ownedTenantID)
 		result.MetadataTable = metadataTableName
-		result.DeletedDetails = append(result.DeletedDetails, fmt.Sprintf("- Deleted metadata table %s.", metadataTableName))
+		result.DeletedDetails = append(result.DeletedDetails, fmt.Sprintf("- Metadata table %s was not removed (not implemented).", metadataTableName))
 
 		// 13. Delete tenant LLM configurations
 		if delErr := tx.Unscoped().Where("tenant_id = ?", ownedTenantID).Delete(&entity.TenantLLM{}); delErr.Error != nil {
-			common.Warn("failed to delete tenant LLM", zap.Error(delErr.Error))
+			rollbackTx()
+			return nil, fmt.Errorf("failed to delete tenant LLM: %w", delErr.Error)
 		}
 
 		var tenantCount int64
-		tx.Model(&entity.Tenant{}).Where("id = ?", ownedTenantID).Count(&tenantCount)
+		if err := tx.Model(&entity.Tenant{}).Where("id = ?", ownedTenantID).Count(&tenantCount).Error; err != nil {
+			rollbackTx()
+			return nil, err
+		}
 		result.TenantCount = int(tenantCount)
 		// 14. Delete tenant
 		if delErr := tx.Unscoped().Where("id = ?", ownedTenantID).Delete(&entity.Tenant{}); delErr.Error != nil {
-			common.Warn("failed to delete tenant", zap.Error(delErr.Error))
+			rollbackTx()
+			return nil, fmt.Errorf("failed to delete tenant: %w", delErr.Error)
 		}
 		result.DeletedDetails = append(result.DeletedDetails, fmt.Sprintf("- Deleted %d tenant.", result.TenantCount))
 	}
 
 	var userTenantCount int64
-	tx.Model(&entity.UserTenant{}).Where("user_id = ?", user.ID).Count(&userTenantCount)
+	if err := tx.Model(&entity.UserTenant{}).Where("user_id = ?", user.ID).Count(&userTenantCount).Error; err != nil {
+		rollbackTx()
+		return nil, err
+	}
 	result.UserTenantCount = int(userTenantCount)
 
 	// 15. Delete user-tenant relations
 	if delErr := tx.Unscoped().Where("user_id = ?", user.ID).Delete(&entity.UserTenant{}); delErr.Error != nil {
-		common.Warn("failed to delete user-tenant relations", zap.Error(delErr.Error))
+		rollbackTx()
+		return nil, fmt.Errorf("failed to delete user-tenant relations: %w", delErr.Error)
 	}
 	result.DeletedDetails = append(result.DeletedDetails, fmt.Sprintf("- Deleted %d user-tenant records.", result.UserTenantCount))
 
@@ -593,100 +827,6 @@ func (s *Service) DeleteUser(username string) (*DeleteUserResult, error) {
 	common.Info("Delete user success with all related data", zap.String("username", username))
 
 	return result, nil
-}
-
-type adminModelCleanupError struct{ cause error }
-
-func (e *adminModelCleanupError) Error() string {
-	return "failed to delete owned tenant model configuration"
-}
-func (e *adminModelCleanupError) Unwrap() error { return e.cause }
-
-// Groups have no tenant column. Only mappings owned through the tenant's
-// providers are removed; a group shared with any surviving mapping is retained.
-func deleteOwnedTenantModelRows(tx *gorm.DB, tenantIDs []string) error {
-	if len(tenantIDs) == 0 {
-		return nil
-	}
-	var providers []entity.TenantModelProvider
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id IN ?", tenantIDs).Order("id").Find(&providers).Error; err != nil {
-		return err
-	}
-	providerIDs := make([]string, 0, len(providers))
-	for _, provider := range providers {
-		providerIDs = append(providerIDs, provider.ID)
-	}
-	if len(providerIDs) == 0 {
-		return nil
-	}
-	var instances []entity.TenantModelInstance
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("provider_id IN ?", providerIDs).Order("id").Find(&instances).Error; err != nil {
-		return err
-	}
-	var models []entity.TenantModel
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("provider_id IN ?", providerIDs).Order("id").Find(&models).Error; err != nil {
-		return err
-	}
-	var groupIDs []string
-	if err := tx.Model(&entity.TenantModelGroupMapping{}).Where("provider_id IN ?", providerIDs).Distinct("group_id").Order("group_id").Pluck("group_id", &groupIDs).Error; err != nil {
-		return err
-	}
-	groupExists := map[string]bool{}
-	if len(groupIDs) > 0 {
-		var groups []entity.TenantModelGroup
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", groupIDs).Order("id").Find(&groups).Error; err != nil {
-			return err
-		}
-		for _, group := range groups {
-			groupExists[group.ID] = true
-		}
-	}
-	var mappings []entity.TenantModelGroupMapping
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("provider_id IN ?", providerIDs).Order("group_id,provider_id,instance_id,model_id").Find(&mappings).Error; err != nil {
-		return err
-	}
-	mappingDelete := tx.Where("provider_id IN ?", providerIDs).Delete(&entity.TenantModelGroupMapping{})
-	if mappingDelete.Error != nil {
-		return mappingDelete.Error
-	}
-	if mappingDelete.RowsAffected != int64(len(mappings)) {
-		return errors.New("owned model mapping deletion was not confirmed")
-	}
-	for _, id := range groupIDs {
-		var remaining int64
-		if err := tx.Model(&entity.TenantModelGroupMapping{}).Where("group_id = ?", id).Count(&remaining).Error; err != nil {
-			return err
-		}
-		if remaining == 0 {
-			deleted := tx.Where("id = ?", id).Delete(&entity.TenantModelGroup{})
-			if deleted.Error != nil {
-				return deleted.Error
-			}
-			if groupExists[id] && deleted.RowsAffected != 1 {
-				return errors.New("owned model group deletion was not confirmed")
-			}
-		}
-	}
-	for _, target := range []struct {
-		model any
-		count int
-	}{{&entity.TenantModel{}, len(models)}, {&entity.TenantModelInstance{}, len(instances)}} {
-		deleted := tx.Where("provider_id IN ?", providerIDs).Delete(target.model)
-		if deleted.Error != nil {
-			return deleted.Error
-		}
-		if deleted.RowsAffected != int64(target.count) {
-			return errors.New("owned model credential deletion was not confirmed")
-		}
-	}
-	deleted := tx.Where("id IN ? AND tenant_id IN ?", providerIDs, tenantIDs).Delete(&entity.TenantModelProvider{})
-	if deleted.Error != nil {
-		return deleted.Error
-	}
-	if deleted.RowsAffected != int64(len(providers)) {
-		return errors.New("owned model provider deletion was not confirmed")
-	}
-	return nil
 }
 
 // ChangePassword change user password
@@ -750,11 +890,16 @@ func (s *Service) UpdateUserActivateStatus(username string, isActive bool) error
 
 	user := userList[0]
 
-	if user.IsActive == isActive {
+	targetStatus := "0"
+	if isActive {
+		targetStatus = "1"
+	}
+
+	if user.IsActive == targetStatus {
 		return nil
 	}
 
-	user.IsActive = isActive
+	user.IsActive = targetStatus
 
 	if err := s.userDAO.Update(user); err != nil {
 		return fmt.Errorf("failed to update user: %w", err)
@@ -829,19 +974,17 @@ func (s *Service) RevokeAdmin(username string) error {
 
 // GetUserDatasets get user datasets
 func (s *Service) GetUserDatasets(username string) ([]map[string]interface{}, error) {
-	// TODO: Implement get user datasets
-	return []map[string]interface{}{}, nil
+	return nil, errors.New("GetUserDatasets: not implemented")
 }
 
 // GetUserAgents get user agents
 func (s *Service) GetUserAgents(username string) ([]map[string]interface{}, error) {
-	// TODO: Implement get user agents
-	return []map[string]interface{}{}, nil
+	return nil, errors.New("GetUserAgents: not implemented")
 }
 
-// API Token methods
+// API Key methods
 
-// ListUserAPITokens get user API tokens
+// ListUserAPITokens get user API keys
 func (s *Service) ListUserAPITokens(username string) ([]map[string]interface{}, error) {
 	// 1. Get user details
 	user, err := s.userDAO.GetByEmail(username)
@@ -850,8 +993,8 @@ func (s *Service) ListUserAPITokens(username string) ([]map[string]interface{}, 
 	}
 
 	// 2. Get user's tenants
-	userTenants, err := s.userTenantDAO.GetByUserIDAndRole(user.ID, "owner")
-	if err != nil || len(userTenants) != 1 {
+	userTenants, err := s.userTenantDAO.GetByUserID(user.ID)
+	if err != nil || len(userTenants) == 0 {
 		return nil, fmt.Errorf("tenant not found")
 	}
 
@@ -882,7 +1025,7 @@ func (s *Service) ListUserAPITokens(username string) ([]map[string]interface{}, 
 	return result, nil
 }
 
-// GenerateUserAPIToken generate API token for user
+// GenerateUserAPIToken generate API key for user
 func (s *Service) GenerateUserAPIToken(username string) (map[string]interface{}, error) {
 	// 1. Get user details
 	user, err := s.userDAO.GetByEmail(username)
@@ -891,8 +1034,8 @@ func (s *Service) GenerateUserAPIToken(username string) (map[string]interface{},
 	}
 
 	// 2. Get user's tenants
-	userTenants, err := s.userTenantDAO.GetByUserIDAndRole(user.ID, "owner")
-	if err != nil || len(userTenants) != 1 {
+	userTenants, err := s.userTenantDAO.GetByUserID(user.ID)
+	if err != nil || len(userTenants) == 0 {
 		return nil, fmt.Errorf("tenant not found")
 	}
 
@@ -910,7 +1053,7 @@ func (s *Service) GenerateUserAPIToken(username string) (map[string]interface{},
 
 	// 4. Save API token
 	if err := s.apiTokenDAO.Create(apiToken); err != nil {
-		return nil, fmt.Errorf("failed to generate API token: %w", err)
+		return nil, fmt.Errorf("failed to generate API key: %w", err)
 	}
 
 	return map[string]interface{}{
@@ -924,7 +1067,7 @@ func (s *Service) GenerateUserAPIToken(username string) (map[string]interface{},
 	}, nil
 }
 
-// DeleteUserAPIToken delete user API token
+// DeleteUserAPIToken delete user API key
 func (s *Service) DeleteUserAPIToken(username, key string) error {
 	// 1. Get user details
 	user, err := s.userDAO.GetByEmail(username)
@@ -933,8 +1076,8 @@ func (s *Service) DeleteUserAPIToken(username, key string) error {
 	}
 
 	// 2. Get user's tenants
-	userTenants, err := s.userTenantDAO.GetByUserIDAndRole(user.ID, "owner")
-	if err != nil || len(userTenants) != 1 {
+	userTenants, err := s.userTenantDAO.GetByUserID(user.ID)
+	if err != nil || len(userTenants) == 0 {
 		return fmt.Errorf("tenant not found")
 	}
 
@@ -943,11 +1086,11 @@ func (s *Service) DeleteUserAPIToken(username, key string) error {
 	// 3. Delete API token
 	rowsAffected, err := s.apiTokenDAO.DeleteByTenantIDAndToken(tenantID, key)
 	if err != nil {
-		return fmt.Errorf("failed to delete API token: %w", err)
+		return fmt.Errorf("failed to delete API key: %w", err)
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("API token not found or could not be deleted")
+		return fmt.Errorf("API key not found or could not be deleted")
 	}
 
 	return nil
@@ -957,62 +1100,52 @@ func (s *Service) DeleteUserAPIToken(username, key string) error {
 
 // ListRoles list all roles
 func (s *Service) ListRoles() ([]map[string]interface{}, error) {
-	// TODO: Implement list roles
-	return []map[string]interface{}{}, nil
+	return nil, errors.New("ListRoles: not implemented")
 }
 
 // CreateRole create a new role
 func (s *Service) CreateRole(roleName, description string) (map[string]interface{}, error) {
-	// TODO: Implement create role
-	return map[string]interface{}{}, nil
+	return nil, errors.New("CreateRole: not implemented")
 }
 
 // GetRole get role details
 func (s *Service) GetRole(roleName string) (map[string]interface{}, error) {
-	// TODO: Implement get role
-	return map[string]interface{}{}, nil
+	return nil, errors.New("GetRole: not implemented")
 }
 
 // UpdateRole update role
 func (s *Service) UpdateRole(roleName, description string) (map[string]interface{}, error) {
-	// TODO: Implement update role
-	return map[string]interface{}{}, nil
+	return nil, errors.New("UpdateRole: not implemented")
 }
 
 // DeleteRole delete role
 func (s *Service) DeleteRole(roleName string) error {
-	// TODO: Implement delete role
-	return nil
+	return errors.New("DeleteRole: not implemented")
 }
 
 // GetRolePermission get role permissions
 func (s *Service) GetRolePermission(roleName string) ([]map[string]interface{}, error) {
-	// TODO: Implement get role permissions
-	return []map[string]interface{}{}, nil
+	return nil, errors.New("GetRolePermission: not implemented")
 }
 
 // GrantRolePermission grant permission to role
 func (s *Service) GrantRolePermission(roleName string, actions []string, resource string) (map[string]interface{}, error) {
-	// TODO: Implement grant role permission
-	return map[string]interface{}{}, nil
+	return nil, errors.New("GrantRolePermission: not implemented")
 }
 
 // RevokeRolePermission revoke permission from role
 func (s *Service) RevokeRolePermission(roleName string, actions []string, resource string) (map[string]interface{}, error) {
-	// TODO: Implement revoke role permission
-	return map[string]interface{}{}, nil
+	return nil, errors.New("RevokeRolePermission: not implemented")
 }
 
 // UpdateUserRole update user role
 func (s *Service) UpdateUserRole(username, roleName string) ([]map[string]interface{}, error) {
-	// TODO: Implement update user role
-	return []map[string]interface{}{}, nil
+	return nil, errors.New("UpdateUserRole: not implemented")
 }
 
 // GetUserPermission get user permissions
 func (s *Service) GetUserPermission(username string) ([]map[string]interface{}, error) {
-	// TODO: Implement get user permissions
-	return []map[string]interface{}{}, nil
+	return nil, errors.New("user permissions: not implemented")
 }
 
 // ListServices get all services
@@ -1036,11 +1169,10 @@ func (s *Service) ListServices() ([]map[string]interface{}, error) {
 			}
 			result = append(result, configDict)
 		}
-
 	}
 
 	id := len(result)
-	serverList := GlobalServerStatusStore.GetAllStatuses()
+	serverList := GlobalServerStore.ListInfos()
 	now := time.Now()
 	for _, serverStatus := range serverList {
 		serverItem := make(map[string]interface{})
@@ -1050,7 +1182,12 @@ func (s *Service) ListServices() ([]map[string]interface{}, error) {
 		id++
 		serverItem["host"] = serverStatus.Host
 		serverItem["port"] = serverStatus.Port
-		serverItem["status"] = heartbeatServiceStatus(serverStatus.Timestamp, now)
+		// the difference between now and serverStatus.Timestamp is less than 5 seconds, then the server is alive
+		if !serverStatus.Timestamp.IsZero() && !serverStatus.Timestamp.After(now) && now.Sub(serverStatus.Timestamp) < 30*time.Second {
+			serverItem["status"] = "alive"
+		} else {
+			serverItem["status"] = "timeout"
+		}
 		result = append(result, serverItem)
 	}
 	return result, nil
@@ -1083,7 +1220,7 @@ func (s *Service) GetServiceDetails(configDict map[string]interface{}) (map[stri
 		}
 		return s.getESClusterStats(name)
 	case "multirag_server":
-		return s.checkMultiRAGServerAlive(name)
+		return s.checkRAGFlowServerAlive(name)
 	case "file_store":
 		return s.checkMinioAlive(name)
 	case "task_executor":
@@ -1135,7 +1272,7 @@ func (s *Service) getMySQLStatus(name string) (map[string]interface{}, error) {
 func (s *Service) getRedisInfo(name string) (map[string]interface{}, error) {
 	startTime := time.Now()
 
-	redisClient := redisengine.Get()
+	redisClient := redis.Get()
 	if redisClient == nil {
 		return map[string]interface{}{
 			"service_name": name,
@@ -1225,11 +1362,11 @@ func (s *Service) getInfinityStatus(name string) (map[string]interface{}, error)
 	}, nil
 }
 
-// checkMultiRAGServerAlive checks if MultiRAG server is alive
-func (s *Service) checkMultiRAGServerAlive(name string) (map[string]interface{}, error) {
+// checkRAGFlowServerAlive checks if RAGFlow server is alive
+func (s *Service) checkRAGFlowServerAlive(name string) (map[string]interface{}, error) {
 	startTime := time.Now()
 
-	// Get multirag config from allConfigs
+	// Get ragflow config from allConfigs
 	var host string
 	var port int
 	allConfigs := server.GetAllConfigs()
@@ -1401,20 +1538,12 @@ func (s *Service) checkTaskExecutorAlive(name string) (map[string]interface{}, e
 
 // ShutdownService shutdown service
 func (s *Service) ShutdownService(serviceID string) (map[string]interface{}, error) {
-	// TODO: Implement with proper service manager
-	return map[string]interface{}{
-		"service_id": serviceID,
-		"status":     "shutdown",
-	}, nil
+	return nil, errors.New("service shutdown: not implemented")
 }
 
 // RestartService restart service
 func (s *Service) RestartService(serviceID string) (map[string]interface{}, error) {
-	// TODO: Implement with proper service manager
-	return map[string]interface{}{
-		"service_id": serviceID,
-		"status":     "restarted",
-	}, nil
+	return nil, errors.New("service restart: not implemented")
 }
 
 // Variable/Settings methods
@@ -1462,7 +1591,7 @@ func validateSystemSettingValue(setting entity.SystemSettings, value string) err
 		return nil
 	case "integer", "int":
 		if _, err := strconv.Atoi(value); err != nil {
-			return NewAdminException(fmt.Sprintf("Invalid integer value for %s", setting.Name))
+			return NewAdminException(fmt.Sprintf("Invalid integer value for %s: %s", setting.Name, value))
 		}
 	case "bool", "boolean":
 		if value != "true" && value != "false" {
@@ -1524,9 +1653,6 @@ func (s *Service) GetAllVariables() ([]map[string]interface{}, error) {
 // Creates or updates a system setting
 // If the setting exists, updates it; otherwise creates a new one
 func (s *Service) SetVariable(varName, varValue string) error {
-	if strings.TrimSpace(varName) == "" {
-		return NewAdminException("Var name is required")
-	}
 	settings, err := s.systemSettingsDAO.GetByName(varName)
 	if err != nil {
 		return err
@@ -1585,7 +1711,7 @@ func (s *Service) GetAllEnvironments() ([]map[string]interface{}, error) {
 	// DEFAULT_SUPERUSER_EMAIL
 	defaultSuperuserEmail := os.Getenv("DEFAULT_SUPERUSER_EMAIL")
 	if defaultSuperuserEmail == "" {
-		defaultSuperuserEmail = "admin@multirag.com"
+		defaultSuperuserEmail = "admin@ragflow.io"
 	}
 	result = append(result, map[string]interface{}{
 		"env":   "DEFAULT_SUPERUSER_EMAIL",
@@ -1627,72 +1753,57 @@ func (s *Service) GetAllEnvironments() ([]map[string]interface{}, error) {
 
 // Version methods
 
-// GetVersion get MultiRAG version
+// GetVersion get RAGFlow version
 func (s *Service) GetVersion() string {
-	return utility.GetMultiRAGVersion()
+	return utility.GetRAGFlowVersion()
 }
 
 // Sandbox methods
 
 // ListSandboxProviders list sandbox providers
 func (s *Service) ListSandboxProviders() ([]map[string]interface{}, error) {
-	// TODO: Implement with sandbox manager
-	return []map[string]interface{}{}, nil
+	return nil, errors.New("sandbox providers: not implemented")
 }
 
 // GetSandboxProviderSchema get sandbox provider schema
 func (s *Service) GetSandboxProviderSchema(providerID string) (map[string]interface{}, error) {
-	// TODO: Implement with sandbox manager
-	return map[string]interface{}{}, nil
+	return nil, errors.New("sandbox provider schema: not implemented")
 }
 
 // GetSandboxConfig get sandbox config
 func (s *Service) GetSandboxConfig() (map[string]interface{}, error) {
-	// TODO: Implement with sandbox manager
-	return map[string]interface{}{}, nil
+	return nil, errors.New("sandbox configuration: not implemented")
 }
 
 // SetSandboxConfig set sandbox config
 func (s *Service) SetSandboxConfig(providerType string, config map[string]interface{}, setActive bool) (map[string]interface{}, error) {
-	// TODO: Implement with sandbox manager
-	return map[string]interface{}{
-		"provider_type": providerType,
-		"config":        config,
-		"set_active":    setActive,
-	}, nil
+	return nil, errors.New("sandbox configuration update: not implemented")
 }
 
 // TestSandboxConnection test sandbox connection
 func (s *Service) TestSandboxConnection(providerType string, config map[string]interface{}) (map[string]interface{}, error) {
-	// TODO: Implement with sandbox manager
-	return map[string]interface{}{
-		"provider_type": providerType,
-		"config":        config,
-		"connected":     true,
-	}, nil
+	return nil, errors.New("sandbox connection test: not implemented")
 }
 
-const heartbeatTimeout = 30 * time.Second
-
-func heartbeatServiceStatus(receivedAt, now time.Time) string {
-	if age := now.Sub(receivedAt); !receivedAt.IsZero() && age >= 0 && age < heartbeatTimeout {
-		return "alive"
-	}
-	return "timeout"
-}
+var heartBeatCount int64 = 0
 
 // HandleHeartbeat handle heartbeat
 func (s *Service) HandleHeartbeat(message *common.BaseMessage) (common.ErrorCode, string) {
+	if message == nil {
+		return common.CodeArgumentError, "heartbeat message is nil"
+	}
+	atomic.AddInt64(&heartBeatCount, 1)
+
 	status := &common.BaseMessage{
 		ServerName: message.ServerName,
 		ServerType: message.ServerType,
 		Host:       message.Host,
 		Port:       message.Port,
 		Version:    message.Version,
-		Timestamp:  message.Timestamp,
+		Timestamp:  time.Now(),
 		Ext:        message.Ext,
 	}
-	GlobalServerStatusStore.UpdateStatus(message.ServerName, status)
+	GlobalServerStore.UpdateServerInfo(message.ServerName, status)
 	return common.CodeLicenseValid, ""
 }
 
@@ -1701,7 +1812,7 @@ func (s *Service) HandleHeartbeat(message *common.BaseMessage) (common.ErrorCode
 func (s *Service) InitDefaultAdmin() error {
 	// Default superuser settings (matching Python's DEFAULT_SUPERUSER_* defaults)
 	defaultNickname := "admin"
-	defaultEmail := "admin@multirag.com"
+	defaultEmail := "admin@ragflow.io"
 	defaultPassword := "admin"
 
 	// Query superusers
@@ -1733,26 +1844,30 @@ func (s *Service) InitDefaultAdmin() error {
 			Password:        &hashedPassword,
 			AccessToken:     &accessToken,
 			Status:          &status,
-			IsActive:        true,
-			IsAuthenticated: true,
-			IsAnonymous:     false,
+			IsActive:        "1",
+			IsAuthenticated: "1",
+			IsAnonymous:     "0",
 			LoginChannel:    &loginChannel,
 			IsSuperuser:     &isSuperuser,
 		}
 
-		if err := dao.DB.Create(user).Error; err != nil {
-			return fmt.Errorf("can't init admin: %w", err)
-		}
-
-		if err := s.addTenantForAdmin(userID, defaultNickname); err != nil {
-			return fmt.Errorf("failed to add tenant for admin: %w", err)
-		}
-
-		return nil
+		return dao.DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(user).Error; err != nil {
+				return fmt.Errorf("can't init admin: %w", err)
+			}
+			tenantName := defaultNickname + "'s Kingdom"
+			if err := tx.Create(&entity.Tenant{ID: userID, Name: &tenantName, Status: &status}).Error; err != nil {
+				return err
+			}
+			if err := tx.Create(&entity.UserTenant{ID: utility.GenerateToken(), TenantID: userID, UserID: userID, InvitedBy: userID, Role: "owner", Status: &status}).Error; err != nil {
+				return err
+			}
+			return nil
+		})
 	}
 
 	for _, user := range users {
-		if !user.IsActive {
+		if user.IsActive != "1" {
 			return fmt.Errorf("no active admin. Please update 'is_active' in db manually")
 		}
 	}
@@ -1761,7 +1876,9 @@ func (s *Service) InitDefaultAdmin() error {
 		if user.Email == defaultEmail {
 			// Check if tenant exists
 			var count int64
-			dao.DB.Model(&entity.UserTenant{}).Where("user_id = ? AND status = ?", user.ID, "1").Count(&count)
+			if err := dao.DB.Model(&entity.UserTenant{}).Where("user_id = ? AND status = ?", user.ID, "1").Count(&count).Error; err != nil {
+				return err
+			}
 			if count == 0 {
 				nickname := defaultNickname
 				if user.Nickname != "" {
@@ -1789,11 +1906,8 @@ func (s *Service) addTenantForAdmin(userID, nickname string) error {
 		Name: &tenantName,
 	}
 
-	if err := dao.DB.Create(tenant).Error; err != nil {
-		return err
-	}
-
 	userTenant := &entity.UserTenant{
+		ID:        utility.GenerateToken(),
 		TenantID:  userID,
 		UserID:    userID,
 		InvitedBy: userID,
@@ -1801,5 +1915,10 @@ func (s *Service) addTenantForAdmin(userID, nickname string) error {
 		Status:    &status,
 	}
 
-	return dao.DB.Create(userTenant).Error
+	return dao.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(tenant).Error; err != nil {
+			return err
+		}
+		return tx.Create(userTenant).Error
+	})
 }

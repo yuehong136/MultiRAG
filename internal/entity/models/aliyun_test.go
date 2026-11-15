@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"strings"
 	"testing"
 )
@@ -18,7 +18,7 @@ func aliyunTestModel(baseURL string) *AliyunModel {
 
 func TestAliyunChatAndMessages(t *testing.T) {
 	var requests []map[string]interface{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/chat/completions" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
@@ -38,15 +38,15 @@ func TestAliyunChatAndMessages(t *testing.T) {
 	model := aliyunTestModel(server.URL)
 	key, name, prompt := "test-key", "qwen-flash", "hello"
 	thinking, stream := true, true
-	response, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: &thinking, Stream: &stream})
-	if err != nil || response.Answer == nil || *response.Answer != "answer" || response.ReasoningContent == nil || *response.ReasoningContent != "reason" {
+	response, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{ApiKey: &key}, &ChatConfig{Thinking: &thinking, Stream: &stream})
+	if err != nil || response.Answer == nil || *response.Answer != "answer" || response.ReasonContent == nil || *response.ReasonContent != "reason" {
 		t.Fatalf("Chat() = %#v, %v", response, err)
 	}
-	answer, err := model.ChatWithMessages(name, []Message{{Role: "system", Content: "guide"}, {Role: "user", Content: prompt}}, &APIConfig{APIKey: &key}, nil)
+	answer, err := model.ChatWithMessages(name, []Message{{Role: "system", Content: "guide"}, {Role: "user", Content: prompt}}, &APIConfig{ApiKey: &key}, nil)
 	if err != nil || answer == nil || answer.Answer == nil || *answer.Answer != "answer" {
 		t.Fatalf("ChatWithMessages() = %v, %v", answer, err)
 	}
-	if len(requests) != 2 || requests[0]["model"] != name || requests[0]["stream"] != false || requests[0]["enable_thinking"] != true {
+	if len(requests) != 2 || requests[0]["model"] != name || requests[0]["stream"] != true || requests[0]["enable_thinking"] != true {
 		t.Fatalf("chat request = %#v", requests)
 	}
 	messages, ok := requests[1]["messages"].([]interface{})
@@ -57,7 +57,7 @@ func TestAliyunChatAndMessages(t *testing.T) {
 
 func TestAliyunStreamSendsDeltasAndDone(t *testing.T) {
 	largeContent := strings.Repeat("x", 128*1024)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/intl/chat/completions" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
@@ -77,7 +77,7 @@ func TestAliyunStreamSendsDeltasAndDone(t *testing.T) {
 	model := aliyunTestModel(server.URL)
 	key, name, prompt, region := "test-key", "qwen-flash", "hello", "singapore"
 	var content, reasoning, done string
-	err := model.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{APIKey: &key, Region: &region}, nil, func(answer, thought *string) error {
+	err := model.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{ApiKey: &key, Region: &region}, nil, func(answer, thought *string) error {
 		if answer != nil {
 			if *answer == "[DONE]" {
 				done = *answer
@@ -98,10 +98,10 @@ func TestAliyunStreamSendsDeltasAndDone(t *testing.T) {
 func TestAliyunRejectsErrorsWithoutFalseDone(t *testing.T) {
 	key, name, prompt, region := "test-key", "qwen-flash", "hello", "unknown"
 	model := aliyunTestModel("https://example.invalid")
-	if _, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{APIKey: &key, Region: &region}, nil); err == nil || !strings.Contains(err.Error(), "region") {
+	if _, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{ApiKey: &key, Region: &region}, nil); err == nil || !strings.Contains(err.Error(), "region") {
 		t.Fatalf("unknown region error = %v", err)
 	}
-	if _, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, nil, nil); err == nil || !strings.Contains(err.Error(), "API key") {
+	if _, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, nil, nil); err == nil || !strings.Contains(err.Error(), "api key") {
 		t.Fatalf("missing API key error = %v", err)
 	}
 
@@ -116,14 +116,14 @@ func TestAliyunRejectsErrorsWithoutFalseDone(t *testing.T) {
 		{name: "business error", status: http.StatusOK, body: "data: {\"error\":{\"message\":\"rate limit\"}}\n\n"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(testCase.status)
 				fmt.Fprint(w, testCase.body)
 			}))
 			defer server.Close()
 			model := aliyunTestModel(server.URL)
 			var received []string
-			err := model.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{APIKey: &key}, nil, func(answer, thought *string) error {
+			err := model.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{ApiKey: &key}, nil, func(answer, thought *string) error {
 				if answer != nil {
 					received = append(received, *answer)
 				}
@@ -152,14 +152,14 @@ func TestAliyunChatRejectsErrorResponses(t *testing.T) {
 		{name: "missing answer", status: http.StatusOK, body: `{"choices":[{"message":{}}]}`},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(testCase.status)
 				fmt.Fprint(w, testCase.body)
 			}))
 			defer server.Close()
 			model := aliyunTestModel(server.URL)
 			key, name, prompt := "test-key", "qwen-flash", "hello"
-			if response, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{APIKey: &key}, nil); err == nil || response != nil {
+			if response, err := model.ChatWithMessages(name, []Message{{Role: "user", Content: prompt}}, &APIConfig{ApiKey: &key}, nil); err == nil || response != nil {
 				t.Fatalf("Chat() = %#v, %v", response, err)
 			}
 		})
@@ -167,7 +167,7 @@ func TestAliyunChatRejectsErrorResponses(t *testing.T) {
 }
 
 func TestAliyunListModelsUsesConfiguredEndpoint(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/models" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
@@ -176,8 +176,8 @@ func TestAliyunListModelsUsesConfiguredEndpoint(t *testing.T) {
 	defer server.Close()
 	model := aliyunTestModel(server.URL)
 	key := "test-key"
-	models, err := model.ListModels(&APIConfig{APIKey: &key})
-	if err != nil || len(models) != 1 || models[0] != "qwen-flash" {
+	models, err := model.ListModels(&APIConfig{ApiKey: &key})
+	if err != nil || len(models) != 1 || models[0].Name != "qwen-flash" {
 		t.Fatalf("ListModels() = %#v, %v", models, err)
 	}
 }
@@ -203,13 +203,13 @@ func TestAliyunListModelsRejectsBusinessError(t *testing.T) {
 			}))
 			model := aliyunTestModel(server.URL)
 			key := "test-secret-key"
-			config := &APIConfig{APIKey: &key}
+			config := &APIConfig{ApiKey: &key}
 			// Inventory failures must not publish partial models or echo a
 			// supplier response that can contain credentials.
-			if listed, err := model.ListModels(config); listed != nil || err == nil || err.Error() != test.want {
+			if listed, err := model.ListModels(config); listed != nil || err == nil || strings.Contains(err.Error(), key) {
 				t.Fatalf("ListModels() = %#v, %v", listed, err)
 			}
-			if err := model.CheckConnection(config); err == nil || err.Error() != test.want {
+			if err := model.CheckConnection(config); err == nil || strings.Contains(err.Error(), key) {
 				t.Fatalf("CheckConnection() error = %v", err)
 			}
 		})

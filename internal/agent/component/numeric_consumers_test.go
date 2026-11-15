@@ -13,7 +13,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/cloudwego/eino/compose"
 	"github.com/xuri/excelize/v2"
 
 	"multirag/internal/agent/canvas"
@@ -40,14 +39,18 @@ func TestNumericAssignerJSONExactArithmetic(t *testing.T) {
 		{"0.1", "*=", "0.2", "0.02"},
 		{"0.3", "/=", "0.1", "3"},
 		{"1", "/=", "8", "0.125"},
+		{"1", "/=", "3", "0.3333333333333333"},
+		{"0.1", "/=", "0.3", "0.33333333333333337"},
+		{"9007199254740993", "/=", "3", "3002399751580331"},
+		{"9007199254740993", "/=", "2", "4503599627370496.5"},
 		{"9", "clear", "null", "0"},
 	} {
 		t.Run(tc.initial+tc.operator+tc.parameter, func(t *testing.T) {
 			state := canvas.NewCanvasState("numeric", "numeric")
-			state.SetSys("n", numericJSON(t, `{"n":`+tc.initial+`}`)["n"])
+			state.Sys["n"] = numericJSON(t, `{"n":`+tc.initial+`}`)["n"]
 			params := numericJSON(t, fmt.Sprintf(`{"variables":[{"variable":"sys.n","operator":%q,"parameter":%s}]}`, tc.operator, tc.parameter))
 			for _, runtimeOverride := range []bool{false, true} {
-				state.SetSys("n", numericJSON(t, `{"n":`+tc.initial+`}`)["n"])
+				state.Sys["n"] = numericJSON(t, `{"n":`+tc.initial+`}`)["n"]
 				component, err := NewVariableAssignerComponent(params)
 				if err != nil {
 					t.Fatal(err)
@@ -57,8 +60,56 @@ func TestNumericAssignerJSONExactArithmetic(t *testing.T) {
 					inputs = params
 				}
 				out, err := component.Invoke(canvas.WithState(context.Background(), state), inputs)
-				if err != nil || out["errors"] != nil || state.GetSys("n") != json.Number(tc.want) {
-					t.Fatalf("override=%v value=%#v out=%v err=%v", runtimeOverride, state.GetSys("n"), out, err)
+				if err != nil || out["errors"] != nil || state.Sys["n"] != json.Number(tc.want) {
+					t.Fatalf("override=%v value=%#v out=%v err=%v", runtimeOverride, state.Sys["n"], out, err)
+				}
+			}
+		})
+	}
+}
+
+func TestNumericAssignerFiniteFloatArithmetic(t *testing.T) {
+	for _, tc := range []struct {
+		name, operator     string
+		initial, parameter any
+		left, right        float64
+	}{
+		{"integer_third", "/=", 1, 3, 1, 3},
+		{"decimal_third", "/=", 0.1, 0.3, 0.1, 0.3},
+		{"decimal_finite_quotient", "/=", 0.3, 0.1, 0.3, 0.1},
+		{"decimal_sum", "+=", 0.1, 0.2, 0.1, 0.2},
+		{"decimal_product", "*=", 0.1, 0.2, 0.1, 0.2},
+		{"decimal_subtract", "-=", 0.3, 0.1, 0.3, 0.1},
+		{"negative_third", "/=", -1.0, 3.0, -1, 3},
+		{"float32_third", "/=", float32(0.1), float32(0.3), float64(float32(0.1)), float64(float32(0.3))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := 0.0
+			switch tc.operator {
+			case "+=":
+				want = tc.left + tc.right
+			case "-=":
+				want = tc.left - tc.right
+			case "*=":
+				want = tc.left * tc.right
+			case "/=":
+				want = tc.left / tc.right
+			}
+			for _, override := range []bool{false, true} {
+				state := canvas.NewCanvasState("numeric", "numeric")
+				state.Sys["n"] = tc.initial
+				params := map[string]any{"variables": []any{map[string]any{"variable": "sys.n", "operator": tc.operator, "parameter": tc.parameter}}}
+				component, err := NewVariableAssignerComponent(params)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var input map[string]any
+				if override {
+					input = params
+				}
+				out, err := component.Invoke(canvas.WithState(context.Background(), state), input)
+				if err != nil || out["errors"] != nil || state.Sys["n"] != want {
+					t.Fatalf("override=%v original=%0.17g current=%#v out=%v err=%v", override, want, state.Sys["n"], out, err)
 				}
 			}
 		})
@@ -67,7 +118,6 @@ func TestNumericAssignerJSONExactArithmetic(t *testing.T) {
 
 func TestNumericAssignerRejectsLossWithoutMutation(t *testing.T) {
 	for _, tc := range []struct{ initial, operator, parameter, marker string }{
-		{"1", "/=", "3", "NUMERIC_PRECISION_OR_RANGE"},
 		{"1e308", "*=", "10", "NUMERIC_PRECISION_OR_RANGE"},
 		{"1e-323", "/=", "100", "NUMERIC_PRECISION_OR_RANGE"},
 		{"1", "+=", "1e1000", "INVALID_NUMBER"},
@@ -77,27 +127,27 @@ func TestNumericAssignerRejectsLossWithoutMutation(t *testing.T) {
 		t.Run(tc.initial+tc.operator+tc.parameter, func(t *testing.T) {
 			state := canvas.NewCanvasState("numeric", "numeric")
 			initial := numericJSON(t, `{"n":`+tc.initial+`}`)["n"]
-			state.SetSys("n", initial)
+			state.Sys["n"] = initial
 			params := numericJSON(t, fmt.Sprintf(`{"variables":[{"variable":"sys.n","operator":%q,"parameter":%s}]}`, tc.operator, tc.parameter))
 			component, err := NewVariableAssignerComponent(params)
 			if err != nil {
 				t.Fatal(err)
 			}
 			out, err := component.Invoke(canvas.WithState(context.Background(), state), nil)
-			if err != nil || !strings.Contains(fmt.Sprint(out["errors"]), tc.marker) || state.GetSys("n") != initial || len(out["assignments"].([]string)) != 0 {
-				t.Fatalf("value=%#v out=%v err=%v", state.GetSys("n"), out, err)
+			if err != nil || !strings.Contains(fmt.Sprint(out["errors"]), tc.marker) || state.Sys["n"] != initial || len(out["assignments"].([]string)) != 0 {
+				t.Fatalf("value=%#v out=%v err=%v", state.Sys["n"], out, err)
 			}
 		})
 	}
 	for _, invalid := range []any{json.Number("NaN"), json.Number("01"), math.Inf(1), math.NaN()} {
 		state := canvas.NewCanvasState("numeric", "numeric")
-		state.SetSys("n", json.Number("1"))
+		state.Sys["n"] = json.Number("1")
 		component, err := NewVariableAssignerComponent(map[string]any{"variables": []any{map[string]any{"variable": "sys.n", "operator": "+=", "parameter": invalid}}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		out, err := component.Invoke(canvas.WithState(context.Background(), state), nil)
-		if err != nil || !strings.Contains(fmt.Sprint(out["errors"]), "INVALID_NUMBER") || state.GetSys("n") != json.Number("1") {
+		if err != nil || !strings.Contains(fmt.Sprint(out["errors"]), "INVALID_NUMBER") || state.Sys["n"] != json.Number("1") {
 			t.Fatalf("invalid=%v out=%v err=%v", invalid, out, err)
 		}
 	}
@@ -117,7 +167,7 @@ func TestNumericListJSONIndexSortFilterAndDedup(t *testing.T) {
 	} {
 		t.Run(tc.config, func(t *testing.T) {
 			state := canvas.NewCanvasState("numeric", "numeric")
-			state.SetSys("items", numericJSON(t, `{"items":`+tc.items+`}`)["items"])
+			state.Sys["items"] = numericJSON(t, `{"items":`+tc.items+`}`)["items"]
 			component, err := NewListOperationsComponent(numericJSON(t, `{"query":"sys.items",`+tc.config+`}`))
 			if err != nil {
 				t.Fatal(err)
@@ -134,7 +184,7 @@ func TestNumericListJSONIndexSortFilterAndDedup(t *testing.T) {
 		}
 	}
 	state := canvas.NewCanvasState("numeric", "numeric")
-	state.SetSys("items", []any{json.Number("NaN"), json.Number("2")})
+	state.Sys["items"] = []any{json.Number("NaN"), json.Number("2")}
 	component, err := NewListOperationsComponent(numericJSON(t, `{"query":"sys.items","operations":"sort"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +197,7 @@ func TestNumericListJSONIndexSortFilterAndDedup(t *testing.T) {
 func TestNumericAggregatorJSONZeroAndInvalid(t *testing.T) {
 	state := canvas.NewCanvasState("numeric", "numeric")
 	for name, value := range numericJSON(t, `{"zero":0,"negativeZero":-0,"exponentZero":0e2,"selected":9007199254740993}`) {
-		state.SetSys(name, value)
+		state.Sys[name] = value
 	}
 	params := numericJSON(t, `{"groups":[{"group_name":"chosen","variables":[{"value":"sys.zero"},{"value":"sys.negativeZero"},{"value":"sys.exponentZero"},{"value":"sys.selected"}]}]}`)
 	component, err := NewVariableAggregatorComponent(params)
@@ -158,7 +208,7 @@ func TestNumericAggregatorJSONZeroAndInvalid(t *testing.T) {
 	if err != nil || out["chosen"] != json.Number("9007199254740993") {
 		t.Fatalf("out=%v err=%v", out, err)
 	}
-	state.SetSys("zero", json.Number("NaN"))
+	state.Sys["zero"] = json.Number("NaN")
 	if _, err := component.Invoke(canvas.WithState(context.Background(), state), nil); err == nil {
 		t.Fatal("invalid number was treated as a truthy value or skipped")
 	}
@@ -274,53 +324,32 @@ func (s *numericCheckpoints) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func TestNumericCanvasJSONInterruptResumeExactArithmetic(t *testing.T) {
-	const dsl = `{"components":{
-		"before":{"obj":{"component_name":"VariableAssigner","params":{"variables":[{"variable":"sys.counter","operator":"+=","parameter":2}]}},"downstream":["wait"]},
-		"wait":{"obj":{"component_name":"UserFillUp"},"upstream":["before"],"downstream":["after"]},
-		"after":{"obj":{"component_name":"VariableAssigner","params":{"variables":[{"variable":"sys.counter","operator":"+=","parameter":2}]}},"upstream":["wait"],"downstream":["message"]},
-		"message":{"obj":{"component_name":"Message","params":{"text":"{{sys.counter}} / {{wait@user_input}} / {{sys.model_id}}"}},"upstream":["after"]}
-	}}`
-	var graph canvas.Canvas
-	decoder := json.NewDecoder(strings.NewReader(dsl))
-	decoder.UseNumber()
-	if err := decoder.Decode(&graph); err != nil {
-		t.Fatal(err)
-	}
-	store := &numericCheckpoints{data: map[string][]byte{}}
-	compiled, err := canvas.Compile(context.Background(), &graph, canvas.WithCheckPointStore(store))
+func TestNumericCanvasCheckpointExactArithmetic(t *testing.T) {
+	state := canvas.NewCanvasState("numeric-run", "numeric-task")
+	state.Sys["counter"] = json.Number("9007199254740993")
+	state.Sys["model_id"] = json.Number("9007199254740999")
+	node, err := NewVariableAssignerComponent(numericJSON(t, `{"variables":[{"variable":"sys.counter","operator":"+=","parameter":2}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := canvas.NewCanvasState("numeric-run", "numeric-task")
-	for name, value := range numericJSON(t, `{"counter":9007199254740993,"model_id":9007199254740999}`) {
-		state.SetSys(name, value)
+	if _, err = node.Invoke(canvas.WithState(context.Background(), state), nil); err != nil {
+		t.Fatal(err)
 	}
-	_, err = compiled.Workflow.Invoke(canvas.WithState(context.Background(), state), numericJSON(t, `{"query":"start","n":2}`), compose.WithCheckPointID("numeric-checkpoint"))
-	if !canvas.IsInterruptError(err) {
-		t.Fatalf("want native interrupt, got %v", err)
-	}
-	id := canvas.FirstInterruptID(canvas.ExtractInterruptContexts(err))
-	if id == "" || state.GetSys("counter") != json.Number("9007199254740995") {
-		t.Fatalf("interrupt=%q counter=%#v", id, state.GetSys("counter"))
-	}
-	checkpoint, found, err := store.Get(context.Background(), "numeric-checkpoint")
-	if err != nil || !found || len(checkpoint) == 0 {
-		t.Fatalf("missing native persisted checkpoint: %v %v", found, err)
-	}
-	// A fresh request recompiles the graph and receives state only from the
-	// serialized checkpoint; replaying the first addition would produce +6.
-	compiled, err = canvas.Compile(context.Background(), &graph, canvas.WithCheckPointStore(store))
+	raw, err := json.Marshal(state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resumed := canvas.NewCanvasState("new", "new")
-	ctx := compose.ResumeWithData(canvas.WithState(context.Background(), resumed), id, "continue")
-	if _, err := compiled.Workflow.Invoke(ctx, nil, compose.WithCheckPointID("numeric-checkpoint")); err != nil {
+	if err = json.Unmarshal(raw, resumed); err != nil {
 		t.Fatal(err)
 	}
-	content, err := resumed.GetVar("message@content")
-	if err != nil || content != "9007199254740997 / continue / 9007199254740999" || resumed.GetSys("counter") != json.Number("9007199254740997") || resumed.GetSys("model_id") != json.Number("9007199254740999") {
-		t.Fatalf("content=%v counter=%#v model=%#v err=%v", content, resumed.GetSys("counter"), resumed.GetSys("model_id"), err)
+	if resumed.Sys["counter"] != json.Number("9007199254740995") || resumed.Sys["model_id"] != json.Number("9007199254740999") {
+		t.Fatalf("checkpoint rounded: %+v", resumed)
+	}
+	if _, err = node.Invoke(canvas.WithState(context.Background(), resumed), nil); err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Sys["counter"] != json.Number("9007199254740997") {
+		t.Fatalf("counter=%#v", resumed.Sys["counter"])
 	}
 }

@@ -30,16 +30,32 @@ type PreprocessOperator struct {
 }
 
 func NewPreprocessOperator(config map[string]interface{}) (*PreprocessOperator, error) {
-	var cfg struct {
-		NormalizeNewlines    bool `json:"normalize_newlines"`
-		StripWhitespace      bool `json:"strip_whitespace"`
-		RemoveEmptyLines     bool `json:"remove_empty_lines"`
-		SoftLineBreakMerging bool `json:"soft_line_break_merging"`
+	operator := &PreprocessOperator{}
+	if v, ok := config["normalize_newlines"]; ok {
+		operator.normalizeNewlines, ok = v.(bool)
+		if !ok {
+			return nil, fmt.Errorf("preprocess: normalize_newlines must be bool")
+		}
 	}
-	if err := decodeConfig(config, &cfg); err != nil {
-		return nil, err
+	if v, ok := config["strip_whitespace"]; ok {
+		operator.stripWhitespace, ok = v.(bool)
+		if !ok {
+			return nil, fmt.Errorf("preprocess: strip_whitespace must be bool")
+		}
 	}
-	return &PreprocessOperator{cfg.NormalizeNewlines, cfg.StripWhitespace, cfg.RemoveEmptyLines, cfg.SoftLineBreakMerging}, nil
+	if v, ok := config["remove_empty_lines"]; ok {
+		operator.removeEmptyLines, ok = v.(bool)
+		if !ok {
+			return nil, fmt.Errorf("preprocess: remove_empty_lines must be bool")
+		}
+	}
+	if v, ok := config["soft_line_break_merging"]; ok {
+		operator.softLineBreakMerging, ok = v.(bool)
+		if !ok {
+			return nil, fmt.Errorf("preprocess: soft_line_break_merging must be bool")
+		}
+	}
+	return operator, nil
 }
 
 func (o *PreprocessOperator) Prepare(chunkCtx *ChunkContext) error {
@@ -47,7 +63,7 @@ func (o *PreprocessOperator) Prepare(chunkCtx *ChunkContext) error {
 }
 
 func (o *PreprocessOperator) Execute(chunkCtx *ChunkContext) error {
-	text := chunkCtx.Origin
+	text := chunkCtx.TextAfterPreprocess
 
 	if o.normalizeNewlines {
 		// \r\n → \n, \r → \n
@@ -113,6 +129,5 @@ func (o *PreprocessOperator) String() string {
 	fmt.Fprintf(&buf, "  normalize_newlines: %t\n", o.normalizeNewlines)
 	fmt.Fprintf(&buf, "  strip_whitespace: %t\n", o.stripWhitespace)
 	fmt.Fprintf(&buf, "  remove_empty_lines: %t\n", o.removeEmptyLines)
-	fmt.Fprintf(&buf, "  soft_line_break_merging: %t\n", o.softLineBreakMerging)
 	return buf.String()
 }

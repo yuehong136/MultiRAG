@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"go.uber.org/zap"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,7 +32,7 @@ func TestHeartbeatResponseValidationAndRetry(t *testing.T) {
 		{"empty-success", 200, `{}`, false},
 		{"trailing-json", 200, `{"code":320}{"code":401}`, false},
 		{"trailing-garbage", 200, `{"code":320}oops`, false},
-		{"oversize", 200, strings.Repeat(" ", maxHeartbeatResponseBytes+1) + `{"code":320}`, false},
+		{"oversize", 200, strings.Repeat(" ", (1<<20)+1) + `{"code":320}`, false},
 		{"valid-whitespace", 200, " \n" + `{"code":320}` + "\t", true},
 	}
 	for _, tc := range cases {
@@ -52,7 +53,7 @@ func TestHeartbeatResponseValidationAndRetry(t *testing.T) {
 			address, _ := url.Parse(fixture.URL)
 			host, portText, _ := net.SplitHostPort(address.Host)
 			port, _ := strconv.Atoi(portText)
-			h := NewHeartbeatSender(nil, common.ServerTypeAPI, "owned-api", "127.0.0.1", 9380)
+			h := NewAdminClient(zap.NewNop(), common.ServerTypeAPI, "owned-api", "127.0.0.1", 9380)
 			h.client = utility.NewHTTPClientBuilder().WithHost(host).WithPort(port).WithTimeout(time.Second).Build()
 			err := h.SendHeartbeat()
 			if (err == nil) != tc.valid || h.lastSuccess != tc.valid {
@@ -76,7 +77,7 @@ func TestHeartbeatResponseValidationAndRetry(t *testing.T) {
 }
 
 func TestHeartbeatNilSenderFailsWithoutPanic(t *testing.T) {
-	var h *HeartbeatSender
+	var h *AdminClient
 	if h.SendHeartbeat() == nil || h.InitHTTPClient() == nil {
 		t.Fatal("nil sender reported success")
 	}
@@ -96,7 +97,7 @@ func TestHeartbeatTransportFailureRetries(t *testing.T) {
 	address, _ := url.Parse(fixture.URL)
 	host, portText, _ := net.SplitHostPort(address.Host)
 	port, _ := strconv.Atoi(portText)
-	h := NewHeartbeatSender(nil, common.ServerTypeAPI, "owned-api", "127.0.0.1", 9380)
+	h := NewAdminClient(zap.NewNop(), common.ServerTypeAPI, "owned-api", "127.0.0.1", 9380)
 	h.client = utility.NewHTTPClientBuilder().WithHost(host).WithPort(port).WithTimeout(time.Second).Build()
 	for i := 0; i < 2; i++ {
 		if h.SendHeartbeat() == nil || h.lastSuccess {

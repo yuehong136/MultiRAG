@@ -42,14 +42,15 @@ const (
 	TokenAlter
 	TokenActive
 	TokenAdmin
+	TokenServer
+	TokenAPI
 	TokenAdd
+	TokenHost
 	TokenDelete
 	TokenPassword
 	TokenDataset
 	TokenDatasets
 	TokenChunkStore
-	TokenStore
-	TokenIn
 	TokenOf
 	TokenAgents
 	TokenRole
@@ -70,11 +71,10 @@ const (
 	TokenVar
 	TokenVars
 	TokenConfigs
+	TokenConfig
 	TokenEnvs
 	TokenKey
 	TokenKeys
-	TokenToken
-	TokenTokens
 	TokenGenerate
 	TokenAvailable
 	TokenSupported
@@ -85,31 +85,50 @@ const (
 	TokenDefault
 	TokenChats
 	TokenChat
+	TokenMessage
+	TokenImage
+	TokenVideo
+	TokenAudio
 	TokenStream
 	TokenFiles
 	TokenAs
 	TokenParse
 	TokenImport
 	TokenInto
+	TokenIn
 	TokenWith
 	TokenParser
 	TokenPipeline
 	TokenSearch
+	TokenRetrieve
 	TokenCurrent
-	TokenLLM
-	TokenVLM
+	TokenVision
 	TokenEmbedding
-	TokenReranker
+	TokenRerank
 	TokenASR
 	TokenTTS
+	TokenOCR
+	TokenDocParse
+	TokenEmbed
+	TokenText
+	TokenQuery
+	TokenFormat
+	TokenParam
+	TokenPlay
+	TokenSave
+	TokenTop
+	TokenDimension
 	TokenAsync
 	TokenSync
 	TokenBenchmark
 	TokenPing
+	TokenToken
+	TokenTokens
+	TokenUnset
 	TokenIndex
 	TokenVector
 	TokenSize
-	TokenDocMeta
+	TokenStore
 	TokenName // For ALTER PROVIDER <name> NAME <new_name>
 	TokenBalance
 	TokenInstance
@@ -127,28 +146,35 @@ const (
 	TokenMedium
 	TokenHigh
 	TokenMax
+	TokenLS
+	TokenCat
 	TokenInsert
 	TokenFile
 	TokenMetadata
 	TokenTable
 	TokenGet
-	TokenDocParse
 	TokenUpdate
 	TokenRemove
+	TokenExplain
 	TokenChunk
 	TokenChunks
 	TokenDocument
 	TokenDocuments
 	TokenTag
-	TokenOCR
 	TokenRegion
+	TokenURL
 	TokenTask
 	TokenTasks
-	TokenURL
-	TokenMessage
-	TokenImage
-	TokenVideo
-	TokenAudio
+	TokenIngestor
+	TokenIngestors
+	TokenStart
+	TokenStop
+	TokenIngestion
+	TokenMQ
+	TokenPublish
+	TokenPull
+	TokenPending
+	TokenNoACK
 	TokenLog
 	TokenLevel
 	TokenDebug
@@ -156,36 +182,24 @@ const (
 	TokenWarn
 	TokenError
 	TokenFatal
-	TokenEmbed
-	TokenText
-	TokenQuery
-	TokenTop
-	TokenDimension
-	TokenFormat
-	TokenParam
-	TokenPlay
-	TokenSave
 	TokenPanic
-	TokenServer
-	TokenAPI
-	TokenHost
-	TokenConfig
-	TokenRetrieve
-	TokenExplain
-
 	// Literals
 	TokenIdentifier
 	TokenQuotedString
-	TokenNumber
+	TokenInteger
 	TokenFloat
+	TokenNumber = TokenInteger // Alias for integer tokens in path parsing (e.g., version numbers like 1.0.0)
 
 	// Special
+	_ = iota
 	TokenSemicolon
 	TokenComma
-	TokenLBracket
-	TokenRBracket
+	TokenSlash
 	TokenEOF
+	TokenDash
 	TokenIllegal
+	TokenLBracket // '['
+	TokenRBracket // ']'
 )
 
 // Token represents a lexical token

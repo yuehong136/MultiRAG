@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -24,16 +24,16 @@ func TestSiliconFlowBalanceHTTP(t *testing.T) {
 		{"zero", `"totalBalance":"0","balance":"8"`, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet || r.URL.Path != "/office/v1/user/info" || r.Header.Get("Authorization") != "Bearer fixture" || r.ContentLength != 0 {
 					t.Errorf("incorrect balance request: %s %s", r.Method, r.URL.Path)
 				}
 				fmt.Fprintf(w, `{"code":0,"status":true,"data":{%s}}`, tc.data)
 			}))
 			defer server.Close()
-			driver := NewSiliconFlowModel(map[string]string{"default": "http://unreachable.invalid", "office": server.URL + "/office/v1/"}, URLSuffix{Balance: "/user/info"})
+			driver := NewSiliconflowModel(map[string]string{"default": "http://unreachable.invalid", "office": server.URL + "/office/v1"}, URLSuffix{Balance: "user/info"})
 			key, region := "fixture", "office"
-			api := &APIConfig{APIKey: &key, Region: &region}
+			api := &APIConfig{ApiKey: &key, Region: &region}
 			got, err := driver.Balance(api)
 			if err != nil || !reflect.DeepEqual(got, map[string]interface{}{"balance": tc.want, "currency": "CNY"}) || api.Context != nil {
 				t.Fatal(got, err)
@@ -63,11 +63,11 @@ func TestSiliconFlowBalanceRejectsInvalidResponsesHTTP(t *testing.T) {
 		{"HTTP failure", "private-body", 401},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); fmt.Fprint(w, tc.body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); fmt.Fprint(w, tc.body) }))
 			defer server.Close()
 			key := "fixture"
-			driver := NewSiliconFlowModel(map[string]string{"default": server.URL}, URLSuffix{Balance: "user/info"})
-			got, err := driver.Balance(&APIConfig{APIKey: &key})
+			driver := NewSiliconflowModel(map[string]string{"default": server.URL}, URLSuffix{Balance: "user/info"})
+			got, err := driver.Balance(&APIConfig{ApiKey: &key})
 			if err == nil || got != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(got, err)
 			}
@@ -77,32 +77,32 @@ func TestSiliconFlowBalanceRejectsInvalidResponsesHTTP(t *testing.T) {
 
 func TestSiliconFlowBalancePreflightAndCancel(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		fmt.Fprint(w, `{"code":0,"status":true,"data":{"balance":"1"}}`)
 	}))
 	defer server.Close()
 	key, empty, unknown := "fixture", "", "missing"
-	driver := NewSiliconFlowModel(map[string]string{"default": server.URL}, URLSuffix{Balance: "user/info"})
-	for _, api := range []*APIConfig{nil, {}, {APIKey: &empty}, {APIKey: &key, Region: &unknown}} {
+	driver := NewSiliconflowModel(map[string]string{"default": server.URL}, URLSuffix{Balance: "user/info"})
+	for _, api := range []*APIConfig{nil, {}, {ApiKey: &empty}, {ApiKey: &key, Region: &unknown}} {
 		if got, err := driver.Balance(api); err == nil || got != nil {
 			t.Fatal(got, err)
 		}
 	}
-	for _, d := range []*SiliconFlowModel{NewSiliconFlowModel(nil, URLSuffix{Balance: "user/info"}), NewSiliconFlowModel(map[string]string{"default": server.URL}, URLSuffix{})} {
-		if _, err := d.Balance(&APIConfig{APIKey: &key}); err == nil {
+	for _, d := range []*SiliconflowModel{NewSiliconflowModel(nil, URLSuffix{Balance: "user/info"}), NewSiliconflowModel(map[string]string{"default": server.URL}, URLSuffix{})} {
+		if _, err := d.Balance(&APIConfig{ApiKey: &key}); err == nil {
 			t.Fatal("missing endpoint accepted")
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got, err := driver.Balance(&APIConfig{APIKey: &key, Context: ctx}); !errors.Is(err, context.Canceled) || got != nil {
+	if got, err := driver.Balance(&APIConfig{ApiKey: &key, Context: ctx}); !errors.Is(err, context.Canceled) || got != nil {
 		t.Fatal(got, err)
 	}
 	if calls.Load() != 0 {
 		t.Fatal("invalid/cancelled request reached provider")
 	}
-	if got, err := driver.Balance(&APIConfig{APIKey: &key, Region: &empty}); err != nil || got["balance"] != float64(1) || calls.Load() != 1 {
+	if got, err := driver.Balance(&APIConfig{ApiKey: &key, Region: &empty}); err != nil || got["balance"] != float64(1) || calls.Load() != 1 {
 		t.Fatal(got, err)
 	}
 }
@@ -110,7 +110,7 @@ func TestSiliconFlowBalancePreflightAndCancel(t *testing.T) {
 func testBalanceCancelDuringHTTP(t *testing.T, create func(string) ModelDriver) {
 	t.Helper()
 	started, stopped := make(chan struct{}), make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		r.Body.Close()
 		w.WriteHeader(http.StatusOK)
@@ -128,7 +128,7 @@ func testBalanceCancelDuringHTTP(t *testing.T, create func(string) ModelDriver) 
 	defer cancel()
 	go func() { <-started; cancel() }()
 	key := "fixture"
-	api := &APIConfig{APIKey: &key, Context: ctx}
+	api := &APIConfig{ApiKey: &key, Context: ctx}
 	got, err := create(server.URL).Balance(api)
 	if !errors.Is(err, context.Canceled) || got != nil || api.Context != ctx {
 		t.Fatal(got, err)
@@ -142,6 +142,6 @@ func testBalanceCancelDuringHTTP(t *testing.T, create func(string) ModelDriver) 
 
 func TestSiliconFlowBalanceCancelDuringHTTP(t *testing.T) {
 	testBalanceCancelDuringHTTP(t, func(baseURL string) ModelDriver {
-		return NewSiliconFlowModel(map[string]string{"default": baseURL}, URLSuffix{Balance: "user/info"})
+		return NewSiliconflowModel(map[string]string{"default": baseURL}, URLSuffix{Balance: "user/info"})
 	})
 }

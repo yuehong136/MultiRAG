@@ -30,22 +30,11 @@ import (
 // EncryptPassword encrypts a password using RSA public key
 // This matches the Python implementation in api/utils/crypt.py
 func EncryptPassword(password string) (string, error) {
-	publicKeyPath := filepath.Join(getProjectBaseDirectory(), "configs", "public.pem")
-	return encryptPasswordFile(password, publicKeyPath)
-}
-
-// encryptPassword uses only the selected connection's key configuration.
-func (c *MultiRAGClient) encryptPassword(password string) (string, error) {
-	if c.PublicKeyFile == "" {
-		return EncryptPassword(password)
-	}
-	return encryptPasswordFile(password, c.PublicKeyFile)
-}
-
-func encryptPasswordFile(password, publicKeyPath string) (string, error) {
+	// Read public key from configs/go/public.pem
+	publicKeyPath := filepath.Join(getProjectBaseDirectory(), "configs", "go", "public.pem")
 	publicKeyPEM, err := os.ReadFile(publicKeyPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read configured public key")
+		return "", fmt.Errorf("failed to read public key: %w", err)
 	}
 
 	// Parse public key
@@ -83,7 +72,7 @@ func encryptPasswordFile(password, publicKeyPath string) (string, error) {
 
 // getProjectBaseDirectory returns the project base directory
 func getProjectBaseDirectory() string {
-	// Try to find the project root by looking for go.mod or conf directory
+	// Try to find the project root by looking for go.mod or configs directory
 	// Start from current working directory and go up
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -92,7 +81,7 @@ func getProjectBaseDirectory() string {
 
 	dir := cwd
 	for {
-		// Check if conf directory exists
+		// Check if configs directory exists
 		confDir := filepath.Join(dir, "configs")
 		if info, err := os.Stat(confDir); err == nil && info.IsDir() {
 			return dir

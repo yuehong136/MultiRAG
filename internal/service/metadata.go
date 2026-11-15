@@ -17,19 +17,28 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
-	"sort"
 	"strconv"
 
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/engine/types"
-	"multirag/internal/entity"
 )
+
+// KBDocIDsMap maps a KB ID to its document IDs.
+// Example: {"kb1": ["doc1", "doc2"], "kb2": ["doc3"]}
+type KBDocIDsMap map[string][]string
+
+// DocMetaMap maps a document ID to its metadata fields.
+// Example: {"doc1": {"author": "Zhang San", "date": "2024-01-01"}}
+type DocMetaMap map[string]map[string]interface{}
 
 // MetadataService provides common metadata operations
 type MetadataService struct {
@@ -52,11 +61,7 @@ func BuildMetadataIndexName(tenantID string) string {
 
 // GetTenantIDByKBID retrieves tenant ID from knowledge base ID
 func (s *MetadataService) GetTenantIDByKBID(kbID string) (string, error) {
-	kb, err := s.kbDAO.GetByID(kbID)
-	if err != nil {
-		return "", fmt.Errorf("knowledgebase not found: %w", err)
-	}
-	return kb.TenantID, nil
+	return dao.GetTenantIDByKBID(kbID)
 }
 
 // GetTenantIDByKBIDs retrieves tenant ID from the first knowledge base ID in the list
@@ -64,310 +69,295 @@ func (s *MetadataService) GetTenantIDByKBIDs(kbIDs []string) (string, error) {
 	if len(kbIDs) == 0 {
 		return "", fmt.Errorf("no kb_ids provided")
 	}
-	kb, err := s.kbDAO.GetByID(kbIDs[0])
-	if err != nil {
-		return "", fmt.Errorf("knowledgebase not found: %w", err)
-	}
-	return kb.TenantID, nil
+	return dao.GetTenantIDByKBID(kbIDs[0])
 }
 
-// SearchMetadataResult holds the result of a metadata search
-type SearchMetadataResult struct {
-	IndexName string
-	Chunks    []map[string]interface{}
+// SearchMetadataResponse holds the result of a metadata search
+type SearchMetadataResponse struct {
+	IndexName       string
+	MetadataRecords []map[string]interface{}
 }
 
 // SearchMetadata searches the metadata index with the given parameters
-func (s *MetadataService) SearchMetadata(kbID, tenantID string, docIDs []string, size int) (*SearchMetadataResult, error) {
-	return s.SearchMetadataContext(context.Background(), kbID, tenantID, docIDs, size)
+func (s *MetadataService) SearchMetadata(kbID, tenantID string, docIDs []string, size int) (*SearchMetadataResponse, error) {
+	if s.docEngine == nil {
+		return nil, fmt.Errorf("document engine is not initialized")
+	}
+	if docIDs != nil && len(docIDs) == 0 {
+		return &SearchMetadataResponse{IndexName: BuildMetadataIndexName(tenantID), MetadataRecords: []map[string]interface{}{}}, nil
+	}
+	searchReq := &types.SearchMetadataRequest{
+		TenantID: tenantID,
+		Offset:   0,
+		Limit:    size,
+		Filter: map[string]interface{}{
+			"id":    docIDs,
+			"kb_id": kbID,
+		},
+	}
+
+	searchResult, err := s.docEngine.SearchMetadata(context.Background(), searchReq)
+	if err != nil {
+		return nil, fmt.Errorf("search failed: %w", err)
+	}
+
+	if searchResult == nil {
+		return nil, fmt.Errorf("metadata search returned no response")
+	}
+	selected := map[string]bool{}
+	for _, id := range docIDs {
+		selected[id] = true
+	}
+	seen := map[string]bool{}
+	for _, row := range searchResult.MetadataRecords {
+		id := extractDocID(row)
+		if id == "" || seen[id] {
+			return nil, fmt.Errorf("invalid metadata document identity")
+		}
+		seen[id] = true
+		if docIDs != nil && !selected[id] {
+			return nil, fmt.Errorf("metadata escaped selected documents")
+		}
+		if kb, exists := row["kb_id"]; exists {
+			if value, ok := kb.(string); !ok || value != kbID {
+				return nil, fmt.Errorf("metadata escaped selected dataset")
+			}
+		}
+	}
+	return &SearchMetadataResponse{
+		IndexName:       BuildMetadataIndexName(tenantID),
+		MetadataRecords: searchResult.MetadataRecords,
+	}, nil
 }
 
 // SearchMetadataByKBs searches the metadata index for multiple knowledge bases
-func (s *MetadataService) SearchMetadataByKBs(kbIDs []string, size int) (*SearchMetadataResult, error) {
-	return s.SearchMetadataByKBsContext(context.Background(), kbIDs, size)
-}
-
-// SearchMetadataByKBsContext keeps both SQL and index work in the request scope.
-func (s *MetadataService) SearchMetadataByKBsContext(ctx context.Context, kbIDs []string, size int) (*SearchMetadataResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+func (s *MetadataService) SearchMetadataByKBs(kbIDs []string, size int) (*SearchMetadataResponse, error) {
 	if len(kbIDs) == 0 {
-		return &SearchMetadataResult{Chunks: []map[string]interface{}{}}, nil
+		return &SearchMetadataResponse{MetadataRecords: []map[string]interface{}{}}, nil
 	}
 
-	if size <= 0 {
-		return nil, fmt.Errorf("positive metadata result size is required")
-	}
-	// Resolve every selected KB before reading any tenant index.
-	var records []entity.Knowledgebase
-	if err := dao.DB.WithContext(ctx).Select("id", "tenant_id").Where("id IN ?", kbIDs).Find(&records).Error; err != nil {
-		return nil, fmt.Errorf("knowledgebase read failed: %w", err)
-	}
-	tenants := make(map[string]string, len(records))
-	for _, kb := range records {
-		tenants[kb.ID] = kb.TenantID
-	}
-	groups := make(map[string][]string)
-	seen := make(map[string]bool)
-	for _, id := range kbIDs {
-		if tenants[id] == "" {
-			return nil, fmt.Errorf("knowledgebase not found")
-		}
-		if !seen[id] {
-			groups[tenants[id]] = append(groups[tenants[id]], id)
-			seen[id] = true
-		}
-	}
-	if s.docEngine == nil {
-		return nil, fmt.Errorf("metadata index is unavailable")
-	}
-	ordered := make([]string, 0, len(groups))
-	for tenant := range groups {
-		ordered = append(ordered, tenant)
-	}
-	sort.Strings(ordered)
-	result := &SearchMetadataResult{Chunks: []map[string]interface{}{}}
-	for _, tenant := range ordered {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		index := BuildMetadataIndexName(tenant)
-		rows, err := s.searchMetadataDirectory(ctx, tenant, groups[tenant], size)
-		if err != nil {
-			return nil, err
-		}
-		result.Chunks = append(result.Chunks, rows...)
-		if len(ordered) == 1 {
-			result.IndexName = index
-		}
-	}
-	return result, ctx.Err()
-}
-
-// searchMetadataDirectory reads a complete, stable tenant selection. The size
-// controls batch memory and never limits the directory used by metadata filters.
-func (s *MetadataService) searchMetadataDirectory(ctx context.Context, tenant string, kbIDs []string, size int) ([]map[string]interface{}, error) {
-	if err := ctx.Err(); err != nil {
+	tenantID, err := s.GetTenantIDByKBIDs(kbIDs)
+	if err != nil {
 		return nil, err
 	}
-	if tenant == "" || len(kbIDs) == 0 || size <= 0 || s.docEngine == nil {
-		return nil, fmt.Errorf("metadata directory scope, engine and positive batch size are required")
+
+	if s.docEngine == nil {
+		return nil, fmt.Errorf("document engine is not initialized")
 	}
-	allowedKBs := make(map[string]bool, len(kbIDs))
-	for _, id := range kbIDs {
-		if id == "" {
-			return nil, fmt.Errorf("metadata directory dataset scope is required")
-		}
-		allowedKBs[id] = true
+	searchReq := &types.SearchMetadataRequest{
+		TenantID: tenantID,
+		Offset:   0,
+		Limit:    size,
+		Filter: map[string]interface{}{
+			"kb_id": kbIDs,
+		},
 	}
-	batchSize := min(size, 1000)
-	rows := []map[string]interface{}{}
-	seen := make(map[string]bool)
-	appendRows := func(batch []map[string]interface{}) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if len(batch) > batchSize {
-			return fmt.Errorf("metadata directory returned an overfull page")
-		}
-		for _, row := range batch {
-			kb, kbOK := row["kb_id"].(string)
-			id, idOK := row["id"].(string)
-			if !kbOK || !allowedKBs[kb] || !idOK || id == "" {
-				return fmt.Errorf("metadata directory dataset or document scope mismatch")
-			}
-			identity := kb + "\x00" + id
-			if seen[identity] {
-				return fmt.Errorf("metadata directory returned a duplicate document")
-			}
-			seen[identity] = true
-			rows = append(rows, row)
-		}
-		return nil
+
+	searchResult, err := s.docEngine.SearchMetadata(context.Background(), searchReq)
+	if err != nil {
+		return nil, fmt.Errorf("search failed: %w", err)
 	}
-	request := &types.SearchRequest{
-		IndexNames: []string{BuildMetadataIndexName(tenant)}, KbIDs: append([]string(nil), kbIDs...),
-		Limit: batchSize, SelectFields: []string{"id", "kb_id", "meta_fields"}, IncludeUnavailable: true,
-		OrderBy: new(types.OrderByExpr).Asc("kb_id").Asc("id"),
+
+	if searchResult == nil {
+		return nil, fmt.Errorf("metadata search returned no response")
 	}
-	// ES can hold a point-in-time snapshot across its result-window boundary;
-	// adapters without that capability still paginate with exact total checks.
-	if scanner, ok := s.docEngine.(engine.MetadataScanner); ok {
-		if err := scanner.ScanMetadata(ctx, request, appendRows); err != nil {
-			return nil, fmt.Errorf("metadata snapshot scan failed: %w", err)
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return rows, nil
-	}
-	expectedTotal := int64(-1)
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		request.Offset = len(rows)
-		found, err := s.docEngine.Search(ctx, request)
-		if err != nil {
-			return nil, fmt.Errorf("metadata search failed: %w", err)
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if found == nil {
-			return nil, fmt.Errorf("metadata index returned no result")
-		}
-		if found.Total < 0 {
-			return nil, fmt.Errorf("metadata directory returned invalid pagination")
-		}
-		if expectedTotal < 0 {
-			expectedTotal = found.Total
-		} else if found.Total != expectedTotal {
-			return nil, fmt.Errorf("metadata directory changed during pagination")
-		}
-		if int64(len(rows))+int64(len(found.Chunks)) > expectedTotal {
-			return nil, fmt.Errorf("metadata directory returned more rows than its total")
-		}
-		if err := appendRows(found.Chunks); err != nil {
-			return nil, err
-		}
-		if int64(len(rows)) == expectedTotal {
-			return rows, nil
-		}
-		if len(found.Chunks) == 0 {
-			return nil, fmt.Errorf("metadata directory pagination made no progress")
-		}
-	}
+	return &SearchMetadataResponse{
+		IndexName:       BuildMetadataIndexName(tenantID),
+		MetadataRecords: searchResult.MetadataRecords,
+	}, nil
 }
 
 // GetFlattedMetaByKBs returns flattened metadata in the format:
 // {field_name: {value: [doc_ids]}}
 func (s *MetadataService) GetFlattedMetaByKBs(kbIDs []string) (common.MetaData, error) {
-	return s.GetFlattedMetaByKBsContext(context.Background(), kbIDs)
-}
-
-// GetFlattedMetaByKBsContext supplies the directory for request-scoped filters.
-func (s *MetadataService) GetFlattedMetaByKBsContext(ctx context.Context, kbIDs []string) (common.MetaData, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	if len(kbIDs) == 0 {
 		return make(common.MetaData), nil
 	}
-
-	// Read every metadata row; the batch size is not a result cap.
-	result, err := s.SearchMetadataByKBsContext(ctx, kbIDs, 10000)
+	result, err := s.SearchMetadataByKBs(kbIDs, 10000)
 	if err != nil {
 		return nil, err
 	}
-
-	return flattenMetadataRows(result.Chunks)
-}
-
-func flattenMetadataRows(rows []map[string]interface{}) (common.MetaData, error) {
-	flattedMeta := make(common.MetaData)
-	for _, chunk := range rows {
-		// Extract doc_id from chunk
-		docID := ""
-		if id, ok := chunk["id"].(string); ok {
-			docID = id
-		} else if id, ok := chunk["doc_id"].(string); ok {
-			docID = id
-		}
-
+	allowed := make(map[string]bool, len(kbIDs))
+	for _, id := range kbIDs {
+		allowed[id] = true
+	}
+	flattened := make(common.MetaData)
+	seen := make(map[string]bool)
+	for _, row := range result.MetadataRecords {
+		docID := extractDocID(row)
 		if docID == "" {
-			return nil, fmt.Errorf("metadata directory document id is required")
+			if id, ok := row["id"].(string); ok {
+				docID = id
+			}
 		}
-
-		// Corrupt metadata cannot become an incomplete directory that broadens
-		// a negative/manual predicate or changes a model-generated filter.
-		metaFields, err := ExtractMetaFields(chunk)
+		if docID == "" || seen[docID] {
+			return nil, fmt.Errorf("invalid or duplicate metadata document identity")
+		}
+		seen[docID] = true
+		if kb, exists := row["kb_id"]; exists {
+			if id, ok := kb.(string); !ok || !allowed[id] {
+				return nil, fmt.Errorf("metadata row escaped requested dataset scope")
+			}
+		}
+		fields, err := ExtractMetaFields(row)
 		if err != nil {
-			return nil, fmt.Errorf("metadata directory contains invalid fields: %w", err)
+			return nil, fmt.Errorf("invalid document metadata: %w", err)
 		}
-		if len(metaFields) == 0 {
-			continue
-		}
-
-		// Flatten each field
-		for fieldName, fieldValue := range metaFields {
-			if fieldName == "empty_metadata" || fieldValue == nil {
-				continue
-			}
-
-			// Initialize field map if not exists
-			if _, exists := flattedMeta[fieldName]; !exists {
-				flattedMeta[fieldName] = make(common.MetaValueDocs)
-			}
-
-			valueMap := flattedMeta[fieldName]
-			addValue := func(value interface{}) {
-				if text, valid := metadataValueText(value); valid {
-					valueMap[text] = appendDocID(valueMap[text], docID)
-				}
-			}
-
-			// Preserve JSON scalars, including false, zero and empty strings.
-			switch v := fieldValue.(type) {
+		for key, value := range fields {
+			var values []interface{}
+			switch v := value.(type) {
+			case []interface{}:
+				values = v
 			case []string:
 				for _, item := range v {
-					addValue(item)
-				}
-			case []interface{}:
-				for _, item := range v {
-					addValue(item)
+					values = append(values, item)
 				}
 			default:
-				addValue(v)
+				values = []interface{}{v}
+			}
+			for _, scalar := range values {
+				var text string
+				switch v := scalar.(type) {
+				case string:
+					text = v
+				case json.Number:
+					text = v.String()
+				case bool:
+					text = strconv.FormatBool(v)
+				case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+					text = fmt.Sprint(v)
+				case float64:
+					if math.IsNaN(v) || math.IsInf(v, 0) {
+						return nil, fmt.Errorf("metadata contains non-finite number")
+					}
+					text = strconv.FormatFloat(v, 'f', -1, 64)
+				case float32:
+					if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+						return nil, fmt.Errorf("metadata contains non-finite number")
+					}
+					text = strconv.FormatFloat(float64(v), 'f', -1, 32)
+				case nil:
+					continue
+				default:
+					return nil, fmt.Errorf("unsupported metadata scalar type %T", scalar)
+				}
+				if flattened[key] == nil {
+					flattened[key] = make(common.MetaValueDocs)
+				}
+				flattened[key][text] = appendDocID(flattened[key][text], docID)
 			}
 		}
 	}
-
-	return flattedMeta, nil
+	return flattened, nil
 }
 
-// metadataValueText preserves scalar spelling without rounding integer values.
-func metadataValueText(value interface{}) (string, bool) {
-	switch scalar := value.(type) {
-	case string:
-		return scalar, true
-	case bool:
-		return strconv.FormatBool(scalar), true
-	case int:
-		return strconv.Itoa(scalar), true
-	case int8:
-		return strconv.FormatInt(int64(scalar), 10), true
-	case int16:
-		return strconv.FormatInt(int64(scalar), 10), true
-	case int32:
-		return strconv.FormatInt(int64(scalar), 10), true
-	case int64:
-		return strconv.FormatInt(scalar, 10), true
-	case uint:
-		return strconv.FormatUint(uint64(scalar), 10), true
-	case uint8:
-		return strconv.FormatUint(uint64(scalar), 10), true
-	case uint16:
-		return strconv.FormatUint(uint64(scalar), 10), true
-	case uint32:
-		return strconv.FormatUint(uint64(scalar), 10), true
-	case uint64:
-		return strconv.FormatUint(scalar, 10), true
-	case float32:
-		if !math.IsNaN(float64(scalar)) && !math.IsInf(float64(scalar), 0) {
-			return strconv.FormatFloat(float64(scalar), 'f', -1, 32), true
+// CollectDocIDsByKB collects unique (kb_id, doc_id) pairs from chunks.
+func CollectDocIDsByKB(chunks []map[string]interface{}) KBDocIDsMap {
+	seen := make(map[string]struct{})
+	result := make(KBDocIDsMap)
+	for _, chunk := range chunks {
+		kbID, _ := chunk["kb_id"].(string)
+		docID := extractDocID(chunk)
+		if kbID == "" || docID == "" {
+			continue
 		}
-	case float64:
-		if !math.IsNaN(scalar) && !math.IsInf(scalar, 0) {
-			return strconv.FormatFloat(scalar, 'f', -1, 64), true
+		key := kbID + ":" + docID
+		if _, ok := seen[key]; ok {
+			continue
 		}
-	case json.Number:
-		if number, err := scalar.Float64(); err == nil && !math.IsNaN(number) && !math.IsInf(number, 0) {
-			return scalar.String(), true
+		seen[key] = struct{}{}
+		result[kbID] = append(result[kbID], docID)
+	}
+	return result
+}
+
+// ConvertSearchResultToDocMeta converts SearchMetadataResult chunks into a DocMetaMap.
+// Pure function, no dependencies.
+func ConvertSearchResultToDocMeta(chunks []map[string]interface{}) DocMetaMap {
+	metaByDoc := make(DocMetaMap)
+	for _, metaChunk := range chunks {
+		docID := extractDocID(metaChunk)
+		if docID == "" {
+			continue
+		}
+		metaFields, err := ExtractMetaFields(metaChunk)
+		if err != nil || len(metaFields) == 0 {
+			continue
+		}
+		metaByDoc[docID] = metaFields
+	}
+	return metaByDoc
+}
+
+// FetchDocMetaByKB fetches document metadata from ES for each KB.
+func (s *MetadataService) FetchDocMetaByKB(docIDsByKB KBDocIDsMap, tenantID string) DocMetaMap {
+	metaByDoc := make(DocMetaMap)
+	for kbID, docIDs := range docIDsByKB {
+		result, err := s.SearchMetadata(kbID, tenantID, docIDs, len(docIDs))
+		if err != nil {
+			continue
+		}
+		for docID, meta := range ConvertSearchResultToDocMeta(result.MetadataRecords) {
+			metaByDoc[docID] = meta
 		}
 	}
-	return "", false
+	return metaByDoc
+}
+
+// AttachDocMetaToChunks attaches document metadata to matching chunks in-place.
+func AttachDocMetaToChunks(chunks []map[string]interface{}, metaByDoc DocMetaMap, metadataFields []string) {
+	filter := make(map[string]struct{}, len(metadataFields))
+	for _, f := range metadataFields {
+		filter[f] = struct{}{}
+	}
+	for _, chunk := range chunks {
+		docID := extractDocID(chunk)
+		meta, ok := metaByDoc[docID]
+		if !ok {
+			continue
+		}
+		if len(filter) > 0 {
+			filtered := make(map[string]interface{}, len(filter))
+			for k, v := range meta {
+				if _, ok := filter[k]; ok {
+					filtered[k] = v
+				}
+			}
+			if len(filtered) > 0 {
+				chunk["document_metadata"] = filtered
+			}
+		} else {
+			chunk["document_metadata"] = meta
+		}
+	}
+}
+
+// EnrichChunksWithDocMetadata attaches document metadata to each chunk in-place.
+// Combines CollectDocIDsByKB, FetchDocMetaByKB, and AttachDocMetaToChunks.
+func (s *MetadataService) EnrichChunksWithDocMetadata(chunks []map[string]interface{}, tenantID string, metadataFields []string) {
+	if len(chunks) == 0 || s.docEngine == nil {
+		return
+	}
+	docIDsByKB := CollectDocIDsByKB(chunks)
+	if len(docIDsByKB) == 0 {
+		return
+	}
+	metaByDoc := s.FetchDocMetaByKB(docIDsByKB, tenantID)
+	if len(metaByDoc) == 0 {
+		return
+	}
+	AttachDocMetaToChunks(chunks, metaByDoc, metadataFields)
+}
+
+// extractDocID extracts the document ID from a chunk, checking both id and doc_id.
+func extractDocID(chunk map[string]interface{}) string {
+	if id, ok := chunk["id"].(string); ok {
+		return id
+	}
+	if id, ok := chunk["doc_id"].(string); ok {
+		return id
+	}
+	return ""
 }
 
 // ExtractDocumentID extracts the document ID from a chunk
@@ -378,11 +368,66 @@ func ExtractDocumentID(chunk map[string]interface{}) (string, bool) {
 
 // ExtractMetaFields extracts meta_fields from a chunk, handling different types
 func ExtractMetaFields(chunk map[string]interface{}) (map[string]interface{}, error) {
-	return decodeDocumentMetadata(chunk["meta_fields"])
+	value := chunk["meta_fields"]
+	if value == nil {
+		return map[string]interface{}{}, nil
+	}
+	if fields, ok := value.(map[string]interface{}); ok {
+		return fields, nil
+	}
+	var raw []byte
+	switch value := value.(type) {
+	case string:
+		raw = []byte(value)
+	case []byte:
+		raw = value
+		if len(raw) == 0 {
+			return map[string]interface{}{}, nil
+		}
+	default:
+		return nil, fmt.Errorf("invalid metadata value type %T", value)
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("metadata is empty")
+	}
+	var objects []map[string]interface{}
+	if trimmed[0] == '{' || bytes.Equal(trimmed, []byte("null")) {
+		var fields map[string]interface{}
+		decoder := json.NewDecoder(bytes.NewReader(trimmed))
+		decoder.UseNumber()
+		if err := decoder.Decode(&fields); err != nil {
+			return nil, fmt.Errorf("invalid metadata JSON: %w", err)
+		}
+		var trailing interface{}
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return nil, fmt.Errorf("trailing metadata JSON")
+		}
+		if fields == nil {
+			fields = map[string]interface{}{}
+		}
+		objects = []map[string]interface{}{fields}
+	} else {
+		objects = ParseAllLengthPrefixedJSON(raw)
+		if len(objects) == 0 {
+			return nil, fmt.Errorf("invalid length-prefixed metadata JSON")
+		}
+	}
+	fields := map[string]interface{}{}
+	for _, object := range objects {
+		for key, value := range object {
+			if existing, ok := fields[key]; ok {
+				fields[key] = mergeFieldValues(existing, value)
+			} else {
+				fields[key] = value
+			}
+		}
+	}
+	return fields, nil
 }
 
 // mergeFieldValues merges two field values when the same key appears multiple times
-// Arrays are flattened and all supported JSON scalars are retained.
+// If both are arrays, append all elements. If one is array and other is string, append string to array.
 // Returns []interface{} with all merged values (flattened).
 func mergeFieldValues(existing, new interface{}) []interface{} {
 	result := []interface{}{}
@@ -393,7 +438,7 @@ func mergeFieldValues(existing, new interface{}) []interface{} {
 			return
 		}
 		switch val := v.(type) {
-		case string, bool, float32, float64, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, json.Number:
+		case string:
 			result = append(result, val)
 		case []string:
 			for _, item := range val {
@@ -403,6 +448,8 @@ func mergeFieldValues(existing, new interface{}) []interface{} {
 			for _, item := range val {
 				addValue(item)
 			}
+		default:
+			result = append(result, val)
 		}
 	}
 
@@ -412,102 +459,65 @@ func mergeFieldValues(existing, new interface{}) []interface{} {
 	return result
 }
 
-// appendDocID appends a document to the typed directory; MetaFilter deduplicates matches.
-func appendDocID(existing []string, docID string) []string {
-	return append(existing, docID)
+// appendDocID appends a docID to an existing value that may be []string or []interface{}
+func appendDocID(existing interface{}, docID string) []string {
+	result := []string{docID}
+	if existing == nil {
+		return result
+	}
+	switch v := existing.(type) {
+	case []string:
+		return append(v, docID)
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	case string:
+		return append(result, v)
+	}
+	return result
 }
 
 // ParseLengthPrefixedJSON parses Infinity's length-prefixed JSON format
 // Format: [4-byte length (little-endian)][JSON][4-byte length][JSON]...
 // Returns the FIRST valid JSON object found
 func ParseLengthPrefixedJSON(data []byte) map[string]interface{} {
-	if len(data) < 4 {
+	values := ParseAllLengthPrefixedJSON(data)
+	if len(values) == 0 {
 		return nil
 	}
-
-	// Try to find the first valid JSON object by skipping length prefixes
-	offset := 0
-	for offset < len(data) {
-		// Skip non-'{' bytes
-		for offset < len(data) && data[offset] != '{' {
-			offset++
-		}
-		if offset >= len(data) {
-			break
-		}
-
-		// Try to parse JSON from current position
-		var result map[string]interface{}
-		err := decodeMetadataObject(data[offset:], &result)
-		if err == nil {
-			return result
-		}
-
-		// Move forward to try next position
-		offset++
-	}
-	return nil
+	return values[0]
 }
 
 // ParseAllLengthPrefixedJSON parses Infinity's length-prefixed JSON format
 // and returns ALL JSON objects found (for cases where multiple rows are concatenated)
 // Format: [4-byte length (little-endian)][JSON][4-byte length][JSON]...
 func ParseAllLengthPrefixedJSON(data []byte) []map[string]interface{} {
-	if len(data) < 4 {
-		return nil
-	}
-
 	var results []map[string]interface{}
-	offset := 0
-
-	// Use length prefix to extract each JSON
-	for offset+4 <= len(data) {
-		// Read 4-byte length (little-endian)
-		length := uint32(data[offset]) | uint32(data[offset+1])<<8 |
-			uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
-
-		// Check if length looks reasonable
-		if length == 0 || offset+4+int(length) > len(data) {
-			// Length invalid, try to find next '{'
-			nextBrace := -1
-			for i := offset + 4; i < len(data) && i < offset+104; i++ {
-				if data[i] == '{' {
-					nextBrace = i
-					break
-				}
-			}
-			if nextBrace > offset {
-				offset = nextBrace
-				continue
-			}
-			break
+	for offset := 0; offset < len(data); {
+		if len(data)-offset < 4 {
+			return nil
 		}
-
-		// Extract JSON bytes (skip the 4-byte length prefix)
-		jsonStart := offset + 4
-		jsonEnd := jsonStart + int(length)
-		jsonBytes := data[jsonStart:jsonEnd]
-
-		var result map[string]interface{}
-		if err := decodeMetadataObject(jsonBytes, &result); err == nil {
-			results = append(results, result)
-			offset = jsonEnd
-			continue
-		} else {
-			// Try to find next '{'
-			nextBrace := -1
-			for i := offset + 4; i < len(data) && i < offset+104; i++ {
-				if data[i] == '{' {
-					nextBrace = i
-					break
-				}
-			}
-			if nextBrace > offset {
-				offset = nextBrace
-				continue
-			}
-			break
+		length := int(binary.LittleEndian.Uint32(data[offset : offset+4]))
+		offset += 4
+		if length <= 0 || length > len(data)-offset {
+			return nil
 		}
+		var object map[string]interface{}
+		decoder := json.NewDecoder(bytes.NewReader(data[offset : offset+length]))
+		decoder.UseNumber()
+		if err := decoder.Decode(&object); err != nil || object == nil {
+			return nil
+		}
+		var trailing interface{}
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return nil
+		}
+		results = append(results, object)
+		offset += length
 	}
 	return results
 }

@@ -311,16 +311,12 @@ func (e *ExcelProcessorComponent) doWrite(sheetName string, inputs map[string]an
 // Spreadsheet numeric cells support at most 15 significant decimal digits;
 // callers must explicitly supply large identifiers as strings to retain them.
 func excelNumericCell(value any) (any, error) {
-	if !isNumberType(value) {
+	if !isNumberish(value) {
 		return value, nil
 	}
-	number, err := exactNumber(value)
+	number, canonical, err := toFloat64(value)
 	if err != nil {
 		return nil, fmt.Errorf("invalid or out-of-range spreadsheet number")
-	}
-	canonical, err := exactDecimal(number)
-	if err != nil {
-		return nil, fmt.Errorf("spreadsheet number requires rounding")
 	}
 	digits := strings.Trim(strings.ReplaceAll(strings.TrimPrefix(canonical.String(), "-"), ".", ""), "0")
 	if len(digits) > 15 {
@@ -330,7 +326,7 @@ func excelNumericCell(value any) (any, error) {
 	if err != nil || math.IsInf(floating, 0) || math.IsNaN(floating) {
 		return nil, fmt.Errorf("spreadsheet number exceeds finite range")
 	}
-	roundtrip, err := exactNumber(json.Number(strconv.FormatFloat(floating, 'g', -1, 64)))
+	roundtrip, _, err := toFloat64(json.Number(strconv.FormatFloat(floating, 'g', -1, 64)))
 	if err != nil || roundtrip.Cmp(number) != 0 {
 		return nil, fmt.Errorf("spreadsheet conversion loses numeric precision")
 	}

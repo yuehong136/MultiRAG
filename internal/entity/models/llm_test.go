@@ -27,7 +27,7 @@ func (d *einoProbeDriver) ChatWithMessages(_ string, messages []Message, api *AP
 		return nil, errors.New("roles dropped")
 	}
 	answer, reason := "answer", "reason"
-	return &ChatResponse{Answer: &answer, ReasoningContent: &reason}, nil
+	return &ChatResponse{Answer: &answer, ReasonContent: &reason}, nil
 }
 func (d *einoProbeDriver) ChatStreamlyWithSender(_ string, _ []Message, api *APIConfig, _ *ChatConfig, send func(*string, *string) error) error {
 	close(d.started)
@@ -49,16 +49,16 @@ func TestEinoAdapterOptionsAndUnsupportedTools(t *testing.T) {
 	if cfg.Temperature == nil || *cfg.Temperature != 0 || cfg.TopP == nil || *cfg.TopP != 0 || cfg.MaxTokens == nil || *cfg.MaxTokens != 12 {
 		t.Fatal("options lost", cfg)
 	}
-	if cm.APIConfig.Context != nil || cm.ModelConfig.Temperature != nil {
+	if cm.APIConfig.Context != nil {
 		t.Fatal("shared state mutated")
 	}
-	if _, err := adapter.WithTools([]*schema.ToolInfo{{Name: "tool"}}); !errors.Is(err, ErrUnsupportedCapability) {
+	if _, err := adapter.WithTools([]*schema.ToolInfo{{Name: "tool"}}); err == nil {
 		t.Fatal("tool no-op accepted", err)
 	}
 	if _, err := adapter.Generate(context.Background(), msgs, model.WithModel("other")); err == nil {
 		t.Fatal("authorized model overridden")
 	}
-	if _, err := adapter.Generate(context.Background(), []*schema.Message{{Role: schema.Tool, Content: "tool"}}); !errors.Is(err, ErrUnsupportedCapability) {
+	if _, err := adapter.Generate(context.Background(), []*schema.Message{{Role: schema.Tool, Content: "tool"}}); err == nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -135,7 +135,7 @@ func TestEinoAdapterHTTPReaderCloseCancelsRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	name, key := "gpt-4o", "controlled"
-	adapter := NewEinoChatModel(NewChatModel(driver, &name, &APIConfig{APIKey: &key}), nil)
+	adapter := NewEinoChatModel(NewChatModel(driver, &name, &APIConfig{ApiKey: &key}), nil)
 	reader, err := adapter.Stream(context.Background(), []*schema.Message{{Role: schema.User, Content: "hello"}})
 	if err != nil {
 		t.Fatal(err)

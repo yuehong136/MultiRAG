@@ -20,10 +20,9 @@ import "time"
 
 // Space status constants
 const (
-	SpaceStatusActive       = "1" // Normal active space
-	SpaceStatusDeleted      = "0" // Soft-deleted space
-	SpaceStatusDeleteFailed = "2"
-	SpaceStatusDeleting     = "2" // Space is being asynchronously deleted
+	SpaceStatusActive   = "1" // Normal active space
+	SpaceStatusDeleted  = "0" // Soft-deleted space
+	SpaceStatusDeleting = "2" // Space is being asynchronously deleted
 )
 
 // SkillSpace represents a skills space (library) that contains skills
@@ -32,19 +31,17 @@ type SkillSpace struct {
 	TenantID    string     `gorm:"column:tenant_id;size:32;not null;index" json:"tenant_id"`
 	Name        string     `gorm:"column:name;size:128;not null" json:"name"`
 	FolderID    string     `gorm:"column:folder_id;size:32;not null" json:"folder_id"`
-	CoreState   JSONMap    `gorm:"column:core_state;type:jsonb" json:"-"`
 	Description string     `gorm:"column:description;type:text" json:"description"`
 	EmbdID      string     `gorm:"column:embd_id;size:128" json:"embd_id"`
 	RerankID    string     `gorm:"column:rerank_id;size:128" json:"rerank_id"`
 	TopK        int        `gorm:"column:top_k;default:10" json:"top_k"`
 	Status      string     `gorm:"column:status;size:1;default:1" json:"status"`
-	CreateTime  *int64     `gorm:"column:create_time" json:"create_time,omitempty"`
-	UpdateTime  *time.Time `gorm:"column:update_time" json:"update_time,omitempty"`
+	BaseModel
 }
 
 // TableName returns the table name for SkillSpace model
 func (SkillSpace) TableName() string {
-	return "t_ai_go_skill_spaces"
+	return "skill_spaces"
 }
 
 // StatusDescription returns a human-readable status string
@@ -64,17 +61,14 @@ func (s *SkillSpace) StatusDescription() string {
 // ToMap converts SkillSpace to a map for JSON response
 func (s *SkillSpace) ToMap() map[string]interface{} {
 	result := map[string]interface{}{
-		"id":        s.ID,
-		"tenant_id": s.TenantID,
-		"name":      s.Name,
-		"folder_id": s.FolderID,
-		"top_k":     s.TopK,
-		"status":    s.StatusDescription(),
+		"id":          s.ID,
+		"tenant_id":   s.TenantID,
+		"name":        s.Name,
+		"folder_id":   s.FolderID,
+		"top_k":       s.TopK,
+		"status":      s.StatusDescription(),
 	}
 
-	if value, ok := s.CoreState["delete_error"]; ok {
-		result["delete_error"] = value
-	}
 	if s.Description != "" {
 		result["description"] = s.Description
 	}
@@ -88,7 +82,7 @@ func (s *SkillSpace) ToMap() map[string]interface{} {
 		result["create_time"] = s.CreateTime
 	}
 	if s.UpdateTime != nil {
-		result["update_time"] = s.UpdateTime.Format("2006-01-02 15:04:05")
+		result["update_time"] = time.UnixMilli(*s.UpdateTime).Format("2006-01-02 15:04:05")
 	}
 
 	return result

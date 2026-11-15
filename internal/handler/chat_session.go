@@ -18,11 +18,11 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
-	"net/http"
-
 	"multirag/internal/common"
+	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -150,9 +150,9 @@ func (h *ChatSessionHandler) RemoveChatSessions(c *gin.Context) {
 // @Tags chat_session
 // @Accept json
 // @Produce json
-// @Param dialog_id query string true "dialog ID"
+// @Param chat_id query string true "chat ID"
 // @Success 200 {object} service.ListChatSessionsResponse
-// @Router /v1/conversation/list [get]
+// @Router /api/v1/chats/<chat_id>/sessions [get]
 func (h *ChatSessionHandler) ListChatSessions(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
@@ -161,21 +161,18 @@ func (h *ChatSessionHandler) ListChatSessions(c *gin.Context) {
 	}
 	userID := user.ID
 
-	// Get dialog_id from query parameter
-	dialogID := c.Param("chat_id")
-	if dialogID == "" {
-		dialogID = c.Query("dialog_id")
-	}
-	if dialogID == "" {
+	// Get chat_id from query parameter
+	chatID := c.Param("chat_id")
+	if chatID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "dialog_id is required",
+			"message": "chat_id is required",
 		})
 		return
 	}
 
 	// Call service to list chat sessions
-	result, err := h.chatSessionService.ListChatSessions(userID, dialogID)
+	result, err := h.chatSessionService.ListChatSessions(userID, chatID)
 	if err != nil {
 		// Check if it's an authorization error
 		if err.Error() == "Only owner of dialog authorized for this operation" {
@@ -209,8 +206,8 @@ type CompletionRequest struct {
 	Thinking         *bool                    `json:"thinking,omitempty"`
 	Temperature      *float64                 `json:"temperature,omitempty"`
 	TopP             *float64                 `json:"top_p,omitempty"`
-	FrequencyPenalty *float64                 `json:"frequency_penalty,omitempty"`
-	PresencePenalty  *float64                 `json:"presence_penalty,omitempty"`
+	FrequencyPenalty float64                  `json:"frequency_penalty,omitempty"`
+	PresencePenalty  float64                  `json:"presence_penalty,omitempty"`
 	MaxTokens        *int                     `json:"max_tokens,omitempty"`
 }
 
@@ -249,16 +246,15 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 	if req.TopP != nil {
 		chatModelConfig["top_p"] = *req.TopP
 	}
-	if req.FrequencyPenalty != nil {
-		chatModelConfig["frequency_penalty"] = *req.FrequencyPenalty
+	if req.FrequencyPenalty != 0 {
+		chatModelConfig["frequency_penalty"] = req.FrequencyPenalty
 	}
-	if req.PresencePenalty != nil {
-		chatModelConfig["presence_penalty"] = *req.PresencePenalty
+	if req.PresencePenalty != 0 {
+		chatModelConfig["presence_penalty"] = req.PresencePenalty
 	}
 	if req.MaxTokens != nil {
 		chatModelConfig["max_tokens"] = *req.MaxTokens
 	}
-
 	if req.Stream != nil {
 		chatModelConfig["stream"] = *req.Stream
 	}
@@ -266,14 +262,18 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 		chatModelConfig["thinking"] = *req.Thinking
 	}
 
-	// The configured system prompt is authoritative; preserve all conversation turns.
+	// Process messages - filter out system messages and initial assistant messages
 	var processedMessages []map[string]interface{}
-	for _, m := range req.Messages {
+	for i, m := range req.Messages {
 		role, _ := m["role"].(string)
 		if role == "system" {
 			continue
 		}
+		if role == "assistant" && len(processedMessages) == 0 {
+			continue
+		}
 		processedMessages = append(processedMessages, m)
+		_ = i
 	}
 
 	// Get last message ID if present
@@ -286,42 +286,68 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 
 	// Call service
 	if req.Stream != nil && *req.Stream {
-		// Streaming response
+
 		disableWriteDeadlineForSSE(c)
-		sender := func(data string) error {
-			if err := c.Request.Context().Err(); err != nil {
-				return err
+		reqCtx := c.Request.Context()
+		streamChan := make(chan string)
+		go func() {
+			defer close(streamChan)
+			err := h.chatSessionService.CompletionStream(reqCtx, userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID, streamChan)
+			if err != nil {
+				payload, _ := json.Marshal(map[string]interface{}{"code": 500, "message": "chat completion failed"})
+				select {
+				case streamChan <- fmt.Sprintf("data: %s\n\n", payload):
+				case <-reqCtx.Done():
+				}
 			}
-			c.Header("Content-Type", "text/event-stream")
-			c.Header("Cache-Control", "no-cache")
-			c.Header("X-Accel-Buffering", "no")
-			if _, err := io.WriteString(c.Writer, data); err != nil {
-				return err
-			}
-			c.Writer.Flush()
-			return c.Request.Context().Err()
-		}
-		err := h.chatSessionService.CompletionStream(c.Request.Context(), userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID, sender)
-		if err != nil && c.Request.Context().Err() == nil {
-			if !c.Writer.Written() && (errors.Is(err, service.ErrChatSessionAccessDenied) || errors.Is(err, service.ErrDatasetAccessDenied)) {
-				jsonError(c, common.CodeForbidden, "No authorization for the selected resources")
+		}()
+		var first string
+		select {
+		case <-reqCtx.Done():
+			return
+		case frame, ok := <-streamChan:
+			if !ok {
 				return
 			}
-			data, _ := json.Marshal(gin.H{"code": common.CodeServerError, "message": "Model stream failed", "data": gin.H{"answer": "**ERROR**: Model stream failed", "reference": []interface{}{}}})
-			_ = sender("data: " + string(data) + "\n\n")
+			first = frame
 		}
+		var envelope struct {
+			Code int `json:"code"`
+		}
+		if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(first, "data:"))), &envelope) == nil && envelope.Code != 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"code": envelope.Code, "message": "chat completion failed"})
+			return
+		}
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+		c.Header("X-Accel-Buffering", "no")
+		pending := true
+		c.Stream(func(w io.Writer) bool {
+			if pending {
+				pending = false
+				_, err := c.Writer.Write([]byte(first))
+				return err == nil
+			}
+			select {
+			case <-reqCtx.Done():
+				return false
+			case frame, ok := <-streamChan:
+				if !ok {
+					return false
+				}
+				_, err := c.Writer.Write([]byte(frame))
+				return err == nil
+			}
+		})
 
 	} else {
 		// Non-streaming response
-		result, err := h.chatSessionService.Completion(c.Request.Context(), userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID)
+		result, err := h.chatSessionService.Completion(userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID)
 		if err != nil {
-			if errors.Is(err, service.ErrChatSessionAccessDenied) || errors.Is(err, service.ErrDatasetAccessDenied) {
-				jsonError(c, common.CodeForbidden, "No authorization for the selected resources")
-				return
-			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
-				"message": "Model request failed",
+				"message": err.Error(),
 			})
 			return
 		}

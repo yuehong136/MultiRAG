@@ -1,6 +1,5 @@
 {
   "name": "xAI",
-  "tags": "LLM",
   "url": {
     "default": "https://api.x.ai/v1"
   },
@@ -52,18 +51,7 @@
       "max_tokens": 32768,
       "model_types": [
         "vision"
-      ],
-      "features": {
-        "multimodal": {
-          "enabled": true,
-          "input_modalities": [
-            "image"
-          ],
-          "output_modalities": [
-            "text"
-          ]
-        }
-      }
+      ]
     },
     {
       "name": "eve",

@@ -25,13 +25,14 @@ import (
 
 const maxColWidth = 256
 
-// PrintTableSimple prints data in a simple table format (default: table with borders)
+// PrintTableSimple prints data in a simple table format (default: table format with borders)
+// Similar to Python's _print_table_simple
 func PrintTableSimple(data []map[string]interface{}) {
 	PrintTableSimpleByFormat(data, OutputFormatTable)
 }
 
-// PrintTableSimpleByFormat prints data in the specified format.
-// Supports: table (with borders), plain (no borders, space-separated), json.
+// PrintTableSimpleByFormat prints data in the specified format
+// Supports: table (with borders), plain (no borders, space-separated), json
 // - Column names in lowercase
 // - Two spaces between columns
 // - Numeric columns right-aligned
@@ -72,6 +73,7 @@ func PrintTableSimpleByFormat(data []map[string]interface{}, format OutputFormat
 	for col := range columnSet {
 		columns = append(columns, col)
 	}
+	// Simple sort - in production you might want specific column ordering
 	for i := 0; i < len(columns); i++ {
 		for j := i + 1; j < len(columns); j++ {
 			if columns[i] > columns[j] {
@@ -122,13 +124,16 @@ func PrintTableSimpleByFormat(data []map[string]interface{}, format OutputFormat
 	}
 
 	if format == OutputFormatPlain {
-		// Plain mode: no borders, space-separated
+		// Plain mode: no borders, space-separated (ov CLI compatible)
+		// Print header (lowercase column names, right-aligned for numeric columns)
 		headerParts := make([]string, 0, len(columns))
 		for _, col := range columns {
+			// Header follows the same alignment as data (right-aligned for numeric columns)
 			headerParts = append(headerParts, padCell(strings.ToLower(col), colWidths[col], colIsNumeric[col]))
 		}
 		fmt.Println(strings.Join(headerParts, "  "))
 
+		// Print data rows
 		for _, item := range data {
 			rowParts := make([]string, 0, len(columns))
 			for _, col := range columns {
@@ -136,9 +141,11 @@ func PrintTableSimpleByFormat(data []map[string]interface{}, format OutputFormat
 				isURI := colIsURI[col]
 				isNumeric := colIsNumeric[col]
 
+				// URI columns: never truncate, no padding if too long
 				if isURI && getStringWidth(value) > colWidths[col] {
 					rowParts = append(rowParts, value)
 				} else {
+					// Normal cell: truncate if too long, then pad
 					valueWidth := getStringWidth(value)
 					if valueWidth > colWidths[col] {
 						runes := []rune(value)
@@ -151,13 +158,15 @@ func PrintTableSimpleByFormat(data []map[string]interface{}, format OutputFormat
 			fmt.Println(strings.Join(rowParts, "  "))
 		}
 	} else {
-		// Table mode: with borders
+		// Normal mode: with borders
+		// Generate separator
 		separatorParts := make([]string, 0, len(columns))
 		for _, col := range columns {
 			separatorParts = append(separatorParts, strings.Repeat("-", colWidths[col]+2))
 		}
 		separator := "+" + strings.Join(separatorParts, "+") + "+"
 
+		// Print header
 		fmt.Println(separator)
 		headerParts := make([]string, 0, len(columns))
 		for _, col := range columns {
@@ -166,16 +175,19 @@ func PrintTableSimpleByFormat(data []map[string]interface{}, format OutputFormat
 		fmt.Println("|" + strings.Join(headerParts, "|") + "|")
 		fmt.Println(separator)
 
+		// Print data rows
 		for _, item := range data {
 			rowParts := make([]string, 0, len(columns))
 			for _, col := range columns {
 				value := formatValue(item[col])
 				valueWidth := getStringWidth(value)
+				// Truncate if too long
 				if valueWidth > colWidths[col] {
 					runes := []rune(value)
 					value = truncateStringByWidth(runes, colWidths[col])
 					valueWidth = getStringWidth(value)
 				}
+				// Pad to column width
 				padding := colWidths[col] - valueWidth + len(value)
 				rowParts = append(rowParts, fmt.Sprintf(" %-*s ", padding, value))
 			}
@@ -256,8 +268,8 @@ func padCell(content string, width int, alignRight bool) string {
 	return content + strings.Repeat(" ", padding)
 }
 
-// getStringWidth calculates the display width of a string.
-// Treats CJK characters as width 2.
+// getStringWidth calculates the display width of a string
+// Treats CJK characters as width 2
 func getStringWidth(text string) int {
 	width := 0
 	for _, r := range text {

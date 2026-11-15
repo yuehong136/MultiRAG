@@ -16,7 +16,7 @@ import (
 )
 
 func TestAfterf9MediaInFlightDeadlineAndIsolation(t *testing.T) {
-	for _, p := range []struct{ provider, kind string }{{"Astraflow", "tts"}, {"Groq", "tts"}, {"Groq", "asr"}, {"OpenAI", "asr"}, {"OpenAI", "tts"}, {"PaddleOCR_Local", "ocr"}, {"ZHIPU-AI", "ocr"}} {
+	for _, p := range []struct{ provider, kind string }{{"Astraflow", "tts"}, {"Groq", "tts"}, {"Groq", "asr"}, {"OpenAI", "asr"}, {"OpenAI", "tts"}, {"PaddleOCR", "ocr"}, {"ZHIPU-AI", "ocr"}} {
 		t.Run(p.provider+p.kind, func(t *testing.T) {
 			started, stopped := make(chan struct{}), make(chan struct{})
 			srv := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,15 +38,15 @@ func TestAfterf9MediaInFlightDeadlineAndIsolation(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
 			d := afterf9Driver(t, p.provider, srv.URL)
-			api := &APIConfig{APIKey: stringPtr("key"), Context: ctx}
+			api := &APIConfig{ApiKey: stringPtr("key"), Context: ctx}
 			var err error
 			switch p.kind {
 			case "asr":
-				_, err = d.(ASRDriver).TranscribeAudio(stringPtr("served"), []byte("audio"), api, nil)
+				_, err = d.(ModelDriver).TranscribeAudio(stringPtr("served"), modelFixtureFile(t, []byte("audio")), api, nil)
 			case "tts":
-				_, err = d.(TTSDriver).AudioSpeech(stringPtr("served"), "hello", api, &TTSConfig{Voice: "voice"})
+				_, err = d.(ModelDriver).AudioSpeech(stringPtr("served"), stringPtr("hello"), api, &TTSConfig{Params: map[string]any{"voice": "voice"}})
 			default:
-				_, err = d.(OCRDriver).OCRFile(stringPtr("served"), []byte("image"), api, nil)
+				_, err = d.(ModelDriver).OCRFile(stringPtr("served"), []byte("image"), nil, api, nil)
 			}
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatal(err)
@@ -66,16 +66,20 @@ func TestAfterf9MediaInFlightDeadlineAndIsolation(t *testing.T) {
 }
 
 func TestAfterf9ConcurrentInstancesAndRegions(t *testing.T) {
-	for _, provider := range []string{"Astraflow", "HunYuan", "TokenHub", "Groq", "OpenAI", "PaddleOCR_Local", "ZHIPU-AI"} {
+	for _, provider := range []string{"Astraflow", "HunYuan", "TokenHub", "Groq", "OpenAI", "PaddleOCR", "ZHIPU-AI"} {
 		t.Run(provider, func(t *testing.T) {
 			var calls atomic.Int32
 			makeServer := func(key string) *httptest.Server {
 				return afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					calls.Add(1)
-					if r.Header.Get("Authorization") != "Bearer "+key {
+					wantAuth := "Bearer " + key
+					if provider == "PaddleOCR" {
+						wantAuth = ""
+					}
+					if r.Header.Get("Authorization") != wantAuth {
 						t.Error("credential crossed instances")
 					}
-					if provider == "PaddleOCR_Local" {
+					if provider == "PaddleOCR" {
 						fmt.Fprintf(w, `{"errorCode":0,"result":{"layoutParsingResults":[{"markdown":{"text":%q}}]}}`, key)
 						return
 					}
@@ -113,16 +117,16 @@ func TestAfterf9ConcurrentInstancesAndRegions(t *testing.T) {
 					if i%2 == 1 {
 						key, region = "second", "other"
 					}
-					api := &APIConfig{APIKey: &key, Region: &region}
+					api := &APIConfig{ApiKey: &key, Region: &region}
 					name := "served-" + key
-					if provider == "PaddleOCR_Local" || provider == "ZHIPU-AI" {
-						result, err := d.(OCRDriver).OCRFile(&name, []byte("image"), api, nil)
+					if provider == "PaddleOCR" || provider == "ZHIPU-AI" {
+						result, err := d.(ModelDriver).OCRFile(&name, []byte("image"), nil, api, nil)
 						if err != nil || result == nil || *result.Text != key {
 							t.Error(result, err)
 						}
 					} else if provider == "Groq" {
-						result, err := d.(ASRDriver).TranscribeAudio(&name, []byte("audio"), api, nil)
-						if err != nil || result == nil || *result.Text != key {
+						result, err := d.(ModelDriver).TranscribeAudio(&name, modelFixtureFile(t, []byte("audio")), api, nil)
+						if err != nil || result == nil || result.Text != key {
 							t.Error(result, err)
 						}
 					} else {
@@ -154,7 +158,7 @@ func TestAfterf9MediaRejectRedirect(t *testing.T) {
 	}))
 	defer redirect.Close()
 	for _, provider := range []string{"Astraflow", "Groq", "OpenAI"} {
-		_, err := afterf9Driver(t, provider, redirect.URL).(TTSDriver).AudioSpeech(stringPtr("served"), "hello", &APIConfig{APIKey: stringPtr("key")}, &TTSConfig{Voice: "voice"})
+		_, err := afterf9Driver(t, provider, redirect.URL).(ModelDriver).AudioSpeech(stringPtr("served"), stringPtr("hello"), &APIConfig{ApiKey: stringPtr("key")}, &TTSConfig{Params: map[string]any{"voice": "voice"}})
 		if err == nil || !strings.Contains(err.Error(), "307") {
 			t.Fatal(provider, err)
 		}

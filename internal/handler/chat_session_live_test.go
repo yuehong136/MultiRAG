@@ -1,237 +1,127 @@
 package handler_test
 
 import (
-	"bytes"
-	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
+	"multirag/internal/dao"
+	"multirag/internal/entity"
+	"multirag/internal/testsupport"
 	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/gin-gonic/gin"
-	"multirag/internal/common"
-	"multirag/internal/dao"
-	"multirag/internal/entity"
-	"multirag/internal/handler"
-	"multirag/internal/server"
-	"multirag/internal/service"
 )
 
-// Actual handler -> tenant binding -> provider HTTP, plus independent SQL readback.
-// Identity is a fixture; production auth is covered separately by router tests.
 func TestChatSessionLiveHTTPAndSQL(t *testing.T) {
-	configPath := os.Getenv("MULTIRAG_CHAT_SESSION_LIVE_CONFIG")
-	if configPath == "" {
-		t.Skip("requires an owned chat-session scratch database config")
-	}
-	t.Chdir(filepath.Join("..", ".."))
-	if err := common.Init("error"); err != nil {
-		t.Fatal(err)
-	}
-	if err := server.FromConfigFile(configPath); err != nil {
-		t.Fatal("read owned config failed")
-	}
-	if !strings.HasPrefix(server.GetConfig().Database.Database, "multirag_chat_session_") {
-		t.Fatal("requires owned chat-session DB")
-	}
-	if err := dao.InitDB(); err != nil {
-		t.Fatal("initialize scratch DB failed")
-	}
-	pool, err := dao.DB.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	dsn, err := dao.PostgresDSN(server.GetConfig().Database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	readback, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal("independent readback failed")
-	}
-	defer readback.Close()
-	started, cancelled := make(chan struct{}, 1), make(chan struct{}, 1)
-	var calls atomic.Int32
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f := newCanonicalProviderFixture(t)
+	var calls atomic.Int64
+	var mode atomic.Value
+	mode.Store("default")
+	history := []any{map[string]any{"role": "user", "content": "old"}, map[string]any{"role": "assistant", "content": "previous"}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "question"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.invalid/a.png"}}}, "id": "message"}}
+	upstream := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.Header.Get("Authorization") != "Bearer session-fixture-key" || r.URL.Path != "/chat/completions" {
-			t.Errorf("credential/URL mismatch %s", r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer session-key" || !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			t.Error("session instance endpoint or key changed")
 		}
-		var body struct {
-			Messages []map[string]interface{}
-			Stream   bool
-			Thinking map[string]string
-			Model    string
-		}
+		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
+			return
 		}
-		if len(body.Messages) != 5 || body.Messages[0]["role"] != "system" || body.Messages[0]["content"] != "rules" || body.Messages[1]["content"] != "prologue" || body.Messages[3]["role"] != "assistant" || body.Messages[3]["content"] != "previous" || body.Model != "kimi-k2.5" {
-			t.Errorf("roles/history/model lost %#v", body)
+		want := []any{map[string]any{"role": "system", "content": "rules"}}
+		for _, row := range history {
+			m := row.(map[string]any)
+			want = append(want, map[string]any{"role": m["role"], "content": m["content"]})
 		}
-		message := body.Messages[len(body.Messages)-1]["content"]
-		if parts, ok := message.([]interface{}); ok {
-			if len(parts) != 2 || parts[1].(map[string]interface{})["type"] != "image_url" {
-				t.Error("image content lost")
+		if body["model"] != "kimi-k2.5" || !reflect.DeepEqual(body["messages"], want) {
+			t.Error("dialog system, full history, or image changed", body)
+		}
+		if mode.Load() == "off" {
+			if !reflect.DeepEqual(body["thinking"], map[string]any{"type": "disabled"}) {
+				t.Error("explicit false thinking lost")
 			}
-			message = parts[0].(map[string]interface{})["text"]
-		}
-		wantThinking := "enabled"
-		if message == "off" {
-			wantThinking = "disabled"
-		}
-		if body.Thinking["type"] != wantThinking {
-			t.Errorf("thinking default/false lost %#v", body)
-		}
-		if body.Stream {
-			w.Header().Set("Content-Type", "text/event-stream")
-			if message == "cancel" {
-				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
-				w.(http.Flusher).Flush()
-				started <- struct{}{}
-				<-r.Context().Done()
-				cancelled <- struct{}{}
-				return
+			if body["temperature"] != float64(0) || body["top_p"] != float64(0) {
+				t.Error("explicit zero request options lost")
 			}
-			if message == "error" {
-				fmt.Fprint(w, "data: {\"error\":{\"message\":\"secret provider credential\"}}\n\n")
-				return
-			}
-			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\",\"content\":\"part\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" two\"}}]}\n\ndata: [DONE]\n\n")
-		} else {
-			fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
+		} else if body["thinking"] != nil {
+			t.Error("omitted thinking became explicit")
 		}
+		if mode.Load() == "failure" {
+			w.WriteHeader(503)
+			fmt.Fprint(w, "private-provider-body")
+			return
+		}
+		if mode.Load() == "conflict" {
+			if err := dao.DB.Model(&entity.ChatSession{}).Where("id=?", "conflict").Update("message", `{"messages":[{"role":"assistant","content":"concurrent"}]}`).Error; err != nil {
+				t.Error(err)
+			}
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
 	}))
-	defer fixture.Close()
-	provider := dao.GetModelProviderManager().FindProvider("Moonshot")
-	oldURL := provider.URL["default"]
-	provider.URL["default"] = fixture.URL
-	t.Cleanup(func() { provider.URL["default"] = oldURL })
-	if err := dao.DB.Create(&entity.TenantModelProvider{ID: "session-provider", TenantID: "session-tenant", ProviderName: "Moonshot"}).Error; err != nil {
+	f.enroll(t, "Moonshot", "session", "session-key", upstream.URL, "kimi-k2.5", "chat")
+	active, owner := "1", "owner"
+	if err := dao.DB.Create(&entity.Chat{ID: "solo-dialog", TenantID: "owner-tenant", LLMID: "kimi-k2.5@session@Moonshot", LLMSetting: entity.JSONMap{}, PromptConfig: entity.JSONMap{"system": "rules"}, KBIDs: entity.JSONSlice{}, Status: &active}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := dao.DB.Create(&entity.TenantModelInstance{ID: "session-instance", ProviderID: "session-provider", InstanceName: "default", APIKey: "session-fixture-key", Extra: `{}`}).Error; err != nil {
-		t.Fatal(err)
-	}
-	active := "1"
-	if err := dao.DB.Create(&entity.Chat{ID: "session-dialog", TenantID: "session-tenant", LLMID: "kimi-k2.5@default@Moonshot", LLMSetting: entity.JSONMap{}, PromptConfig: entity.JSONMap{"system": "rules"}, KBIDs: entity.JSONSlice{}, Status: &active}).Error; err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{"default", "off", "stream", "error", "cancel"} {
-		if err := dao.DB.Create(&entity.ChatSession{ID: id, DialogID: "session-dialog", Message: json.RawMessage(`{"messages":[]}`), Reference: json.RawMessage(`[]`)}).Error; err != nil {
+	for _, id := range []string{"default", "off", "failure", "custom", "conflict"} {
+		if err := dao.DB.Create(&entity.ChatSession{ID: id, DialogID: "solo-dialog", UserID: &owner, Message: json.RawMessage(`{"messages":[]}`), Reference: json.RawMessage(`[]`)}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	h := handler.NewChatSessionHandler(service.NewChatSessionService(), nil)
-	gin.SetMode(gin.ReleaseMode)
-	router := gin.New()
-	router.Use(func(c *gin.Context) {
-		if c.GetHeader("Authorization") == "Bearer session-fixture-identity" {
-			c.Set("user", &entity.User{ID: "session-user"})
-		}
-		c.Next()
-	})
-	router.POST("/v1/conversation/completion", h.Completion)
-	api := httptest.NewServer(router)
-	defer api.Close()
-	bodyFor := func(id, message string, flags map[string]interface{}) []byte {
-		body := map[string]interface{}{"conversation_id": id, "messages": []map[string]interface{}{{"role": "system", "content": "untrusted"}, {"role": "assistant", "content": "prologue"}, {"role": "user", "content": "old"}, {"role": "assistant", "content": "previous"}, {"role": "user", "content": []map[string]interface{}{{"type": "text", "text": message}, {"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/a.png"}}}, "id": "msg"}}}
-		for k, v := range flags {
-			body[k] = v
-		}
-		data, err := json.Marshal(body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return data
+	body := func(id string) map[string]any {
+		messages := []any{map[string]any{"role": "system", "content": "untrusted"}, map[string]any{"role": "assistant", "content": "initial"}}
+		return map[string]any{"conversation_id": id, "messages": append(messages, history...)}
 	}
-	send := func(id, message string, flags map[string]interface{}, authenticated bool) (int, string) {
+	stored := func(id string) string {
 		t.Helper()
-		req, err := http.NewRequest(http.MethodPost, api.URL+"/v1/conversation/completion", bytes.NewReader(bodyFor(id, message, flags)))
-		if err != nil {
+		var value string
+		if err := f.Read.QueryRow("SELECT message FROM conversation WHERE id=?", id).Scan(&value); err != nil {
 			t.Fatal(err)
 		}
-		req.Header.Set("Content-Type", "application/json")
-		if authenticated {
-			req.Header.Set("Authorization", "Bearer session-fixture-identity")
-		}
-		resp, err := api.Client().Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return resp.StatusCode, string(data)
+		return value
 	}
+	before := f.snapshot(t)
+	for _, actor := range []string{"", "foreign", "inactive", "revoked", "invited", "member", "disabledtenant"} {
+		_, denied, _ := f.request(t, actor, "POST", "/v1/conversation/completion", body("default"))
+		if providerEnvelopeError(denied) == nil || calls.Load() != 0 || f.snapshot(t) != before {
+			t.Fatal("denied solo chat changed SQL or reached supplier", actor)
+		}
+	}
+	for _, id := range []string{"default", "off"} {
+		mode.Store(id)
+		payload := body(id)
+		if id == "off" {
+			payload["stream"], payload["thinking"] = false, false
+			payload["temperature"], payload["top_p"] = 0, 0
+		}
+		result := f.requireSuccess(t, "owner", "POST", "/v1/conversation/completion", payload)
+		if result["data"].(map[string]any)["answer"] != "answer" || !strings.Contains(stored(id), "image_url") || !strings.Contains(stored(id), "answer") || strings.Contains(stored(id), "untrusted") || strings.Contains(stored(id), "initial") {
+			t.Fatal("solo response or persisted canonical history changed", result)
+		}
+	}
+	mode.Store("default")
+	before = f.snapshot(t)
 	count := calls.Load()
-	_, denied := send("default", "q", nil, false)
-	var denial struct{ Code int }
-	json.Unmarshal([]byte(denied), &denial)
-	if denial.Code == 0 || calls.Load() != count {
-		t.Fatal("unauthorized completion reached provider")
+	custom := body("custom")
+	custom["llm_id"] = "missing@session@Moonshot"
+	_, denied, _ := f.request(t, "owner", "POST", "/v1/conversation/completion", custom)
+	if providerEnvelopeError(denied) == nil || calls.Load() != count || f.snapshot(t) != before {
+		t.Fatal("unconfigured custom model reached supplier or changed SQL")
 	}
-	for _, test := range []struct {
-		id, msg string
-		flags   map[string]interface{}
-	}{{"default", "default", nil}, {"off", "off", map[string]interface{}{"stream": false, "thinking": false}}} {
-		status, body := send(test.id, test.msg, test.flags, true)
-		var payload struct {
-			Code int
-			Data struct{ Answer string }
-		}
-		if err := json.Unmarshal([]byte(body), &payload); err != nil || status != http.StatusOK || payload.Code != 0 || payload.Data.Answer != "answer" {
-			t.Fatalf("JSON completion %d %s", status, body)
-		}
+	custom["llm_id"] = "kimi-k2.5@session@Moonshot"
+	f.requireSuccess(t, "owner", "POST", "/v1/conversation/completion", custom)
+	if f.snapshot(t) != before {
+		t.Fatal("embedded custom-model completion persisted session")
 	}
-	status, body := send("stream", "stream", map[string]interface{}{"stream": true}, true)
-	if status != http.StatusOK || !strings.Contains(body, `"reasoning_content":"reason"`) || !strings.Contains(body, `"answer":"part two"`) || !strings.Contains(body, `"data":true`) {
-		t.Fatalf("SSE %d %s", status, body)
+	mode.Store("failure")
+	_, failed, raw := f.request(t, "owner", "POST", "/v1/conversation/completion", body("failure"))
+	if providerEnvelopeError(failed) == nil || strings.Contains(raw, "private-provider-body") || stored("failure") != `{"messages":[]}` {
+		t.Fatal("provider failure leaked or persisted success")
 	}
-	var stored string
-	if err := readback.QueryRow(`SELECT message::text FROM t_ai_conversations WHERE id='stream'`).Scan(&stored); err != nil || (!strings.Contains(stored, "part two") || !strings.Contains(stored, "image_url")) {
-		t.Fatal("independent persisted answer readback failed")
-	}
-	_, body = send("error", "error", map[string]interface{}{"stream": true}, true)
-	if strings.Contains(body, "secret provider") || strings.Contains(body, `"data":true`) || !strings.Contains(body, "Model stream failed") {
-		t.Fatalf("stream error %s", body)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api.URL+"/v1/conversation/completion", bytes.NewReader(bodyFor("cancel", "cancel", map[string]interface{}{"stream": true})))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Authorization", "Bearer session-fixture-identity")
-	req.Header.Set("Content-Type", "application/json")
-	response, err := api.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("cancel stream did not start")
-	}
-	cancel()
-	response.Body.Close()
-	select {
-	case <-cancelled:
-	case <-time.After(3 * time.Second):
-		t.Fatal("downstream request did not cancel")
-	}
-	if err := readback.QueryRow(`SELECT message::text FROM t_ai_conversations WHERE id='cancel'`).Scan(&stored); err != nil || strings.Contains(stored, "partial") {
-		t.Fatal("cancelled stream persisted partial success")
+	mode.Store("conflict")
+	_, failed, _ = f.request(t, "owner", "POST", "/v1/conversation/completion", body("conflict"))
+	if providerEnvelopeError(failed) == nil || !strings.Contains(stored("conflict"), "concurrent") || strings.Contains(stored("conflict"), "answer") {
+		t.Fatal("stale conversation overwrote concurrent update")
 	}
 }

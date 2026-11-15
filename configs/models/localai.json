@@ -1,11 +1,10 @@
 {
-  "name": "LocalAI",
+  "name": "localai",
   "url_suffix": {
     "chat": "chat/completions",
     "models": "models",
     "embedding": "embeddings",
     "rerank": "rerank"
   },
-  "class": "local",
-  "models": []
+  "class": "local"
 }

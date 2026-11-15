@@ -1,7 +1,6 @@
 package dao
 
 import (
-	"context"
 	"testing"
 )
 
@@ -18,7 +17,7 @@ func TestDocumentGetByIDsEmptyDoesNotAccessDB(t *testing.T) {
 		{name: "empty", ids: []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			docs, err := NewDocumentDAO().GetByIDs(context.Background(), tc.ids)
+			docs, err := NewDocumentDAO().GetByIDs(tc.ids)
 			if docs != nil || err != nil {
 				t.Fatalf("GetByIDs(%v) = %#v, %v; want nil, nil", tc.ids, docs, err)
 			}

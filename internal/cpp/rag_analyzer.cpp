@@ -22,9 +22,9 @@
 #include "re2/re2.h"
 
 #include <cassert>
+#include <sstream>   // std::ostringstream / std::istringstream — explicit for libc++ (macOS)
 #include <cstdint>
 #include <filesystem>
-#include <sstream>
 #include <iostream>
 #include <cmath>
 #include <fstream>
@@ -144,6 +144,9 @@ std::string Join(const std::vector<T> &tokens, int start, int end, const std::st
 
 template <typename T>
 std::string Join(const std::vector<T> &tokens, int start, const std::string &delim = " ") {
+    // C++23 strict overload resolution refuses the implicit size_t → int
+    // narrowing conversion; the explicit cast makes the 4-arg overload above
+    // unambiguous on libc++ (macOS) without changing behaviour on libstdc++.
     return Join(tokens, start, static_cast<int>(tokens.size()), delim);
 }
 
@@ -1382,14 +1385,14 @@ void RAGAnalyzer::MergeWithPosition(const std::vector<std::string> &tokens,
 
 void RAGAnalyzer::EnglishNormalize(const std::vector<std::string> &tokens, std::vector<std::string> &res) const {
     for (auto &t : tokens) {
-        if (re2::RE2::PartialMatch(t, pattern1_)) {
-            //"[a-zA-Z_-]+$"
-            std::string lemma_term = wordnet_lemma_->Lemmatize(t);
+        if (re2::RE2::PartialMatch(t, pattern1_)) { //"[a-zA-Z_-]+$"
+            // Apply lowercase before lemmatization to match Python NLTK behavior
             std::vector<char> lowercase_buffer(term_string_buffer_limit_);
             char *lowercase_term = lowercase_buffer.data();
-            ToLower(lemma_term.c_str(), lemma_term.size(), lowercase_term, term_string_buffer_limit_);
+            ToLower(t.c_str(), t.size(), lowercase_term, term_string_buffer_limit_);
+            std::string lemma_term = wordnet_lemma_->Lemmatize(lowercase_term);
             std::string stem_term;
-            stemmer_->Stem(lowercase_term, stem_term);
+            stemmer_->Stem(lemma_term, stem_term);
             res.push_back(stem_term);
         } else {
             res.push_back(t);
@@ -1746,12 +1749,13 @@ std::string RAGAnalyzer::Tokenize(const std::string &line) const {
                 NLTKWordTokenizer::GetInstance().Tokenize(sentence, term_list);
             }
             for (unsigned i = 0; i < term_list.size(); ++i) {
-                std::string t = wordnet_lemma_->Lemmatize(term_list[i]);
+                // Apply lowercase before lemmatization to match Python NLTK behavior
                 std::vector<char> lowercase_buffer(term_string_buffer_limit_);
-                char *lowercase_term = lowercase_buffer.data();
-                ToLower(t.c_str(), t.size(), lowercase_term, term_string_buffer_limit_);
+            char *lowercase_term = lowercase_buffer.data();
+                ToLower(term_list[i].c_str(), term_list[i].size(), lowercase_term, term_string_buffer_limit_);
+                std::string lemma_term = wordnet_lemma_->Lemmatize(lowercase_term);
                 std::string stem_term;
-                stemmer_->Stem(lowercase_term, stem_term);
+                stemmer_->Stem(lemma_term, stem_term);
                 res.push_back(stem_term);
             }
             continue;
@@ -1864,12 +1868,13 @@ std::pair<std::vector<std::string>, std::vector<std::pair<unsigned, unsigned>>> 
                     if (pos_in_sentence != std::string::npos) {
                         unsigned start_pos = sentence_start_pos + static_cast<unsigned>(pos_in_sentence);
                         unsigned end_pos = start_pos + static_cast<unsigned>(term.size());
-                        std::string t = wordnet_lemma_->Lemmatize(term);
+                        // Apply lowercase before lemmatization to match Python NLTK behavior
                         std::vector<char> lowercase_buffer(term_string_buffer_limit_);
-                        char *lowercase_term = lowercase_buffer.data();
-                        ToLower(t.c_str(), t.size(), lowercase_term, term_string_buffer_limit_);
+            char *lowercase_term = lowercase_buffer.data();
+                        ToLower(term.c_str(), term.size(), lowercase_term, term_string_buffer_limit_);
+                        std::string lemma_term = wordnet_lemma_->Lemmatize(lowercase_term);
                         std::string stem_term;
-                        stemmer_->Stem(lowercase_term, stem_term);
+                        stemmer_->Stem(lemma_term, stem_term);
 
                         tokens.push_back(stem_term);
 
@@ -2188,14 +2193,14 @@ void RAGAnalyzer::EnglishNormalizeWithPosition(const std::vector<std::string> &t
         const auto &token = tokens[i];
         const auto &[start_pos, end_pos] = positions[i];
 
-        if (re2::RE2::PartialMatch(token, pattern1_)) {
-            //"[a-zA-Z_-]+$"
-            std::string lemma_term = wordnet_lemma_->Lemmatize(token);
+        if (re2::RE2::PartialMatch(token, pattern1_)) { //"[a-zA-Z_-]+$"
+            // Apply lowercase before lemmatization to match Python NLTK behavior
             std::vector<char> lowercase_buffer(term_string_buffer_limit_);
             char *lowercase_term = lowercase_buffer.data();
-            ToLower(lemma_term.c_str(), lemma_term.size(), lowercase_term, term_string_buffer_limit_);
+            ToLower(token.c_str(), token.size(), lowercase_term, term_string_buffer_limit_);
+            std::string lemma_term = wordnet_lemma_->Lemmatize(lowercase_term);
             std::string stem_term;
-            stemmer_->Stem(lowercase_term, stem_term);
+            stemmer_->Stem(lemma_term, stem_term);
 
             normalize_tokens.push_back(stem_term);
             normalize_positions.emplace_back(start_pos, end_pos);

@@ -35,27 +35,34 @@ type TokenResponse struct {
 
 // ListAPITokens list all API tokens for a tenant
 func (s *SystemService) ListAPITokens(tenantID string) ([]*TokenResponse, error) {
-	apiTokenDAO := dao.NewAPITokenDAO()
-	tokens, err := apiTokenDAO.GetByTenantID(tenantID)
+	APITokenDAO := dao.NewAPITokenDAO()
+	tokens, err := APITokenDAO.GetByTenantID(tenantID)
 	if err != nil {
 		return nil, err
 	}
 
 	responses := make([]*TokenResponse, len(tokens))
 	for i, token := range tokens {
-		if token.Beta == nil || *token.Beta == "" {
-			beta, err := apiTokenDAO.BackfillBeta(tenantID, token.Token, utility.GenerateBetaAPIToken(utility.GenerateAPIToken()))
-			if err != nil {
+		beta := token.Beta
+		if beta == nil || *beta == "" {
+			generatedBeta := utility.GenerateBetaAPIToken(utility.GenerateAPIToken())
+			if err := dao.DB.Model(&entity.APIToken{}).
+				Where("tenant_id = ? AND token = ?", tenantID, token.Token).
+				Updates(map[string]interface{}{
+					"beta": generatedBeta,
+				}).Error; err != nil {
 				return nil, err
 			}
-			token.Beta = &beta
+			beta = &generatedBeta
+			token.Beta = beta
 		}
+
 		responses[i] = &TokenResponse{
 			TenantID:   token.TenantID,
 			Token:      token.Token,
 			DialogID:   token.DialogID,
 			Source:     token.Source,
-			Beta:       token.Beta,
+			Beta:       beta,
 			CreateTime: token.CreateTime,
 			UpdateTime: token.UpdateTime,
 		}
@@ -71,38 +78,38 @@ type CreateAPITokenRequest struct {
 
 // CreateAPIToken creates a new API token for a tenant
 func (s *SystemService) CreateAPIToken(tenantID string, req *CreateAPITokenRequest) (*TokenResponse, error) {
-	apiTokenDAO := dao.NewAPITokenDAO()
+	APITokenDAO := dao.NewAPITokenDAO()
 
 	// Generate token and beta values
 	// token: "multirag-" + secrets.token_urlsafe(32)
-	apiToken := utility.GenerateAPIToken()
+	APIToken := utility.GenerateAPIToken()
 	// beta: generate_confirmation_token().replace("multirag-", "")[:32]
 	betaAPIKey := utility.GenerateBetaAPIToken(utility.GenerateAPIToken())
 
-	apiTokenData := &entity.APIToken{
+	APITokenData := &entity.APIToken{
 		TenantID: tenantID,
-		Token:    apiToken,
+		Token:    APIToken,
 		Beta:     &betaAPIKey,
 	}
 
-	if err := apiTokenDAO.Create(apiTokenData); err != nil {
+	if err := APITokenDAO.Create(APITokenData); err != nil {
 		return nil, err
 	}
 
 	return &TokenResponse{
-		TenantID:   apiTokenData.TenantID,
-		Token:      apiTokenData.Token,
-		DialogID:   apiTokenData.DialogID,
-		Source:     apiTokenData.Source,
-		Beta:       apiTokenData.Beta,
-		CreateTime: apiTokenData.CreateTime,
-		UpdateTime: apiTokenData.UpdateTime,
+		TenantID:   APITokenData.TenantID,
+		Token:      APITokenData.Token,
+		DialogID:   APITokenData.DialogID,
+		Source:     APITokenData.Source,
+		Beta:       APITokenData.Beta,
+		CreateTime: APITokenData.CreateTime,
+		UpdateTime: APITokenData.UpdateTime,
 	}, nil
 }
 
 // DeleteAPIToken deletes an API token by tenant ID and token value
 func (s *SystemService) DeleteAPIToken(tenantID, token string) error {
-	apiTokenDAO := dao.NewAPITokenDAO()
-	_, err := apiTokenDAO.DeleteByTenantIDAndToken(tenantID, token)
+	APITokenDAO := dao.NewAPITokenDAO()
+	_, err := APITokenDAO.DeleteByTenantIDAndToken(tenantID, token)
 	return err
 }

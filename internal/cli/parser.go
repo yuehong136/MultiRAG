@@ -23,20 +23,18 @@ import (
 	"strings"
 )
 
-// Parser implements a recursive descent parser for MultiRAG CLI commands.
-// Command parsing is split by mode: admin-mode parse functions live in
-// admin_parser.go, user-mode ones in user_parser.go, and helpers / shared
-// leaf parsers stay here.
+// Parser implements a recursive descent parser for RAGFlow CLI commands
 type Parser struct {
 	lexer     *Lexer
 	curToken  Token
 	peekToken Token
+	original  string
 }
 
 // NewParser creates a new parser
 func NewParser(input string) *Parser {
 	l := NewLexer(input)
-	p := &Parser{lexer: l}
+	p := &Parser{lexer: l, original: input}
 	// Read two tokens to initialize curToken and peekToken
 	p.nextToken()
 	p.nextToken()
@@ -48,12 +46,28 @@ func (p *Parser) nextToken() {
 	p.peekToken = p.lexer.NextToken()
 }
 
-// Parse parses the input and returns a Command. adminCommand selects the
-// admin grammar (true) or the user grammar (false).
-func (p *Parser) Parse(adminCommand bool) (*Command, error) {
-	if strings.ContainsRune(p.lexer.input, 0) {
-		return nil, fmt.Errorf("NUL is not allowed in commands")
+// Parse parses the input and returns a Command
+func (p *Parser) Parse(cliMode CommandLineMode) (*Command, error) {
+	// A lexer pass prevents leaf parsers from accepting a second statement or
+	// hiding trailing bytes after a semicolon/NUL. Quoted delimiters remain data.
+	scan := NewLexer(p.original)
+	terminated := false
+	for {
+		token := scan.NextToken()
+		if token.Type == TokenEOF {
+			if scan.pos < len(scan.input) {
+				return nil, fmt.Errorf("invalid command input")
+			}
+			break
+		}
+		if terminated {
+			return nil, fmt.Errorf("unexpected input after semicolon")
+		}
+		if token.Type == TokenSemicolon {
+			terminated = true
+		}
 	}
+
 	if p.curToken.Type == TokenEOF {
 		return nil, nil
 	}
@@ -63,11 +77,14 @@ func (p *Parser) Parse(adminCommand bool) (*Command, error) {
 		return p.parseMetaCommand()
 	}
 
-	// Common local commands share one grammar in either mode.
-	if cmd, handled, err := p.parseServerCommand(); handled {
-		return cmd, err
+	command, err := p.parseCommand(cliMode)
+	if err != nil {
+		return nil, err
 	}
-	return p.parseSQLCommand(adminCommand)
+	if p.curToken.Type != TokenEOF && !(p.curToken.Type == TokenSemicolon && p.peekToken.Type == TokenEOF) {
+		return nil, fmt.Errorf("unexpected trailing input: %s", p.curToken.Value)
+	}
+	return command, nil
 }
 
 func (p *Parser) parseMetaCommand() (*Command, error) {
@@ -87,26 +104,15 @@ func (p *Parser) parseMetaCommand() (*Command, error) {
 	return cmd, nil
 }
 
-func (p *Parser) parseSQLCommand(adminCommand bool) (*Command, error) {
-	if p.curToken.Type != TokenIdentifier && !isKeyword(p.curToken.Type) {
-		return nil, fmt.Errorf("expected command, got %s", p.curToken.Value)
-	}
-
-	if adminCommand {
-		return p.parseAdminCommand()
-	}
-	return p.parseUserCommand()
-}
-
-// parseAdminCommand dispatches admin-mode commands.
 func (p *Parser) parseAdminCommand() (*Command, error) {
+
 	switch p.curToken.Type {
 	case TokenLogin:
-		return p.parseLoginUser()
+		return p.parseAdminLoginUser()
 	case TokenLogout:
-		return p.parseLogout()
+		return p.parseAdminLogout()
 	case TokenPing:
-		return p.parsePingServer()
+		return p.parseAdminPingServer()
 	case TokenList:
 		return p.parseAdminListCommand()
 	case TokenShow:
@@ -118,39 +124,61 @@ func (p *Parser) parseAdminCommand() (*Command, error) {
 	case TokenAlter:
 		return p.parseAdminAlterCommand()
 	case TokenGrant:
-		return p.parseGrantCommand()
+		return p.parseAdminGrantCommand()
 	case TokenRevoke:
-		return p.parseRevokeCommand()
+		return p.parseAdminRevokeCommand()
 	case TokenSet:
 		return p.parseAdminSetCommand()
+	case TokenUnset:
+		return p.parseAdminUnsetCommand()
+	case TokenReset:
+		return p.parseAdminResetCommand()
 	case TokenGenerate:
-		return p.parseGenerateCommand()
+		return p.parseAdminGenerateCommand()
+	case TokenImport:
+		return p.parseAdminImportCommand()
+	case TokenRetrieve:
+		return p.parseAdminRetrieveCommand()
+	case TokenParse:
+		return p.parseAdminParseCommand()
 	case TokenBenchmark:
-		return p.parseBenchmarkCommand()
+		return p.parseAdminBenchmarkCommand()
+	case TokenRegister:
+		return p.parseAdminRegisterCommand()
 	case TokenStartup:
-		return p.parseStartupCommand()
+		return p.parseAdminStartupCommand()
 	case TokenShutdown:
-		return p.parseShutdownCommand()
+		return p.parseAdminShutdownCommand()
 	case TokenRestart:
-		return p.parseRestartCommand()
+		return p.parseAdminRestartCommand()
+	case TokenMQ:
+		return p.parseMessageQueueCommand()
+	case TokenRemove:
+		return p.parseAdminRemoveCommand()
+	case TokenStop:
+		return p.parseAdminStopIngestionTasks()
+	case TokenAdd:
+		return p.parseAdminAddCommand()
+	case TokenDelete:
+		return p.parseAdminDeleteCommand()
+	case TokenSave:
+		return p.parseAdminSaveCommand()
+	case TokenUse:
+		return p.parseAdminUseCommand()
 	default:
 		return nil, fmt.Errorf("unknown command: %s", p.curToken.Value)
 	}
 }
 
-// parseUserCommand dispatches user-mode commands.
 func (p *Parser) parseUserCommand() (*Command, error) {
+
 	switch p.curToken.Type {
-	case TokenChunk, TokenExplain:
-		return p.parseLocalChunkCommand()
 	case TokenLogin:
 		return p.parseLoginUser()
 	case TokenLogout:
 		return p.parseLogout()
 	case TokenPing:
 		return p.parsePingServer()
-	case TokenRegister:
-		return p.parseRegisterCommand()
 	case TokenList:
 		return p.parseListCommand()
 	case TokenShow:
@@ -164,21 +192,37 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 	case TokenDelete:
 		return p.parseDeleteCommand()
 	case TokenAlter:
-		return p.parseUserAlterCommand()
+		return p.parseAlterCommand()
+	case TokenGrant:
+		return p.parseGrantCommand()
+	case TokenRevoke:
+		return p.parseRevokeCommand()
 	case TokenSet:
 		return p.parseSetCommand()
+	case TokenUnset:
+		return p.parseUnsetCommand()
 	case TokenReset:
 		return p.parseResetCommand()
+	case TokenGenerate:
+		return p.parseGenerateCommand()
 	case TokenImport:
 		return p.parseImportCommand()
 	case TokenInsert:
 		return p.parseInsertCommand()
-	case TokenSearch:
-		return p.parseSearchCommand()
+	case TokenRetrieve:
+		return p.parseRetrieveCommand()
 	case TokenParse:
 		return p.parseParseCommand()
 	case TokenBenchmark:
 		return p.parseBenchmarkCommand()
+	case TokenRegister:
+		return p.parseRegisterCommand()
+	case TokenStartup:
+		return p.parseStartupCommand()
+	case TokenShutdown:
+		return p.parseShutdownCommand()
+	case TokenRestart:
+		return p.parseRestartCommand()
 	case TokenEnable:
 		return p.parseEnableCommand()
 	case TokenDisable:
@@ -190,27 +234,57 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 	case TokenThink:
 		return p.parseThinkCommand()
 	case TokenEmbed:
-		return p.parseInferenceCommand(false)
-	case TokenReranker:
-		return p.parseInferenceCommand(true)
+		return p.parseEmbedCommand()
+	case TokenRerank:
+		return p.parseRerankCommand()
 	case TokenASR:
-		return p.parseMediaCommand("asr")
+		return p.parseASRCommand()
 	case TokenTTS:
-		return p.parseMediaCommand("tts")
+		return p.parseTTSCommand()
 	case TokenOCR:
-		return p.parseMediaCommand("ocr")
-	case TokenUse:
-		return p.parseUseCommand()
+		return p.parseOCRCommand()
 	case TokenCheck:
 		return p.parseCheckCommand()
-	case TokenGet:
-		return p.parseGetCommand()
+	case TokenStart:
+		return p.parseUserStartIngestion()
+	case TokenStop:
+		return p.parseUserStopIngestion()
+
+	case TokenSave:
+		return p.parseUserSaveCommand()
+	case TokenUse:
+		return p.parseUseCommand()
 	case TokenUpdate:
 		return p.parseUpdateCommand()
 	case TokenRemove:
 		return p.parseRemoveCommand()
+	case TokenGet:
+		return p.parseGetCommand()
+	case TokenExplain:
+		return p.parseExplainCommand()
+	case TokenChunk:
+		return p.parseChunkCommand(false)
+
+	case TokenLS, TokenCat, TokenSearch:
+		// For context engine
+		return p.parseFileSystemCommand()
 	default:
 		return nil, fmt.Errorf("unknown command: %s", p.curToken.Value)
+	}
+}
+
+func (p *Parser) parseCommand(cliMode CommandLineMode) (*Command, error) {
+	if p.curToken.Type != TokenIdentifier && !isKeyword(p.curToken.Type) {
+		return nil, fmt.Errorf("expected command, got %s", p.curToken.Value)
+	}
+
+	switch cliMode {
+	case AdminMode:
+		return p.parseAdminCommand()
+	case APIMode:
+		return p.parseUserCommand()
+	default:
+		return nil, fmt.Errorf("unknown mode: %s", cliMode)
 	}
 }
 
@@ -234,7 +308,17 @@ func (p *Parser) expectSemicolon() error {
 }
 
 func isKeyword(tokenType int) bool {
-	return tokenType >= TokenLogin && tokenType <= TokenExplain
+	return tokenType >= TokenLogin && tokenType <= TokenPanic
+}
+
+// isCECommand checks if the given string is a Filesystem command
+func isCECommand(s string) bool {
+	upper := strings.ToUpper(s)
+	switch upper {
+	case "LS", "LIST", "SEARCH":
+		return true
+	}
+	return false
 }
 
 // Helper functions for parsing
@@ -253,459 +337,106 @@ func (p *Parser) parseIdentifier() (string, error) {
 }
 
 func (p *Parser) parseVariableValue() (string, error) {
-	sign := ""
-	if p.curToken.Type == TokenIllegal && (p.curToken.Value == "-" || p.curToken.Value == "+") {
-		sign = p.curToken.Value
-		p.nextToken()
-		if p.curToken.Type != TokenNumber && p.curToken.Type != TokenFloat {
-			return "", fmt.Errorf("expected numeric variable value")
-		}
-	}
 	switch p.curToken.Type {
-	case TokenIdentifier, TokenQuotedString:
+	case TokenIdentifier, TokenQuotedString, TokenInteger, TokenFloat:
 		return p.curToken.Value, nil
-	case TokenNumber, TokenFloat:
-		value := sign + p.curToken.Value
-		return value, nil
 	default:
 		return "", fmt.Errorf("expected variable value, got %s", p.curToken.Value)
 	}
 }
 
 func (p *Parser) parseNumber() (int, error) {
-	if p.curToken.Type != TokenNumber {
+	if p.curToken.Type != TokenInteger {
 		return 0, fmt.Errorf("expected number, got %s", p.curToken.Value)
 	}
 	return strconv.Atoi(p.curToken.Value)
 }
 
 func (p *Parser) parseFloat() (float64, error) {
-	if p.curToken.Type != TokenNumber && p.curToken.Type != TokenFloat {
-		return 0, fmt.Errorf("expected number, got %s", p.curToken.Value)
+	// Accept either TokenInteger or TokenFloat so that literals like
+	// `0.3` (which the lexer tags as TokenFloat) and `10` (TokenInteger)
+	// both parse cleanly.
+	if p.curToken.Type != TokenInteger && p.curToken.Type != TokenFloat {
+		return math.NaN(), fmt.Errorf("expected number, got %s", p.curToken.Value)
 	}
-	value, err := strconv.ParseFloat(p.curToken.Value, 64)
-	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0, fmt.Errorf("finite number required")
+	result, err := strconv.ParseFloat(p.curToken.Value, 64)
+	if err != nil {
+		return math.NaN(), err
 	}
-	return value, nil
+
+	return result, nil
 }
 
-func (p *Parser) parseIdentifierList() ([]string, error) {
-	var list []string
-
-	ident, err := p.parseIdentifier()
-	if err != nil {
-		return nil, err
+// parseQuotedStringList consumes a bracket-delimited list of quoted strings:
+//
+//	[ 'a', 'b', 'c' ]
+//
+// Empty list [] is allowed. The cursor must be positioned on '[' when called;
+// on return, the cursor is positioned just past the closing ']'.
+func (p *Parser) parseQuotedStringList() ([]string, error) {
+	if p.curToken.Type != TokenLBracket {
+		return nil, fmt.Errorf("expected '[', got %s", p.curToken.Value)
 	}
-	list = append(list, ident)
-	p.nextToken()
+	p.nextToken() // skip '['
 
-	for p.curToken.Type == TokenComma {
-		p.nextToken()
-		ident, err := p.parseIdentifier()
+	// Always return a non-nil slice so callers (and json.Marshal) see []
+	// instead of null for the empty-list case.
+	list := make([]string, 0)
+	// Allow empty list []
+	if p.curToken.Type == TokenRBracket {
+		p.nextToken() // skip ']'
+		return list, nil
+	}
+
+	for {
+		s, err := p.parseQuotedString()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("expected quoted string in list: %w", err)
 		}
-		list = append(list, ident)
-		p.nextToken()
-	}
+		list = append(list, s)
+		p.nextToken() // step past the closing quote
 
-	return list, nil
+		if p.curToken.Type == TokenComma {
+			p.nextToken() // step past ','
+			continue
+		}
+		if p.curToken.Type == TokenRBracket {
+			p.nextToken() // step past ']'
+			return list, nil
+		}
+		return nil, fmt.Errorf("expected ',' or ']' in list, got %s", p.curToken.Value)
+	}
 }
 
 func tokenTypeToString(t int) string {
-	// Simplified for error messages
+	switch t {
+	case TokenEOF:
+		return "end of input"
+	case TokenIdentifier:
+		return "identifier"
+	case TokenInteger:
+		return "integer"
+	case TokenFloat:
+		return "float"
+	case TokenQuotedString:
+		return "quoted string"
+	case TokenLBracket:
+		return "'['"
+	case TokenRBracket:
+		return "']'"
+	case TokenComma:
+		return "','"
+	case TokenSemicolon:
+		return "';'"
+	}
 	return fmt.Sprintf("token(%d)", t)
 }
 
-// ==================== Shared leaf parsers (both modes) ====================
+func (p *Parser) parseFileSystemCommand() (*Command, error) {
+	p.nextToken() // consume COMMAND
 
-func (p *Parser) parseLoginUser() (*Command, error) {
-	cmd := NewCommand("login_user")
-
-	p.nextToken() // consume LOGIN
-	if p.curToken.Type != TokenUser {
-		return nil, fmt.Errorf("expected USER after LOGIN")
-	}
-
-	p.nextToken()
-	email, err := p.parseQuotedString()
-	if err != nil {
-		return nil, err
-	}
-	cmd.Params["email"] = email
-
-	p.nextToken()
-	// Optional: WITH PASSWORD 'password'
-	if p.curToken.Type == TokenWith {
-		p.nextToken()
-		if p.curToken.Type != TokenPassword {
-			return nil, fmt.Errorf("expected PASSWORD after WITH")
-		}
-		p.nextToken()
-		password, err := p.parseQuotedString()
-		if err != nil {
-			return nil, err
-		}
-		cmd.Params["password"] = password
-		p.nextToken()
-	}
-
-	if err := p.expectSemicolon(); err != nil {
-		return nil, err
-	}
+	cmd := NewCommand("file_system_command")
+	cmd.Params["command"] = p.original
 
 	return cmd, nil
-}
-
-// parseLogout parses LOGOUT[;] for both admin and user modes.
-func (p *Parser) parseLogout() (*Command, error) {
-	cmd := NewCommand("logout")
-	p.nextToken() // consume LOGOUT
-	// Semicolon is optional for LOGOUT
-	if p.curToken.Type == TokenSemicolon {
-		p.nextToken()
-	}
-	return cmd, nil
-}
-
-// parseCommonListProviders parses (shared by admin and user LIST):
-//
-//	LIST AVAILABLE PROVIDERS;
-func (p *Parser) parseCommonListProviders() (*Command, error) {
-	p.nextToken() // consume AVAILABLE
-
-	if p.curToken.Type != TokenProviders {
-		return nil, fmt.Errorf("expected PROVIDERS")
-	}
-
-	return NewCommand("list_available_providers"), nil
-}
-
-// parseListModelsOfProvider parses (shared by admin and user LIST):
-//
-//	LIST MODELS FROM '<provider>';
-//	LIST MODELS FROM '<provider>' '<instance>';
-func (p *Parser) parseListModelsOfProvider() (*Command, error) {
-	if p.curToken.Type == TokenSupported {
-		p.nextToken()
-		if p.curToken.Type != TokenModels {
-			return nil, fmt.Errorf("expected MODELS")
-		}
-		p.nextToken()
-		if p.curToken.Type != TokenFrom {
-			return nil, fmt.Errorf("expected FROM")
-		}
-		p.nextToken()
-		providerName, err := p.parseQuotedString()
-		if err != nil {
-			return nil, err
-		}
-		p.nextToken()
-		instanceName, err := p.parseQuotedString()
-		if err != nil {
-			return nil, err
-		}
-		cmd := NewCommand("list_supported_models")
-		cmd.Params["provider_name"] = providerName
-		cmd.Params["instance_name"] = instanceName
-		return cmd, nil
-	}
-	if p.curToken.Type != TokenModels {
-		return nil, fmt.Errorf("expected MODELS")
-	}
-
-	p.nextToken()
-	if p.curToken.Type == TokenSemicolon {
-		if p.peekToken.Type != TokenEOF {
-			return nil, fmt.Errorf("unexpected token after semicolon")
-		}
-		return NewCommand("list_all_models"), nil
-	}
-	if p.curToken.Type != TokenFrom {
-		return nil, fmt.Errorf("expected FROM or semicolon")
-	}
-	p.nextToken()
-
-	// Parse first quoted string (could be instance_name or provider_name)
-	firstName, err := p.parseQuotedString()
-	if err != nil {
-		return nil, err
-	}
-	p.nextToken()
-
-	// Check if there's a second quoted string (instance_name)
-	// If so, format is: LIST MODELS FROM <provider_name> <instance_name>
-	// If not, format is: LIST MODELS FROM <provider_name>
-	if p.curToken.Type == TokenQuotedString {
-		// Two arguments: provider_name and instance_name
-		instanceName, err := p.parseQuotedString()
-		if err != nil {
-			return nil, err
-		}
-		cmd := NewCommand("list_instance_models")
-		cmd.Params["instance_name"] = instanceName
-		cmd.Params["provider_name"] = firstName
-		p.nextToken()
-		if p.curToken.Type == TokenSemicolon {
-			p.nextToken()
-		}
-		return cmd, nil
-	}
-
-	// Only one argument: provider_name
-	cmd := NewCommand("list_provider_models")
-	cmd.Params["provider_name"] = firstName
-	if p.curToken.Type == TokenSemicolon {
-		p.nextToken()
-	}
-	return cmd, nil
-}
-
-// parseShowProvider parses (shared by admin and user SHOW):
-//
-//	SHOW PROVIDER '<provider>';
-func (p *Parser) parseShowProvider() (*Command, error) {
-	p.nextToken() // consume PROVIDER
-
-	providerName, err := p.parseQuotedString()
-	if err != nil {
-		return nil, fmt.Errorf("expected provider name: %w", err)
-	}
-
-	cmd := NewCommand("show_provider")
-	cmd.Params["provider_name"] = providerName
-
-	p.nextToken()
-	if p.curToken.Type == TokenSemicolon {
-		p.nextToken()
-	}
-	return cmd, nil
-}
-
-// parseShowModel parses (shared by admin and user SHOW):
-//
-//	SHOW MODEL '<model>' FROM '<provider>';
-func (p *Parser) parseShowModel() (*Command, error) {
-	p.nextToken() // consume MODEL
-
-	modelName, err := p.parseQuotedString()
-	if err != nil {
-		return nil, fmt.Errorf("expected model name: %w", err)
-	}
-
-	cmd := NewCommand("show_model")
-	cmd.Params["model_name"] = modelName
-
-	p.nextToken() // consume model_name
-
-	if p.curToken.Type == TokenSemicolon {
-		if p.peekToken.Type != TokenEOF {
-			return nil, fmt.Errorf("unexpected token after semicolon")
-		}
-		cmd.Type = "show_catalog_model"
-		return cmd, nil
-	}
-	if p.curToken.Type != TokenFrom {
-		return nil, fmt.Errorf("expected FROM or semicolon")
-	}
-	p.nextToken() // consume FROM
-	providerName, err := p.parseQuotedString()
-	if err != nil {
-		return nil, fmt.Errorf("expected provider name: %w", err)
-	}
-	cmd.Params["provider_name"] = providerName
-	p.nextToken() // consume provider name
-	if p.curToken.Type == TokenSemicolon {
-		p.nextToken()
-	}
-	return cmd, nil
-}
-
-func (p *Parser) parsePingServer() (*Command, error) {
-	cmd := NewCommand("ping_server")
-	p.nextToken()
-	if err := p.expectSemicolon(); err != nil {
-		return nil, err
-	}
-	return cmd, nil
-}
-
-// parseListDatasets parses:
-//
-//	LIST DATASETS;                 (user mode, self-service -> list_user_datasets)
-//	LIST DATASETS OF '<email>';    (admin mode, on behalf of a user -> list_datasets)
-func (p *Parser) parseListDatasets() (*Command, error) {
-	cmd := NewCommand("list_user_datasets")
-	p.nextToken() // consume DATASETS
-
-	if p.curToken.Type == TokenSemicolon {
-		return cmd, nil
-	}
-
-	if p.curToken.Type == TokenOf {
-		p.nextToken()
-		userName, err := p.parseQuotedString()
-		if err != nil {
-			return nil, err
-		}
-		cmd = NewCommand("list_datasets")
-		cmd.Params["user_name"] = userName
-		p.nextToken()
-	}
-
-	if err := p.expectSemicolon(); err != nil {
-		return nil, err
-	}
-	return cmd, nil
-}
-
-// parseListAgents parses LIST AGENTS [OF '<email>'];
-func (p *Parser) parseListAgents() (*Command, error) {
-	p.nextToken() // consume AGENTS
-
-	if p.curToken.Type == TokenSemicolon {
-		return NewCommand("list_user_agents"), nil
-	}
-
-	if p.curToken.Type != TokenOf {
-		return nil, fmt.Errorf("expected OF")
-	}
-	p.nextToken()
-
-	userName, err := p.parseQuotedString()
-	if err != nil {
-		return nil, err
-	}
-
-	cmd := NewCommand("list_agents")
-	cmd.Params["user_name"] = userName
-
-	p.nextToken()
-	if err := p.expectSemicolon(); err != nil {
-		return nil, err
-	}
-	return cmd, nil
-}
-
-// parseListTokens parses:
-//
-//	LIST TOKENS;                 (user mode, self-service)
-//	LIST TOKENS OF '<email>';    (admin mode, on behalf of a user)
-func (p *Parser) parseListTokens() (*Command, error) {
-	p.nextToken() // consume TOKENS
-	cmd := NewCommand("list_tokens")
-
-	if p.curToken.Type == TokenOf {
-		p.nextToken()
-		userName, err := p.parseQuotedString()
-		if err != nil {
-			return nil, err
-		}
-		cmd.Params["user_name"] = userName
-		p.nextToken()
-	}
-
-	if err := p.expectSemicolon(); err != nil {
-		return nil, err
-	}
-	return cmd, nil
-}
-
-// parseDropToken parses:
-//
-//	DROP TOKEN '<token>';                 (user mode, self-service)
-//	DROP TOKEN '<token>' OF '<email>';    (admin mode, on behalf of a user)
-func (p *Parser) parseDropToken() (*Command, error) {
-	p.nextToken() // consume TOKEN
-	token, err := p.parseQuotedString()
-	if err != nil {
-		return nil, err
-	}
-
-	cmd := NewCommand("drop_token")
-	cmd.Params["token"] = token
-
-	p.nextToken()
-	if p.curToken.Type == TokenOf {
-		p.nextToken()
-		userName, err := p.parseQuotedString()
-		if err != nil {
-			return nil, err
-		}
-		cmd.Params["user_name"] = userName
-		p.nextToken()
-	}
-
-	if err := p.expectSemicolon(); err != nil {
-		return nil, err
-	}
-	return cmd, nil
-}
-
-func (p *Parser) parseBenchmarkCommand() (*Command, error) {
-	cmd := NewCommand("benchmark")
-
-	p.nextToken() // consume BENCHMARK
-	concurrency, err := p.parseNumber()
-	if err != nil {
-		return nil, err
-	}
-	cmd.Params["concurrency"] = concurrency
-
-	p.nextToken()
-	iterations, err := p.parseNumber()
-	if err != nil {
-		return nil, err
-	}
-	cmd.Params["iterations"] = iterations
-
-	p.nextToken()
-	// Parse user_statement
-	nestedCmd, err := p.parseUserStatement()
-	if err != nil {
-		return nil, err
-	}
-	cmd.Params["command"] = nestedCmd
-
-	return cmd, nil
-}
-
-func (p *Parser) parseUserStatement() (*Command, error) {
-	switch p.curToken.Type {
-	case TokenDelete:
-		return p.parseDeleteCommand()
-	case TokenGet:
-		return p.parseGetCommand()
-	case TokenPing:
-		return p.parsePingServer()
-	case TokenShow:
-		return p.parseShowCommand()
-	case TokenCreate:
-		return p.parseCreateCommand()
-	case TokenDrop:
-		return p.parseDropCommand()
-	case TokenAlter:
-		return p.parseUserAlterCommand()
-	case TokenSet:
-		return p.parseSetCommand()
-	case TokenReset:
-		return p.parseResetCommand()
-	case TokenList:
-		return p.parseListCommand()
-	case TokenParse:
-		return p.parseParseCommand()
-	case TokenImport:
-		return p.parseImportCommand()
-	case TokenInsert:
-		return p.parseInsertCommand()
-	case TokenSearch:
-		return p.parseSearchCommand()
-	case TokenUpdate:
-		return p.parseUpdateCommand()
-	case TokenRemove:
-		return p.parseRemoveCommand()
-	default:
-		return nil, fmt.Errorf("invalid user statement: %s", p.curToken.Value)
-	}
 }

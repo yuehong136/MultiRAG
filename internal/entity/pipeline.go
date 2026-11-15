@@ -32,18 +32,18 @@ type PipelineOperationLog struct {
 	DocumentType    string     `gorm:"column:document_type;size:255;not null" json:"document_type"`
 	SourceFrom      string     `gorm:"column:source_from;size:255;not null" json:"source_from"`
 	Progress        float64    `gorm:"column:progress;default:0;index" json:"progress"`
-	ProgressMsg     *string    `gorm:"column:progress_msg;type:text" json:"progress_msg,omitempty"`
+	ProgressMsg     *string    `gorm:"column:progress_msg;type:longtext" json:"progress_msg,omitempty"`
 	ProcessBeginAt  *time.Time `gorm:"column:process_begin_at;index" json:"process_begin_at,omitempty"`
 	ProcessDuration float64    `gorm:"column:process_duration;default:0" json:"process_duration"`
-	DSL             JSONMap    `gorm:"column:dsl;type:jsonb" json:"dsl,omitempty"`
+	DSL             JSONMap    `gorm:"column:dsl;type:longtext" json:"dsl,omitempty"`
 	TaskType        string     `gorm:"column:task_type;size:32;not null;default:''" json:"task_type"`
 	OperationStatus string     `gorm:"column:operation_status;size:32;not null" json:"operation_status"`
-	Avatar          *string    `gorm:"column:avatar;type:text" json:"avatar,omitempty"`
+	Avatar          *string    `gorm:"column:avatar;type:longtext" json:"avatar,omitempty"`
 	Status          *string    `gorm:"column:status;size:1;index" json:"status,omitempty"`
 	BaseModel
 }
 
 // TableName specify table name
 func (PipelineOperationLog) TableName() string {
-	return "t_pipeline_operation_log"
+	return "pipeline_operation_log"
 }

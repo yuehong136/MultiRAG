@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"testing"
@@ -16,7 +16,7 @@ import (
 func TestAfter9dHostedChatHTTP(t *testing.T) {
 	for _, provider := range []string{"CometAPI", "DeepInfra", "XunFei"} {
 		t.Run(provider, func(t *testing.T) {
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/office/chat" || r.Header.Get("Authorization") != "Bearer key" || r.Header.Get("Content-Type") != "application/json" {
 					t.Error("instance lost", r.URL.Path)
 				}
@@ -25,7 +25,7 @@ func TestAfter9dHostedChatHTTP(t *testing.T) {
 					t.Error(err)
 				}
 				messages, _ := body["messages"].([]any)
-				if len(messages) != 3 || messages[0].(map[string]any)["role"] != "system" || messages[1].(map[string]any)["role"] != "assistant" || body["model"] != "model" || body["max_tokens"] != float64(64) || body["temperature"] != 0.3 || body["top_p"] != 0.9 || !reflect.DeepEqual(body["stop"], []any{"END"}) {
+				if len(messages) != 3 || messages[0].(map[string]any)["role"] != "system" || messages[1].(map[string]any)["role"] != "assistant" || body["model"] != "model" || body["max_tokens"] != float64(64) || body["temperature"] != 0.3 || body["top_p"] != 0.9 || (provider != "XunFei" && !reflect.DeepEqual(body["stop"], []any{"END"})) {
 					t.Error("history/config lost", body)
 				}
 				if body["stream"] == true {
@@ -36,18 +36,19 @@ func TestAfter9dHostedChatHTTP(t *testing.T) {
 				}
 			}))
 			defer fixture.Close()
-			urls := map[string]string{"default": "http://unused.invalid", "office": fixture.URL + "/office/"}
+			urls := map[string]string{"default": "http://unused.invalid", "office": fixture.URL + "/office"}
 			d, err := NewModelFactory().CreateModelDriver(provider, urls, URLSuffix{Chat: "chat"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			urls["office"] = "http://mutated.invalid"
-			api := &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("office")}
+			api := &APIConfig{ApiKey: stringPtr("key"), Region: stringPtr("office")}
 			limit, temp, top, stop := 64, 0.3, 0.9, []string{"END"}
-			config := &ChatConfig{MaxTokens: &limit, Temperature: &temp, TopP: &top, Stop: &stop}
+			thinking := true
+			config := &ChatConfig{MaxTokens: &limit, Temperature: &temp, TopP: &top, Stop: &stop, Thinking: &thinking}
 			history := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "q"}}
 			answer, err := d.ChatWithMessages("model", history, api, config)
-			if err != nil || answer == nil || *answer.Answer != "answer" || *answer.ReasoningContent != "reason" {
+			if err != nil || answer == nil || *answer.Answer != "answer" || *answer.ReasonContent != "reason" {
 				t.Fatal(answer, err)
 			}
 			var output, reason string
@@ -77,10 +78,10 @@ func TestAfter9dHostedChatFailuresHTTP(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			for _, body := range []string{`null`, `{}`, `{"choices":[]}`, `{"choices":[{"message":{"content":" "}}]}`, `{"choices":[{"message":{"content":5}}]}`, `{"choices":[{"message":{"content":"ok"}}],"error":{"message":"private-body"}}`, `{"choices":[{"message":{"content":"ok"}}]} {}`} {
 				t.Run(body, func(t *testing.T) {
-					fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+					fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 					defer fixture.Close()
 					d, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": fixture.URL}, URLSuffix{Chat: "chat"})
-					answer, err := d.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
+					answer, err := d.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil)
 					if err == nil || answer != nil || strings.Contains(err.Error(), "private-body") {
 						t.Fatal(answer, err)
 					}
@@ -94,14 +95,14 @@ func TestAfter9dHostedChatFailuresHTTP(t *testing.T) {
 				"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"error\":\"private-body\"}\n\n",
 			} {
 				t.Run(body, func(t *testing.T) {
-					fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						w.Header().Set("Content-Type", "text/event-stream")
 						fmt.Fprint(w, body)
 					}))
 					defer fixture.Close()
 					d, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": fixture.URL}, URLSuffix{Chat: "chat"})
 					done := 0
-					err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+					err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(c, r *string) error {
 						if c != nil && *c == "[DONE]" {
 							done++
 						}
@@ -112,20 +113,20 @@ func TestAfter9dHostedChatFailuresHTTP(t *testing.T) {
 					}
 				})
 			}
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n")
 			}))
 			defer fixture.Close()
 			d, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": fixture.URL}, URLSuffix{Chat: "chat"})
 			marker := errors.New("sender failed")
-			if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return marker }); !errors.Is(err, marker) {
+			if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(*string, *string) error { return marker }); !errors.Is(err, marker) {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			done := 0
-			err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+			err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 				if c != nil && *c == "[DONE]" {
 					done++
 				}

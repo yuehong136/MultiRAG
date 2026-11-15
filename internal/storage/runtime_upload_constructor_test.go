@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"strconv"
@@ -97,13 +96,7 @@ func TestRuntimeUploadAdapterConstructedS3UsesConfiguredNamespace(t *testing.T) 
 				options.RetryMaxAttempts = 1
 				options.UsePathStyle = true
 				original.client = s3.New(options)
-				store := ForRuntimeUploads(original)
-				probe := store.(interface {
-					ObjectExistsContext(context.Context, string, string) (bool, error)
-				})
-				remover := store.(interface {
-					RemoveContext(context.Context, string, string, ...string) error
-				})
+				store := original
 				for _, actor := range []string{"alice-downloads", "bob-downloads"} {
 					if err := store.Put(actor, "same-id", []byte(content)); err != nil {
 						t.Fatal(err)
@@ -112,21 +105,21 @@ func TestRuntimeUploadAdapterConstructedS3UsesConfiguredNamespace(t *testing.T) 
 					if err != nil || string(data) != content {
 						t.Fatalf("configured runtime Get failed: %s %v", data, err)
 					}
-					if exists, err := probe.ObjectExistsContext(t.Context(), actor, "same-id"); !exists || err != nil {
-						t.Fatalf("configured runtime probe failed: %t %v", exists, err)
+					if !store.ObjExist(actor, "same-id") {
+						t.Fatal("mapped object missing")
 					}
 				}
 				if len(objects) != 2 {
 					t.Fatal("same runtime ID overwrote another actor")
 				}
-				if err := remover.RemoveContext(t.Context(), "alice-downloads", "same-id"); err != nil {
+				if err := store.Remove("alice-downloads", "same-id"); err != nil {
 					t.Fatal(err)
 				}
-				if exists, err := probe.ObjectExistsContext(t.Context(), "alice-downloads", "same-id"); exists || err != nil {
-					t.Fatalf("configured runtime cleanup was not confirmed: %t %v", exists, err)
+				if store.ObjExist("alice-downloads", "same-id") {
+					t.Fatal("deleted object still exists")
 				}
-				if exists, err := probe.ObjectExistsContext(t.Context(), "bob-downloads", "same-id"); !exists || err != nil {
-					t.Fatalf("configured runtime cleanup crossed actors: %t %v", exists, err)
+				if !store.ObjExist("bob-downloads", "same-id") {
+					t.Fatal("mapped object missing")
 				}
 				if err := store.Remove("bob-downloads", "same-id"); err != nil {
 					t.Fatal(err)
@@ -134,7 +127,7 @@ func TestRuntimeUploadAdapterConstructedS3UsesConfiguredNamespace(t *testing.T) 
 				if len(objects) != 0 {
 					t.Fatal("configured runtime Remove used a different mapping")
 				}
-				if original.bucket != originalBucket || original.prefixPath != originalPrefix || original.config != &cfg {
+				if original.bucket != originalBucket || original.prefixPath != originalPrefix || original.config == &cfg {
 					t.Fatal("runtime adapter changed the ordinary S3 storage instance")
 				}
 				for _, actor := range []string{"alice-downloads", "bob-downloads"} {

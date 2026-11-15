@@ -100,7 +100,7 @@ func TestSearXNG_ParseResults(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := NewSearXNGTool().WithResolver(toolTestResolver)
+	tool := NewSearXNGTool()
 	out, err := tool.InvokableRun(context.Background(),
 		`{"query":"ragflow","base_url":`+jsonString(srv.URL)+`,"max_results":5}`)
 	if err != nil {

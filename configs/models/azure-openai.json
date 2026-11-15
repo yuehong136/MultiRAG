@@ -3,8 +3,7 @@
   "url_suffix": {
     "chat": "chat/completions",
     "embedding": "embeddings",
-    "models": "models"
+    "models": "deployments"
   },
-  "class": "gpt",
-  "models": []
+  "class": "gpt"
 }

@@ -27,6 +27,7 @@ package component
 import (
 	"context"
 	"fmt"
+
 	"maps"
 
 	"multirag/internal/agent/runtime"
@@ -39,9 +40,8 @@ const componentNameMessage = "Message"
 // it from the DSL params at build time, and Invoke falls back to it
 // when the input map does not carry a fresh "text" override.
 type MessageComponent struct {
-	name   string
-	text   string
-	stream bool
+	name string
+	text string
 }
 
 // NewMessageComponent constructs a Message component. The params map
@@ -56,12 +56,11 @@ type MessageComponent struct {
 // emits an empty content (it is the canvas terminal, so a runtime
 // error would be louder than a missing template).
 func NewMessageComponent(params map[string]any) (Component, error) {
-	if save, _ := params["memory_save"].(bool); save {
-		return nil, fmt.Errorf("Message memory persistence: %w", ErrNotImplemented)
+	if memorySave, _ := params["memory_save"].(bool); memorySave {
+		return nil, fmt.Errorf("Message: memory persistence: %w", ErrNotImplemented)
 	}
 	tpl := extractMessageText(params)
-	stream, _ := params["stream"].(bool)
-	return &MessageComponent{name: componentNameMessage, text: tpl, stream: stream}, nil
+	return &MessageComponent{name: componentNameMessage, text: tpl}, nil
 }
 
 // extractMessageText reads text / content from params in the v1 / v2
@@ -99,7 +98,7 @@ func (m *MessageComponent) Name() string { return m.name }
 // *CanvasState, returns the resolved string at outputs["content"], and
 // (if inputs["stream"] == true) records the number of chunks in
 // outputs["streamed_chunks"]. Memory persistence (memory_save) is
-// explicitly unavailable and returns an error.
+// logged as deferred to a later phase per the P0 plan.
 //
 // inputs["text"] takes precedence over the per-instance text so the
 // same node can be reused with different templates at run time when
@@ -127,15 +126,11 @@ func (m *MessageComponent) Invoke(ctx context.Context, inputs map[string]any) (m
 	}
 
 	if memSave, _ := inputs["memory_save"].(bool); memSave {
-		return nil, fmt.Errorf("Message memory persistence: %w", ErrNotImplemented)
+		return nil, fmt.Errorf("Message: memory persistence: %w", ErrNotImplemented)
 	}
 
 	out := map[string]any{"content": resolved}
-	streamOn := m.stream
-	if override, present := inputs["stream"].(bool); present {
-		streamOn = override
-	}
-	if streamOn {
+	if streamOn, _ := inputs["stream"].(bool); streamOn {
 		// P0: one chunk for the whole resolved content. A later phase
 		// can split on token / sentence boundaries.
 		out["streamed_chunks"] = 1
@@ -164,7 +159,7 @@ func (m *MessageComponent) Inputs() map[string]string {
 	return map[string]string{
 		"text":        "Template string with {{...}} references; resolved against the canvas state.",
 		"stream":      "When true, the resolved content is delivered as an SSE stream (P0: one chunk).",
-		"memory_save": "Unavailable: true is rejected until persistence is implemented.",
+		"memory_save": "When true, persist the message to API4Conversation (deferred to Phase 2.5).",
 	}
 }
 

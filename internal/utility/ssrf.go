@@ -1,99 +1,207 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package utility
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
 
-var errUnsafeMCPURL = errors.New("MCP endpoint must resolve only to public HTTP addresses.")
+// AllowedURLSchemes are the schemes accepted by AssertURLSafe.
+var AllowedURLSchemes = []string{"http", "https"}
 
-// AssertURLSafe validates the endpoint and all DNS answers before returning a
-// single pin. Resolution shares the caller's cancellation and deadline.
-func AssertURLSafe(ctx context.Context, rawURL string) (string, string, error) {
-	return assertURLSafe(ctx, rawURL, net.DefaultResolver.LookupHost)
-}
+// LookupHost is the indirection used to resolve hostnames. Tests override it.
+var LookupHost = net.DefaultResolver.LookupHost
 
-func assertURLSafe(ctx context.Context, rawURL string, lookup func(context.Context, string) ([]string, error)) (string, string, error) {
-	endpoint, err := url.Parse(rawURL)
-	if err != nil || rawURL != strings.TrimSpace(rawURL) || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Hostname() == "" {
-		return "", "", errUnsafeMCPURL
+// AssertURLSafe parses rawURL and rejects it if the scheme is disallowed,
+// the host is missing, or any resolved IP is not globally routable
+// (private, loopback, link-local, multicast, reserved). Returns the hostname
+// and the first validated public IP so callers can DNS-pin the address and
+// prevent rebinding between validation and the actual TCP connection.
+//
+// Mirrors common/ssrf_guard.py:assert_url_is_safe.
+func AssertURLSafe(ctx context.Context, rawURL string) (hostname, resolvedIP string, err error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
 	}
-	host := endpoint.Hostname()
-	// Keep the validated spelling identical to net/http's dial host. Unicode
-	// names must be supplied as explicit ASCII IDNA labels.
-	for _, char := range host {
-		if char > 127 || char <= 32 {
-			return "", "", errUnsafeMCPURL
-		}
+	parsed, perr := url.Parse(strings.TrimSpace(rawURL))
+	if perr != nil || parsed.User != nil || parsed.Fragment != "" || parsed.Opaque != "" {
+		return "", "", fmt.Errorf("Invalid url.")
 	}
-	if strings.Contains(host, "%") || strings.HasSuffix(host, ".") {
-		return "", "", errUnsafeMCPURL
+
+	scheme := strings.ToLower(parsed.Scheme)
+	if !schemeAllowed(scheme) {
+		sorted := append([]string(nil), AllowedURLSchemes...)
+		sort.Strings(sorted)
+		return "", "", fmt.Errorf("Disallowed URL scheme: '%s'. Only %v are allowed.", scheme, sorted)
 	}
-	if port := endpoint.Port(); port != "" {
-		if _, err := net.LookupPort("tcp", port); err != nil {
-			return "", "", errUnsafeMCPURL
-		}
+
+	hostname = parsed.Hostname()
+	if hostname == "" || strings.Contains(hostname, "%") {
+		return "", "", fmt.Errorf("URL is missing a host.")
 	}
-	answers, err := lookup(ctx, host)
+
+	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	addrs, err := LookupHost(lookupCtx, hostname)
 	if err != nil {
-		if ctx.Err() != nil {
-			return "", "", ctx.Err()
-		}
-		return "", "", errUnsafeMCPURL
+		return "", "", fmt.Errorf("could not resolve hostname: %w", err)
 	}
-	if len(answers) == 0 {
-		return "", "", errUnsafeMCPURL
+	if len(addrs) == 0 {
+		return "", "", fmt.Errorf("Hostname '%s' resolved to no addresses.", hostname)
 	}
-	first := ""
-	for _, answer := range answers {
-		ip, err := netip.ParseAddr(answer)
-		if err != nil || !isPublicMCPAddress(ip) {
-			return "", "", errUnsafeMCPURL
+
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			return "", "", fmt.Errorf("Could not parse resolved address '%s' for hostname '%s'.", addr, hostname)
 		}
-		if first == "" {
-			first = ip.Unmap().String()
+		if !isGlobalIP(effectiveIP(ip)) {
+			return "", "", fmt.Errorf("URL resolves to a non-public address (%s), which is not allowed.", ip.String())
+		}
+		if resolvedIP == "" {
+			resolvedIP = ip.String()
 		}
 	}
-	return host, first, nil
+	return hostname, resolvedIP, nil
 }
 
-func isPublicMCPAddress(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	if !ip.IsValid() || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+func schemeAllowed(scheme string) bool {
+	for _, s := range AllowedURLSchemes {
+		if s == scheme {
+			return true
+		}
+	}
+	return false
+}
+
+// effectiveIP unwraps IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1) so
+// the routability check sees the IPv4 form. Without this, an attacker could
+// bypass the guard with an IPv4-mapped IPv6 representation of a private host.
+func effectiveIP(ip net.IP) net.IP {
+	if v4 := ip.To4(); v4 != nil {
+		return v4
+	}
+	return ip
+}
+
+// isGlobalIP mirrors Python's ipaddress.IPv*Address.is_global: an address is
+// global if it is none of {unspecified, loopback, multicast, link-local,
+// private (including CGNAT and IPv6 ULA), benchmarking, documentation,
+// reserved}.
+func isGlobalIP(ip net.IP) bool {
+	if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() || ip.IsPrivate() {
 		return false
 	}
-	// Special-purpose, documentation and transition ranges are not remote
-	// public services. In particular, IPv4-embedded IPv6 must not hide a pin.
-	blocks := []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4", "::/96", "64:ff9b::/96", "64:ff9b:1::/48", "100::/64", "2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20"}
-	for _, block := range blocks {
-		if netip.MustParsePrefix(block).Contains(ip) {
+	if v4 := ip.To4(); v4 != nil {
+		// CGNAT 100.64.0.0/10 — not flagged by IsPrivate in older Go versions.
+		if v4[0] == 100 && v4[1]&0xC0 == 64 {
+			return false
+		}
+		// 192.0.0.0/24 reserved for IETF protocol assignments.
+		if v4[0] == 192 && v4[1] == 0 && v4[2] == 0 {
+			return false
+		}
+		// 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 documentation (TEST-NET-1/2/3).
+		if v4[0] == 192 && v4[1] == 0 && v4[2] == 2 {
+			return false
+		}
+		if v4[0] == 198 && v4[1] == 51 && v4[2] == 100 {
+			return false
+		}
+		if v4[0] == 203 && v4[1] == 0 && v4[2] == 113 {
+			return false
+		}
+		// 198.18.0.0/15 benchmarking.
+		if v4[0] == 198 && (v4[1] == 18 || v4[1] == 19) {
+			return false
+		}
+		// 240.0.0.0/4 reserved (excluding 255.255.255.255 which IsUnspecified misses).
+		if v4[0] >= 240 {
+			return false
+		}
+	} else if v6 := ip.To16(); v6 != nil {
+		address, ok := netip.AddrFromSlice(v6)
+		if !ok {
+			return false
+		}
+		for _, prefix := range []string{"64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32", "3fff::/20"} {
+			if netip.MustParsePrefix(prefix).Contains(address) {
+				return false
+			}
+		}
+		// 2001:db8::/32 documentation prefix.
+		if v6[0] == 0x20 && v6[1] == 0x01 && v6[2] == 0x0d && v6[3] == 0xb8 {
+			return false
+		}
+		// 100::/64 discard-only address block.
+		if v6[0] == 0x01 && v6[1] == 0x00 && allZero(v6[2:8]) {
 			return false
 		}
 	}
-	return ip.Is4() || netip.MustParsePrefix("2000::/3").Contains(ip)
+	return true
 }
 
-// PinnedHTTPClient never falls back to system DNS, an environment proxy or an
-// unvalidated redirect destination. The caller owns CloseIdleConnections.
-func PinnedHTTPClient(hostname, resolvedIP string, timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{Timeout: timeout}
-	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(address)
-			if err != nil || !strings.EqualFold(host, hostname) || net.ParseIP(resolvedIP) == nil {
-				return nil, errUnsafeMCPURL
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(resolvedIP, port))
-		},
-		TLSHandshakeTimeout: timeout, ResponseHeaderTimeout: timeout,
-		MaxResponseHeaderBytes: 32 << 10, DisableCompression: true,
+func allZero(b []byte) bool {
+	for _, x := range b {
+		if x != 0 {
+			return false
+		}
 	}
-	return &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("MCP redirects are not allowed.") }}
+	return true
+}
+
+// PinnedHTTPClient returns an HTTP client whose Transport rewrites every
+// outbound dial for hostname:port to resolvedIP:port, closing the TOCTOU
+// window between AssertURLSafe and the actual TCP connection. Pins are
+// scoped to this client only.
+func PinnedHTTPClient(hostname, resolvedIP string, timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   timeout,
+		KeepAlive: 30 * time.Second,
+	}
+	transport := &http.Transport{
+		// Disable environment proxy: HTTP_PROXY / HTTPS_PROXY would route
+		// the connection through the proxy host instead of the pinned
+		// resolvedIP, bypassing the SSRF guard.
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, splitErr := net.SplitHostPort(addr)
+			if splitErr == nil && host == hostname && resolvedIP != "" {
+				return dialer.DialContext(ctx, network, net.JoinHostPort(resolvedIP, port))
+			}
+			return nil, errors.New("unvalidated HTTP destination")
+		},
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     false,
+	}
+	return &http.Client{
+		Transport:     transport,
+		Timeout:       timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("HTTP redirects are not allowed") },
+	}
 }

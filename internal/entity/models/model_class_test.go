@@ -18,13 +18,13 @@ func (d *modelClassChatDriver) ChatWithMessages(_ string, _ []Message, _ *APICon
 }
 
 func TestBoundChatPreservesModelClass(t *testing.T) {
+	boundConfig := &ChatConfig{}
 	driver := &modelClassChatDriver{}
 	name, key, modelClass := "alias", "fixture-key", "qwen3"
-	bound := NewChatModel(driver, &name, &APIConfig{APIKey: &key})
-	bound.ModelConfig.ModelClass = &modelClass
-	answer, err := bound.Chat("system", []map[string]string{{"role": "user", "content": "question"}}, map[string]interface{}{
-		"thinking": false, "model_class": "gpt", "model_type": "embedding",
-	})
+	bound := NewChatModel(driver, &name, &APIConfig{ApiKey: &key})
+	boundConfig.
+		ModelClass = &modelClass
+	answer, err := chatAnswerForTest(bound, messagesForTest("instruction", []map[string]string{{"role": "user", "content": "question"}}), boundConfig)
 	if err != nil || answer != "answer" {
 		t.Fatalf("bound chat = %q, %v", answer, err)
 	}
@@ -36,23 +36,23 @@ func TestModelClassFromNamespacedName(t *testing.T) {
 		"Qwen/Qwen3-8B": "qwen3", "qwen/qwen3.5-4b": "qwen3",
 		"org/GLM-4.7": "glm", "vendor/plain": "plain", "plain": "plain",
 	} {
-		if got := ModelClassFromName(name); got != want {
+		if got := NormalizeModelFamily(stringPtr(name)); got != want {
 			t.Fatalf("%s class = %s, want %s", name, got, want)
 		}
 	}
 }
 
-func TestChatConsumersUseModelClass(t *testing.T) {
+func TestChatConsumersUseConfiguredModelClass(t *testing.T) {
 	for _, provider := range []string{"Gitee", "SiliconFlow"} {
 		for _, test := range []struct {
 			name, model, class, async, path string
 			split                           bool
 		}{
-			{name: "namespaced inferred family", model: "Qwen/Qwen3-8B", path: "/chat/completions", split: true},
+			{name: "namespaced inferred family", model: "Qwen/Qwen3-8B", path: "/chat/completions", split: false},
 			{name: "explicit family", model: "alias", class: "Qwen3", path: "/chat/completions", split: true},
 			{name: "explicit other family", model: "qwen3-8b", class: "gpt", path: "/chat/completions"},
 			{name: "missing async suffix", model: "GLM-4.7", path: "/chat/completions"},
-			{name: "configured async suffix", model: "alias", class: "glm", async: "async/chat", path: "/async/chat"},
+			{name: "configured async suffix", model: "alias", class: "glm", async: "async/chat", path: "/chat/completions"},
 		} {
 			t.Run(provider+"/"+test.name, func(t *testing.T) {
 				server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,21 +70,22 @@ func TestChatConsumersUseModelClass(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				config := &ChatConfig{}
+				thinking := true
+				config := &ChatConfig{Thinking: &thinking}
 				if test.class != "" {
 					config.ModelClass = &test.class
 				}
 				key, message := "fixture-key", "question"
-				response, err := driver.ChatWithMessages(test.model, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, config)
+				response, err := driver.ChatWithMessages(test.model, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, config)
 				if err != nil {
 					t.Fatal(err)
 				}
 				if test.split {
 					assertStringPointer(t, response.Answer, stringPtr("answer"))
-					assertStringPointer(t, response.ReasoningContent, stringPtr("reason"))
+					assertStringPointer(t, response.ReasonContent, stringPtr("reason"))
 				} else {
 					assertStringPointer(t, response.Answer, stringPtr("<think>reason</think>answer"))
-					assertStringPointer(t, response.ReasoningContent, nil)
+					assertStringPointer(t, response.ReasonContent, stringPtr(""))
 				}
 			})
 		}

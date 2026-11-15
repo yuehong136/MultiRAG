@@ -32,7 +32,7 @@ type Operator interface {
 type ChunkData struct {
 	Content  string                 `json:"content"`
 	Size     int                    `json:"size"`
-	Index    int                    `json:"index"`
+	Index    int                    `json:"index,omitempty"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 

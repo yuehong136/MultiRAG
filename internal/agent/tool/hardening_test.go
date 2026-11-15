@@ -95,7 +95,7 @@ func TestEmailCancelsGreeting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err = NewEmailTool().WithResolver(toolTestResolver).InvokableRun(ctx, string(args))
+	_, err = NewEmailTool().InvokableRun(ctx, string(args))
 	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
 		t.Fatalf("SMTP did not cancel: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestEmailRejectsHeaderInjection(t *testing.T) {
 func TestResolveCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, _, err := ResolveAndValidateContext(ctx, "https://example.invalid")
+	_, _, err := ResolveAndValidate(ctx, "https://example.invalid")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
@@ -142,5 +142,37 @@ func TestExeSQLRegistryRejectsInvalidNumericConfig(t *testing.T) {
 		if err == nil {
 			t.Errorf("accepted port %v", value)
 		}
+	}
+}
+
+func TestResolveCancelsActiveDNS(t *testing.T) {
+	previous := net.DefaultResolver
+	started := make(chan struct{}, 1)
+	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	t.Cleanup(func() { net.DefaultResolver = previous })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { _, _, err := ResolveAndValidate(ctx, "https://blocked.fixture.invalid"); result <- err }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("DNS did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DNS ignored cancellation")
 	}
 }

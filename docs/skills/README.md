@@ -1,24 +1,22 @@
-# 技能资产库与兼容核心
+# Python 技能资产库与核心
 
 独立管理 SKILL.md、目录与版本，提供上传、下载、索引和检索。Web 入口为 `/skills`。
 上传内容不会被执行，也不会自动装入 Agent。生产 Python 不依赖 Go 服务。
 
-Python、Go 是各自管理数据的可替换后端。两者分别使用独立数据库（包括 File、租户和
-模型绑定）、对象前缀与索引命名空间。不能将两个服务指向同一业务库再轮流写入。
-迁移通过显式导出原始包、在目标导入并重新绑定模型和重建索引；当前没有全空间自动迁移工具。
-
+本页描述生产 Python 的空间、Files 与版本合同。Go 按自己的原 service、handler、
+MySQL 和 `/api/v1/skills` 路线实现，见[Go Skills](GO_CORE.md)。两者使用独立数据库、
+对象和索引；迁移通过显式导出导入、模型重新绑定和索引重建。
 ## 选择协议
 
 | 能力 | 固定 API | CLI | 合同 |
 |---|---|---|---|
-| Python/Go 核心：空间、Files 目录、最高版本、同步索引与搜索 | `/api/v1/skill-core` | `skill-core`、`ls/search/cat skills/...`、`install-skill` | [核心合同](CORE_CONTRACT.md) |
+| Python 核心：空间、Files 目录、最高版本、同步索引与搜索 | `/api/v1/skill-core` | `skill-core`、`ls/search/cat skills/...`、`install-skill` | [核心合同](CORE_CONTRACT.md) |
 | Python 资产增强：不可变版本、活动发布、持久任务、严格 rerank | `/api/v1/skill-assets` | `skills` | [资产合同](CONTRACT.md) |
 
 `SKILLS_API_PROTOCOL` 选择 `/api/v1/skills` 的部署别名，允许 `multirag-assets-v1`（默认）
 或 `ragflow-skills-v1`。固定 namespace 不随别名改变；非法配置拒绝启动。
 Web 使用 `VITE_SKILLS_API_PROTOCOL` 明确选择协议。消费者不能根据返回 payload 猜测协议。
-通过 `GET /api/v1/skill-protocols` 和协议能力接口确认可用能力，Go 运行边界见
-[Go 核心](GO_CORE.md)。Go 核心模式中的旧资产协议仅供读取和排空已有任务。
+通过 `GET /api/v1/skill-protocols` 和协议能力接口确认 Python 的可用能力。
 
 所有核心配置、索引与检索请求必须显式指定已创建、已授权的 `space_id`。
 没有隐式 default 空间。模型 ID 使用十进制字符串，禁止转换为 JavaScript number。
@@ -26,7 +24,7 @@ Web 使用 `VITE_SKILLS_API_PROTOCOL` 明确选择协议。消费者不能根据
 ## 运行与操作
 
 1. Python 通过现有 Alembic 流程应用资产迁移 `c5e7f9a1b3d5` 和核心迁移
-   `d6f8a0b2c4e6` 及各自前置迁移。Go 在自己的数据库管理两张 Go 核心私表。
+   `d6f8a0b2c4e6` 及各自前置迁移。
    开发测试不会自动迁移业务库或切换部署协议。
 2. 启动所选后端；Python 正常启动 FastAPI 会启动所需恢复 worker。
    核对数据库、MinIO 和 Milvus 能力后，由 Web/CLI 创建实际空间。
@@ -43,7 +41,7 @@ Web 使用 `VITE_SKILLS_API_PROTOCOL` 明确选择协议。消费者不能根据
 
 核心保存 rerank 配置但不执行，Python 资产扩展提供真正的 rerank 能力。当前已实现的
 组合为 PostgreSQL、MinIO、Milvus；其他引擎不能宣称支持。外部模型需部署环境单独验收。
-CLI 完整参数见 [CLI 用法](../../internal/cli/README.md#skills-core)。
+Go CLI 使用自己的[原命令](../../internal/cli/README.md)。
 
 ## Python 只读 MCP 分发
 
@@ -56,12 +54,10 @@ CLI 完整参数见 [CLI 用法](../../internal/cli/README.md#skills-core)。
 ```sh
 make verify
 make integration INTEGRATION_WORKERS=0 TESTS='tests/integration/test_skill_core.py tests/integration/test_skill_core_state.py tests/integration/test_skill_assets.py tests/integration/test_skill_search_store.py tests/integration/test_skill_http.py tests/integration/test_mcp_skill_distribution.py tests/integration/test_file_batch_delete.py tests/integration/test_db_bootstrap.py'
-make integration INTEGRATION_WORKERS=0 TESTS=tests/integration/skill_core_go_acceptance.py
 make mcp-compat
 make smoke
 ```
 
-Go 验收需要符合 go.mod 的工具链，可设置 `MULTIRAG_TEST_GO` 为其绝对路径。
 集成仅使用隔离资源，模型请求使用本地 HTTP 替身，不等于外部付费模型或生产验收。
 浏览器 fixture 为 `tests/integration/skill_ui_server.py`，需显式启动和指定新的私有
 `SKILL_UI_HANDOFF_PATH`；该文件含临时身份，不得归档。验收后写同路径 `.done` 清理。

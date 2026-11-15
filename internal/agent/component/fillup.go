@@ -18,7 +18,8 @@
 //
 // Fillup is the lighter sibling of UserFillUp: it does NOT render a
 // `tips` template. It only passes the form's input map through to its
-// outputs; file inputs explicitly fail until FileService integration exists. The Python codebase has no separate
+// outputs (file inputs are still stubbed because FileService integration
+// is Phase 5 per plan §2.11.10). The Python codebase has no separate
 // Fillup class — per plan §2.11.3 row 3, this component is the Go
 // port's normalized, tips-less variant of UserFillUp so the DSL can
 // spawn it without paying for the unused template path.
@@ -77,8 +78,9 @@ func NewFillupComponent(p fillupParam) *FillupComponent {
 // Name returns the registered component name.
 func (f *FillupComponent) Name() string { return f.name }
 
-// Invoke emits scalar form values and rejects file-typed fields.
-// No tips key is added.
+// Invoke emits one output per form field, with file-typed fields
+// stubbed as "<file:key>". No "tips" key is added — that is the
+// defining difference from UserFillUp.
 func (f *FillupComponent) Invoke(ctx context.Context, inputs map[string]any) (map[string]any, error) {
 	// State is required by the engine contract; we don't read from it
 	// here, but we still extract it to fail loudly if the engine forgot
@@ -87,17 +89,12 @@ func (f *FillupComponent) Invoke(ctx context.Context, inputs map[string]any) (ma
 		return nil, fmt.Errorf("Fillup: %w", err)
 	}
 
-	fields, present := formFields(inputs)
-	if !present {
-		return nil, fmt.Errorf("Fillup: invoke through canvas interrupt/resume: %w", ErrNotImplemented)
-	}
-	for _, raw := range fields {
-		if field, ok := raw.(map[string]any); ok && isFileType(field) {
-			return nil, fmt.Errorf("Fillup file input: %w", ErrNotImplemented)
-		}
-	}
+	fields, _ := formFields(inputs)
 	out := make(map[string]any, len(fields))
 	for k, v := range fields {
+		if field, ok := v.(map[string]any); ok && isFileType(field) {
+			return nil, fmt.Errorf("Fillup: file inputs: %w", ErrNotImplemented)
+		}
 		out[k] = resolveFieldValue(k, v)
 	}
 	return out, nil
@@ -129,7 +126,7 @@ func (f *FillupComponent) Inputs() map[string]string {
 // the UserFillUp contract; no "tips" key is ever emitted.
 func (f *FillupComponent) Outputs() map[string]string {
 	return map[string]string{
-		"*": "One output per scalar form-field key; file inputs are unavailable.",
+		"*": "One output per form-field key in inputs (file inputs are stubbed as \"<file:key>\").",
 	}
 }
 

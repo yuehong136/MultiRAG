@@ -18,12 +18,12 @@ package handler
 
 import (
 	"net/http"
+	"multirag/internal/dao"
+	"multirag/internal/entity"
+
+	"multirag/internal/service"
 
 	"github.com/gin-gonic/gin"
-
-	"multirag/internal/common"
-	"multirag/internal/dao"
-	"multirag/internal/service"
 )
 
 // ListTokens list all API tokens for the current user's tenant
@@ -36,29 +36,50 @@ import (
 // @Success 200 {object} map[string]interface{}
 // @Router /api/v1/system/tokens [get]
 func (h *SystemHandler) ListTokens(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+	// Get current user from context
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "Unauthorized",
+		})
+		return
+	}
+
+	userModel, ok := user.(*entity.User)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "Invalid user data",
+		})
 		return
 	}
 
 	// Get user's tenant with owner role
 	userTenantDAO := dao.NewUserTenantDAO()
-	tenants, err := userTenantDAO.GetByUserIDAndRole(user.ID, "owner")
+	tenants, err := userTenantDAO.GetByUserIDAndRole(userModel.ID, "owner")
 	if err != nil || len(tenants) == 0 {
-		jsonError(c, common.CodeDataError, "Tenant not found")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "Tenant not found",
+		})
 		return
 	}
+
 	tenantID := tenants[0].TenantID
 
+	// Get tokens for the tenant
 	tokens, err := h.systemService.ListAPITokens(tenantID)
 	if err != nil {
-		jsonError(c, common.CodeServerError, "Failed to list tokens")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "Failed to list tokens",
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code":    common.CodeSuccess,
+		"code":    0,
 		"message": "success",
 		"data":    tokens,
 	})
@@ -75,33 +96,60 @@ func (h *SystemHandler) ListTokens(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/v1/system/tokens [post]
 func (h *SystemHandler) CreateToken(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+	// Get current user from context
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "Unauthorized",
+		})
+		return
+	}
+
+	userModel, ok := user.(*entity.User)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "Invalid user data",
+		})
 		return
 	}
 
 	// Get user's tenant with owner role
 	userTenantDAO := dao.NewUserTenantDAO()
-	tenants, err := userTenantDAO.GetByUserIDAndRole(user.ID, "owner")
+	tenants, err := userTenantDAO.GetByUserIDAndRole(userModel.ID, "owner")
 	if err != nil || len(tenants) == 0 {
-		jsonError(c, common.CodeDataError, "Tenant not found")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "Tenant not found",
+		})
 		return
 	}
+
 	tenantID := tenants[0].TenantID
 
-	// Parse request (name is optional, kept for API compatibility)
+	// Parse request
 	var req service.CreateAPITokenRequest
-	_ = c.ShouldBind(&req)
+	if err := c.ShouldBind(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "Invalid request",
+		})
+		return
+	}
 
+	// Create token
 	token, err := h.systemService.CreateAPIToken(tenantID, &req)
 	if err != nil {
-		jsonError(c, common.CodeServerError, "Failed to create token")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "Failed to create token",
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code":    common.CodeSuccess,
+		"code":    0,
 		"message": "success",
 		"data":    token,
 	})
@@ -118,35 +166,59 @@ func (h *SystemHandler) CreateToken(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/v1/system/tokens/{token} [delete]
 func (h *SystemHandler) DeleteToken(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+	// Get current user from context
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "Unauthorized",
+		})
+		return
+	}
+
+	userModel, ok := user.(*entity.User)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "Invalid user data",
+		})
 		return
 	}
 
 	// Get user's tenant with owner role
 	userTenantDAO := dao.NewUserTenantDAO()
-	tenants, err := userTenantDAO.GetByUserIDAndRole(user.ID, "owner")
+	tenants, err := userTenantDAO.GetByUserIDAndRole(userModel.ID, "owner")
 	if err != nil || len(tenants) == 0 {
-		jsonError(c, common.CodeDataError, "Tenant not found")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "Tenant not found",
+		})
 		return
 	}
+
 	tenantID := tenants[0].TenantID
 
 	// Get token from path parameter
 	token := c.Param("token")
 	if token == "" {
-		jsonError(c, common.CodeArgumentError, "Token is required")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "Token is required",
+		})
 		return
 	}
 
+	// Delete token
 	if err := h.systemService.DeleteAPIToken(tenantID, token); err != nil {
-		jsonError(c, common.CodeServerError, "Failed to delete token")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "Failed to delete token",
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code":    common.CodeSuccess,
+		"code":    0,
 		"message": "success",
 		"data":    true,
 	})

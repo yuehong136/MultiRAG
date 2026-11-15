@@ -1,255 +1,268 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
-	"multirag/internal/entity"
-	"multirag/internal/entity/models"
+	"multirag/internal/common"
+	modelModule "multirag/internal/entity/models"
+
+	"go.uber.org/zap"
 )
 
-const DefaultAskTokenBudget = 4096
+// Defaults for the Ask pipeline — match Python bot_api.py.
+const (
+	DefaultAskPage                   = 1
+	DefaultAskPageSize               = 12
+	DefaultAskTopK                   = 1024
+	DefaultAskSimilarityThreshold    = 0.1
+	DefaultAskVectorSimilarityWeight = 0.3
+	DefaultAskTokenBudget            = 4096
+	DefaultAskStreamMinTokens        = 16
+)
 
-var ErrNoVisibleAnswer = errors.New("model returned no visible answer")
+// AskDeltaKind classifies a streaming event emitted by AskService.
+type AskDeltaKind int
 
-// AskRequest is distinct from retrieval_test's established kb_id contract.
-type AskRequest struct {
-	Question string   `json:"question"`
-	KBIDs    []string `json:"kb_ids"`
-	SearchID string   `json:"search_id,omitempty"`
+const (
+	AskDeltaAnswer AskDeltaKind = iota // visible answer text delta
+	AskDeltaMarker                     // <think> or </think> boundary
+	AskDeltaError                      // non-fatal error message / early stop
+	AskDeltaFinal                      // final event with references
+)
+
+// AskDelta is a single streaming event from AskService.Stream.
+type AskDelta struct {
+	Kind  AskDeltaKind
+	Value string
+	Refs  interface{} // populated on AskDeltaFinal: {chunks, doc_aggs}
 }
 
-// AnswerFrame is a cumulative visible answer with a separate reasoning channel.
-// References always describe markers in Answer; the final frame is authoritative.
-type AnswerFrame struct {
-	Answer           string                 `json:"answer"`
-	ReasoningContent string                 `json:"reasoning_content,omitempty"`
-	Reference        map[string]interface{} `json:"reference"`
-	Final            bool                   `json:"final"`
+// Retriever abstracts chunk retrieval for AskService.
+type Retriever interface {
+	RetrievalTest(req *RetrievalTestRequest, userID string) (*RetrievalTestResponse, error)
 }
 
-type answerRetrievalOptions struct {
-	chatTenantID   string
-	chatID         any
-	rerankTenantID string
-	search         *entity.Search
-	config         map[string]interface{}
+// StreamingLLM abstracts streaming chat for AskService.
+type StreamingLLM interface {
+	ChatStream(ctx context.Context, messages []modelModule.Message, config *modelModule.ChatConfig) (<-chan AskDelta, error)
 }
 
+// AskService performs retrieval-augmented Q&A with streaming output.
+// Embedder may be nil; if nil, citation insertion is skipped.
 type AskService struct {
-	chunks *ChunkService
-	models *ModelProviderService
+	retriever       Retriever
+	embedder        Embedder
+	tokenBudget     int
+	minStreamTokens int
 }
 
-func NewAskService(chunks *ChunkService, provider *ModelProviderService) *AskService {
-	return &AskService{chunks: chunks, models: provider}
+// NewAskService creates an AskService.
+func NewAskService(retriever Retriever, embedder Embedder, tokenBudget, minStreamTokens int) *AskService {
+	if tokenBudget <= 0 {
+		tokenBudget = DefaultAskTokenBudget
+	}
+	if minStreamTokens <= 0 {
+		minStreamTokens = DefaultAskStreamMinTokens
+	}
+	return &AskService{
+		retriever:       retriever,
+		embedder:        embedder,
+		tokenBudget:     tokenBudget,
+		minStreamTokens: minStreamTokens,
+	}
 }
 
-func ValidateAskRequest(req *AskRequest) error {
-	if req == nil || strings.TrimSpace(req.Question) == "" || len(req.Question) > 100000 || req.SearchID != strings.TrimSpace(req.SearchID) || len(req.SearchID) > 128 || len(req.KBIDs) == 0 || len(req.KBIDs) > 100 {
-		return ErrRetrievalArgument
-	}
-	for _, id := range req.KBIDs {
-		if !exactVectorID(id) || len(id) > 128 {
-			return ErrRetrievalArgument
-		}
-	}
-	return nil
+// Stream runs the full ask pipeline.  llm must not be nil.  The returned
+// channel is closed when the pipeline completes or ctx is cancelled.
+func (s *AskService) Stream(ctx context.Context, llm StreamingLLM, userID, question string, kbIDs []string) <-chan AskDelta {
+	out := make(chan AskDelta, 32)
+	go func() {
+		defer close(out)
+		s.run(ctx, llm, userID, question, kbIDs, out)
+	}()
+	return out
 }
 
-// Stream authorizes every SQL resource before retrieval and binds the selected
-// owner's chat/embedding models without falling back after lookup errors.
-func (s *AskService) Stream(ctx context.Context, actor string, req *AskRequest, sender func(AnswerFrame) error) error {
-	if ctx == nil || !exactVectorID(actor) {
-		return ErrSearchbotAccessDenied
+func (s *AskService) run(ctx context.Context, llm StreamingLLM, userID, question string, kbIDs []string, out chan<- AskDelta) {
+	// Phase 1: Retrieval.
+	req := &RetrievalTestRequest{
+		Datasets:               common.StringSlice(kbIDs),
+		Question:               question,
+		TopK:                   ptrInt(DefaultAskTopK),
+		SimilarityThreshold:    ptrFloat64(DefaultAskSimilarityThreshold),
+		VectorSimilarityWeight: ptrFloat64(DefaultAskVectorSimilarityWeight),
 	}
-	if err := ValidateAskRequest(req); err != nil {
-		return err
-	}
-	if sender == nil || s == nil || s.chunks == nil || s.models == nil {
-		return fmt.Errorf("ask service unavailable")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	owner := actor
-	config := map[string]interface{}{}
-	options := &answerRetrievalOptions{chatTenantID: owner, chatID: ""}
-	page, size, top, threshold, weight := 1, 12, 1024, 0.1, 0.3
-	retrieval := &RetrievalTestRequest{DatasetIDs: append([]string{}, req.KBIDs...), Question: req.Question, Page: &page, Size: &size, TopK: &top, SimilarityThreshold: &threshold, VectorSimilarityWeight: &weight, answer: options}
-	if req.SearchID != "" {
-		search, saved, err := readableRetrievalConfig(ctx, actor, req.SearchID)
-		if err != nil {
-			return err
-		}
-		owner, config = search.TenantID, saved
-		options.chatTenantID, options.search, options.config = owner, search, saved
-		if ids, exists := saved["kb_ids"]; exists {
-			data, err := json.Marshal(ids)
-			if err != nil || string(data) == "null" {
-				return ErrRetrievalArgument
-			}
-			if err := json.Unmarshal(data, &retrieval.DatasetIDs); err != nil || len(retrieval.DatasetIDs) == 0 {
-				return ErrRetrievalArgument
-			}
-		}
-		retrieval.SearchID = &req.SearchID
-	}
-	if selector, exists := config["chat_id"]; exists && selector == nil {
-		return ErrSearchbotArgument
-	}
-	selector, err := searchbotSelector(config["chat_id"])
+	page := DefaultAskPage
+	ps := DefaultAskPageSize
+	req.Page = &page
+	req.Size = &ps
+
+	result, err := s.retriever.RetrievalTest(req, userID)
 	if err != nil {
-		return err
+		common.Warn("AskService retrieval failed", zap.Error(err))
+		s.sendOrCancel(out, AskDelta{Kind: AskDeltaError, Value: "retrieval failed"}, ctx)
+		return
 	}
-	options.chatID = selector
-	settings, err := searchbotGeneration(entity.JSONMap(config))
-	if err != nil {
-		return err
+	if result == nil || len(result.Chunks) == 0 {
+		s.sendOrCancel(out, AskDelta{Kind: AskDeltaError, Value: "Sorry, no relevant information provided."}, ctx)
+		return
 	}
-	// Summary generation never needs provider reasoning; inline think tags are
-	// still parsed because providers may ignore this explicit configuration.
-	settings["thinking"] = false
-	enabled := true
-	result, err := s.chunks.RetrievalTest(ctx, retrieval, actor)
-	if err != nil {
-		return err
-	}
-	if result == nil {
-		return fmt.Errorf("retrieval returned no result")
-	}
-	chunks, err := NewSourcedChunks(result.Chunks)
-	if err != nil {
-		return err
-	}
+
+	chunks := NewSourcedChunks(result.Chunks)
+
+	// Phase 2: Build system prompt.
+	knowledge := KbPrompt(chunks, s.tokenBudget)
 	prompt, err := LoadPrompt("ask_summary")
 	if err != nil {
-		return err
+		common.Warn("AskService failed to load prompt", zap.Error(err))
+		s.sendOrCancel(out, AskDelta{Kind: AskDeltaError, Value: "prompt configuration error"}, ctx)
+		return
 	}
-	base := RenderPrompt(prompt, map[string]interface{}{"knowledge": ""})
-	budget, err := answerKnowledgeBudget(DefaultAskTokenBudget, []models.Message{{Role: "system", Content: base}, {Role: "user", Content: req.Question}})
+	sysPrompt := RenderPrompt(prompt, map[string]interface{}{"knowledge": knowledge})
+
+	messages := []modelModule.Message{
+		{Role: "system", Content: sysPrompt},
+		{Role: "user", Content: question},
+	}
+	genConf := &modelModule.ChatConfig{Temperature: ptrFloat64(0.1)}
+
+	ch, err := llm.ChatStream(ctx, messages, genConf)
 	if err != nil {
-		return err
+		common.Warn("AskService LLM stream failed", zap.Error(err))
+		s.sendOrCancel(out, AskDelta{Kind: AskDeltaError, Value: "LLM call failed"}, ctx)
+		return
 	}
-	knowledge, selected, err := BuildKnowledgePrompt(chunks, budget)
-	if err != nil {
-		return err
+
+	// Keep think-tag processing on text, while preserving an explicit producer error.
+	text := make(chan string)
+	streamResult := make(chan error, 1)
+	go func() {
+		var streamErr error
+		defer func() { streamResult <- streamErr; close(text) }()
+		for {
+			select {
+			case <-ctx.Done():
+				streamErr = ctx.Err()
+				return
+			case delta, ok := <-ch:
+				if !ok {
+					return
+				}
+				if delta.Kind != AskDeltaAnswer {
+					streamErr = errors.New("LLM stream failed")
+					return
+				}
+				if delta.Value == "[DONE]" {
+					continue
+				}
+				select {
+				case text <- delta.Value:
+				case <-ctx.Done():
+					streamErr = ctx.Err()
+					return
+				}
+			}
+		}
+	}()
+	var fullAnswer string
+	for delta := range StreamThinkTagDelta(ctx, text, s.minStreamTokens) {
+		switch delta.Kind {
+		case ThinkDeltaMarker:
+			s.sendOrCancel(out, AskDelta{Kind: AskDeltaMarker, Value: delta.Value}, ctx)
+		case ThinkDeltaText:
+			fullAnswer += delta.Value
+			s.sendOrCancel(out, AskDelta{Kind: AskDeltaAnswer, Value: delta.Value}, ctx)
+		}
 	}
-	if len(selected) == 0 {
-		return sendAnswerFrame(ctx, sender, AnswerFrame{Answer: "Sorry, no relevant information provided.", Reference: answerReference(nil), Final: true})
+	if err := <-streamResult; err != nil || ctx.Err() != nil {
+		s.sendOrCancel(out, AskDelta{Kind: AskDeltaError, Value: "LLM stream failed"}, ctx)
+		return
 	}
-	model, err := NewSearchbotService(s.models).chatModel(ctx, owner, selector)
-	if err != nil {
-		return err
+	if strings.TrimSpace(ExtractVisibleAnswer(fullAnswer)) == "" {
+		s.sendOrCancel(out, AskDelta{Kind: AskDeltaError, Value: "LLM returned no answer"}, ctx)
+		return
 	}
-	history := []models.Message{{Role: "system", Content: RenderPrompt(prompt, map[string]interface{}{"knowledge": knowledge})}, {Role: "user", Content: req.Question}}
-	emit := func(frame AnswerFrame) error {
-		return sender(withoutNoAnswerCitations(frame, "Sorry, no relevant information provided."))
+
+	// Phase 4: Finalize — citation insertion + reference formatting.
+	visible := ExtractVisibleAnswer(fullAnswer)
+	chunkRefs := ChunksFormat(chunks)
+
+	// Attempt citation insertion if embedder is available.
+	chunkVectors := ExtractChunkVectors(result.Chunks)
+	if len(chunkVectors) > 0 && s.embedder != nil {
+		if decorated, cited := InsertCitations(visible, chunks, s.embedder, chunkVectors); len(cited) > 0 {
+			visible = decorated
+		}
 	}
-	answer, reasoning, err := streamVisibleAnswer(ctx, model, history, settings, selected, enabled, emit)
-	if err != nil {
-		return err
+
+	refs := map[string]interface{}{
+		"chunks":   chunkRefs,
+		"doc_aggs": result.DocAggs,
 	}
-	if isNoAnswer(answer, "Sorry, no relevant information provided.") {
-		enabled = false
-	}
-	answer, refs, err := s.chunks.finalizeCitations(ctx, actor, answer, selected, result, enabled)
-	if err != nil {
-		return err
-	}
-	return sendAnswerFrame(ctx, sender, AnswerFrame{Answer: answer, ReasoningContent: reasoning, Reference: refs, Final: true})
+	s.sendOrCancel(out, AskDelta{Kind: AskDeltaFinal, Value: visible, Refs: refs}, ctx)
 }
 
-func answerCitationSetting(config map[string]interface{}, key string, fallback bool) (bool, error) {
-	value, exists := config[key]
-	if !exists {
-		return fallback, nil
+func (s *AskService) sendOrCancel(out chan<- AskDelta, d AskDelta, ctx context.Context) {
+	select {
+	case out <- d:
+	case <-ctx.Done():
 	}
-	enabled, ok := value.(bool)
-	if !ok {
-		return false, ErrRetrievalArgument
-	}
-	return enabled, nil
 }
 
-func answerKnowledgeBudget(total int, history []models.Message) (int, error) {
-	data, err := json.Marshal(history)
-	if err != nil {
-		return 0, err
+// ExtractChunkVectors extracts float64 vectors from retrieval result chunks.
+// Returns nil for chunks that have no, empty, or all-zero vectors.
+func ExtractChunkVectors(chunks []map[string]interface{}) [][]float64 {
+	if len(chunks) == 0 {
+		return nil
 	}
-	used, err := NumTokensFromString(string(data))
-	if err != nil {
-		return 0, err
+	out := make([][]float64, 0, len(chunks))
+	for _, ck := range chunks {
+		v := toFloat64Slice(ck["vector"])
+		if len(v) == 0 || common.IsZeroVector(v) {
+			out = append(out, nil)
+		} else {
+			out = append(out, v)
+		}
 	}
-	return max(0, total-used), nil
+	return out
 }
 
-func sendAnswerFrame(ctx context.Context, sender func(AnswerFrame) error, frame AnswerFrame) error {
-	if err := ctx.Err(); err != nil {
-		return err
+func toFloat64Slice(v interface{}) []float64 {
+	switch val := v.(type) {
+	case []float64:
+		out := make([]float64, len(val))
+		copy(out, val)
+		return out
+	case []interface{}:
+		out := make([]float64, len(val))
+		for i, x := range val {
+			if f, ok := x.(float64); ok {
+				out[i] = f
+			}
+		}
+		return out
+	default:
+		return nil
 	}
-	if err := sender(frame); err != nil {
-		return err
-	}
-	return ctx.Err()
 }
 
-func streamVisibleAnswer(ctx context.Context, model *models.ChatModel, history []models.Message, settings map[string]interface{}, chunks []SourcedChunk, citations bool, sender func(AnswerFrame) error) (string, string, error) {
-	if model == nil || model.ModelDriver == nil || model.ModelName == nil {
-		return "", "", fmt.Errorf("chat model unavailable")
-	}
-	local, api := *model, models.APIConfig{}
-	if model.APIConfig != nil {
-		api = *model.APIConfig
-	}
-	child, cancel := context.WithCancel(ctx)
-	defer cancel()
-	api.Context, local.APIConfig = child, &api
-	var parser ThinkStreamState
-	var answer, reasoning strings.Builder
-	var firstError error
-	err := local.ChatStreamlyWithSender(history, settings, func(content, thought *string) error {
-		if firstError != nil {
-			return firstError
-		}
-		if err := child.Err(); err != nil {
-			firstError = err
-			return err
-		}
-		if content != nil && *content == "[DONE]" {
-			return nil
-		}
-		if thought != nil {
-			reasoning.WriteString(*thought)
-		}
-		if content != nil {
-			visible, private := parser.Feed(*content)
-			answer.WriteString(visible)
-			reasoning.WriteString(private)
-		}
-		visible, refs := cleanAnswerCitations(answer.String(), chunks, citations)
-		firstError = sendAnswerFrame(child, sender, AnswerFrame{Answer: visible, ReasoningContent: reasoning.String(), Reference: answerReference(refs)})
-		if firstError != nil {
-			cancel()
-		}
-		return firstError
-	})
-	parser.Finish()
-	if firstError != nil {
-		return "", "", firstError
-	}
-	if err != nil {
-		return "", "", err
-	}
-	if err := child.Err(); err != nil {
-		return "", "", err
-	}
-	visible, _ := cleanAnswerCitations(answer.String(), chunks, citations)
-	if strings.TrimSpace(visible) == "" {
-		return "", "", ErrNoVisibleAnswer
-	}
-	return visible, reasoning.String(), nil
-}
+func ptrInt(v int) *int             { return &v }
+func ptrFloat64(v float64) *float64 { return &v }

@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"strings"
 	"testing"
 )
 
 func TestZhipuAIChatUsesConfiguredRegionURL(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {
 			t.Errorf("request path = %q", r.URL.Path)
 		}
@@ -32,7 +32,7 @@ func TestZhipuAIChatUsesConfiguredRegionURL(t *testing.T) {
 	message := "hello"
 
 	response, err := model.ChatWithMessages(
-		modelName, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &apiKey, Region: &region},
+		modelName, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &apiKey, Region: &region},
 		&ChatConfig{},
 	)
 	if err != nil {
@@ -44,7 +44,7 @@ func TestZhipuAIChatUsesConfiguredRegionURL(t *testing.T) {
 }
 
 func TestZhipuAIChatReturnsThinkingContent(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("decode body: %v", err)
@@ -58,17 +58,17 @@ func TestZhipuAIChatReturnsThinkingContent(t *testing.T) {
 
 	apiKey, modelName, message, thinking := "key", "glm-test", "hello", true
 	model := NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
-	response, err := model.ChatWithMessages(modelName, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &apiKey}, &ChatConfig{Thinking: &thinking})
+	response, err := model.ChatWithMessages(modelName, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &apiKey}, &ChatConfig{Thinking: &thinking})
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
-	if response.Answer == nil || *response.Answer != "answer" || response.ReasoningContent == nil || *response.ReasoningContent != "reason" {
+	if response.Answer == nil || *response.Answer != "answer" || response.ReasonContent == nil || *response.ReasonContent != "reason" {
 		t.Fatalf("response = %#v", response)
 	}
 }
 
 func TestZhipuAIEmbeddingUsesConfiguredRegionURL(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/embeddings" {
 			t.Errorf("request path = %q", r.URL.Path)
 		}
@@ -91,7 +91,7 @@ func TestZhipuAIEmbeddingUsesConfiguredRegionURL(t *testing.T) {
 	embeddings, err := embeddingVectorsForTest(model.Embed(
 		&modelName,
 		[]string{"hello"},
-		&APIConfig{APIKey: &apiKey, Region: &region},
+		&APIConfig{ApiKey: &apiKey, Region: &region},
 		&EmbeddingConfig{},
 	))
 	if err != nil {
@@ -103,7 +103,7 @@ func TestZhipuAIEmbeddingUsesConfiguredRegionURL(t *testing.T) {
 }
 
 func TestZhipuAIStreamUsesConfiguredRegionURL(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {
 			t.Errorf("request path = %q", r.URL.Path)
 		}
@@ -133,7 +133,7 @@ func TestZhipuAIStreamUsesConfiguredRegionURL(t *testing.T) {
 	}
 
 	err := model.ChatStreamlyWithSender(
-		modelName, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &apiKey, Region: &region},
+		modelName, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &apiKey, Region: &region},
 		&ChatConfig{Stream: &stream},
 		sender,
 	)
@@ -156,16 +156,16 @@ func TestZhipuAIRejectsUnknownRegion(t *testing.T) {
 	message := "hello"
 
 	_, err := model.ChatWithMessages(
-		modelName, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &apiKey, Region: &region},
+		modelName, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &apiKey, Region: &region},
 		&ChatConfig{},
 	)
-	if err == nil || !strings.Contains(err.Error(), `region "missing"`) {
+	if err == nil || !strings.Contains(err.Error(), "no base URL configured") {
 		t.Fatalf("Chat() error = %v", err)
 	}
 }
 
 func TestZhipuAIStreamSendsReasoningBeforeContent(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\",\"reasoning_content\":\"reason\"},\"finish_reason\":\"stop\"}]}\n\n")
 	}))
@@ -173,7 +173,7 @@ func TestZhipuAIStreamSendsReasoningBeforeContent(t *testing.T) {
 	model := NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
 	key, name, message, stream := "test-key", "glm-test", "hello", true
 	var events []string
-	err := model.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, &ChatConfig{Stream: &stream}, func(content, reason *string) error {
+	err := model.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, &ChatConfig{Stream: &stream}, func(content, reason *string) error {
 		if reason != nil {
 			events = append(events, "r:"+*reason)
 		}

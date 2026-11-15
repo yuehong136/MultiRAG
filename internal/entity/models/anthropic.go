@@ -1,331 +1,550 @@
-// Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
-// Licensed under the Apache License, Version 2.0.
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package models
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
 const anthropicVersion = "2023-06-01"
 
-// AnthropicModel uses the native Messages API. Streaming and media operations
-// remain unavailable unless their optional capability is implemented.
+// AnthropicModel implements ModelDriver for Claude models through the
+// Anthropic Messages API.
 type AnthropicModel struct {
-	*DummyModel
-	httpClient *http.Client
+	baseModel BaseModel
 }
 
-func NewAnthropicModel(urls map[string]string, suffix URLSuffix) *AnthropicModel {
-	return &AnthropicModel{NewDummyModel(maps.Clone(urls), suffix), &http.Client{Transport: openAIChatTransport}}
+func NewAnthropicModel(baseURL map[string]string, urlSuffix URLSuffix) *AnthropicModel {
+	if baseURL != nil {
+		copied := make(map[string]string, len(baseURL))
+		for region, value := range baseURL {
+			copied[region] = value
+		}
+		baseURL = copied
+	}
+	return &AnthropicModel{
+		baseModel: BaseModel{
+			BaseURL:    baseURL,
+			URLSuffix:  urlSuffix,
+			httpClient: NewDriverHTTPClient(),
+		},
+	}
 }
 
-func (a *AnthropicModel) Name() string { return "anthropic" }
+func (a *AnthropicModel) NewInstance(baseURL map[string]string) ModelDriver {
+	return NewAnthropicModel(baseURL, a.baseModel.URLSuffix)
+}
 
-func (a *AnthropicModel) request(method, suffix string, api *APIConfig, body any) (*http.Response, error) {
-	if api == nil || api.APIKey == nil || strings.TrimSpace(*api.APIKey) == "" {
-		return nil, fmt.Errorf("anthropic: API key is required")
+func (a *AnthropicModel) Name() string {
+	return "anthropic"
+}
+
+func (a *AnthropicModel) region(apiConfig *APIConfig) string {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
+		return *apiConfig.Region
 	}
-	if suffix == "" {
-		return nil, fmt.Errorf("anthropic: endpoint suffix is missing")
+	return "default"
+}
+
+func (a *AnthropicModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	if chatModelConfig != nil && chatModelConfig.Stream != nil && *chatModelConfig.Stream {
+		return nil, fmt.Errorf("stream must be false in ChatWithMessages")
 	}
-	base, err := resolveModelBaseURL(a.BaseURL, api.Region)
+	if err := a.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(modelName) == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+	if chatModelConfig != nil {
+		if chatModelConfig.Thinking != nil && *chatModelConfig.Thinking {
+			return nil, fmt.Errorf("anthropic thinking configuration is not implemented")
+		}
+		if chatModelConfig.MaxTokens != nil && *chatModelConfig.MaxTokens <= 0 {
+			return nil, fmt.Errorf("max tokens must be positive")
+		}
+	}
+	apiKey := strings.TrimSpace(*apiConfig.ApiKey)
+	if strings.TrimSpace(modelName) == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("messages is empty")
+	}
+
+	apiMessages, systemPrompt, err := anthropicMessages(messages)
 	if err != nil {
 		return nil, err
 	}
-	var reader io.Reader
-	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("anthropic: invalid request JSON")
-		}
-		reader = bytes.NewReader(raw)
-	}
-	req, err := http.NewRequestWithContext(requestContext(api), method, joinModelURL(base, suffix), reader)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("x-api-key", strings.TrimSpace(*api.APIKey))
-	req.Header.Set("anthropic-version", anthropicVersion)
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic request: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("anthropic request failed (HTTP %d)", resp.StatusCode)
-	}
-	return resp, nil
-}
 
-func (a *AnthropicModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
-	if strings.TrimSpace(name) == "" {
-		return nil, fmt.Errorf("anthropic: model name is required")
+	baseURLRegion := a.region(apiConfig)
+	baseURLConfig := &APIConfig{Region: &baseURLRegion}
+	if apiConfig != nil {
+		baseURLConfig.BaseURL = apiConfig.BaseURL
 	}
-	converted, system, err := anthropicMessages(messages)
+	baseURL, err := a.baseModel.GetBaseURL(baseURLConfig)
 	if err != nil {
 		return nil, err
 	}
-	body := map[string]any{"model": name, "messages": converted, "max_tokens": 1024}
-	if system != "" {
-		body["system"] = system
+	baseURL = strings.TrimSpace(strings.TrimSuffix(baseURL, "/"))
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(baseURL, "/"), strings.TrimLeft(a.baseModel.URLSuffix.Chat, "/"))
+
+	reqBody := map[string]interface{}{
+		"model":      modelName,
+		"messages":   apiMessages,
+		"max_tokens": 1024,
 	}
-	if config != nil {
-		if config.Thinking != nil && *config.Thinking {
-			body["max_tokens"] = 2048
-			body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": 1024}
-		} else if config.Thinking != nil {
-			body["thinking"] = map[string]any{"type": "disabled"}
-		}
-		if config.MaxTokens != nil {
-			if *config.MaxTokens <= 0 || config.Thinking != nil && *config.Thinking && *config.MaxTokens <= 1024 {
-				return nil, fmt.Errorf("anthropic: invalid max_tokens for thinking budget")
-			}
-			body["max_tokens"] = *config.MaxTokens
-		}
-		if config.Temperature != nil {
-			body["temperature"] = *config.Temperature
-		}
-		if config.TopP != nil {
-			body["top_p"] = *config.TopP
-		}
-		if config.Stop != nil {
-			body["stop_sequences"] = *config.Stop
-		}
+	if systemPrompt != "" {
+		reqBody["system"] = systemPrompt
 	}
-	applyClaudeSamplingPolicy(name, body)
-	local, cancel := modelCallConfig(api)
+	applyAnthropicChatConfig(reqBody, chatModelConfig)
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
 	defer cancel()
-	resp, err := a.request(http.MethodPost, a.URLSuffix.Chat, local, body)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	setAnthropicHeaders(req, apiKey)
+
+	resp, err := a.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	var result struct {
-		Content []struct {
-			Type     string  `json:"type"`
-			Text     *string `json:"text"`
-			Thinking *string `json:"thinking"`
-		} `json:"content"`
-		Error json.RawMessage `json:"error"`
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if err == nil && len(body) > 20*1024*1024 {
+		err = fmt.Errorf("response exceeds limit")
 	}
-	if err := decodeCoHereJSON(resp.Body, &result); err != nil {
-		return nil, fmt.Errorf("anthropic: invalid chat response: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	if len(result.Error) > 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("anthropic: provider returned an error")
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
 	}
-	var answer, reasoning strings.Builder
-	for _, block := range result.Content {
-		switch block.Type {
-		case "text":
-			if block.Text == nil {
-				return nil, fmt.Errorf("anthropic: missing text")
-			}
-			answer.WriteString(*block.Text)
-		case "thinking":
-			if block.Thinking == nil {
-				return nil, fmt.Errorf("anthropic: missing thinking text")
-			}
-			reasoning.WriteString(*block.Thinking)
-		case "redacted_thinking":
-			// Redacted provider thinking is not user-visible text.
-		default:
-			return nil, fmt.Errorf("anthropic: unsupported response content block")
-		}
-	}
-	if strings.TrimSpace(answer.String()) == "" {
-		return nil, fmt.Errorf("anthropic: no text answer")
-	}
-	if err := requestContext(local).Err(); err != nil {
+
+	answer, reasoning, err := parseAnthropicChatResponse(body)
+	if err != nil {
 		return nil, err
 	}
-	text, thought := answer.String(), reasoning.String()
-	return &ChatResponse{Answer: &text, ReasoningContent: &thought}, nil
+	return &ChatResponse{
+		Answer:        &answer,
+		ReasonContent: &reasoning,
+	}, nil
 }
 
-func anthropicMessages(messages []Message) ([]map[string]any, string, error) {
-	converted := make([]map[string]any, 0, len(messages))
-	var systems []string
-	for _, message := range messages {
-		role := strings.ToLower(strings.TrimSpace(message.Role))
-		content, err := anthropicContent(message.Content)
+func applyAnthropicChatConfig(reqBody map[string]interface{}, chatModelConfig *ChatConfig) {
+	if chatModelConfig == nil {
+		return
+	}
+	if chatModelConfig.MaxTokens != nil {
+		reqBody["max_tokens"] = *chatModelConfig.MaxTokens
+	}
+	if chatModelConfig.Temperature != nil {
+		reqBody["temperature"] = *chatModelConfig.Temperature
+	}
+	if chatModelConfig.TopP != nil {
+		reqBody["top_p"] = *chatModelConfig.TopP
+	}
+	if chatModelConfig.Stop != nil {
+		reqBody["stop_sequences"] = *chatModelConfig.Stop
+	}
+}
+
+func setAnthropicHeaders(req *http.Request, apiKey string) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("anthropic-version", anthropicVersion)
+}
+
+func anthropicMessages(messages []Message) ([]map[string]interface{}, string, error) {
+	apiMessages := make([]map[string]interface{}, 0, len(messages))
+	systemPrompts := make([]string, 0)
+	for _, msg := range messages {
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		content, err := anthropicContent(msg.Content)
 		if err != nil {
 			return nil, "", err
 		}
 		switch role {
 		case "system":
-			switch value := content.(type) {
-			case string:
-				systems = append(systems, value)
-			case []map[string]any:
-				var parts []string
-				for _, block := range value {
-					if block["type"] != "text" {
-						return nil, "", fmt.Errorf("anthropic: system content must be text")
-					}
-					parts = append(parts, block["text"].(string))
-				}
-				systems = append(systems, strings.Join(parts, "\n"))
+			if text, ok := anthropicSystemText(content); ok && text != "" {
+				systemPrompts = append(systemPrompts, text)
 			}
 		case "user", "assistant":
-			converted = append(converted, map[string]any{"role": role, "content": content})
+			apiMessages = append(apiMessages, map[string]interface{}{
+				"role":    role,
+				"content": content,
+			})
 		default:
-			return nil, "", fmt.Errorf("anthropic: unsupported message role")
+			return nil, "", fmt.Errorf("anthropic: unsupported message role %q", msg.Role)
 		}
 	}
-	if len(converted) == 0 {
-		return nil, "", fmt.Errorf("anthropic: messages are empty")
+	if len(apiMessages) == 0 {
+		return nil, "", fmt.Errorf("messages is empty")
 	}
-	return converted, strings.Join(systems, "\n\n"), nil
+	return apiMessages, strings.Join(systemPrompts, "\n\n"), nil
 }
 
-func anthropicContent(content any) (any, error) {
-	var blocks []any
+func anthropicSystemText(content interface{}) (string, bool) {
+	switch value := content.(type) {
+	case string:
+		return value, true
+	case []map[string]interface{}:
+		parts := make([]string, 0, len(value))
+		for _, block := range value {
+			if block["type"] == "text" {
+				if text, ok := block["text"].(string); ok {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return strings.Join(parts, "\n"), true
+	default:
+		return "", false
+	}
+}
+
+func anthropicContent(content interface{}) (interface{}, error) {
 	switch value := content.(type) {
 	case string:
 		if strings.TrimSpace(value) == "" {
-			return nil, fmt.Errorf("anthropic: empty message content")
+			return nil, fmt.Errorf("empty message content")
 		}
 		return value, nil
-	case []any:
-		blocks = value
-	case []map[string]any:
+	case []interface{}:
+		return anthropicContentBlocks(value)
+	case []map[string]interface{}:
+		blocks := make([]interface{}, 0, len(value))
 		for _, block := range value {
 			blocks = append(blocks, block)
 		}
+		return anthropicContentBlocks(blocks)
 	default:
-		return nil, fmt.Errorf("anthropic: unsupported message content")
+		return nil, fmt.Errorf("anthropic: unsupported message content type %T", content)
 	}
-	if len(blocks) == 0 {
-		return nil, fmt.Errorf("anthropic: empty message content")
-	}
-	converted := make([]map[string]any, 0, len(blocks))
-	for _, item := range blocks {
-		block, ok := item.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("anthropic: invalid content block")
-		}
-		switch block["type"] {
-		case "text":
-			text, ok := block["text"].(string)
-			if !ok || strings.TrimSpace(text) == "" {
-				return nil, fmt.Errorf("anthropic: invalid text block")
-			}
-			converted = append(converted, map[string]any{"type": "text", "text": text})
-		case "image", "image_url":
-			source, ok := block["source"].(map[string]any)
-			if block["type"] == "image_url" {
-				image, valid := block["image_url"].(map[string]any)
-				if !valid {
-					return nil, fmt.Errorf("anthropic: invalid image_url")
-				}
-				value, valid := image["url"].(string)
-				if !valid {
-					return nil, fmt.Errorf("anthropic: invalid image URL")
-				}
-				source = map[string]any{"type": "url", "url": value}
-				if strings.HasPrefix(value, "data:") {
-					parts := strings.SplitN(strings.TrimPrefix(value, "data:"), ";base64,", 2)
-					if len(parts) != 2 {
-						return nil, fmt.Errorf("anthropic: invalid data image URL")
-					}
-					source = map[string]any{"type": "base64", "media_type": parts[0], "data": parts[1]}
-				}
-				ok = true
-			}
-			if !ok {
-				return nil, fmt.Errorf("anthropic: image source is required")
-			}
-			clean, err := anthropicImageSource(source)
-			if err != nil {
-				return nil, err
-			}
-			converted = append(converted, map[string]any{"type": "image", "source": clean})
-		default:
-			return nil, fmt.Errorf("anthropic: unsupported content block")
-		}
-	}
-	return converted, nil
 }
 
-func anthropicImageSource(source map[string]any) (map[string]any, error) {
-	switch source["type"] {
-	case "url":
-		value, ok := source["url"].(string)
+func anthropicContentBlocks(blocks []interface{}) ([]map[string]interface{}, error) {
+	apiBlocks := make([]map[string]interface{}, 0, len(blocks))
+	for _, item := range blocks {
+		block, ok := item.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("anthropic: invalid image URL")
+			return nil, fmt.Errorf("anthropic: invalid content block %T", item)
 		}
-		if err := ValidateOCRURL(value); err != nil {
+		converted, err := anthropicContentBlock(block)
+		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"type": "url", "url": value}, nil
+		apiBlocks = append(apiBlocks, converted)
+	}
+	return apiBlocks, nil
+}
+
+func anthropicContentBlock(block map[string]interface{}) (map[string]interface{}, error) {
+	blockType, _ := block["type"].(string)
+	switch blockType {
+	case "text":
+		text, ok := block["text"].(string)
+		if !ok {
+			return nil, fmt.Errorf("anthropic: text block missing or invalid text field %T", block["text"])
+		}
+		return map[string]interface{}{"type": "text", "text": text}, nil
+	case "image":
+		return validateAnthropicImageBlock(block)
+	case "image_url":
+		return anthropicImageURLBlock(block)
+	default:
+		return nil, fmt.Errorf("anthropic: unsupported content block type %q", blockType)
+	}
+}
+
+func validateAnthropicImageBlock(block map[string]interface{}) (map[string]interface{}, error) {
+	source, ok := block["source"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("anthropic: image block missing source object")
+	}
+	sourceType, ok := source["type"].(string)
+	if !ok || sourceType == "" {
+		return nil, fmt.Errorf("anthropic: image source missing type")
+	}
+	switch sourceType {
+	case "url":
+		if address, ok := source["url"].(string); !ok || address == "" {
+			return nil, fmt.Errorf("anthropic: image url source missing url")
+		} else if parsed, err := url.Parse(address); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+			return nil, fmt.Errorf("invalid image URL")
+		}
 	case "base64":
-		mime, ok := source["media_type"].(string)
-		if !ok || mime != "image/jpeg" && mime != "image/png" && mime != "image/gif" && mime != "image/webp" {
-			return nil, fmt.Errorf("anthropic: unsupported image MIME")
+		mediaType, ok := source["media_type"].(string)
+		if !ok || !strings.HasPrefix(mediaType, "image/") {
+			return nil, fmt.Errorf("anthropic: image base64 source missing media_type")
 		}
 		data, ok := source["data"].(string)
-		if !ok {
-			return nil, fmt.Errorf("anthropic: missing image data")
+		if !ok || data == "" {
+			return nil, fmt.Errorf("anthropic: image base64 source missing data")
 		}
-		if _, err := DecodeMediaData(data); err != nil {
-			return nil, err
+		if _, err := base64.StdEncoding.DecodeString(data); err != nil {
+			return nil, fmt.Errorf("anthropic: invalid base64 image data: %w", err)
 		}
-		return map[string]any{"type": "base64", "media_type": mime, "data": data}, nil
 	default:
-		return nil, fmt.Errorf("anthropic: unsupported image source")
+		return nil, fmt.Errorf("anthropic: unsupported image source type %q", sourceType)
 	}
+	return block, nil
 }
 
-func (a *AnthropicModel) ListModels(api *APIConfig) ([]string, error) {
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	resp, err := a.request(http.MethodGet, a.URLSuffix.Models, local, nil)
+func anthropicImageURLBlock(block map[string]interface{}) (map[string]interface{}, error) {
+	imageURL, ok := block["image_url"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("anthropic: image_url block missing image_url object")
+	}
+	url, _ := imageURL["url"].(string)
+	if url == "" {
+		return nil, fmt.Errorf("anthropic: image_url block missing url")
+	}
+	source := map[string]interface{}{
+		"type": "url",
+		"url":  url,
+	}
+	if strings.HasPrefix(url, "data:") {
+		mediaType, data, err := parseDataImageURL(url)
+		if err != nil {
+			return nil, err
+		}
+		source = map[string]interface{}{
+			"type":       "base64",
+			"media_type": mediaType,
+			"data":       data,
+		}
+	}
+	return map[string]interface{}{
+		"type":   "image",
+		"source": source,
+	}, nil
+}
+
+func parseDataImageURL(url string) (string, string, error) {
+	const marker = ";base64,"
+	if !strings.HasPrefix(url, "data:") || !strings.Contains(url, marker) {
+		return "", "", fmt.Errorf("anthropic: unsupported data image url")
+	}
+	trimmed := strings.TrimPrefix(url, "data:")
+	parts := strings.SplitN(trimmed, marker, 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("anthropic: invalid data image url")
+	}
+	if _, err := base64.StdEncoding.DecodeString(parts[1]); err != nil {
+		return "", "", fmt.Errorf("anthropic: invalid base64 image data: %w", err)
+	}
+	return parts[0], parts[1], nil
+}
+
+func parseAnthropicChatResponse(body []byte) (string, string, error) {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil || envelope == nil {
+		return "", "", fmt.Errorf("invalid Anthropic response")
+	}
+	if raw, ok := envelope["error"]; ok && string(raw) != "null" {
+		return "", "", fmt.Errorf("Anthropic response error")
+	}
+
+	var result struct {
+		Content []struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", "", fmt.Errorf("failed to parse response: %w", err)
+	}
+	if len(result.Content) == 0 {
+		return "", "", fmt.Errorf("no content in Anthropic response")
+	}
+
+	var answer strings.Builder
+	var reasoning strings.Builder
+	for _, block := range result.Content {
+		switch block.Type {
+		case "text":
+			if strings.TrimSpace(block.Text) == "" {
+				return "", "", fmt.Errorf("invalid text response block")
+			}
+			answer.WriteString(block.Text)
+		case "thinking":
+			if strings.TrimSpace(block.Thinking) == "" {
+				return "", "", fmt.Errorf("invalid reasoning response block")
+			}
+			reasoning.WriteString(block.Thinking)
+		default:
+			return "", "", fmt.Errorf("unsupported response block")
+		}
+	}
+	if answer.Len() == 0 {
+		return "", "", fmt.Errorf("no text content in Anthropic response")
+	}
+	return answer.String(), reasoning.String(), nil
+}
+
+func (a *AnthropicModel) ListModels(apiConfig *APIConfig) ([]ListModelResponse, error) {
+	if err := a.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	apiKey := strings.TrimSpace(*apiConfig.ApiKey)
+
+	baseURLRegion := a.region(apiConfig)
+	baseURLConfig := &APIConfig{Region: &baseURLRegion}
+	if apiConfig != nil {
+		baseURLConfig.BaseURL = apiConfig.BaseURL
+	}
+	baseURL, err := a.baseModel.GetBaseURL(baseURLConfig)
 	if err != nil {
 		return nil, err
 	}
+	baseURL = strings.TrimSpace(strings.TrimSuffix(baseURL, "/"))
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(baseURL, "/"), strings.TrimLeft(a.baseModel.URLSuffix.Models, "/"))
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	setAnthropicHeaders(req, apiKey)
+
+	resp, err := a.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
 	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if err == nil && len(body) > 20*1024*1024 {
+		err = fmt.Errorf("response exceeds limit")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
+	}
+
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil || envelope == nil {
+		return nil, fmt.Errorf("invalid model response")
+	}
+	if raw, ok := envelope["error"]; ok && string(raw) != "null" {
+		return nil, fmt.Errorf("provider models error")
+	}
+	var rows []map[string]json.RawMessage
+	if json.Unmarshal(envelope["data"], &rows) != nil || rows == nil {
+		return nil, fmt.Errorf("invalid model data")
+	}
+	for _, row := range rows {
+		var id string
+		if json.Unmarshal(row["id"], &id) != nil || strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("invalid model id")
+		}
+	}
 	var result struct {
-		Data *[]struct {
+		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
-		Error json.RawMessage `json:"error"`
 	}
-	if err := decodeCoHereJSON(resp.Body, &result); err != nil {
-		return nil, fmt.Errorf("anthropic: invalid model list: %w", err)
+	if err = json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-	if len(result.Error) > 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("anthropic: model list error")
-	}
-	if result.Data == nil {
-		return nil, fmt.Errorf("anthropic: missing model list")
-	}
-	names := make([]string, 0, len(*result.Data))
-	seen := map[string]bool{}
-	for _, item := range *result.Data {
-		if strings.TrimSpace(item.ID) == "" || seen[item.ID] {
-			return nil, fmt.Errorf("anthropic: invalid or duplicate model ID")
+	models := make([]ListModelResponse, 0, len(result.Data))
+	for _, item := range result.Data {
+		if item.ID != "" {
+			models = append(models, ListModelResponse{
+				Name: item.ID,
+			})
 		}
-		seen[item.ID] = true
-		names = append(names, item.ID)
 	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
-	}
-	return names, nil
+	return models, nil
 }
 
-func (a *AnthropicModel) CheckConnection(api *APIConfig) error {
-	_, err := a.ListModels(api)
+func (a *AnthropicModel) CheckConnection(apiConfig *APIConfig) error {
+	_, err := a.ListModels(apiConfig)
 	return err
 }
 
-var _ ModelDriver = (*AnthropicModel)(nil)
+func (a *AnthropicModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	return nil, fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) Rerank(modelName *string, query string, documents []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) TranscribeAudio(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig) (*ASRResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) AudioSpeech(modelName *string, audioContent *string, apiConfig *APIConfig, asrConfig *TTSConfig) (*TTSResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) OCRFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, ocrConfig *OCRConfig) (*OCRFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) ParseFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, parseFileConfig *ParseFileConfig) (*ParseFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) ListTasks(apiConfig *APIConfig) ([]ListTaskStatus, error) {
+	return nil, fmt.Errorf("%s, no such method", a.Name())
+}
+
+func (a *AnthropicModel) ShowTask(taskID string, apiConfig *APIConfig) (*TaskResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", a.Name())
+}

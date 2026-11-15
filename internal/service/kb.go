@@ -18,17 +18,14 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/entity"
+
 	"multirag/internal/utility"
-	"os"
 	"strings"
 )
 
@@ -43,18 +40,14 @@ type KnowledgebaseService struct {
 }
 
 // NewKnowledgebaseService creates a new knowledge base service
-func NewKnowledgebaseService(documentEngines ...engine.DocEngine) *KnowledgebaseService {
-	store := engine.Get()
-	if len(documentEngines) > 0 {
-		store = documentEngines[0]
-	}
+func NewKnowledgebaseService() *KnowledgebaseService {
 	return &KnowledgebaseService{
 		kbDAO:         dao.NewKnowledgebaseDAO(),
 		userTenantDAO: dao.NewUserTenantDAO(),
 		userDAO:       dao.NewUserDAO(),
 		tenantDAO:     dao.NewTenantDAO(),
 		connectorDAO:  dao.NewConnectorDAO(),
-		docEngine:     store,
+		docEngine:     engine.Get(),
 	}
 }
 
@@ -83,135 +76,6 @@ type UpdateMetadataSettingRequest struct {
 type ListKbsResponse struct {
 	KBs   []map[string]interface{} `json:"kbs"`
 	Total int64                    `json:"total"`
-}
-
-// CreateChunkStoreRequest represents the request for creating a dataset table
-type CreateChunkStoreRequest struct {
-	KBID       string `json:"kb_id" binding:"required"`
-	VectorSize int    `json:"vector_size" binding:"required"`
-	ParserID   string `json:"parser_id,omitempty"`
-}
-
-// CreateChunkStoreResponse represents the response for creating a dataset table
-type CreateChunkStoreResponse struct {
-	KBID       string `json:"kb_id"`
-	TableName  string `json:"table_name"`
-	VectorSize int    `json:"vector_size"`
-}
-
-// CreateChunkStore creates a table in the document engine for a knowledge base
-func (s *KnowledgebaseService) CreateChunkStore(ctx context.Context, req *CreateChunkStoreRequest) (*CreateChunkStoreResponse, common.ErrorCode, error) {
-	if req == nil {
-		return nil, common.CodeDataError, fmt.Errorf("request is required")
-	}
-	// Get KB to find tenant_id for building table name
-	kb, err := s.kbDAO.GetByIDContext(ctx, req.KBID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, common.CodeDataError, fmt.Errorf("knowledge base not found: %s", req.KBID)
-		}
-		return nil, common.CodeServerError, fmt.Errorf("query knowledge base: %w", err)
-	}
-
-	// vector_size is required
-	vecSize := req.VectorSize
-	if vecSize <= 0 {
-		return nil, common.CodeDataError, fmt.Errorf("vector_size must be positive")
-	}
-
-	// Build table name prefix: multirag_<tenant_id>
-	tableName := fmt.Sprintf("multirag_%s", kb.TenantID)
-
-	// Call document engine to create table
-	// Full table name will be built as "{tableName}_{kb_id}"
-	err = s.docEngine.CreateChunkStore(ctx, tableName, req.KBID, vecSize, req.ParserID)
-	if err != nil {
-		return nil, common.CodeServerError, fmt.Errorf("failed to create dataset: %w", err)
-	}
-
-	return &CreateChunkStoreResponse{
-		KBID:       req.KBID,
-		TableName:  tableName,
-		VectorSize: vecSize,
-	}, common.CodeSuccess, nil
-}
-
-// DeleteChunkStore deletes the table in the document engine for a knowledge base
-func (s *KnowledgebaseService) DeleteChunkStore(ctx context.Context, kbID string) (common.ErrorCode, error) {
-	// Get KB to find tenant_id for building table name
-	kb, err := s.kbDAO.GetByIDContext(ctx, kbID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return common.CodeDataError, fmt.Errorf("knowledge base not found: %s", kbID)
-		}
-		return common.CodeServerError, fmt.Errorf("query knowledge base: %w", err)
-	}
-
-	// Build table name: multirag_<tenant_id>_<kb_id>
-	tableName := fmt.Sprintf("multirag_%s", kb.TenantID)
-
-	// Call document engine to delete table
-	err = s.docEngine.DropChunkStore(ctx, tableName, kbID)
-	if err != nil {
-		return common.CodeServerError, fmt.Errorf("failed to delete table: %w", err)
-	}
-
-	return common.CodeSuccess, nil
-}
-
-// InsertChunksFromFile reads a JSON file and inserts the chunks into the dataset table.
-// The file format is: {"table_name": ..., "knowledgebase_id": ..., "chunks": [...]}
-func (s *KnowledgebaseService) InsertChunksFromFile(ctx context.Context, userID, filePath string) (interface{}, common.ErrorCode, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, common.CodeDataError, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	var input struct {
-		IndexName       string                   `json:"index_name"`
-		TableNamePrefix string                   `json:"table_name"`
-		KnowledgebaseID string                   `json:"knowledgebase_id"`
-		Chunks          []map[string]interface{} `json:"chunks"`
-	}
-	if err := json.Unmarshal(data, &input); err != nil || input.Chunks == nil {
-		return nil, common.CodeDataError, fmt.Errorf(`invalid JSON format: expected {"table_name": ..., "knowledgebase_id": ..., "chunks": [...]}`)
-	}
-	if len(input.Chunks) == 0 {
-		return nil, common.CodeDataError, fmt.Errorf("no chunks found in file")
-	}
-
-	kb, err := s.kbDAO.GetReadableByID(ctx, input.KnowledgebaseID, userID)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, common.CodeForbidden, ErrDatasetAccessDenied
-	}
-	if err != nil {
-		return nil, common.CodeServerError, err
-	}
-	expected := "multirag_" + kb.TenantID
-	for _, supplied := range []string{input.IndexName, input.TableNamePrefix} {
-		if supplied != "" && supplied != expected {
-			return nil, common.CodeDataError, fmt.Errorf("chunk namespace must match the authorized tenant")
-		}
-	}
-	for _, chunk := range input.Chunks {
-		docID, ok := chunk["doc_id"].(string)
-		if !ok || strings.TrimSpace(docID) == "" || chunk["kb_id"] != kb.ID {
-			return nil, common.CodeDataError, fmt.Errorf("chunk document and dataset identities are required")
-		}
-		var count int64
-		if err := dao.DB.WithContext(ctx).Model(&entity.Document{}).Where("id = ? AND kb_id = ? AND status = ?", docID, kb.ID, string(entity.StatusValid)).Count(&count).Error; err != nil {
-			return nil, common.CodeServerError, err
-		}
-		if count != 1 {
-			return nil, common.CodeDataError, fmt.Errorf("chunk document does not belong to dataset")
-		}
-	}
-	result, err := s.docEngine.InsertChunks(ctx, input.Chunks, expected, input.KnowledgebaseID)
-	if err != nil {
-		return nil, common.CodeServerError, fmt.Errorf("failed to insert into dataset: %w", err)
-	}
-
-	return result, common.CodeSuccess, nil
 }
 
 // UpdateKB updates an existing knowledge base
@@ -300,56 +164,40 @@ func (s *KnowledgebaseService) UpdateKB(req *UpdateKBRequest, userID string) (ma
 	return result, common.CodeSuccess, nil
 }
 
-// UpdateMetadataSetting updates the metadata settings for a knowledge base
-func (s *KnowledgebaseService) UpdateMetadataSetting(ctx context.Context, req *UpdateMetadataSettingRequest, userID string) (map[string]interface{}, common.ErrorCode, error) {
-	if userID == "" {
-		return nil, common.CodeAuthenticationError, errors.New("No authorization.")
+// UpdateMetadataSetting updates the metadata settings for a knowledge base.
+// The userID must be a member of the owning tenant; this is the same authorization
+// boundary applied by GetDetail and the handler-level guard, duplicated here so
+// the security check cannot be regressed by future handler refactors that drop it.
+func (s *KnowledgebaseService) UpdateMetadataSetting(req *UpdateMetadataSettingRequest, userID string) (map[string]interface{}, common.ErrorCode, error) {
+	if !s.kbDAO.Accessible(req.KBID, userID) {
+		return nil, common.CodeOperatingError, errors.New("only owner of dataset authorized for this operation")
 	}
-	if req == nil || strings.TrimSpace(req.KBID) == "" || req.Metadata == nil {
-		return nil, common.CodeArgumentError, errors.New("kb_id and metadata are required")
-	}
-	var kb entity.Knowledgebase
-	code := common.CodeServerError
-	err := dao.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Lock membership before the dataset to serialize revocation with a write.
-		var membership entity.UserTenant
-		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("user_id = ? AND status = ? AND role IN ? AND tenant_id = (SELECT tenant_id FROM t_ai_knowledgebases WHERE id = ?)", userID, "1", []string{"owner", "admin", "normal"}, req.KBID).Take(&membership).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				code = common.CodeAuthenticationError
-				return errors.New("No authorization.")
-			}
-			return err
-		}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ? AND (created_by = ? OR permission = ?)", req.KBID, string(entity.StatusValid), userID, string(entity.TenantPermissionTeam)).Take(&kb).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				code = common.CodeAuthenticationError
-				return errors.New("No authorization.")
-			}
-			return err
-		}
-		config := kb.ParserConfig
-		if config == nil {
-			config = entity.JSONMap{}
-		}
-		config["metadata"] = req.Metadata
-		enabled := true
-		if req.EnableMetadata != nil {
-			enabled = *req.EnableMetadata
-		}
-		config["enable_metadata"] = enabled
-		if err := tx.Model(&kb).Update("parser_config", config).Error; err != nil {
-			return err
-		}
-		kb.ParserConfig = config
-		return nil
-	})
+
+	kb, err := s.kbDAO.GetByID(req.KBID)
 	if err != nil {
-		if code == common.CodeAuthenticationError {
-			return nil, code, errors.New("No authorization.")
-		}
-		return nil, code, errors.New("Unable to update metadata setting.")
+		return nil, common.CodeDataError, errors.New("database error (knowledgebase not found)")
 	}
-	return kb.ToMap(), common.CodeSuccess, nil
+
+	parserConfig := kb.ParserConfig
+	if parserConfig == nil {
+		parserConfig = make(map[string]interface{})
+	}
+
+	parserConfig["metadata"] = req.Metadata
+	enableMetadata := true
+	if req.EnableMetadata != nil {
+		enableMetadata = *req.EnableMetadata
+	}
+	parserConfig["enable_metadata"] = enableMetadata
+
+	if err := s.kbDAO.UpdateParserConfig(req.KBID, parserConfig); err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("failed to update metadata setting: %w", err)
+	}
+
+	result := kb.ToMap()
+	result["parser_config"] = parserConfig
+
+	return result, common.CodeSuccess, nil
 }
 
 // GetDetail retrieves detailed information about a knowledge base

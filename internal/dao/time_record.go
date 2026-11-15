@@ -52,7 +52,7 @@ func (dao *TimeRecordDAO) GetCount() (int64, error) {
 
 // DeleteOldest removes the oldest records (smallest ID) with limit
 func (dao *TimeRecordDAO) DeleteOldest(limit int64) error {
-	return DB.Exec("DELETE FROM t_ai_time_records ORDER BY id ASC LIMIT ?", limit).Error
+	return DB.Exec("DELETE FROM time_records ORDER BY id ASC LIMIT ?", limit).Error
 }
 
 // GetByID retrieves a single record by its ID

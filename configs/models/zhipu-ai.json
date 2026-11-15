@@ -1,6 +1,5 @@
 {
   "name": "ZHIPU-AI",
-  "tags": "LLM,TEXT EMBEDDING,TTS,TEXT RE-RANK,SPEECH2TEXT,MODERATION",
   "url": {
     "default": "https://open.bigmodel.cn/api/paas/v4"
   },
@@ -10,11 +9,11 @@
     "async_result": "async-result",
     "embedding": "embeddings",
     "rerank": "rerank",
-    "files": "files",
-    "models": "models",
+    "ocr": "layout_parsing",
     "asr": "audio/transcriptions",
     "tts": "audio/speech",
-    "ocr": "layout_parsing"
+    "files": "files",
+    "models": "models"
   },
   "class": "glm",
   "models": [

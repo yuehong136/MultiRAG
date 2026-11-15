@@ -312,10 +312,11 @@ func (qb *QueryBuilder) Question(txt string, tbl string, minMatch float64) (*typ
 				for _, syn := range tkSyns {
 					syn = strings.TrimSpace(syn)
 					if syn != "" {
-						synParts = append(synParts, fmt.Sprintf(`"%s"^%.4f`, qb.SubSpecialChar(syn), tw.w/4.0))
+						synParts = append(synParts, fmt.Sprintf(`"%s"^%.4f`, syn, tw.w/4.0))
 					}
 				}
 				syns[i] = strings.Join(synParts, " ")
+				// Extend keywords with synonyms
 				keywords = append(keywords, tkSyns...)
 			} else {
 				syns[i] = ""
@@ -409,7 +410,7 @@ func (qb *QueryBuilder) Question(txt string, tbl string, minMatch float64) (*typ
 		}
 
 		// Sort by weight descending
-		sort.SliceStable(termWeightList, func(i, j int) bool {
+		sort.Slice(termWeightList, func(i, j int) bool {
 			return termWeightList[i].Weight > termWeightList[j].Weight
 		})
 
@@ -441,7 +442,7 @@ func (qb *QueryBuilder) Question(txt string, tbl string, minMatch float64) (*typ
 			for _, m := range sm {
 				m = specialCharRe.ReplaceAllString(m, "")
 				m = qb.SubSpecialChar(m)
-				if utf8.RuneCountInString(m) > 1 {
+				if len([]rune(m)) > 1 {
 					cleanSm = append(cleanSm, m)
 				}
 			}

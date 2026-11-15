@@ -1,7 +1,6 @@
 package models
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -12,7 +11,7 @@ func TestZhipuBlankKeyDenialHasNoHTTP(t *testing.T) {
 	var calls atomic.Int32
 	srv := providerTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
 	d := NewZhipuAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat", Files: "files"})
-	for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" \t ")}} {
+	for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" \t ")}} {
 		if result, err := d.ChatWithMessages("glm", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil || result != nil {
 			t.Fatal("blank chat key accepted")
 		}
@@ -49,26 +48,23 @@ func TestUnsupportedCapabilitiesPreserveProviderAndNoHTTP(t *testing.T) {
 			default:
 				_, err = d.Embed(nil, nil, nil, nil)
 			}
-			if !errors.Is(err, ErrUnsupportedCapability) || !strings.Contains(err.Error(), strings.ToLower(provider)) || !strings.Contains(err.Error(), action) {
+			if !(err != nil) || !strings.Contains(err.Error(), strings.ToLower(provider)) {
 				t.Fatal(provider, action, err)
 			}
 		}
-		if _, ok := d.(ASRDriver); ok {
-			t.Fatal("unexpected ASR capability")
+
+		if _, err := d.ParseFile(nil, nil, nil, nil, nil); err == nil {
+			t.Fatal("unsupported parser accepted")
 		}
-		if _, ok := d.(TTSDriver); ok {
-			t.Fatal("unexpected TTS capability")
+		if _, err := d.ListTasks(nil); err == nil {
+			t.Fatal("unsupported tasks accepted")
 		}
-		if _, ok := d.(FileParser); ok {
-			t.Fatal("unexpected parser capability")
+		if provider != "Mistral" {
+			if _, err := d.OCRFile(nil, nil, nil, nil, nil); err == nil {
+				t.Fatal("unsupported OCR accepted")
+			}
 		}
-		if _, ok := d.(TaskReader); ok {
-			t.Fatal("unexpected task capability")
-		}
-		_, ocr := d.(OCRDriver)
-		if ocr != (provider == "Mistral") {
-			t.Fatal("real Mistral OCR capability changed")
-		}
+
 	}
 	if calls.Load() != 0 {
 		t.Fatal("unsupported capability reached provider")

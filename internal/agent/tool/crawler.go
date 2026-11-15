@@ -149,6 +149,9 @@ var ErrCrawlerDepthUnsupported = errors.New(
 // max_depth>0 is rejected; multi-page crawling is deferred to a later
 // batch.
 func (c *CrawlerTool) InvokableRun(ctx context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	var args crawlerArgs
 	if argumentsInJSON == "" {
 		return crawlerStubResult(crawlerResult{Error: "arguments are required"}),
@@ -164,18 +167,15 @@ func (c *CrawlerTool) InvokableRun(ctx context.Context, argumentsInJSON string, 
 			errors.New("crawler: empty url")
 	}
 	if !strings.HasPrefix(args.URL, "http://") && !strings.HasPrefix(args.URL, "https://") {
-		return crawlerStubResult(crawlerResult{URL: SanitizeURL(args.URL), Error: "url must be http or https"}),
+		return crawlerStubResult(crawlerResult{URL: args.URL, Error: "url must be http or https"}),
 			fmt.Errorf("crawler: unsupported url scheme: %s", args.URL)
 	}
 	// Reject max_depth > 0 BEFORE the SSRF guard: the guard performs a
 	// DNS lookup that may be slow / fail in CI, and a depth-0 caller
 	// asking for max_depth=10 should be rejected on a structural
 	// problem first.
-	if args.MaxDepth < 0 || args.MaxPages < 0 || args.MaxPages > 1 {
-		return crawlerStubResult(crawlerResult{Error: "crawler: only one page is supported"}), errors.New("crawler: only one page is supported")
-	}
 	if args.MaxDepth > 0 {
-		return crawlerStubResult(crawlerResult{URL: SanitizeURL(args.URL), Error: ErrCrawlerDepthUnsupported.Error()}),
+		return crawlerStubResult(crawlerResult{URL: args.URL, Error: ErrCrawlerDepthUnsupported.Error()}),
 			ErrCrawlerDepthUnsupported
 	}
 	// SSRF guard + DNS-rebinding pinning. c.resolve validates the URL
@@ -193,34 +193,36 @@ func (c *CrawlerTool) InvokableRun(ctx context.Context, argumentsInJSON string, 
 	if c.resolve != nil {
 		host, pinnedIP, resolveErr = c.resolve(args.URL)
 	} else {
-		host, pinnedIP, resolveErr = ResolveAndValidateContext(ctx, args.URL)
+		host, pinnedIP, resolveErr = ResolveAndValidate(ctx, args.URL)
 	}
 	if resolveErr != nil {
-		return crawlerStubResult(crawlerResult{URL: SanitizeURL(args.URL), Error: resolveErr.Error()}), resolveErr
+		return crawlerStubResult(crawlerResult{URL: args.URL, Error: resolveErr.Error()}), resolveErr
 	}
 
 	resp, err := c.helper.DoPinned(ctx, http.MethodGet, args.URL, "", "", nil, host, pinnedIP)
 	if err != nil {
-		return crawlerStubResult(crawlerResult{URL: SanitizeURL(args.URL), Error: err.Error()}), err
+		return crawlerStubResult(crawlerResult{URL: args.URL, Error: err.Error()}), err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err := fmt.Errorf("crawler: upstream returned %d", resp.StatusCode)
-		return crawlerStubResult(crawlerResult{URL: SanitizeURL(args.URL), Status: resp.StatusCode, Error: err.Error()}), err
+		defer resp.Body.Close()
+		err := fmt.Errorf("crawler: HTTP status %d", resp.StatusCode)
+		return crawlerStubResult(crawlerResult{Error: err.Error()}), err
 	}
+
+	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return crawlerStubResult(crawlerResult{URL: SanitizeURL(args.URL), Status: resp.StatusCode, Error: "read body: " + err.Error()}),
+		return crawlerStubResult(crawlerResult{URL: args.URL, Status: resp.StatusCode, Error: "read body: " + err.Error()}),
 			fmt.Errorf("crawler: read body: %w", err)
 	}
 
 	page, err := extractPage(body)
 	if err != nil {
-		return crawlerStubResult(crawlerResult{URL: SanitizeURL(args.URL), Status: resp.StatusCode, Error: err.Error()}),
+		return crawlerStubResult(crawlerResult{URL: args.URL, Status: resp.StatusCode, Error: err.Error()}),
 			fmt.Errorf("crawler: extract: %w", err)
 	}
-	page.URL = SanitizeURL(args.URL)
+	page.URL = args.URL
 	page.Status = resp.StatusCode
 
 	return crawlerJSON(page)

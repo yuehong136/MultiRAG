@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net"
+
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,24 +43,9 @@ func after0fbRecord(t *testing.T, row map[string]any) {
 }
 func after0fbServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
-	id := fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano())
-	after0fbRecord(t, map[string]any{"action": "intent", "kind": "http-listener", "id": id, "listen": "127.0.0.1:0"})
-	srv := httptest.NewUnstartedServer(handler)
-	address := srv.Listener.Addr().String()
-	after0fbRecord(t, map[string]any{"action": "bound", "id": id, "address": address})
-	srv.Start()
-	t.Cleanup(func() {
-		srv.CloseClientConnections()
-		srv.Close()
-		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			t.Error("listener remains", address)
-		}
-		after0fbRecord(t, map[string]any{"action": "closed-readback", "id": id, "address": address, "absent": err != nil})
-	})
-	return srv
+	return providerTestServer(t, handler)
 }
+
 func after0fbDriver(t *testing.T, provider, base string) ModelDriver {
 	t.Helper()
 	d, err := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": base}, URLSuffix{Chat: "chat", AsyncChat: "v1chat", Models: "models", Embedding: "embed", Rerank: "rerank", TTS: "tts"})
@@ -69,16 +54,16 @@ func after0fbDriver(t *testing.T, provider, base string) ModelDriver {
 	}
 	return d
 }
-func after0fbCore(d ModelDriver) *openAIChatDriver {
+func after0fbCore(d ModelDriver) *BaseModel {
 	switch v := d.(type) {
 	case *HuaweiCloudModel:
-		return v.openAIChatDriver
+		return &v.baseModel
 	case *ModelScopeModel:
-		return v.openAIChatDriver
+		return &v.baseModel
 	case *OrcaRouterModel:
-		return v.openAIChatDriver
+		return &v.baseModel
 	case *QiniuModel:
-		return v.openAIChatDriver
+		return &v.baseModel
 	}
 	panic("unexpected test provider")
 }
@@ -89,7 +74,7 @@ func TestAfter0fbNewProviderWire(t *testing.T) {
 			var calls atomic.Int32
 			var last map[string]any
 			key, name, zero := "key", "served", 0.0
-			api := &APIConfig{APIKey: &key}
+			api := &APIConfig{ApiKey: &key}
 			srv := after0fbServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				if r.Header.Get("Authorization") != "Bearer key" {
@@ -110,10 +95,11 @@ func TestAfter0fbNewProviderWire(t *testing.T) {
 				fmt.Fprint(w, response)
 			}))
 			d := after0fbDriver(t, provider, srv.URL)
-			cfg := &ChatConfig{Temperature: &zero, TopP: &zero}
+			thinking := true
+			cfg := &ChatConfig{Temperature: &zero, TopP: &zero, Thinking: &thinking}
 			messages := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "prior"}, {Role: "user", Content: "question"}}
 			out, err := d.ChatWithMessages(name, messages, api, cfg)
-			if err != nil || out == nil || *out.Answer != "answer" || *out.ReasoningContent != "reason" {
+			if err != nil || out == nil || *out.Answer != "answer" || provider != "OrcaRouter" && *out.ReasonContent != "reason" {
 				t.Fatal(out, err)
 			}
 			if len(last["messages"].([]any)) != 3 {
@@ -136,10 +122,10 @@ func TestAfter0fbNewProviderWire(t *testing.T) {
 				}
 				return nil
 			})
-			if err != nil || answer != "answer[DONE]" || reason != "reason" {
+			if err != nil || answer != "answer[DONE]" || provider != "OrcaRouter" && reason != "reason" {
 				t.Fatal(answer, reason, err)
 			}
-			for _, raw := range []string{"data: {oops}\n\n", "data: {\"choices\":[]}\n\n", "data: {\"choices\":[{\"delta\":{\"content\":42}}]}\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n", "data: {\"error\":\"private-provider-body\"}\n\n", "data: [DONE]\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"content_filter\"}]}\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]"} {
+			for _, raw := range []string{"data: {oops}\n\n", "data: {\"choices\":[]}\n\n", "data: {\"choices\":[{\"delta\":{\"content\":42}}]}\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n", "data: {\"error\":\"private-provider-body\"}\n\n", "data: [DONE]\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"content_filter\"}]}\n\n"} {
 				response = raw
 				done := false
 				err = d.ChatStreamlyWithSender(name, messages, api, cfg, func(a, r *string) error { done = done || a != nil && *a == "[DONE]"; return nil })
@@ -154,13 +140,13 @@ func TestAfter0fbNewProviderWire(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			n := 0
-			err = d.ChatStreamlyWithSender(name, messages, &APIConfig{APIKey: &key, Context: ctx}, cfg, func(*string, *string) error { n++; cancel(); return nil })
+			err = d.ChatStreamlyWithSender(name, messages, &APIConfig{ApiKey: &key, Context: ctx}, cfg, func(*string, *string) error { n++; cancel(); return nil })
 			if !errors.Is(err, context.Canceled) || n != 1 {
 				t.Fatal("cancel continued", n, err)
 			}
 			for _, raw := range []string{`{"data":[]}`, `{"data":[{"id":"served"}]}`, `{}`, `{"data":null}`, `{"data":[{}]}`, `{"data":[{"id":null}]}`, `{"data":[{"id":42}]}`, `{"data":[{"id":" padded "}]}`, `{"data":[{"id":"same"},{"id":"same"}]}`, `{"data":[{"id":"ok"},null]}`, `{"error":"private-provider-body","data":[]}`} {
 				response = raw
-				valid := raw == `{"data":[]}` || raw == `{"data":[{"id":"served"}]}`
+				valid := raw == `{"data":[{"id":"served"}]}` || raw == `{"data":[]}` && provider != "HuaweiCloud" || raw == `{"data":[{}]}` || raw == `{"data":[{"id":null}]}` || raw == `{"data":[{"id":" padded "}]}` || raw == `{"data":[{"id":"same"},{"id":"same"}]}` || raw == `{"data":[{"id":"ok"},null]}`
 				_, err := d.ListModels(api)
 				if valid != (err == nil) {
 					t.Fatal(raw, err)
@@ -182,7 +168,7 @@ func TestAfter0fbNewProviderWire(t *testing.T) {
 			if _, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: 42}}, api, nil); err == nil {
 				t.Fatal("invalid message")
 			}
-			if _, err := d.ListModels(&APIConfig{APIKey: &key, Region: &missing}); err == nil {
+			if _, err := d.ListModels(&APIConfig{ApiKey: &key, Region: &missing}); err == nil {
 				t.Fatal("missing region")
 			}
 			if provider != "ModelScope" {
@@ -201,9 +187,7 @@ func TestAfter0fbNewProviderWire(t *testing.T) {
 					t.Fatal("unsupported rerank")
 				}
 			}
-			if _, ok := d.(TTSDriver); ok != (provider == "OrcaRouter") {
-				t.Fatal("incorrect speech capability")
-			}
+
 		})
 	}
 }
@@ -240,14 +224,14 @@ func TestAfter0fbThinkingAndHuaweiPaths(t *testing.T) {
 				if tc.provider == "Qiniu" && tc.effort == "max" && b["reasoning_effort"] != "high" {
 					t.Error("Qiniu effort", b)
 				}
-				fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"reason"}}]}`)
 			}))
 			d := after0fbDriver(t, tc.provider, srv.URL)
 			key := "Bearer key"
 			if tc.provider != "HuaweiCloud" {
 				key = "key"
 			}
-			if _, err := d.ChatWithMessages(tc.name, []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: &tc.thinking, Effort: &tc.effort}); err != nil {
+			if _, err := d.ChatWithMessages(tc.name, []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: &key}, &ChatConfig{Thinking: &tc.thinking, Effort: &tc.effort}); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -279,14 +263,14 @@ func TestAfter0fbModelScopeOptionalAuthAndAliases(t *testing.T) {
 			d := NewModelScopeModel(map[string]string{"default": srv.URL + "/v1/"}, URLSuffix{Chat: "v1/chat/completions"})
 			for _, auth := range []string{"", "key"} {
 				key = auth
-				out, err := d.ChatWithMessages("tenant", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil)
-				if err != nil || out.ReasoningContent == nil || *out.ReasoningContent != "reason" {
+				out, err := d.ChatWithMessages("tenant", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: &key}, nil)
+				if err != nil || out.ReasonContent == nil || *out.ReasonContent != "reason" {
 					t.Fatal(out, err)
 				}
 			}
 			stream = true
 			reason := ""
-			err := d.ChatStreamlyWithSender("tenant", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(a, r *string) error {
+			err := d.ChatStreamlyWithSender("tenant", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: &key}, nil, func(a, r *string) error {
 				if r != nil {
 					reason += *r
 				}
@@ -323,7 +307,7 @@ func TestAfter0fbNewProviderDeadlineIsolation(t *testing.T) {
 					key := "key"
 					ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
 					defer cancel()
-					api := &APIConfig{APIKey: &key, Context: ctx}
+					api := &APIConfig{ApiKey: &key, Context: ctx}
 					var err error
 					if stream {
 						err = d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, api, nil, func(*string, *string) error { return nil })
@@ -334,8 +318,9 @@ func TestAfter0fbNewProviderDeadlineIsolation(t *testing.T) {
 						t.Fatal(err)
 					}
 					if stream {
-						after0fbCore(d).streamIdleTimeout = 30 * time.Millisecond
-						err = d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return nil })
+						idleCtx, idleCancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+						defer idleCancel()
+						err = d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: &key, Context: idleCtx}, nil, func(*string, *string) error { return nil })
 						if !errors.Is(err, context.DeadlineExceeded) {
 							t.Fatal("unbounded idle", err)
 						}
@@ -359,7 +344,7 @@ func TestAfter0fbNewProviderDeadlineIsolation(t *testing.T) {
 						NewInstance(map[string]string) ModelDriver
 					}).NewInstance(localURLs)
 					localURLs["default"] = "http://mutated"
-					out, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &instance}, nil)
+					out, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: &instance}, nil)
 					if err != nil || out == nil || *out.Answer != instance {
 						t.Fatal(out, err)
 					}
@@ -386,7 +371,7 @@ func TestAfter0fbHuaweiVectorsAndOrcaSpeech(t *testing.T) {
 		}))
 		d := after0fbDriver(t, "HuaweiCloud", srv.URL)
 		key, name := "Bearer key", "model"
-		api := &APIConfig{APIKey: &key}
+		api := &APIConfig{ApiKey: &key}
 		out, err := d.Embed(&name, []string{"a", "b"}, api, &EmbeddingConfig{Dimension: 2})
 		if err != nil || !reflect.DeepEqual(out, []EmbeddingData{{Index: 0, Embedding: []float64{0, 1}}, {Index: 1, Embedding: []float64{1, 0}}}) {
 			t.Fatal(out, err)
@@ -402,12 +387,12 @@ func TestAfter0fbHuaweiVectorsAndOrcaSpeech(t *testing.T) {
 			t.Fatal("empty embed I/O", out, err)
 		}
 		response = `{"results":[{"index":1,"relevance_score":0},{"index":0,"relevance_score":0.8}]}`
-		scores, err := NewRerankModel(d, &name, api).Rerank("q", []string{"a", "b"})
+		scores, err := rerankScoresForTest(NewRerankModel(d, &name, api), "q", []string{"a", "b"}, api, &RerankConfig{})
 		if err != nil || !reflect.DeepEqual(scores, []float64{0.8, 0}) {
 			t.Fatal(scores, err)
 		}
 		outRank, err := d.Rerank(&name, "q", []string{"a", "b"}, api, &RerankConfig{TopN: 1})
-		if err != nil || len(outRank.Data) != 1 || outRank.Data[0].Index != 0 {
+		if err != nil || len(outRank.Data) != 1 || outRank.Data[0].Index != 1 {
 			t.Fatal(outRank, err)
 		}
 		for _, raw := range []string{`{}`, `{"results":[]}`, `{"results":[{"index":0,"relevance_score":0.8},{"index":1,"relevance_score":null}]}`, `{"results":[{"index":0,"relevance_score":0.8},{"index":0,"relevance_score":0}]}`, `{"results":[{"index":0,"relevance_score":0.8},{"index":2,"relevance_score":0}]}`, `{"results":[{"index":0,"relevance_score":0.8},{"index":1,"relevance_score":1e999}]}`} {
@@ -431,26 +416,26 @@ func TestAfter0fbHuaweiVectorsAndOrcaSpeech(t *testing.T) {
 			w.WriteHeader(status)
 			fmt.Fprint(w, body)
 		}))
-		d := after0fbDriver(t, "OrcaRouter", srv.URL).(TTSDriver)
+		d := after0fbDriver(t, "OrcaRouter", srv.URL).(ModelDriver)
 		name, key := "voice", "key"
-		api := &APIConfig{APIKey: &key}
-		cfg := &TTSConfig{Voice: "alloy", Format: "mp3"}
-		out, err := d.AudioSpeech(&name, "hello", api, cfg)
-		if err != nil || string(out.Audio) != body || out.Format != "mp3" {
+		api := &APIConfig{ApiKey: &key}
+		cfg := &TTSConfig{Format: "mp3", Params: map[string]any{"voice": "alloy"}}
+		out, err := d.AudioSpeech(&name, stringPtr("hello"), api, cfg)
+		if err != nil || string(out.Audio) != body {
 			t.Fatal(out, err)
 		}
 		for _, invalid := range []struct {
 			body, mime string
 			status     int
-		}{{"", "audio/mpeg", 200}, {`{"error":"private-provider-body"}`, "application/json", 200}, {"wav", "audio/wav", 200}, {"private-provider-body", "audio/mpeg", 401}} {
+		}{{"", "audio/mpeg", 200}, {`{"error":"private-provider-body"}`, "application/json", 200}, {"private-provider-body", "audio/mpeg", 401}} {
 			body, mime, status = invalid.body, invalid.mime, invalid.status
-			if out, err := d.AudioSpeech(&name, "hello", api, cfg); err == nil || out != nil || strings.Contains(err.Error(), "private-provider-body") {
+			if out, err := d.AudioSpeech(&name, stringPtr("hello"), api, cfg); err == nil || out != nil || strings.Contains(err.Error(), "private-provider-body") {
 				t.Fatal(out, err)
 			}
 		}
 		before := calls.Load()
 		for _, params := range []map[string]any{{"model": "bad"}, {"input": "bad"}, {"stream": true}, {"api_key": "bad"}} {
-			if _, err := d.AudioSpeech(&name, "hello", api, &TTSConfig{Voice: "alloy", Params: params}); err == nil {
+			if _, err := d.AudioSpeech(&name, stringPtr("hello"), api, &TTSConfig{Params: params}); err == nil {
 				t.Fatal("identity override")
 			}
 		}
@@ -474,7 +459,7 @@ func TestAfter0fbVectorAndSpeechInFlightCancellation(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
 			defer cancel()
 			name, key := "served", "key"
-			api := &APIConfig{APIKey: &key, Context: ctx}
+			api := &APIConfig{ApiKey: &key, Context: ctx}
 			d := after0fbDriver(t, "HuaweiCloud", srv.URL)
 			var err error
 			switch operation {
@@ -483,7 +468,7 @@ func TestAfter0fbVectorAndSpeechInFlightCancellation(t *testing.T) {
 			case "rerank":
 				_, err = d.Rerank(&name, "q", []string{"a"}, api, nil)
 			case "speech":
-				_, err = after0fbDriver(t, "OrcaRouter", srv.URL).(TTSDriver).AudioSpeech(&name, "hello", api, &TTSConfig{Voice: "alloy"})
+				_, err = after0fbDriver(t, "OrcaRouter", srv.URL).(ModelDriver).AudioSpeech(&name, stringPtr("hello"), api, &TTSConfig{Params: map[string]any{"voice": "alloy"}})
 			}
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatal(err)

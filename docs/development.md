@@ -60,203 +60,78 @@ worker 的 `-i` / `--index` 默认值为 `0`；旧位置参数已退出。仅支
 
 ## Go 并行实现的本地验证
 
-本仓生产后端是 Python/FastAPI；`cmd/`、`internal/` 是停滞的 Go 并行实现。
-本节说明该实现的构建、CLI 用法和验证，不作为生产启动或前端代理配置入口。
+Python 仍是生产后端。Go 的独立入口在 `cmd/`，实现位于 `internal/`；Go 使用
+统一的 `configs/` 配置根和 MySQL；模型资产位于 `configs/models/`、`configs/all_models.json`，ES 复用 `configs/es_mapping.json`。Go 服务配置与私有 RSA 文件仅位于 `configs/go/`，不覆盖 Python 的 `configs/service_conf.yaml`、`configs/llm_factories.json`。
+函数、文件和实现路线以本次冻结目标为准，收敛状态和必要例外见
+[Go 对齐记录](ragflow-porting/go-alignment.md)。
 
 ### 工具链与 native 依赖
 
-从仓库根目录执行命令。Go 版本以 [go.mod](../go.mod) 为准，当前要求 Go 1.25；
-CI 使用的 patch 版本和 native 准备步骤见
-[setup-go-native](../.github/actions/setup-go-native/action.yml)。
+Go 版本以 `go.mod` 和 CI 为准，使用 `GOTOOLCHAIN=local`、`GOFLAGS=-mod=readonly`
+与 `CGO_ENABLED=1`。C++ 分词库需要 CMake 4.0.3、C++ 编译器、PCRE2 和 SIMDe；
+真实字典包括 `rag/huqie.txt`、`rag/pos-id.def`、`opencc/` 和完整 `wordnet/`。
+运行 API 和 ingestor 时通过 `RAGFLOW_DICT_PATH` 指定字典根；测试另设置同路径的
+`RAG_DICT_PATH`。依赖准备见 [.github/actions/setup-go-native](../.github/actions/setup-go-native/action.yml)。
 
-```bash
-go version
-export GOTOOLCHAIN=local
-export GOFLAGS=-mod=readonly
-```
+Office 解析默认使用 office_oxide 0.1.2 的 C binding，没有 builtin/tag 选择接口。
+`OFFICE_OXIDE_PREFIX` 指向包含 `include/office_oxide_c/office_oxide.h` 和库的独立目录；
+Linux 链接 `.so`，macOS 链接同一发布包的 `.a` 及系统 frameworks。macOS 发布动态库含
+构建机绝对安装路径，因此构建脚本选用静态库。`build.sh` 在 prefix 缺依赖时下载发布包；
+受控验证应事先登记并准备指定 prefix，不修改全局缓存。
 
-CGO 需要真实的 `internal/cpp/cmake-build-release/librag_tokenizer_c_api.a`，
-以及与目标平台一致的 C/C++ 编译器和 PCRE2 静态库。当前 native 构建以 Linux amd64
-为 CI 验证平台，要求 CMake 4、PCRE2 和 SIMDe 开发头文件。依赖应预先安装；
-Go 构建阶段缺少 PCRE2 时直接报错，不自动调用系统包管理器。
-
-macOS 使用 Apple Clang，依赖可由 Homebrew 提前安装：`brew install cmake pcre2 simde`。
-CMake 仅在 macOS 查询 Homebrew prefix，并查找 PCRE2 静态库；使用自定义依赖目录时，
-可设置 `CMAKE_PREFIX_PATH` 和 `CXXFLAGS`。构建脚本使用 CMake 的并行构建入口，
-不要求 macOS 提供 `nproc`。[CGO 链接声明](../internal/binding/rag_analyzer.go)使用
-Apple Silicon 的 `/opt/homebrew/lib/libpcre2-8.a` 或 Intel 的
-`/usr/local/lib/libpcre2-8.a`；自定义 PCRE2 路径还需与 CGO 声明一致。
-不要跨平台复用静态库；源码、依赖或工具链变化后重建 native 库，再重新链接 Go 消费者。
-
-Go 文件解析默认使用内置 OOXML 解析器。需要可选的 office_oxide 0.1.2 时，
-预先准备对应平台的头文件与库，再设置 `MULTIRAG_GO_BUILD_TAGS=office_oxide` 和
-`OFFICE_OXIDE_PREFIX=/absolute/path/to/office_oxide` 执行 `./build.sh --go`。
-prefix 下需有 `include/office_oxide_c/office_oxide.h` 以及 `lib/liboffice_oxide.so`
-（macOS 为 `.a`，链接 Security/CoreFoundation 等系统库）。0.1.2 的 macOS 发布动态库
-带构建机绝对安装路径，脚本使用同包静态库；缺失所需资源时直接失败。
-
-### 构建三个入口
-
-在依赖已就绪的 Linux 或 macOS 环境中，首次构建：
+### 构建四个入口
 
 ```bash
 ./build.sh --all
-```
-
-也可以分两步执行；native 库未变化时只运行第二步：
-
-```bash
-./build.sh --cpp
+# native 源码未变化时：
 ./build.sh --go
 ```
 
 | 产物 | 独立源码入口 | 用途 |
 | --- | --- | --- |
-| `bin/server_main` | [`cmd/server_main.go`](../cmd/server_main.go) | Go API 服务 |
+| `bin/multirag_server` | [`cmd/server_main.go`](../cmd/server_main.go) | Go API |
 | `bin/admin_server` | [`cmd/admin_server.go`](../cmd/admin_server.go) | Go 管理服务 |
-| `bin/multirag_cli` | [`cmd/multirag_cli.go`](../cmd/multirag_cli.go) | CLI 客户端 |
+| `bin/ingestor` | [`cmd/ingestor.go`](../cmd/ingestor.go) | 独立 ingestion worker |
+| `bin/multirag_cli` | [`cmd/multirag_cli.go`](../cmd/multirag_cli.go) | CLI |
 
-`cmd/` 下有多个 `main`，应逐文件构建，不能用 `go build ./cmd` 合并编译。
-`--go` 对三个产物均检查失败并返回非零状态。`GOPROXY` 可由环境覆盖。
-直接构建到自有临时目录时，使用同一组入口：
-
-```bash
-mkdir -p /absolute/path/to/owned-bin
-CGO_ENABLED=1 go build -o /absolute/path/to/owned-bin/server_main ./cmd/server_main.go
-CGO_ENABLED=1 go build -o /absolute/path/to/owned-bin/admin_server ./cmd/admin_server.go
-CGO_ENABLED=1 go build -o /absolute/path/to/owned-bin/multirag_cli ./cmd/multirag_cli.go
-```
-
-`./build.sh --clean` 删除当前 checkout 的三个 binary 和 native 构建目录。
-仅在确认它们属于本任务时执行，避免清理共享工作目录中的他人产物。
-
-`./build.sh --run` 构建后从 `bin/` 同时启动 API 与管理服务；任一进程退出时，
-脚本停止并等待另一个自有子进程，返回先退出进程的状态。启动就绪仍需检查服务端点。
+`cmd/` 中的入口带独立构建约束，逐文件执行 `go build ./cmd/<name>.go`；不要把它们合成
+单个包。`--clean` 删除当前 checkout 的四个 binary 和 native 构建目录，只能清理本任务
+拥有的产物。`--run` 的具体启动方式见脚本；构建和进程存活不代表业务就绪。
 
 ### 本地服务与 CLI
 
-运行服务前先准备独立数据库、Redis、文档引擎、对象存储和真实分词字典，配置与
-本节下方的定向验证约定一致。Go 服务会初始化数据库等资源，
-不要指向生产库或其他任务的测试资源。
+Go 默认从 `configs/go/service_conf.yaml`、当前目录或 `/etc/ragflow/` 查找配置；环境变量前缀为
+`RAGFLOW`，字段与端口映射
+以 [config.go](../internal/server/config.go) 为准。管理服务支持 `--config`，ingestor 支持
+`-f`，API 支持 `--port`。准备独占 MySQL、Redis、NATS JetStream、文档引擎和对象存储，
+再从包含私有 `configs/go/` 的工作目录启动。不要使用生产库、生产队列或其他任务的测试资源。
+服务启动会建表和初始化目录。API 和 ingestor 依赖 Admin 心跳状态；检查真实健康、鉴权及
+业务响应。CLI 支持单条命令、交互模式和文件系统命令，语法见 [CLI README](../internal/cli/README.md)。
+密码加密使用 `configs/go/public.pem`，服务使用 `configs/go/private.pem`；这些是本机私有文件，不入库。
 
-Go 服务默认从 `./configs/service_conf.yaml`、当前目录或 `/etc/multirag/` 查找配置；
-字段映射和端口变换以 [`internal/server/config.go`](../internal/server/config.go) 为准。
-管理服务支持 `--config` 指定私有配置，API 服务支持 `--port` 覆盖端口。
-确认生效配置后，在两个终端从仓库根目录分别启动：
-
-```bash
-./bin/admin_server
-```
-
-```bash
-./bin/server_main
-```
-
-API 服务与管理服务通过心跳通信。端口由配置决定；CLI 默认地址为 `127.0.0.1:9380`，
-连接 Go 实例时应显式传入其实际端口，例如独立配置的 `9384`：
-
-```bash
-./bin/multirag_cli --help
-./bin/multirag_cli --host 127.0.0.1:9384
-```
-
-在交互模式中用 `\?` 查看命令、`\q` 退出。登录现有测试用户后，先检查本租户资源：
-
-```sql
-LOGIN USER 'developer@example.com';
-LIST AVAILABLE PROVIDERS;
-LIST PROVIDERS;
-LIST DATASETS;
-```
-
-登录命令会提示输入密码。自动化可通过 `--config /absolute/path/to/private-multirag.yml`
-读取私有连接配置（格式见 CLI `--help`）；该文件放在仓库外并设为 `0600`，不提交凭据。
-API token 与用户名/密码是两种互斥认证方式。CLI 也支持单条 SQL 命令和 Context Engine
-命令，详见 [CLI README](../internal/cli/README.md)。
-
-模型实例已配置且测试用户有权使用后，可以生成 embedding 或重排文档；以下模型名和
-实例名需替换为本租户实际配置。`dimension 0` 使用模型默认维度，正数必须是模型支持的
-维度。`top 0` 保留全部重排结果，负数参数会被拒绝。
-
-```sql
-EMBED TEXT 'hello' 'world' WITH 'nomic-embed-text@local@LM-Studio' DIMENSION 0;
-RERANK QUERY 'what is rag' DOCUMENT 'retrieval augmented generation' 'a weather report' WITH 'rerank@dev@zhipu-ai' TOP 2;
-```
-
-Go embedding 驱动和绑定模型统一使用 `Embed`，返回 `[]EmbeddingData`；每项含输入
-`index` 和 `embedding` 向量。`POST /api/v1/embeddings` 的 `data` 使用这一结构，
-CLI 输出每项的 `index` 与从向量长度计算的 `dimension`。输入顺序通过全局 index 保持；
-结果缺失、重复、越界或维度不一致会失败，零分量合法。
-
-Web 是独立仓库，本指南不配置前端代理。需要 Web 联调时，按实际 Web 仓约定与当前
-后端契约验证；Go 构建成功只证明编译和链接，不能作为 Python 服务或 Web 验收证据。
-
-### 模型、图谱与存储合同
-
-共享 `configs/all_models.json` 只为实际发现的模型 ID 补充元数据；名称和别名索引忽略
-大小写，但保留供应商原始 ID、顺序与数量。目录规范化同模型的冗余拼写，索引加载仍
-拒绝重复或跨模型碰撞，失败时不发布半份目录；独立 provider 目录与模型退役策略不变。
-
-Go 模型目录支持 MinerU URL 异步解析、Replicate prediction/SSE、Xinference 本地聊天、
-TogetherAI 聊天与 reasoning，以及 302.AI、JieKouAI 和 CometAPI 的非流式 ASR/TTS。
-另支持 MinerU_Local 文件内容任务（provider `mineru_local`、`doc_parse`、租户自定义 URL，
-key 可选）、TogetherAI embedding、Xinference embedding/rerank、Novita rerank、
-N1N chat/embedding/rerank、GPUStack chat/embedding 和 Azure OpenAI deployment chat/embedding。
-Azure 实例 URL 包含 `/openai`，使用 `api-key` 和 `api-version=2024-10-21`；
-模型发现与连接检查查询 `/models`，返回可访问的基础/微调模型 ID。实际调用仍须另外声明
-租户的 deployment ID，不能把发现结果当成已部署实例。过滤、损坏响应及不合法流终态报错，
-不会产生成功完成事件。这些 Go 驱动不代表已通过付费供应商验收。
-Xinference 必须指定实例 URL，可不提供 API key；托管供应商仍校验凭据和地址。
-CLI `FILE=URL` 解析不抓取文档，MinerU 驱动仅把 URL 交给服务。Replicate 聊天当前只接受
-文本消息，非文本内容在请求前报错；预测成功使用 `succeeded`，供应商错误和取消会终止流。
-
-Go 的 `GET/DELETE /api/v1/datasets/{dataset_id}/graph` 先校验用户与 dataset 权限，
-再使用授权记录中的规范 ID 和 tenant。GET 返回聚合图并按权重裁剪到最多 256 节点、128 边；
-DELETE 只删除当前 dataset 的五类图谱记录，保留普通 chunk。`doc_id` 子图请求明确拒绝。
-图谱损坏、重复记录、后端读取/删除失败不会冒充空图或删除成功。
-
-`DocEngine` 的 chunk 和 metadata 写入使用独立的 `ChunkStore`、`MetadataStore` 方法，
-禁止依靠名称前缀猜测删除范围。ES 在共享 tenant 索引内按 dataset 删除；metadata 更新保留
-已有 Python 物理文档 ID 并合并字段。Infinity 使用显式表范围；固定 SDK 无法保留同时包含
-两种引号的字面量时直接报错。通用 Milvus 写入仍明确不可用，独立 Skills 存储合同保持原实现。
-这些能力属于 Go 并行实现，不代表 Python 生产实例已切换。
-
-Go chunk 直读使用 `GET /api/v1/datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}`；
-先校验有效 dataset、用户访问和有效文档，再绑定 tenant、dataset 与 native chunk 的身份。
-CLI `GET/UPDATE CHUNK` 显式提供 `DOCUMENT`，不再跨租户猜测文档。metadata flattened
-查询先授权完整 dataset 集合，再分别读取各 tenant 的 metadata；删除 tag 使用
-`DELETE /api/v1/datasets/{dataset_id}/tags`。完整 CLI 语法见 [CLI README](../internal/cli/README.md)。
+Go 模型配置在 `configs/models/` 与 `configs/all_models.json`，模型定义位于
+`internal/entity/models/`。驱动直接提供 messages、typed inventory 和原生 embedding/media
+合同；租户模型 ID 为 UUID。具体能力、流终态和 SDK 边界以对应 driver 为准，不提供统一的
+旧接口兼容层。数据库内 `TenantLLM` 的数值 ID 与租户模型 UUID 是不同模型。
+受控 HTTP 假件通过不能代表付费供应商、生产数据或 Web 验收。
 
 ### 定向验证
 
-分词测试从 `RAG_DICT_PATH` 读取资源路径，未设置时使用仓库根下 `resource/`；
-路径应包含 `rag/huqie.txt`、`rag/pos-id.def`、`opencc/` 与完整 `wordnet/`。
-NLP WordNet 测试使用 `resource/wordnet/`。资源可从 Dockerfile 使用的
-`infiniflow/resource` 仓库获取，放在已忽略的 `resource/`，不在测试期间自动下载，
-也无需写入 `/usr/share`。
+测试使用 `scripts/run_registered.py` 登记进程、临时目录和缓存；外部资源由 case fixture
+先登记再创建，结束后独立读回。`scripts/go_test_services.py start --root <evidence>` 为 Go
+创建独占的 MySQL、Redis、NATS、MinIO、ES 和 Infinity，生成私有
+`isolated-services/scratch.json` 与 `service_conf.yaml`。停止命令校验容器 owner/run 身份，
+删除本任务容器和卷，并检查端口、卷与容器确实消失。服务缺失或认证失败不得改为 skip。
 
-MinIO Go 测试通过 `MULTIRAG_GO_TEST_MINIO_CONFIG` 指向私有 JSON 文件，
-不读取应用存储配置。文件字段对应 `server.MinioConfig`，例如：
+设置 `MULTIRAG_GO_ALIGNMENT_CONFIG` 指向该私有 scratch JSON；真实 native fixture 目录
+通过 `MULTIRAG_OFFICE_FIXTURES` 提供 `sample.doc/docx/ppt/pptx/xls/xlsx`。
+`MULTIRAG_M_CLI` 指向本组合实际构建的 CLI，启用真实子进程消费者验收。按范围通过
+registered runner 执行 `go build ./internal/...`、`go vet ./internal/...` 和
+`go test -race -count=1 -json ./internal/...`，最后逐文件构建四个入口并实际启动验收。
+CI 校验本提交的必需专项测试、失败和意外 skip，不复用其他组合的运行结果。
 
-```json
-{"Host":"127.0.0.1:9000","User":"<test-access-key>","Password":"<test-secret-key>","Secure":false,"Verify":true}
-```
-
-该文件放在仓库外并设为 `0600`，不得提交。`Bucket` 和 `PrefixPath` 必须为空。
-测试先做认证探测，再使用随机 `multirag-go-test-*` 桶；成功或失败都会清理本次桶，
-不会清理应用桶。配置缺失或认证失败直接失败，不以 skip 充当通过。
-
-```bash
-export MULTIRAG_GO_TEST_MINIO_CONFIG=/absolute/path/to/private-minio.json
-go test -count=1 ./internal/...
-go test -race -count=1 ./internal/service/nlp ./internal/tokenizer ./internal/storage
-go build ./internal/...
-go vet ./internal/...
-```
-
-Python integration 若卡住，先用
-`pytest -vv -o faulthandler_timeout=60 <selected-test>` 获取停顿位置并隔离复现；
-不要启动多份全套测试，或终止其他任务的进程。单例通过不等于全套通过。
+Python integration 若停滞，先用 `pytest -vv -o faulthandler_timeout=60 <selected-test>`
+定位，不启动多份全套测试或终止其他任务的进程。Python、Go、Web 的验证结论分别报告。
 
 ## 维护协作指令
 

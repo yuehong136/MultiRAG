@@ -98,11 +98,11 @@ const (
 // Knowledgebase represents the knowledge base model
 type Knowledgebase struct {
 	ID                     string     `gorm:"column:id;primaryKey;size:32" json:"id"`
-	Avatar                 *string    `gorm:"column:avatar;type:text" json:"avatar,omitempty"`
+	Avatar                 *string    `gorm:"column:avatar;type:longtext" json:"avatar,omitempty"`
 	TenantID               string     `gorm:"column:tenant_id;size:32;not null;index" json:"tenant_id"`
 	Name                   string     `gorm:"column:name;size:128;not null;index" json:"name"`
 	Language               *string    `gorm:"column:language;size:32;index" json:"language,omitempty"`
-	Description            *string    `gorm:"column:description;type:text" json:"description,omitempty"`
+	Description            *string    `gorm:"column:description;type:longtext" json:"description,omitempty"`
 	EmbdID                 string     `gorm:"column:embd_id;size:128;not null;index" json:"embd_id"`
 	TenantEmbdID           *int64     `gorm:"column:tenant_embd_id;index" json:"tenant_embd_id,omitempty"`
 	Permission             string     `gorm:"column:permission;size:16;not null;default:me;index" json:"permission"`
@@ -114,7 +114,7 @@ type Knowledgebase struct {
 	VectorSimilarityWeight float64    `gorm:"column:vector_similarity_weight;default:0.3;index" json:"vector_similarity_weight"`
 	ParserID               string     `gorm:"column:parser_id;size:32;not null;default:naive;index" json:"parser_id"`
 	PipelineID             *string    `gorm:"column:pipeline_id;size:32;index" json:"pipeline_id,omitempty"`
-	ParserConfig           JSONMap    `gorm:"column:parser_config;type:jsonb" json:"parser_config"`
+	ParserConfig           JSONMap    `gorm:"column:parser_config;type:json" json:"parser_config"`
 	Pagerank               int64      `gorm:"column:pagerank;default:0" json:"pagerank"`
 	GraphragTaskID         *string    `gorm:"column:graphrag_task_id;size:32;index" json:"graphrag_task_id,omitempty"`
 	GraphragTaskFinishAt   *time.Time `gorm:"column:graphrag_task_finish_at" json:"graphrag_task_finish_at,omitempty"`
@@ -128,7 +128,7 @@ type Knowledgebase struct {
 
 // TableName returns the table name for Knowledgebase model
 func (Knowledgebase) TableName() string {
-	return "t_ai_knowledgebases"
+	return "knowledgebase"
 }
 
 // ToMap converts Knowledgebase to a map for JSON response
@@ -237,3 +237,18 @@ type KnowledgebaseListItem struct {
 	UpdateTime   *int64  `json:"update_time,omitempty"`
 }
 
+// InvitationCode represents the invitation code model
+type InvitationCode struct {
+	ID        string     `gorm:"column:id;primaryKey;size:32" json:"id"`
+	Code      string     `gorm:"column:code;size:32;not null;index" json:"code"`
+	VisitTime *time.Time `gorm:"column:visit_time;index" json:"visit_time,omitempty"`
+	UserID    *string    `gorm:"column:user_id;size:32;index" json:"user_id,omitempty"`
+	TenantID  *string    `gorm:"column:tenant_id;size:32;index" json:"tenant_id,omitempty"`
+	Status    *string    `gorm:"column:status;size:1;index" json:"status,omitempty"`
+	BaseModel
+}
+
+// TableName returns the table name for InvitationCode model
+func (InvitationCode) TableName() string {
+	return "invitation_code"
+}

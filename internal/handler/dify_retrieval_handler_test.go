@@ -1,475 +1,401 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package handler
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math"
+	"gorm.io/gorm"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 	"multirag/internal/common"
+	"multirag/internal/engine"
+	"multirag/internal/engine/types"
 	"multirag/internal/entity"
-	"multirag/internal/entity/models"
-	"multirag/internal/service/kg"
+	modelModule "multirag/internal/entity/models"
 	"multirag/internal/service/nlp"
+
+	"github.com/gin-gonic/gin"
 )
 
-type difyTestDependencies struct {
-	calls       []string
-	kb          *entity.Knowledgebase
-	readError   error
-	existsErr   error
-	metaError   error
-	embedError  error
-	chatError   error
-	childError  error
-	docError    error
-	graphError  error
-	enrichErr   error
-	searchErr   error
-	labelErr    error
-	labelNil    bool
-	metadata    common.MetaData
-	chunks      []map[string]interface{}
-	documents   []*entity.Document
-	graph       *kg.Result
-	request     *nlp.RetrievalRequest
-	childrenFn  DifyChildrenRetriever
-	metaFn      func(context.Context)
-	authorizeFn func(context.Context)
+// --- Mock implementations ---
+
+type mockKBService struct {
+	KBServiceIface
+	getByIDFn    func(kbID string) (*entity.Knowledgebase, error)
+	accessibleFn func(kbID, userID string) bool
 }
 
-func (d *difyTestDependencies) GetReadableByID(ctx context.Context, id, user string) (*entity.Knowledgebase, error) {
-	d.calls = append(d.calls, "authorize:"+id+":"+user)
-	if d.authorizeFn != nil {
-		d.authorizeFn(ctx)
+func (m *mockKBService) GetByID(kbID string) (*entity.Knowledgebase, error) {
+	if m.getByIDFn != nil {
+		return m.getByIDFn(kbID)
 	}
-	return d.kb, d.readError
-}
-func (d *difyTestDependencies) GetByIDContext(context.Context, string) (*entity.Knowledgebase, error) {
-	d.calls = append(d.calls, "exists")
-	return d.kb, d.existsErr
-}
-func (d *difyTestDependencies) Embedding(context.Context, *entity.Knowledgebase) (*models.EmbeddingModel, error) {
-	d.calls = append(d.calls, "embedding")
-	return &models.EmbeddingModel{}, d.embedError
-}
-func (d *difyTestDependencies) Chat(context.Context, *entity.Knowledgebase) (*models.ChatModel, error) {
-	d.calls = append(d.calls, "chat")
-	return &models.ChatModel{}, d.chatError
-}
-func (d *difyTestDependencies) GetFlattedMetaByKBsContext(ctx context.Context, ids []string) (common.MetaData, error) {
-	d.calls = append(d.calls, "filter")
-	if d.kb != nil && !reflect.DeepEqual(ids, []string{d.kb.ID}) {
-		return nil, errors.New("unexpected metadata scope")
-	}
-	if d.metaFn != nil {
-		d.metaFn(ctx)
-	}
-	return d.metadata, d.metaError
-}
-func (d *difyTestDependencies) EnrichChunksWithDocMetadata(_ context.Context, chunks []map[string]interface{}, user string, fields []string) ([]map[string]interface{}, error) {
-	d.calls = append(d.calls, "enrich")
-	if user != "user" || fields != nil {
-		return nil, errors.New("unexpected enrichment scope")
-	}
-	result := make([]map[string]interface{}, len(chunks))
-	for i, chunk := range chunks {
-		copy := make(map[string]interface{}, len(chunk)+1)
-		for key, value := range chunk {
-			copy[key] = value
-		}
-		copy["document_metadata"] = map[string]interface{}{"count": 42, "enabled": true, "tags": []interface{}{"a", "b"}, "document_id": "untrusted", "doc_id": "untrusted"}
-		result[i] = copy
-	}
-	return result, d.enrichErr
-}
-func (d *difyTestDependencies) LabelQuestionContext(_ context.Context, userID, question string, kbs []*entity.Knowledgebase) (map[string]float64, error) {
-	d.calls = append(d.calls, "labels")
-	if userID != "user" || question != "question" || len(kbs) != 1 || kbs[0].ID != "kb" {
-		return nil, errors.New("unexpected ranking scope")
-	}
-	if d.labelNil {
-		return nil, d.labelErr
-	}
-	return map[string]float64{"pagerank_fea": 10}, d.labelErr
-}
-func (d *difyTestDependencies) Retrieval(_ context.Context, request *nlp.RetrievalRequest) (*nlp.RetrievalResult, error) {
-	d.calls = append(d.calls, "retrieve")
-	d.request = request
-	return &nlp.RetrievalResult{Chunks: d.chunks}, d.searchErr
-}
-func (d *difyTestDependencies) GetByIDs(_ context.Context, ids []string) ([]*entity.Document, error) {
-	d.calls = append(d.calls, "documents")
-	return d.documents, d.docError
+	return &entity.Knowledgebase{
+		ID: kbID, TenantID: "tenant1", EmbdID: "text-embedding",
+	}, nil
 }
 
-type difyTestGraph struct{ deps *difyTestDependencies }
-
-func (g difyTestGraph) Retrieval(_ context.Context, user string, ids []string, question string, _ *models.ChatModel, _ *models.EmbeddingModel, _ ...kg.Option) (*kg.Result, error) {
-	g.deps.calls = append(g.deps.calls, "graph")
-	if user != "user" || !reflect.DeepEqual(ids, []string{"kb"}) || question != "question" {
-		return nil, errors.New("unexpected graph scope")
+func (m *mockKBService) Accessible(kbID, userID string) bool {
+	if m.accessibleFn != nil {
+		return m.accessibleFn(kbID, userID)
 	}
-	return g.deps.graph, g.deps.graphError
+	return true
 }
 
-func newDifyTestHandler(t *testing.T, user *entity.User) (*difyTestDependencies, *gin.Engine) {
-	t.Helper()
-	d := &difyTestDependencies{
-		kb:        &entity.Knowledgebase{ID: "kb", TenantID: "owner"},
-		chunks:    []map[string]interface{}{{"doc_id": "doc", "kb_id": "kb", "similarity": 0.8, "content_with_weight": "ordinary", "docnm_kwd": "title", "vector": []float64{1}}},
-		documents: []*entity.Document{{ID: "doc", KbID: "kb"}},
-		graph:     &kg.Result{Content: "graph aggregate", KBID: "kb"},
+type mockModelService struct {
+	ModelServiceIface
+	getEmbeddingFn func(tenantID, embdID string) (*modelModule.EmbeddingModel, error)
+	getChatModelFn func(tenantID, llmID string) (*modelModule.ChatModel, error)
+}
+
+func (m *mockModelService) GetEmbeddingModel(tenantID, embdID string) (*modelModule.EmbeddingModel, error) {
+	if m.getEmbeddingFn != nil {
+		return m.getEmbeddingFn(tenantID, embdID)
 	}
-	children := func(ctx context.Context, chunks []map[string]interface{}, owner string) ([]map[string]interface{}, error) {
-		d.calls = append(d.calls, "children")
-		if owner != "owner" {
-			return nil, errors.New("unexpected child owner")
-		}
-		if d.childrenFn != nil {
-			return d.childrenFn(ctx, chunks, owner)
-		}
-		return chunks, d.childError
+	return &modelModule.EmbeddingModel{}, nil
+}
+
+func (m *mockModelService) GetChatModel(tenantID, llmID string) (*modelModule.ChatModel, error) {
+	if m.getChatModelFn != nil {
+		return m.getChatModelFn(tenantID, llmID)
 	}
-	h := NewDifyRetrievalHandler(DifyRetrievalDependencies{Datasets: d, Models: d, Metadata: d, Retrieval: d, Documents: d, Children: children, KG: difyTestGraph{d}})
+	return &modelModule.ChatModel{}, nil
+}
+
+type mockMetadataService struct {
+	MetadataServiceIface
+	getFlattedMetaFn func(kbIDs []string) (common.MetaData, error)
+	labelQuestionFn  func(question string, kbs []*entity.Knowledgebase) map[string]float64
+}
+
+func (m *mockMetadataService) GetFlattedMetaByKBs(kbIDs []string) (common.MetaData, error) {
+	if m.getFlattedMetaFn != nil {
+		return m.getFlattedMetaFn(kbIDs)
+	}
+	return common.MetaData{}, nil
+}
+
+func (m *mockMetadataService) LabelQuestion(question string, kbs []*entity.Knowledgebase) map[string]float64 {
+	if m.labelQuestionFn != nil {
+		return m.labelQuestionFn(question, kbs)
+	}
+	return nil
+}
+
+type mockRetrievalService struct {
+	RetrievalServiceIface
+	retrievalFn func(ctx context.Context, req *nlp.RetrievalRequest) (*nlp.RetrievalResult, error)
+}
+
+func (m *mockRetrievalService) Retrieval(ctx context.Context, req *nlp.RetrievalRequest) (*nlp.RetrievalResult, error) {
+	if m.retrievalFn != nil {
+		return m.retrievalFn(ctx, req)
+	}
+	return &nlp.RetrievalResult{
+		Chunks: []map[string]interface{}{
+			{"doc_id": "doc1", "docnm_kwd": "Test Doc", "content_with_weight": "test content", "similarity": 0.85},
+		},
+	}, nil
+}
+
+type mockDocDAO struct {
+	DocumentDAOIface
+	getByIDsFn func(ids []string) ([]*entity.Document, error)
+}
+
+func (m *mockDocDAO) GetByIDs(ids []string) ([]*entity.Document, error) {
+	if m.getByIDsFn != nil {
+		return m.getByIDsFn(ids)
+	}
+	return []*entity.Document{
+		{ID: "doc1", Name: strPtr("Test Doc"), MetaFields: &entity.JSONMap{"author": "Zhang San"}},
+	}, nil
+}
+
+// mockDocEngine stubs the DocEngine interface (embed = panic on unimplemented).
+type mockDocEngine struct {
+	engine.DocEngine
+}
+
+func (m *mockDocEngine) Close() error                   { return nil }
+func (m *mockDocEngine) Ping(ctx context.Context) error { return nil }
+func (m *mockDocEngine) GetType() string                { return "mock" }
+func (m *mockDocEngine) Search(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error) {
+	return &types.SearchResult{}, nil
+}
+func (m *mockDocEngine) GetChunk(ctx context.Context, _, _ string, _ []string) (interface{}, error) {
+	return map[string]interface{}{}, nil
+}
+
+// --- Helper ---
+
+func setupDifyTest(userID string) (*DifyRetrievalHandler, *gin.Engine) {
+	h := &DifyRetrievalHandler{
+		kbSvc:        &mockKBService{},
+		modelSvc:     &mockModelService{},
+		metadataSvc:  &mockMetadataService{},
+		retrievalSvc: &mockRetrievalService{},
+		docDAO:       &mockDocDAO{},
+		docEngine:    &mockDocEngine{},
+	}
+
 	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.POST("/api/v1/dify/retrieval", func(c *gin.Context) {
-		if user != nil {
-			c.Set("user", user)
-		}
-		h.Retrieval(c)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("user", &entity.User{ID: userID})
 	})
-	router.GET("/api/v1/dify/retrieval/health", h.HealthCheck)
-	return d, router
+	r.POST("/api/v1/dify/retrieval", h.Retrieval)
+	r.GET("/api/v1/dify/retrieval", h.Retrieval)
+	r.GET("/api/v1/dify/retrieval/health", h.HealthCheck)
+	return h, r
 }
 
-func callDify(router *gin.Engine, body string) *httptest.ResponseRecorder {
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/dify/retrieval", strings.NewReader(body))
-	request.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(response, request)
-	return response
+func setupDifyTestNoAuth() (*DifyRetrievalHandler, *gin.Engine) {
+	h := &DifyRetrievalHandler{
+		kbSvc:        &mockKBService{},
+		modelSvc:     &mockModelService{},
+		metadataSvc:  &mockMetadataService{},
+		retrievalSvc: &mockRetrievalService{},
+		docDAO:       &mockDocDAO{},
+		docEngine:    &mockDocEngine{},
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/dify/retrieval", h.Retrieval)
+	return h, r
 }
 
-func TestDifyMetadataNoMatchStopsBeforeModelsAndRetrieval(t *testing.T) {
-	d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-	d.metadata = common.MetaData{"count": {"42": {"other"}}}
-	response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":true,"metadata_condition":{"conditions":[{"name":"count","comparison_operator":">","value":100}]}}`)
-	if response.Code != 200 || strings.TrimSpace(response.Body.String()) != `{"records":[]}` {
-		t.Fatal(response.Code, response.Body.String())
-	}
-	if !reflect.DeepEqual(d.calls, []string{"authorize:kb:user", "filter"}) {
-		t.Fatal("zero match performed forbidden IO:", d.calls)
-	}
-}
+// --- Tests ---
 
-func TestDifyTypedMetadataAndTrustedGraphIdentity(t *testing.T) {
-	d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-	d.metadata = common.MetaData{"count": {"42": {"doc"}}, "enabled": {"true": {"doc"}}, "tags": {"a": {"doc"}}}
-	d.chunks = append(d.chunks,
-		map[string]interface{}{"doc_id": "", "kb_id": "kb", "content_with_weight": "untrusted synthetic"},
-		map[string]interface{}{"doc_id": "dangling", "kb_id": "kb", "content_with_weight": "deleted"},
-		map[string]interface{}{"doc_id": "doc", "kb_id": "foreign", "content_with_weight": "foreign"},
-		map[string]interface{}{"doc_id": "unselected", "kb_id": "kb", "content_with_weight": "unselected"})
-	d.documents = append(d.documents, &entity.Document{ID: "unselected", KbID: "kb"})
-	response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":true,"retrieval_setting":{"score_threshold":0,"top_k":7},"metadata_condition":{"conditions":[{"name":"count","comparison_operator":"=","value":42},{"name":"enabled","comparison_operator":"=","value":true},{"name":"tags","comparison_operator":"in","value":["a","b"]}]}}`)
-	if response.Code != http.StatusOK {
-		t.Fatal(response.Code, response.Body.String())
+func TestDifyRetrieval_HealthCheck(t *testing.T) {
+	_, r := setupDifyTest("user1")
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/v1/dify/retrieval/health", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
 	}
-	var payload struct {
-		Records []difyRecord `json:"records"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Records) != 2 || payload.Records[0].Content != "graph aggregate" || payload.Records[1].Content != "ordinary" {
-		t.Fatal(payload.Records)
-	}
-	if !reflect.DeepEqual(payload.Records[0].Metadata, map[string]interface{}{"doc_id": "", "document_id": ""}) {
-		t.Fatal(payload.Records[0])
-	}
-	metadata := payload.Records[1].Metadata
-	if metadata["doc_id"] != "doc" || metadata["document_id"] != "doc" || metadata["enabled"] != true || metadata["count"] != float64(42) || !reflect.DeepEqual(metadata["tags"], []interface{}{"a", "b"}) {
-		t.Fatal(metadata)
-	}
-	if d.request == nil || !reflect.DeepEqual(d.request.DocIDs, []string{"doc"}) || !reflect.DeepEqual(d.request.KbIDs, []string{"kb"}) || !reflect.DeepEqual(d.request.TenantIDs, []string{"owner"}) || d.request.Top == nil || *d.request.Top != 7 || d.request.SimilarityThreshold == nil || *d.request.SimilarityThreshold != 0 {
-		t.Fatal(d.request)
-	}
-	if _, retained := d.chunks[0]["vector"]; !retained {
-		t.Fatal("handler mutated caller's chunks")
+	if resp["data"] != true {
+		t.Errorf("expected data=true, got %v", resp["data"])
 	}
 }
 
-func TestDifyEmptyMetadataPredicatesDoNotSelectEmptyDocuments(t *testing.T) {
-	for _, metadata := range []string{"", `,"metadata_condition":{}`, `,"metadata_condition":null`} {
-		for _, useKG := range []string{"false", "true"} {
-			t.Run(metadata+"/kg="+useKG, func(t *testing.T) {
-				d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-				response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":`+useKG+metadata+`}`)
-				if response.Code != 200 || d.request == nil || d.request.DocIDs != nil || *d.request.Top != 1024 || *d.request.SimilarityThreshold != 0 {
-					t.Fatal(response.Code, response.Body.String(), d.request)
-				}
-				for _, call := range d.calls {
-					if call == "filter" {
-						t.Fatal("inactive predicates loaded filtering metadata")
-					}
-				}
-			})
-		}
+func TestDifyRetrieval_Basic(t *testing.T) {
+	_, r := setupDifyTest("user1")
+	body := `{"knowledge_id": "kb1", "query": "test question"}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	records, ok := resp["records"].([]interface{})
+	if !ok || len(records) == 0 {
+		t.Errorf("expected non-empty records, got %v", resp["records"])
 	}
 }
 
-func TestDifyExplicitEmptyMetadataStopsAfterAuthorization(t *testing.T) {
-	for _, useKG := range []string{"false", "true"} {
-		t.Run(useKG, func(t *testing.T) {
-			d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-			response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":`+useKG+`,"metadata_condition":{"conditions":[]}}`)
-			if response.Code != http.StatusOK || response.Body.String() != `{"records":[]}` || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user"}) {
-				t.Fatal(response.Code, response.Body.String(), d.calls)
+func TestDifyRetrieval_GET(t *testing.T) {
+	_, r := setupDifyTest("user1")
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/v1/dify/retrieval?knowledge_id=kb1&query=test", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDifyRetrieval_MissingArgs(t *testing.T) {
+	_, r := setupDifyTest("user1")
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"no knowledge_id", `{"query": "test"}`},
+		{"no query", `{"knowledge_id": "kb1"}`},
+		{"empty body", `{}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("expected 400, got %d", w.Code)
 			}
 		})
 	}
 }
 
-func TestDifyExplicitEmptyMetadataKeepsAuthorizationChecks(t *testing.T) {
-	const body = `{"knowledge_id":"kb","query":"question","use_kg":true,"metadata_condition":{"conditions":[]}}`
-	t.Run("missing identity", func(t *testing.T) {
-		d, router := newDifyTestHandler(t, nil)
-		response := callDify(router, body)
-		if response.Code != http.StatusForbidden || len(d.calls) != 0 {
-			t.Fatal(response.Code, response.Body.String(), d.calls)
-		}
-	})
-	t.Run("denied dataset", func(t *testing.T) {
-		d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-		d.readError = gorm.ErrRecordNotFound
-		response := callDify(router, body)
-		if response.Code != http.StatusForbidden || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user", "exists"}) {
-			t.Fatal(response.Code, response.Body.String(), d.calls)
-		}
-	})
-	t.Run("original token tenant", func(t *testing.T) {
-		d := &difyTestDependencies{kb: &entity.Knowledgebase{ID: "kb", TenantID: "foreign-owner"}}
-		h := NewDifyRetrievalHandler(DifyRetrievalDependencies{Datasets: d, Metadata: d})
-		router := gin.New()
-		router.POST("/api/v1/dify/retrieval", func(c *gin.Context) {
-			c.Set("user", &entity.User{ID: "user"})
-			c.Set(difyTokenTenantContext, "original-token-tenant")
-			h.Retrieval(c)
-		})
-		response := callDify(router, body)
-		if response.Code != http.StatusForbidden || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user"}) {
-			t.Fatal(response.Code, response.Body.String(), d.calls)
-		}
-	})
-}
-
-func TestDifyNullMetadataConditionsRejectBeforeIO(t *testing.T) {
-	for _, useKG := range []string{"false", "true"} {
-		t.Run(useKG, func(t *testing.T) {
-			d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-			response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":`+useKG+`,"metadata_condition":{"conditions":null}}`)
-			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"error_code":101`) || len(d.calls) != 0 {
-				t.Fatal(response.Code, response.Body.String(), d.calls)
-			}
-		})
+func TestDifyRetrieval_KBNotFound(t *testing.T) {
+	h, r := setupDifyTest("user1")
+	h.kbSvc = &mockKBService{
+		getByIDFn: func(kbID string) (*entity.Knowledgebase, error) {
+			return nil, gorm.ErrRecordNotFound
+		},
+	}
+	w := httptest.NewRecorder()
+	body := `{"knowledge_id": "nonexistent", "query": "test"}`
+	req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
 	}
 }
 
-func TestDifyExplicitEmptyMetadataCancellation(t *testing.T) {
-	d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	d.authorizeFn = func(context.Context) { cancel() }
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/dify/retrieval", strings.NewReader(`{"knowledge_id":"kb","query":"question","use_kg":true,"metadata_condition":{"conditions":[]}}`)).WithContext(ctx)
-	router.ServeHTTP(response, request)
-	if response.Code != http.StatusInternalServerError || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user"}) {
-		t.Fatal(response.Code, response.Body.String(), d.calls)
+func TestDifyRetrieval_NoAuth(t *testing.T) {
+	_, r := setupDifyTestNoAuth()
+	w := httptest.NewRecorder()
+	body := `{"knowledge_id": "kb1", "query": "test"}`
+	req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
 	}
 }
 
-func TestDifyAbsentRankFeaturesPreserveRetrieverDefaults(t *testing.T) {
-	d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-	d.labelNil = true
-	response := callDify(router, `{"knowledge_id":"kb","query":"question"}`)
-	if response.Code != 200 || d.request == nil || d.request.RankFeature != nil {
-		t.Fatal(response.Code, response.Body.String(), d.request)
+func TestDifyRetrieval_Unauthorized(t *testing.T) {
+	h, r := setupDifyTest("user1")
+	h.kbSvc = &mockKBService{
+		accessibleFn: func(kbID, userID string) bool { return false },
+	}
+	w := httptest.NewRecorder()
+	body := `{"knowledge_id": "kb1", "query": "test"}`
+	req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
 	}
 }
 
-func TestDifyRejectsInvalidArgumentsBeforeDependencyIO(t *testing.T) {
-	for _, body := range []string{
-		`{}`, `null`, `[]`, `{bad`, `{"knowledge_id":"kb","query":"question"}{}`,
-		`{"knowledge_id":"kb","query":" "}`,
-		`{"knowledge_id":"kb","query":"question","use_kg":null}`,
-		`{"knowledge_id":"kb","query":"question","retrieval_setting":null}`,
-		`{"knowledge_id":"kb","query":"question","retrieval_setting":{"top_k":0}}`,
-		`{"knowledge_id":"kb","query":"question","retrieval_setting":{"top_k":10001}}`,
-		`{"knowledge_id":"kb","query":"question","retrieval_setting":{"top_k":1.2}}`,
-		`{"knowledge_id":"kb","query":"question","retrieval_setting":{"top_k":null}}`,
-		`{"knowledge_id":"kb","query":"question","retrieval_setting":{"score_threshold":null}}`,
-		`{"knowledge_id":"kb","query":"question","retrieval_setting":{"score_threshold":1e999}}`,
-		`{"knowledge_id":"kb","query":"question","retrieval_setting":{"score_threshold":-0.1}}`,
-		`{"knowledge_id":"kb","query":"question","metadata_condition":{"conditions":null}}`,
-		`{"knowledge_id":"kb","query":"question","metadata_condition":{"conditions":[{"name":"author","comparison_operator":"in","value":{}}]}}`,
-		`{"knowledge_id":"kb","query":"question","metadata_condition":{"logic":"xor","conditions":[]}}`,
-		`{"knowledge_id":"kb","query":"question","metadata_condition":{"logic":"","conditions":[]}}`,
-		`{"knowledge_id":"kb","query":"question","search_mode":{"type":"dense"}}`,
-	} {
-		t.Run(body, func(t *testing.T) {
-			d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-			response := callDify(router, body)
-			if response.Code != 400 || !strings.Contains(response.Body.String(), `"error_code":101`) || len(d.calls) != 0 {
-				t.Fatal(response.Code, response.Body.String(), d.calls)
-			}
-		})
+func TestDifyRetrieval_WithMetadataFilter(t *testing.T) {
+	h, r := setupDifyTest("user1")
+	h.metadataSvc = &mockMetadataService{
+		getFlattedMetaFn: func(kbIDs []string) (common.MetaData, error) {
+			return common.MetaData{}, nil
+		},
+	}
+	body := `{"knowledge_id":"kb1","query":"test","metadata_condition":{"conditions":[{"name":"author","comparison_operator":"eq","value":"Zhang San"}],"logic":"and"}}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestDifyCSVStringMembership(t *testing.T) {
-	d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-	d.metadata = common.MetaData{"author": {"Alice": {"doc"}}}
-	response := callDify(router, `{"knowledge_id":"kb","query":"question","metadata_condition":{"conditions":[{"name":"author","comparison_operator":"in","value":" Alice, Bob "}]}}`)
-	if response.Code != http.StatusOK || d.request == nil || !reflect.DeepEqual(d.request.DocIDs, []string{"doc"}) || !strings.Contains(response.Body.String(), `"content":"ordinary"`) {
-		t.Fatal(response.Code, response.Body.String(), d.request)
+func TestDifyRetrieval_InvalidJSON(t *testing.T) {
+	_, r := setupDifyTest("user1")
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader("{invalid json"))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
 	}
 }
 
-func TestDifyAuthorizationPrecedesMetadata(t *testing.T) {
-	for _, user := range []*entity.User{nil, {ID: ""}, {ID: " "}} {
-		d, router := newDifyTestHandler(t, user)
-		response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":true}`)
-		if response.Code != 403 || len(d.calls) != 0 {
-			t.Fatal(response.Code, response.Body.String(), d.calls)
-		}
+func TestDifyRetrieval_UseKG(t *testing.T) {
+	h, r := setupDifyTest("user1")
+	h.metadataSvc = &mockMetadataService{
+		labelQuestionFn: func(question string, kbs []*entity.Knowledgebase) map[string]float64 {
+			return map[string]float64{"tag_1": 0.8}
+		},
 	}
-	for _, missing := range []bool{false, true} {
-		d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-		d.readError = gorm.ErrRecordNotFound
-		status := 403
-		if missing {
-			d.existsErr, status = gorm.ErrRecordNotFound, 404
-		}
-		response := callDify(router, `{"knowledge_id":"kb","query":"question","metadata_condition":{"conditions":[{"name":"x","comparison_operator":"=","value":1}]}}`)
-		if response.Code != status || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user", "exists"}) {
-			t.Fatal(response.Code, response.Body.String(), d.calls)
-		}
+	body := `{"knowledge_id":"kb1","query":"test","use_kg":true}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestDifyAPITokenRetainsOriginalTenantScope(t *testing.T) {
-	d := &difyTestDependencies{kb: &entity.Knowledgebase{ID: "kb", TenantID: "foreign-owner"}}
-	h := NewDifyRetrievalHandler(DifyRetrievalDependencies{Datasets: d, Metadata: d})
-	router := gin.New()
-	router.POST("/api/v1/dify/retrieval", func(c *gin.Context) {
-		c.Set("user", &entity.User{ID: "user"})
-		c.Set(difyTokenTenantContext, "original-token-tenant")
-		h.Retrieval(c)
-	})
-	response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":true,"metadata_condition":{"conditions":[{"name":"x","comparison_operator":"=","value":1}]}}`)
-	if response.Code != 403 || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user"}) {
-		t.Fatal(response.Code, response.Body.String(), d.calls)
+func strPtr(s string) *string { return &s }
+
+func TestDifyRetrieval_KBDBError(t *testing.T) {
+	h, r := setupDifyTest("user1")
+	h.kbSvc = &mockKBService{
+		getByIDFn: func(kbID string) (*entity.Knowledgebase, error) {
+			return nil, errors.New("connection refused")
+		},
+	}
+	w := httptest.NewRecorder()
+	body := `{"knowledge_id": "kb1", "query": "test"}`
+	req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for DB error, got %d", w.Code)
 	}
 }
 
-func TestDifyGraphCannotReturnAnotherDatasetSummary(t *testing.T) {
-	d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-	d.graph.KBID = "foreign"
-	response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":true}`)
-	if response.Code != 500 || strings.Contains(response.Body.String(), "graph aggregate") {
-		t.Fatal(response.Code, response.Body.String())
+func TestDifyRetrieval_DocLoadError(t *testing.T) {
+	h, r := setupDifyTest("user1")
+	h.docDAO = &mockDocDAO{
+		getByIDsFn: func(ids []string) ([]*entity.Document, error) {
+			return nil, errors.New("db unavailable")
+		},
+	}
+	w := httptest.NewRecorder()
+	body := `{"knowledge_id": "kb1", "query": "test"}`
+	req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for doc load error, got %d", w.Code)
 	}
 }
 
-func TestDifyPropagatesResourceFailures(t *testing.T) {
-	for _, boundary := range []string{"dataset", "metadata", "embedding", "labels", "retrieval", "children", "documents", "enrich", "chat", "graph"} {
-		t.Run(boundary, func(t *testing.T) {
-			d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-			failure := errors.New("private connection credential must not appear in response")
-			metadata := ""
-			switch boundary {
-			case "dataset":
-				d.readError = failure
-			case "metadata":
-				d.metaError = failure
-				metadata = `,"metadata_condition":{"conditions":[{"name":"x","comparison_operator":"=","value":1}]}`
-			case "embedding":
-				d.embedError = failure
-			case "labels":
-				d.labelErr = failure
-			case "retrieval":
-				d.searchErr = failure
-			case "children":
-				d.childError = failure
-			case "documents":
-				d.docError = failure
-			case "enrich":
-				d.enrichErr = failure
-			case "chat":
-				d.chatError = failure
-			case "graph":
-				d.graphError = failure
-			}
-			response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":true`+metadata+`}`)
-			if response.Code != 500 || !strings.Contains(response.Body.String(), `"error_code":500`) || strings.Contains(response.Body.String(), "credential") {
-				t.Fatal(response.Code, response.Body.String(), d.calls)
-			}
-		})
+func TestDifyRetrieval_RetrievalNotFound(t *testing.T) {
+	h, r := setupDifyTest("user1")
+	h.retrievalSvc = &mockRetrievalService{
+		retrievalFn: func(ctx context.Context, req *nlp.RetrievalRequest) (*nlp.RetrievalResult, error) {
+			return nil, errors.New("no chunk found: not_found")
+		},
 	}
-}
-
-func TestDifyParentExpansionCannotBroadenSelection(t *testing.T) {
-	d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-	d.metadata = common.MetaData{"author": {"Alice": {"doc"}}}
-	d.documents = append(d.documents, &entity.Document{ID: "other", KbID: "kb"})
-	d.childrenFn = func(_ context.Context, chunks []map[string]interface{}, _ string) ([]map[string]interface{}, error) {
-		return append(chunks, map[string]interface{}{"kb_id": "kb", "doc_id": "other", "content_with_weight": "wrong document"}), nil
-	}
-	response := callDify(router, `{"knowledge_id":"kb","query":"question","metadata_condition":{"conditions":[{"name":"author","comparison_operator":"=","value":"Alice"}]}}`)
-	if response.Code != 200 || strings.Contains(response.Body.String(), "wrong document") {
-		t.Fatal(response.Code, response.Body.String())
-	}
-}
-
-func TestDifyCancellationDoesNotReportEmptySuccess(t *testing.T) {
-	d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-	ctx, cancel := context.WithCancel(context.Background())
-	d.metaFn = func(context.Context) { cancel() }
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/dify/retrieval", strings.NewReader(`{"knowledge_id":"kb","query":"question","use_kg":true,"metadata_condition":{"conditions":[{"name":"x","comparison_operator":"=","value":1}]}}`)).WithContext(ctx)
-	router.ServeHTTP(response, request)
-	if response.Code != 500 || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user", "filter"}) {
-		t.Fatal(response.Code, response.Body.String(), d.calls)
-	}
-}
-
-func TestDifyHealthHasNoRetrievalDependencies(t *testing.T) {
-	handler := NewDifyRetrievalHandler(DifyRetrievalDependencies{})
-	router := gin.New()
-	router.GET("/health", handler.HealthCheck)
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health?knowledge_id=kb&query=ignored", nil))
-	if response.Code != 200 || response.Body.String() != `{"code":0,"data":true}` {
-		t.Fatal(response.Code, response.Body.String())
-	}
-}
-
-func TestDifyNonFiniteChunkScoreIsFailure(t *testing.T) {
-	for _, value := range []interface{}{math.Inf(1), math.NaN(), "0.5"} {
-		d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-		d.chunks[0]["similarity"] = value
-		response := callDify(router, `{"knowledge_id":"kb","query":"question"}`)
-		if response.Code != 500 {
-			t.Fatal(response.Code, response.Body.String())
-		}
+	w := httptest.NewRecorder()
+	body := `{"knowledge_id": "kb1", "query": "test"}`
+	req, _ := http.NewRequest("POST", "/api/v1/dify/retrieval", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for not_found, got %d", w.Code)
 	}
 }

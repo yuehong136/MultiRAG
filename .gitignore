@@ -294,3 +294,7 @@ internal/cpp/cmake-build-debug/
 
 # Local test evidence (may include owned fixture payloads).
 .test-results/
+
+# Local Go password-encryption keys.
+/configs/go/private.pem
+/configs/go/public.pem

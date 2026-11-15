@@ -6,14 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strconv"
 	"sync/atomic"
 	"testing"
 )
 
-func localEmbeddingProviders() []string { return []string{"vllm", "ollama", "LM-Studio"} }
+func localEmbeddingProviders() []string { return []string{"vllm", "ollama", "LMStudio"} }
 
 func localEmbeddingDriver(t *testing.T, provider string, urls map[string]string) ModelDriver {
 	t.Helper()
@@ -34,7 +34,7 @@ func TestLocalEmbeddingKeylessBatchesRegionAndDimensionHTTP(t *testing.T) {
 			for _, count := range []int{0, 1, 32, 33, 65} {
 				t.Run(strconv.Itoa(count), func(t *testing.T) {
 					var batches []int
-					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						path := "/instance/embeddings"
 						if provider == "ollama" {
 							path = "/instance/v1/embeddings"
@@ -51,7 +51,7 @@ func TestLocalEmbeddingKeylessBatchesRegionAndDimensionHTTP(t *testing.T) {
 						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 							t.Error(err)
 						}
-						if body.Model != "embed" || body.Dimensions != 2 || body.Query != nil {
+						if body.Model != "embed" || body.Dimensions != 2 {
 							t.Error(body)
 						}
 						batches = append(batches, len(body.Input))
@@ -63,13 +63,22 @@ func TestLocalEmbeddingKeylessBatchesRegionAndDimensionHTTP(t *testing.T) {
 							}
 							data = append(data, map[string]any{"index": i, "embedding": []float64{0, float64(value)}})
 						}
-						json.NewEncoder(w).Encode(map[string]any{"data": data})
+						if provider == "ollama" {
+							vectors := make([][]float64, len(body.Input))
+							for i, value := range body.Input {
+								n, _ := strconv.Atoi(value)
+								vectors[i] = []float64{0, float64(n)}
+							}
+							json.NewEncoder(w).Encode(map[string]any{"embeddings": vectors})
+						} else {
+							json.NewEncoder(w).Encode(map[string]any{"data": data})
+						}
 					}))
 					defer server.Close()
-					driver := localEmbeddingDriver(t, provider, map[string]string{"default": server.URL + "/instance/"})
+					driver := localEmbeddingDriver(t, provider, map[string]string{"default": server.URL + "/instance"})
 					name, unknown := "embed", "unknown"
-					api := &APIConfig{Region: &unknown}
-					cfg := &EmbeddingConfig{Dimension: 2, Query: true}
+					api := &APIConfig{}
+					cfg := &EmbeddingConfig{Dimension: 2}
 					texts := make([]string, count)
 					for i := range texts {
 						texts[i] = strconv.Itoa(i)
@@ -84,10 +93,10 @@ func TestLocalEmbeddingKeylessBatchesRegionAndDimensionHTTP(t *testing.T) {
 						}
 					}
 					want := []int(nil)
-					for remaining := count; remaining > 0; remaining -= 32 {
-						want = append(want, min(32, remaining))
+					if count > 0 {
+						want = []int{count}
 					}
-					if !reflect.DeepEqual(batches, want) || !cfg.Query || unknown != "unknown" {
+					if unknown != "unknown" || !reflect.DeepEqual(batches, want) {
 						t.Fatal(batches, want, "configuration mutation")
 					}
 				})
@@ -115,9 +124,15 @@ func TestLocalEmbeddingRejectsMalformedHTTP(t *testing.T) {
 	}
 	for _, provider := range localEmbeddingProviders() {
 		t.Run(provider, func(t *testing.T) {
-			for i, response := range responses {
+			providerResponses := responses
+			if provider == "ollama" {
+				providerResponses = []string{
+					`{}`, `{"embeddings":null}`, `{"embeddings":[]}`, `{"embeddings":[[1,2]]}`, `{"embeddings":[[],[1,2]]}`, `{"embeddings":[[null,2],[1,2]]}`, `{"embeddings":[[1,2],[1]]}`, `{"embeddings":[[1e999,2],[1,2]]}`, `{"embeddings":[[1,2],[1,2]],"error":"failed"}`, `{"embeddings":[[1,2],[1,2]]} {}`,
+				}
+			}
+			for i, response := range providerResponses {
 				t.Run(strconv.Itoa(i), func(t *testing.T) {
-					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
+					server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 					defer server.Close()
 					driver := localEmbeddingDriver(t, provider, map[string]string{"default": server.URL})
 					if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"a", "b"}, nil, &EmbeddingConfig{Dimension: 2})); err == nil || vectors != nil {
@@ -133,24 +148,28 @@ func TestLocalEmbeddingPreflightAuthAndCancellationHTTP(t *testing.T) {
 	for _, provider := range localEmbeddingProviders() {
 		t.Run(provider, func(t *testing.T) {
 			var calls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				if r.Header.Get("Authorization") != "Bearer optional" {
 					t.Error("provided key missing")
 				}
-				fmt.Fprint(w, `{"data":[{"index":0,"embedding":[0,2]}]}`)
+				if provider == "ollama" {
+					fmt.Fprint(w, `{"embeddings":[[0,2]]}`)
+				} else {
+					fmt.Fprint(w, `{"data":[{"index":0,"embedding":[0,2]}]}`)
+				}
 			}))
 			defer server.Close()
 			driver := localEmbeddingDriver(t, provider, map[string]string{"default": server.URL, "office": server.URL})
 			name, key, region := "embed", "optional", "office"
-			if got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"a"}, &APIConfig{APIKey: &key, Region: &region}, nil)); err != nil || len(got) != 1 {
+			if got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"a"}, &APIConfig{ApiKey: &key, Region: &region}, nil)); err != nil || len(got) != 1 {
 				t.Fatal(got, err)
 			}
 			for _, invalid := range []struct {
 				name *string
 				cfg  *EmbeddingConfig
 			}{{nil, nil}, {stringPtr(" "), nil}, {&name, &EmbeddingConfig{Dimension: -1}}, {&name, &EmbeddingConfig{Dimension: 3}}} {
-				if got, err := embeddingVectorsForTest(driver.Embed(invalid.name, []string{"a"}, &APIConfig{APIKey: &key}, invalid.cfg)); err == nil || got != nil {
+				if got, err := embeddingVectorsForTest(driver.Embed(invalid.name, []string{"a"}, &APIConfig{ApiKey: &key}, invalid.cfg)); err == nil || got != nil {
 					t.Fatal("invalid config/response accepted")
 				}
 			}
@@ -180,28 +199,42 @@ func TestLocalEmbeddingLaterBatchFailureHTTP(t *testing.T) {
 			for _, status := range []int{http.StatusOK, http.StatusServiceUnavailable} {
 				t.Run(strconv.Itoa(status), func(t *testing.T) {
 					calls := 0
-					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						calls++
 						var body struct{ Input []string }
 						json.NewDecoder(r.Body).Decode(&body)
-						if calls == 2 && status != http.StatusOK {
+						if status != http.StatusOK {
 							w.WriteHeader(status)
 							fmt.Fprint(w, "private failure")
 							return
 						}
 						dim := 2
-						if calls == 2 {
+						if status == http.StatusOK {
 							dim = 3
 						}
 						data := make([]map[string]any, len(body.Input))
 						for i := range data {
 							data[i] = map[string]any{"index": i, "embedding": make([]float64, dim)}
 						}
-						json.NewEncoder(w).Encode(map[string]any{"data": data})
+						if provider == "ollama" {
+							vectors := make([][]float64, len(body.Input))
+							for i := range vectors {
+								vectors[i] = make([]float64, dim)
+								if i == len(vectors)-1 {
+									vectors[i] = make([]float64, 2)
+								}
+							}
+							json.NewEncoder(w).Encode(map[string]any{"embeddings": vectors})
+						} else {
+							if len(data) > 0 {
+								data[len(data)-1]["embedding"] = make([]float64, 2)
+							}
+							json.NewEncoder(w).Encode(map[string]any{"data": data})
+						}
 					}))
 					defer server.Close()
 					got, err := embeddingVectorsForTest(localEmbeddingDriver(t, provider, map[string]string{"default": server.URL}).Embed(stringPtr("embed"), make([]string, 33), nil, nil))
-					if err == nil || got != nil || calls != 2 {
+					if err == nil || got != nil || calls != 1 {
 						t.Fatal("partial success", len(got), err, calls)
 					}
 				})
@@ -214,7 +247,7 @@ func TestLocalEmbeddingCancellationDuringHTTP(t *testing.T) {
 	for _, provider := range localEmbeddingProviders() {
 		t.Run(provider, func(t *testing.T) {
 			started := make(chan struct{})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body any
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)

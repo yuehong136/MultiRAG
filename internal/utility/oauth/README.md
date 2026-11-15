@@ -1,37 +1,26 @@
-# OAuth protocol verification in the Go API
+# Go OAuth clients
 
-The Go API is a parallel implementation; the production backend uses Python.
-These new endpoints have controlled HTTP acceptance coverage; no active Web login
-UI caller or real-provider/browser login has been verified.
+`client.go`, `oidc.go` and `github.go` keep the corresponding OAuth client
+implementations. `NewClient` selects OAuth2, OIDC or GitHub from server-controlled
+configuration. Production continues to use the Python backend.
 
-The Go API can start and verify an authorization-code exchange through
-`GET /api/v1/auth/login/{channel}` and
-`GET /api/v1/auth/oauth/{channel}/callback`.
+`AuthorizationURL` builds the authorization-code redirect. `ExchangeCodeForToken`
+and `FetchUserInfo` use the caller's context, bounded responses, checked HTTP
+status and fixed errors that omit provider bodies and credentials. Redirects on
+token and user-info requests are refused.
 
-**Platform account login is disabled.** A valid provider exchange ends with
-`/?error=oauth_identity_binding_required`. The callback never links an email,
-registers an account or tenant, changes an existing session, or issues a platform
-token. Persisted provider-subject identity binding is required before enabling
-account login. These routes do not implement password reset.
+OIDC resolves missing endpoints from the issuer's discovery document. The current
+implementation uses authenticated userinfo and does not verify or parse ID-token
+claims; it does not provide a separate JWKS verifier, nonce contract or PKCE
+facade. Its discovery loader has its own bounded timeout.
 
-Channels use server-controlled `oauth.<channel>` configuration: `type`
-(`oauth2`, `oidc`, or `github`), `client_id`, `client_secret`, `redirect_uri`,
-`scope`, and provider endpoints `authorization_url`, `token_url`, `userinfo_url`.
-OIDC uses `issuer` and validates its discovery document before using its
-endpoints. GitHub uses its fixed authorization, token, and user endpoints; it
-reads the numeric provider ID and does not request email permissions.
+GitHub uses its fixed authorization, token and user endpoints, defaults to the
+`user:email` scope, and reads `/user/emails`. It selects a verified primary email,
+then a verified fallback. Errors from either user request propagate.
 
-All configured endpoints and the redirect URI require HTTPS. Requests are
-bounded to seven seconds and one MiB, use request cancellation, reject HTTP
-redirects, and return fixed public errors without provider bodies or tokens.
-Redis is mandatory. State lasts five minutes, is tied to a Secure, HttpOnly,
-SameSite=Lax browser cookie and channel, and is consumed atomically with
-`GETDEL` before provider exchange. Each attempt uses S256 PKCE. OIDC additionally
-requires an RS256 ID token with a matching JWKS key, issuer, audience, expiry,
-issued-at, nonce, subject, and authorized party where applicable; userinfo must
-report the same subject. Other signing algorithms are currently refused.
-
-`client_test.go` covers protocol acceptance and rejection without external
-network access. `router.TestAfter1eGMCPAndOAuth` uses registered scratch PostgreSQL,
-a separately reserved empty Redis database, real registered HTTP routes and a
-controlled TLS provider, and independently reads SQL state after refusals.
+Account creation, session persistence, browser state and connector OAuth are
+owned by the original service/handler functions, outside this utility package.
+`client_test.go` exercises the client request and error contracts with controlled
+transports. Actual account and connector flows use their own SQL/HTTP/Redis
+acceptance tests. These tests do not establish real provider or browser login
+acceptance.

@@ -1,59 +1,20 @@
-# Local Go ingestion utilities
+# Go ingestion
 
-This package belongs to the parallel Go implementation. It does not run the
-Python production ingestion worker or submit tasks to its queue.
+`chunk_engine.go` 定义 ChunkPlan，`chunk/` 保留各原始 operator 和 expression 文件。
+DSL 的 `pipeline` 按声明顺序编译全部 operator；允许重复、任意阶段顺序与空 plan。
+`ChunkPlan.Operators` 可直接查阅，Explain 不读取文件。Execute 使用实际输入并传递错误；
+字符大小与 overlap 按 Unicode code point 计算。无兼容 stage 数量或顺序限制。
 
-`NewChunkEngine().Compile(dsl)` compiles the declared JSON pipeline in its given
-order. Stages may repeat; no fixed order, stage count or required `split` stage
-is imposed. A missing or empty pipeline compiles to an empty plan. Invalid
-operator options, expressions and unsupported strategies fail compilation.
-`ChunkPlan.Operators` exposes the ordered operators. `Explain` describes them without
-reading a document. `Execute` returns actual `ResultChunks` and propagates
-condition failures. Sizes, merge targets, filters and character overlap count
-Unicode code points. Compiled plans can be reused concurrently.
+`parser/` 的各 Office parser 默认调用 office_oxide 0.1.2 native binding，原 Parse 方法打印
+解析结果并返回 error；GetParser 的 `lib_type` 为 `office_oxide`。没有 builtin OOXML
+替代路线、统一 ParseResult facade 或可选 build tag。
+支持 DOC、DOCX、PPT、PPTX、XLS、XLSX，真实格式需通过 native fixture 验证。
+PDF 原方法目前明确返回未实现错误。native 内部分配不受 Go 上层内存限制保证。
 
-```json
-{"pipeline":[{"operator":"split","strategy":"sentence","params":{"boundaries":["。","\n"],"keep_separators":true}},{"operator":"postprocess","merge":{"target_size":500,"strategy":"greedy"},"overlap":{"enabled":true,"unit":"char","default":{"size":30}}}]}
-```
+`ingestion_service.go` 保留 Ingestor、executeTask 和 executeTasklet 原实现入口；任务业务处理
+仍未由冻结目标完成。收到任务后原位置写入 FAILED checkpoint/status，在事务提交后 ACK，
+写入失败 NACK，不产生虚假的成功或进度。NATS 使用实际配置和 subject；消息畸形会终止，
+队列错误传播到启动入口。Stop 等待自有 worker，停止期间不会新增 WaitGroup 任务。
 
-Supported split strategies are `sentence` (literal boundaries, first match
-wins), `paragraph` (nonempty trimmed lines), and `char` (individual code points).
-Preprocess supports `normalize_newlines`, `strip_whitespace`,
-`remove_empty_lines`, and `soft_line_break_merging`. Postprocess supports greedy
-merge, conditional overlap (`if` with boolean/comparison expressions), length
-filtering and metadata. Overlap reads the previous original merged chunk so it
-does not recursively accumulate earlier overlaps. `language` metadata is a
-Chinese/English heuristic, not language identification by a model.
-
-`parser.Parse(filename, data, config)` requires `lib_type` and returns `Format`,
-`Text`, `Markdown`, and `Backend`; it never prints. `builtin` supports body
-paragraph/table-cell text in DOCX, presentation-order slide text in PPTX, and
-worksheet values in XLSX (shared/inline strings, coordinates and cached formula
-values). It does not calculate formulas, recognize images, preserve Office
-layout or reproduce rich text formatting. Blank content in a valid document can
-produce empty text. Malformed archives and unavailable parts fail explicitly.
-Input is capped at 32 MiB; builtin ZIP expansion, cumulative part reads and
-combined Text/Markdown output each at 64 MiB, with at most 4096 ZIP entries.
-Repeated part and shared-string references remain valid within those budgets.
-
-`office_oxide` delegates Office extraction to the pinned native binding. Build
-with `-tags office_oxide` and the header/library prefix selected in `build.sh`.
-Missing native builds, unsupported formats, open failures, text failures and
-Markdown failures are errors. DOC/PPT/XLS support depends on the native library
-and the actual input, and must be validated with real files. This package does
-not supply a PDF parser, OCR, image extraction, or a remote-provider fallback.
-Only the selected backend runs; unknown configuration keys are errors.
-
-Native verification requires a registered fixture directory containing
-`sample.doc`, `sample.docx`, `sample.xls`, `sample.xlsx`, `sample.ppt` and
-`sample.pptx`, passed as `MULTIRAG_OFFICE_FIXTURES`. Run
-`go test -tags office_oxide ./internal/ingestion/parser` with the selected
-header/static-library flags. Those files are test inputs, not production data.
-On macOS, use the release static archive: the tested v0.1.2 dynamic library
-contains an absolute build-machine install name. The build entry point selects
-the prepared static archive without rewriting the library or global caches.
-
-Native extraction performs allocations inside the external library before Go can
-check the returned Text/Markdown size. The result-size limit is not a hard
-native peak-memory bound; compressed Office inputs also receive archive-size
-preflight validation, but native internals are not sandboxed by this package.
+运行依赖独占 MySQL、NATS、Redis、对象存储及 native 字典；使用 `cmd/ingestor.go` 独立
+入口。配置、四个构建入口和 registered 验证见 [开发说明](../../docs/development.md#go-并行实现的本地验证)。

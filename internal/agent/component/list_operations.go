@@ -37,6 +37,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -127,7 +128,7 @@ func toInt(value any) (int, error) {
 		n, err := strconv.Atoi(text)
 		return n, err
 	}
-	number, err := exactNumber(value)
+	number, _, err := toFloat64(value)
 	if err != nil || !number.IsInt() || !number.Num().IsInt64() {
 		return 0, fmt.Errorf("not an in-range integer")
 	}
@@ -324,10 +325,10 @@ func (l *ListOperationsComponent) opFilter(items []any) []any {
 	val := normValue(value)
 	out := make([]any, 0, len(items))
 	for _, item := range items {
-		if isNumberType(item) && isNumberType(value) && (op == "=" || op == "≠") {
-			left, lerr := exactNumber(item)
-			right, rerr := exactNumber(value)
-			if lerr == nil && rerr == nil {
+		if isNumberish(item) && isNumberish(value) && (op == "=" || op == "≠") {
+			left, lok := toFloat64OK(item)
+			right, rok := toFloat64OK(value)
+			if lok && rok {
 				equal := left.Cmp(right) == 0
 				if (op == "=" && equal) || (op == "≠" && !equal) {
 					out = append(out, item)
@@ -433,10 +434,8 @@ func evalFilter(v, op, target string) bool {
 // value) pairs (sorted by key for determinism). Lists and slices
 // recurse element-wise.
 func hashableKey(v any) any {
-	if number, err := exactNumber(v); err == nil {
-		if canonical, err := exactDecimal(number); err == nil {
-			return canonical
-		}
+	if _, canonical, err := toFloat64(v); err == nil {
+		return canonical
 	}
 	switch x := v.(type) {
 	case map[string]any:
@@ -485,15 +484,22 @@ func lessKey(a, b any) bool {
 // types. Separating the two groups keeps mixed lists transitively ordered;
 // numeric-looking strings remain strings.
 func lessScalar(a, b any) bool {
-	left, leftErr := exactNumber(a)
-	right, rightErr := exactNumber(b)
-	if leftErr == nil && rightErr == nil {
+	left, leftOK := toFloat64OK(a)
+	right, rightOK := toFloat64OK(b)
+	if leftOK && rightOK {
 		return left.Cmp(right) < 0
 	}
-	if (leftErr == nil) != (rightErr == nil) {
-		return leftErr == nil
+	if leftOK != rightOK {
+		return leftOK
 	}
 	return fmt.Sprintf("%v", a) < fmt.Sprintf("%v", b)
+}
+
+// toFloat64OK keeps the original comparison conversion point; an exact
+// rational result avoids rounding distinct JSON integers to the same value.
+func toFloat64OK(v any) (*big.Rat, bool) {
+	number, _, err := toFloat64(v)
+	return number, err == nil
 }
 
 func init() {

@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"context"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -58,7 +57,7 @@ func TestAfter7fbStorageReadinessIsReadOnly(t *testing.T) {
 			var store Storage
 			switch kind {
 			case "s3":
-				store = &S3Storage{client: client, config: &server.S3Config{Bucket: "owned-bucket"}}
+				store = &S3Storage{client: client, bucket: "owned-bucket", config: &server.S3Config{Bucket: "owned-bucket"}}
 			case "oss":
 				store = &OSSStorage{client: client, bucket: "owned-bucket"}
 			case "minio":
@@ -67,19 +66,13 @@ func TestAfter7fbStorageReadinessIsReadOnly(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err = readinessFor(t.Context(), store); err != nil {
-				t.Fatal(err)
+			if !store.Health() {
+				t.Fatal("read-only health failed")
 			}
 			fail.Store(true)
-			if err = readinessFor(t.Context(), store); err == nil {
+			if store.Health() {
 				t.Fatal("permission failure reported healthy")
 			}
-			ctx, cancel := context.WithCancel(t.Context())
-			cancel()
-			if err = readinessFor(ctx, store); err == nil {
-				t.Fatal("cancelled probe succeeded")
-			}
-			j.Event("controlled-storage-readback", map[string]any{"requests": calls.Load(), "methods": "HEAD only", "objects_created": 0})
 		})
 	}
 }

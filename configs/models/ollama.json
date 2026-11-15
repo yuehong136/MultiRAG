@@ -5,6 +5,5 @@
     "models": "api/tags",
     "embedding": "api/embed"
   },
-  "class": "local",
-  "models": []
+  "class": "local"
 }

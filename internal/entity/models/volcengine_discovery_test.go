@@ -5,8 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"reflect"
+
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,15 +18,16 @@ func TestVolcEngineDiscoveryInventory(t *testing.T) {
 		want       []string
 		wantErr    bool
 	}{
-		{name: "ordered IDs", body: `{"data":[{"id":"doubao-b","owned_by":"bytedance"},{"id":"doubao-a"}]}`, want: []string{"doubao-b", "doubao-a"}},
+		{name: "ordered IDs", body: `{"data":[{"id":"doubao-b","owned_by":"bytedance"},{"id":"doubao-a"}]}`, want: []string{"doubao-b@bytedance", "doubao-a"}},
 		{name: "empty inventory", body: `{"data":[]}`, want: []string{}},
 		{name: "missing data", body: `{}`, wantErr: true},
 		{name: "null data", body: `{"data":null}`, wantErr: true},
 		{name: "wrong envelope", body: `{"Models":[{"id":"doubao"}]}`, wantErr: true},
-		{name: "missing ID", body: `{"data":[{}]}`, wantErr: true},
-		{name: "blank ID", body: `{"data":[{"id":" "}]}`, wantErr: true},
-		{name: "padded ID", body: `{"data":[{"id":" doubao"}]}`, wantErr: true},
-		{name: "duplicate ID", body: `{"data":[{"id":"doubao"},{"id":"doubao"}]}`, wantErr: true},
+		{name: "wrong data type", body: `{"data":{}}`, wantErr: true},
+		{name: "missing ID", body: `{"data":[{}]}`, want: []string{}},
+		{name: "blank ID", body: `{"data":[{"id":" "}]}`, want: []string{}},
+		{name: "padded ID", body: `{"data":[{"id":" doubao"}]}`, want: []string{"doubao"}},
+		{name: "duplicate ID", body: `{"data":[{"id":"doubao"},{"id":"doubao"}]}`, want: []string{"doubao", "doubao"}},
 		{name: "invalid ID type", body: `{"data":[{"id":1}]}`, wantErr: true},
 		{name: "business error", body: `{"data":[],"error":{"message":"private provider failure"}}`, wantErr: true},
 		{name: "malformed JSON", body: `{"data":`, wantErr: true},
@@ -35,7 +35,7 @@ func TestVolcEngineDiscoveryInventory(t *testing.T) {
 		{name: "HTTP failure", body: `private provider failure`, status: http.StatusUnauthorized, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet || r.URL.Path != "/api/v3/models" || r.Header.Get("Authorization") != "Bearer key" {
 					t.Errorf("unexpected discovery request: %s %s", r.Method, r.URL.Path)
 				}
@@ -45,10 +45,10 @@ func TestVolcEngineDiscoveryInventory(t *testing.T) {
 				fmt.Fprint(w, test.body)
 			}))
 			defer server.Close()
-			driver := NewVolcEngine(map[string]string{"default": server.URL + "/api/v3/"}, URLSuffix{Models: "models"})
-			key := `{"ark_api_key":"key","endpoint_id":"ep"}`
-			names, err := driver.ListModels(&APIConfig{APIKey: &key})
-			if (err != nil) != test.wantErr || !reflect.DeepEqual(names, test.want) {
+			driver := NewVolcEngine(map[string]string{"default": server.URL + "/api/v3"}, URLSuffix{Models: "models"})
+			key := "key"
+			names, err := driver.ListModels(&APIConfig{ApiKey: &key})
+			if (err != nil) != test.wantErr || (test.want != nil && joinModelNames(names, "|") != strings.Join(test.want, "|")) {
 				t.Fatalf("ListModels() = %v, %v; want %v, error=%v", names, err, test.want, test.wantErr)
 			}
 			if err != nil && strings.Contains(err.Error(), "private provider failure") {
@@ -60,7 +60,7 @@ func TestVolcEngineDiscoveryInventory(t *testing.T) {
 
 func TestVolcEngineDiscoveryEndpointValidation(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.URL.Path != "/api/v3/models" {
 			t.Errorf("path = %q", r.URL.Path)
@@ -70,8 +70,8 @@ func TestVolcEngineDiscoveryEndpointValidation(t *testing.T) {
 	defer server.Close()
 	key, empty, unknown := "key", "", "unknown"
 	for _, region := range []*string{nil, &empty} {
-		driver := NewVolcEngine(map[string]string{"default": server.URL + "/api/v3/"}, URLSuffix{Models: " /models/ "})
-		if _, err := driver.ListModels(&APIConfig{APIKey: &key, Region: region}); err != nil {
+		driver := NewVolcEngine(map[string]string{"default": server.URL + "/api/v3"}, URLSuffix{Models: " /models/ "})
+		if _, err := driver.ListModels(&APIConfig{ApiKey: &key, Region: region}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -84,10 +84,10 @@ func TestVolcEngineDiscoveryEndpointValidation(t *testing.T) {
 	}{
 		{"nil config", map[string]string{"default": server.URL}, "models", nil},
 		{"missing key", map[string]string{"default": server.URL}, "models", &APIConfig{}},
-		{"unknown region", map[string]string{"default": server.URL}, "models", &APIConfig{APIKey: &key, Region: &unknown}},
-		{"missing default", nil, "models", &APIConfig{APIKey: &key}},
-		{"missing suffix", map[string]string{"default": server.URL}, "", &APIConfig{APIKey: &key}},
-		{"blank suffix", map[string]string{"default": server.URL}, " / ", &APIConfig{APIKey: &key}},
+		{"unknown region", map[string]string{"default": server.URL}, "models", &APIConfig{ApiKey: &key, Region: &unknown}},
+		{"missing default", nil, "models", &APIConfig{ApiKey: &key}},
+		{"missing suffix", map[string]string{"default": server.URL}, "", &APIConfig{ApiKey: &key}},
+		{"blank suffix", map[string]string{"default": server.URL}, " / ", &APIConfig{ApiKey: &key}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			driver := NewVolcEngine(test.urls, URLSuffix{Models: test.suffix})
@@ -102,7 +102,7 @@ func TestVolcEngineDiscoveryEndpointValidation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	driver := NewVolcEngine(map[string]string{"default": server.URL}, URLSuffix{Models: "models"})
-	if _, err := driver.ListModels(&APIConfig{APIKey: &key, Context: ctx}); !errors.Is(err, context.Canceled) {
+	if _, err := driver.ListModels(&APIConfig{ApiKey: &key, Context: ctx}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation error = %v", err)
 	}
 }

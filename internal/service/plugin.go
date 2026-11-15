@@ -20,9 +20,8 @@ package service
 //
 // The Python service discovers plugins dynamically from
 // agent/plugin/embedded_plugins/llm_tools via pluginlib. The Go server has no
-// Python plugin executor: this endpoint mirrors only the repository-owned
-// embedded metadata, not dynamic plugins or tenant MCP tools.
-// Keep the table aligned with the embedded Python metadata when it changes.
+// runtime Python loader, so the embedded set is mirrored as a static table.
+// To add a plugin here, append to embeddedLLMTools below.
 type PluginService struct{}
 
 // NewPluginService creates a new plugin service.

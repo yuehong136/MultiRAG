@@ -1,75 +1,55 @@
-// Package parser provides bounded local document text extraction.
+//
+// Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
 package parser
 
 import (
-	"errors"
 	"fmt"
-	"path/filepath"
-	"strings"
+	"multirag/internal/utility"
 )
 
-const MaxDocumentBytes = 32 << 20
-const Builtin = "builtin"
-const OfficeOxide = "office_oxide"
-
-var ErrUnsupported = errors.New("unsupported local parser")
-
-// Result carries actual extraction output. Parsers never print to stdout.
-type Result struct {
-	Format   string `json:"format"`
-	Text     string `json:"text"`
-	Markdown string `json:"markdown"`
-	Backend  string `json:"backend"`
-}
-
-// Parse selects a real backend from config. No fallback silently ignores options.
-func Parse(filename string, data []byte, config map[string]string) (*Result, error) {
-	if len(data) == 0 || len(data) > MaxDocumentBytes {
-		return nil, fmt.Errorf("document size must be 1..%d bytes", MaxDocumentBytes)
-	}
-	for key := range config {
-		if key != "lib_type" {
-			return nil, fmt.Errorf("unknown parser configuration %q", key)
-		}
-	}
-	backend := config["lib_type"]
-	if backend == "" {
+func GetParser(fileType utility.FileType, config map[string]string) (FileParser, error) {
+	libType, ok := config["lib_type"]
+	if !ok {
 		return nil, fmt.Errorf("missing lib_type config")
 	}
-	format := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
-	switch backend {
-	case Builtin:
-		if format != "docx" && format != "pptx" && format != "xlsx" {
-			return nil, fmt.Errorf("%w: builtin %s", ErrUnsupported, format)
-		}
-		archive, err := openOfficeArchive(data)
-		if err != nil {
-			return nil, err
-		}
-		var result *Result
-		switch format {
-		case "docx":
-			result, err = parseDOCX(archive)
-		case "pptx":
-			result, err = parsePPTX(archive)
-		case "xlsx":
-			result, err = parseXLSX(archive)
-		default:
-			return nil, fmt.Errorf("%w: builtin %s", ErrUnsupported, format)
-		}
-		if err != nil {
-			return nil, err
-		}
-		result.Format, result.Backend = format, backend
-		return result, nil
-	case OfficeOxide:
-		switch format {
-		case "doc", "docx", "xls", "ppt", "pptx", "xlsx":
-			return parseOfficeOxide(format, data)
-		default:
-			return nil, fmt.Errorf("%w: office_oxide %s", ErrUnsupported, format)
-		}
+	switch fileType {
+	case utility.FileTypePPTX:
+		return NewPPTXParser(libType)
+	case utility.FileTypePPT:
+		return NewPPTParser(libType)
+	case utility.FileTypeXLSX:
+		return NewXLSXParser(libType)
+	case utility.FileTypeXLS:
+		return NewXLSParser(libType)
+	case utility.FileTypeDOCX:
+		return NewDOCXParser(libType)
+	case utility.FileTypeDOC:
+		return NewDOCParser(libType)
+	case utility.FileTypePDF:
+		return NewPDFParser(), nil
 	default:
-		return nil, fmt.Errorf("%w: library %q", ErrUnsupported, backend)
+		return nil, fmt.Errorf("unsupported file type: %s", fileType)
 	}
+}
+
+// FileParser defines the interface for all file parsers.
+type FileParser interface {
+	// Parse parses the input text.
+	Parse(filename string, data []byte) error
+
+	String() string
 }

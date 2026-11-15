@@ -1,9 +1,12 @@
 {
-  "name": "PaddleOCR",
+  "name": "PaddleOCR.Net",
   "url": {
     "default": "https://paddleocr.aistudio-app.com/api"
   },
-  "class": "paddleocr",
+  "url_suffix": {
+    "ocr": "v2/ocr/jobs"
+  },
+  "class": "paddleocr.net",
   "models": [
     {
       "name": "PaddleOCR-VL-1.5",
@@ -26,8 +29,5 @@
         "ocr"
       ]
     }
-  ],
-  "url_suffix": {
-    "ocr": "v2/ocr/jobs"
-  }
+  ]
 }

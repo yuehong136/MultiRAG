@@ -16,26 +16,43 @@
 
 // Package component — Browser (T3, plan §2.11.3 row 15).
 //
-// Browser fetches public HTTP(S) content with the same DNS-pinned transport
-// as tools. Optional summaries use the request's authorized model resolver.
-// It returns content and metadata; storage uploads remain unavailable.
+// Browser visits a URL, fetches the HTML body, and (optionally) asks an
+// LLM to summarize the page. The P4 implementation focuses on the fetch
+// half: it returns the body as a string with size metadata. The LLM-
+// summary path is a no-op passthrough when model_id is unset, with the
+// wiring left in place for Phase 5 (when the model's ChatInvoker is
+// available without duplicating the LLM component's internals here).
+//
+// Storage upload of downloaded artifacts is deferred to Phase 5 per
+// the plan; for now the response carries the bytes' size, not the bytes
+// themselves, to keep large-payload flows off the canvas state bag.
+//
+// The transport wraps net/http with otelhttp.NewTransport so the
+// outbound request participates in the active OTel trace (plan §2.10).
 package component
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"multirag/internal/agent/runtime"
+	agenttool "multirag/internal/agent/tool"
 )
 
 const (
 	componentNameBrowser = "Browser"
 
-	defaultBrowserTimeout = 30 * time.Second
+	defaultBrowserTimeout  = 30 * time.Second
+	maxBrowserResponseBody = 16 << 20 // 16 MiB; same cap as Invoke
 )
 
 // browserParam is the static configuration for a Browser node.
@@ -51,7 +68,7 @@ func (p *browserParam) Update(conf map[string]any) error {
 	if conf == nil {
 		conf = map[string]any{}
 	}
-	p.ModelID, _ = stringFrom(conf, "model_id")
+	p.ModelID, _ = conf["model_id"].(string)
 	p.URL, _ = conf["url"].(string)
 	p.Prompt, _ = conf["prompt"].(string)
 	// Preserve an explicitly-supplied timeout (including 0 / negative)
@@ -69,8 +86,8 @@ func (p *browserParam) Update(conf map[string]any) error {
 // the resolved URL (param or input override) is checked at Invoke time
 // so test fixtures can construct the component without a real URL.
 func (p *browserParam) Check() error {
-	if p.Timeout < 0 || p.Timeout > 30 {
-		return &ParamError{Field: "timeout", Reason: "must be between 0 and 30"}
+	if p.Timeout < 0 {
+		return &ParamError{Field: "timeout", Reason: "must be non-negative"}
 	}
 	return nil
 }
@@ -109,7 +126,11 @@ func NewBrowserComponent(params map[string]any) (Component, error) {
 // Name returns the registered component name.
 func (b *BrowserComponent) Name() string { return b.name }
 
-// Invoke fetches bounded content and optionally calls the selected model.
+// Invoke visits the (resolved) URL, returns the response body as
+// content, the final URL after any redirects, the HTTP status, and the
+// bytes' size. When model_id is set in the param and a prompt is
+// provided, the LLM summarization hook is left for Phase 5; for P4 the
+// content field simply contains the fetched body.
 func (b *BrowserComponent) Invoke(ctx context.Context, inputs map[string]any) (map[string]any, error) {
 	state, _, err := runtime.GetStateFromContext[*runtime.CanvasState](ctx)
 	if err != nil {
@@ -135,6 +156,15 @@ func (b *BrowserComponent) Invoke(ctx context.Context, inputs map[string]any) (m
 	if strings.TrimSpace(rawURL) == "" {
 		return nil, &ParamError{Field: "url", Reason: "required (param or inputs.url)"}
 	}
+	if _, err := url.Parse(rawURL); err != nil {
+		return nil, fmt.Errorf("Browser: parse url: %w", err)
+	}
+
+	originalHost, pinnedIP, err := agenttool.ResolveAndValidate(ctx, rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("Browser: %w", err)
+	}
+
 	// Resolve prompt override (input.prompt → param.prompt).
 	prompt := b.param.Prompt
 	if v, ok := inputs["prompt"].(string); ok && v != "" {
@@ -146,15 +176,49 @@ func (b *BrowserComponent) Invoke(ctx context.Context, inputs map[string]any) (m
 		timeout = time.Duration(b.param.Timeout) * time.Second
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	resp, err := executeHTTP(ctx, http.MethodGet, rawURL, "", "", map[string]string{"Accept": "text/html,text/plain"})
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("Browser: %w", err)
+		return nil, fmt.Errorf("Browser: build request: %w", err)
 	}
-	bodyBytes, err := readHTTPBody(resp)
+	req.Header.Set("User-Agent", "multirag-agent/1.0 (Browser component)")
+	// Encourage HTML / text responses; some servers sniff the UA and
+	// only return text/html for browser-shaped UAs.
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5")
+
+	var base http.RoundTripper = http.DefaultTransport
+	if native, ok := base.(*http.Transport); ok {
+		pinned := native.Clone()
+		pinned.Proxy = nil
+		pinned.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(pinnedIP.String(), port))
+		}
+		base = pinned
+		defer pinned.CloseIdleConnections()
+	}
+	_ = originalHost // The URL retains the original host for TLS SNI.
+	client := &http.Client{
+		Timeout: timeout, Transport: otelhttp.NewTransport(base),
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Browser: %w", err)
+		return nil, fmt.Errorf("Browser: do: %w", err)
+	}
+	defer resp.Body.Close()
+
+	limited := io.LimitReader(resp.Body, maxBrowserResponseBody+1)
+	bodyBytes, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("Browser: read body: %w", err)
+	}
+
+	if len(bodyBytes) > maxBrowserResponseBody {
+		return nil, fmt.Errorf("Browser: response exceeds limit")
 	}
 
 	finalURL := rawURL
@@ -164,21 +228,11 @@ func (b *BrowserComponent) Invoke(ctx context.Context, inputs map[string]any) (m
 
 	content := string(bodyBytes)
 	modelID := b.param.ModelID
-	if v, ok := stringFrom(inputs, "model_id"); ok && v != "" {
+	if v, ok := inputs["model_id"].(string); ok && v != "" {
 		modelID = v
 	}
-	if modelID != "" {
-		if prompt == "" {
-			return nil, &ParamError{Field: "prompt", Reason: "required for summarization"}
-		}
-		result, err := chatInvokerFor(ctx).Invoke(ctx, ChatInvokeRequest{ModelName: modelID, Messages: buildMessages(prompt, content)})
-		if err != nil {
-			return nil, fmt.Errorf("Browser summarize: %w", err)
-		}
-		if result == nil {
-			return nil, errors.New("Browser: model returned no response")
-		}
-		content = result.Content
+	if modelID != "" && prompt != "" {
+		return nil, fmt.Errorf("Browser: summarization: %w", runtime.ErrNotImplemented)
 	}
 
 	return map[string]any{
@@ -206,7 +260,7 @@ func (b *BrowserComponent) Stream(ctx context.Context, inputs map[string]any) (<
 // Inputs returns parameter metadata.
 func (b *BrowserComponent) Inputs() map[string]string {
 	return map[string]string{
-		"model_id": "Authorized tenant model ID used for a real summary call.",
+		"model_id": "Optional LLM model id used to summarize the fetched page (Phase 5).",
 		"url":      "Target URL; can be a {{...}} reference resolved upstream.",
 		"prompt":   "Optional LLM prompt (e.g. \"summarize this page\"); used when model_id is set.",
 		"timeout":  "Per-request timeout in seconds; default 30.",
@@ -216,7 +270,7 @@ func (b *BrowserComponent) Inputs() map[string]string {
 // Outputs returns the response surface.
 func (b *BrowserComponent) Outputs() map[string]string {
 	return map[string]string{
-		"content":  "Fetched body or model summary; response body limited to 8 MiB.",
+		"content":  "Response body (string, truncated at 16 MiB).",
 		"url":      "Final URL after redirects.",
 		"status":   "HTTP status code (int).",
 		"size":     "Body size in bytes (int).",

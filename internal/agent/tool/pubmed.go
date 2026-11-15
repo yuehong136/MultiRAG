@@ -58,7 +58,7 @@ type pubmedEnvelope struct {
 // pubmedUserAgent is the User-Agent that NCBI requires for all
 // E-utilities requests. Without it, requests are silently dropped
 // or rate-limited to a single IP.
-const pubmedUserAgent = "ragflow/1.0"
+const pubmedUserAgent = "multirag/1.0"
 
 // pubmedESearchEndpoint is the E-utilities esearch URL. Exposed as a
 // package var so tests can substitute a httptest.Server URL.
@@ -195,7 +195,7 @@ func decodePubMedESummary(body []byte) (map[string]pubmedESummaryArticle, error)
 		}
 		var article pubmedESummaryArticle
 		if err := json.Unmarshal(v, &article); err != nil {
-			return nil, fmt.Errorf("pubmed: invalid summary article")
+			continue
 		}
 		out[k] = article
 	}
@@ -229,7 +229,7 @@ func (p *PubMedTool) InvokableRun(ctx context.Context, argsJSON string, _ ...too
 		return pubmedErrJSON(err), err
 	}
 	var searchBody pubmedESearchResponse
-	if decErr := decodeToolJSON(searchResp.Body, &searchBody); decErr != nil {
+	if decErr := json.NewDecoder(searchResp.Body).Decode(&searchBody); decErr != nil {
 		_ = searchResp.Body.Close()
 		return pubmedErrJSON(fmt.Errorf("pubmed: decode esearch: %w", decErr)),
 			fmt.Errorf("pubmed: decode esearch: %w", decErr)
@@ -257,11 +257,7 @@ func (p *PubMedTool) InvokableRun(ctx context.Context, argsJSON string, _ ...too
 			fmt.Errorf("pubmed: esummary returned %d", summaryResp.StatusCode)
 	}
 
-	summaryPayload, err := io.ReadAll(summaryResp.Body)
-	if err != nil {
-		return pubmedErrJSON(err), err
-	}
-	articles, err := decodePubMedESummary(summaryPayload)
+	articles, err := decodePubMedESummary(mustReadAll(summaryResp.Body))
 	if err != nil {
 		return pubmedErrJSON(fmt.Errorf("pubmed: parse esummary: %w", err)),
 			fmt.Errorf("pubmed: parse esummary: %w", err)

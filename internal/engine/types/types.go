@@ -16,10 +16,19 @@
 
 package types
 
+import (
+	"errors"
+	"fmt"
+
+	"go.uber.org/zap"
+
+	"multirag/internal/common"
+)
+
+var ErrDocumentNotFound = errors.New("document not found")
+
 // SearchRequest unified search request for all engines
 type SearchRequest struct {
-	// Kind is a trusted internal capability, never decoded from client JSON.
-	Kind SearchKind `json:"-"`
 	// Search target
 	IndexNames []string // For ES: index names; For Infinity: treated as table name prefixes
 	KbIDs      []string // Knowledge base IDs filter
@@ -33,8 +42,6 @@ type SearchRequest struct {
 
 	// Filtering
 	Filter map[string]interface{} // Filters for search
-	// IncludeUnavailable is for scoped administrative reads, never a retrieval default.
-	IncludeUnavailable bool
 
 	// Match expressions
 	MatchExprs []interface{} // List of match expressions: [matchText, matchDense, fusionExpr]
@@ -48,6 +55,22 @@ type SearchRequest struct {
 type SearchResult struct {
 	Chunks []map[string]interface{} // Search results
 	Total  int64                    // Total number of matches
+}
+
+// SearchMetadataResult unified search result for metadata indices
+type SearchMetadataResult struct {
+	MetadataRecords []map[string]interface{} // Metadata search results
+	Total           int64                    // Total number of matches
+}
+
+// SearchMetadataRequest unified search request for metadata indices
+type SearchMetadataRequest struct {
+	TenantID     string                 // Tenant ID (index name derived: multirag_doc_meta_{tenantID})
+	Offset       int                    // Pagination offset
+	Limit        int                    // Pagination limit
+	SelectFields []string               // List of field names to return (nil means all fields)
+	Filter       map[string]interface{} // Filters for search
+	OrderBy      *OrderByExpr           // Order by expression
 }
 
 type OrderByExpr struct {
@@ -105,4 +128,37 @@ type FusionExpr struct {
 	Method       string                 // Fusion method (e.g., "weighted_sum")
 	TopN         int                    // TopK for fusion
 	FusionParams map[string]interface{} // Fusion parameters (e.g., {"weights": "0.05,0.95"})
+}
+
+// LogSearchRequest logs SearchRequest in debug mode
+func LogSearchRequest(engineName string, req *SearchRequest) {
+	common.Info(fmt.Sprintf("Search in %s started", engineName), zap.Any("indexNames", req.IndexNames))
+
+	if !common.IsDebugEnabled() {
+		return
+	}
+
+	var matchExprsStr string
+	for i, expr := range req.MatchExprs {
+		switch e := expr.(type) {
+		case *MatchTextExpr:
+			matchExprsStr += fmt.Sprintf("    [%d] MatchTextExpr: fields=%v, matchingText=%s, topN=%d, extraOptions=%v\n", i, e.Fields, e.MatchingText, e.TopN, e.ExtraOptions)
+		case *MatchDenseExpr:
+			matchExprsStr += fmt.Sprintf("    [%d] MatchDenseExpr: vectorColumn=%s, vectorSize=%d, topN=%d, extraOptions=%v\n", i, e.VectorColumnName, len(e.EmbeddingData), e.TopN, e.ExtraOptions)
+		case *FusionExpr:
+			matchExprsStr += fmt.Sprintf("    [%d] FusionExpr: method=%s, topN=%d, fusionParams=%v\n", i, e.Method, e.TopN, e.FusionParams)
+		default:
+			matchExprsStr += fmt.Sprintf("    [%d] unknown type\n", i)
+		}
+	}
+
+	common.Debug(fmt.Sprintf("Search request:\n"+
+		"    indexNames=%v\n"+
+		"    KbIDs=%v\n"+
+		"    offset=%d, limit=%d\n"+
+		"    SelectFields=%v\n"+
+		"    Filter=%v\n"+
+		"    MatchExprs:\n%s    orderBy=%v\n"+
+		"    RankFeature=%v",
+		req.IndexNames, req.KbIDs, req.Offset, req.Limit, req.SelectFields, req.Filter, matchExprsStr, req.OrderBy, req.RankFeature))
 }

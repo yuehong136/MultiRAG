@@ -3,411 +3,349 @@ package handler_test
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/go-sql-driver/mysql"
 	"io"
+	"multirag/internal/cli"
+	"multirag/internal/server/local"
+	"multirag/internal/testsupport"
 	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-
-	"github.com/gin-gonic/gin"
-	"multirag/internal/common"
-	"multirag/internal/dao"
-	"multirag/internal/entity"
-	"multirag/internal/entity/models"
-	"multirag/internal/handler"
-	"multirag/internal/server"
-	"multirag/internal/service"
+	"time"
 )
 
-// Opt-in uses a private PostgreSQL database, controlled identities and real HTTP listeners.
 func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
-	configPath := os.Getenv("MULTIRAG_PROVIDER_INSTANCES_CONFIG")
-	if configPath == "" {
-		t.Skip("requires owned provider-instance scratch config")
-	}
-	t.Chdir(filepath.Join("..", ".."))
-	if err := common.Init("error"); err != nil {
-		t.Fatal(err)
-	}
-	if err := server.FromConfigFile(configPath); err != nil {
-		t.Fatal("read owned config failed")
-	}
-	if !strings.HasPrefix(server.GetConfig().Database.Database, "multirag_provider_instances_") {
-		t.Fatal("requires owned scratch DB")
-	}
-	if err := dao.InitDB(); err != nil {
-		t.Fatal("initialize owned DB failed")
-	}
-	pool, err := dao.DB.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	dsn, err := dao.PostgresDSN(server.GetConfig().Database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	readback, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal("open readback failed")
-	}
-	defer readback.Close()
-	active := "1"
-	for _, user := range []string{"owner", "other"} {
-		if err := dao.DB.Create(&entity.UserTenant{ID: user, UserID: user, TenantID: user + "-tenant", Role: "owner", InvitedBy: user, Status: &active}).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
-	var calls [2]atomic.Int32
+	f := newCanonicalProviderFixture(t)
+	var calls [2]atomic.Int64
 	var received [2]atomic.Value
-	fixtures := make([]*httptest.Server, 2)
-	for i := range fixtures {
-		fixtures[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ids := make([]string, 2)
+	for i := range ids {
+		up := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls[i].Add(1)
-			if r.URL.Path == "/v1/models" {
-				if r.Method != "GET" || r.ContentLength > 0 {
-					t.Error("invalid discovery request")
-				}
-				fmt.Fprint(w, `{"data":[{"id":"Qwen/custom"}]}`)
-				return
+			if r.Method != "POST" || r.URL.Path != "/chat/completions" {
+				t.Error("original vllm endpoint changed")
 			}
-			if r.URL.Path != "/v1/chat/completions" {
-				t.Errorf("bad path %s", r.URL.Path)
-				w.WriteHeader(404)
-				return
+			if r.Header.Get("Authorization") != fmt.Sprintf("Bearer instance-key-%d", i) {
+				t.Error("instance credential crossed")
 			}
-			if r.Header.Get("Authorization") != fmt.Sprintf("Bearer fixture-key-%d", i) {
-				t.Error("credential cross-contamination")
-			}
-			var body map[string]interface{}
+			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Error(err)
 			}
 			received[i].Store(body["messages"])
-			if body["model"] != "Qwen/custom" {
-				t.Errorf("model %v", body)
-			}
-			if body["chat_template_kwargs"].(map[string]interface{})["enable_thinking"] != false {
-				t.Errorf("explicit false lost: %v", body)
+			if body["model"] != "fixture-model" {
+				t.Error("model name changed")
 			}
 			if body["stream"] == true {
-				fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason-%d\",\"content\":\"answer-%d\"}}]}\n\ndata: [DONE]\n\n", i, i)
+				fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer-%d\"}}]}\n\ndata: [DONE]\n\n", i)
 			} else {
-				fmt.Fprintf(w, `{"choices":[{"message":{"content":"answer-%d","reasoning_content":"reason-%d"}}]}`, i, i)
+				fmt.Fprintf(w, `{"choices":[{"message":{"content":"answer-%d"}}]}`, i)
 			}
 		}))
-		defer fixtures[i].Close()
+		ids[i] = f.enroll(t, "vllm", fmt.Sprintf("instance-%d", i), fmt.Sprintf("instance-key-%d", i), up.URL, "fixture-model", "chat")
 	}
-	svc := service.NewModelProviderService()
-	if code, err := svc.AddModelProvider("vllm", "owner"); code != common.CodeSuccess || err != nil {
-		t.Fatalf("add provider %d %v", code, err)
+	history := []any{map[string]any{"role": "system", "content": "rules"}, map[string]any{"role": "assistant", "content": "previous"}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "question"}}}}
+	for i, id := range ids {
+		result := f.requireSuccess(t, "owner", "POST", "/api/v1/chat/completions", map[string]any{"model_id": id, "messages": history})
+		if result["answer"] != fmt.Sprintf("answer-%d", i) {
+			t.Fatal("actual inference answer lost")
+		}
+		if !reflect.DeepEqual(received[i].Load(), history) {
+			t.Fatal("history never reached supplier")
+		}
+		_, _, raw := f.request(t, "owner", "POST", "/api/v1/chat/completions", map[string]any{"model_id": id, "messages": history, "stream": true})
+		if !strings.Contains(raw, "[DONE]") || !strings.Contains(raw, fmt.Sprintf("answer-%d", i)) {
+			t.Fatal("real stream absent")
+		}
 	}
-	h := handler.NewProviderHandler(nil, svc)
-	gin.SetMode(gin.ReleaseMode)
-	router := gin.New()
-	router.Use(func(c *gin.Context) {
-		user := c.GetHeader("X-Fixture-User")
-		if user != "" {
-			c.Set("user", &entity.User{ID: user})
-			c.Set("user_id", user)
+	before := f.counts(t)
+	beforeSnapshot := f.snapshot(t)
+	supplierCalls := calls[0].Load() + calls[1].Load()
+	for _, actor := range []string{"", "foreign", "inactive"} {
+		_, result, _ := f.request(t, actor, "POST", "/api/v1/chat/completions", map[string]any{"model_id": ids[0], "messages": history})
+		if providerEnvelopeError(result) == nil {
+			t.Fatal("foreign/disabled actor inferred")
 		}
-		c.Next()
-	})
-	router.POST("/api/v1/providers/:provider_name/instances", h.CreateProviderInstance)
-	router.POST("/api/v1/providers/:provider_name/instances/:instance_name/models", h.AddCustomModel)
-	router.PATCH("/api/v1/providers/:provider_name/instances/:instance_name/models/*model_name", h.EnableOrDisableModel)
-	router.GET("/api/v1/providers/:provider_name/instances/:instance_name/models", h.ListInstanceModels)
-	router.POST("/api/v1/chat/completions", h.ChatToModel)
-	router.DELETE("/api/v1/providers/:provider_name/instances/:instance_name/models", h.DropInstanceModels)
-	router.DELETE("/api/v1/providers/:provider_name/instances", h.DropProviderInstance)
-	api := httptest.NewServer(router)
-	defer api.Close()
-	request := func(method, path, user string, body map[string]interface{}) (int, map[string]interface{}) {
-		t.Helper()
-		raw, err := json.Marshal(body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req, err := http.NewRequest(method, api.URL+path, bytes.NewReader(raw))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Fixture-User", user)
-		response, err := api.Client().Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer response.Body.Close()
-		var result map[string]interface{}
-		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-			t.Fatal(err)
-		}
-		return response.StatusCode, result
 	}
-	for i := range fixtures {
-		path := "/api/v1/providers/vllm/instances"
-		instance := fmt.Sprintf("local-%d", i)
-		status, result := request("POST", path, "owner", map[string]interface{}{"instance_name": instance, "api_key": fmt.Sprintf("fixture-key-%d", i), "base_url": fixtures[i].URL + "/v1", "region": "private"})
-		if status != 200 || result["code"] != float64(0) {
-			t.Fatalf("create instance %d %v", status, result)
-		}
-		_, duplicateInstance := request("POST", path, "owner", map[string]interface{}{"instance_name": instance, "api_key": fmt.Sprintf("different-key-%d", i), "base_url": fixtures[i].URL + "/v1"})
-		if duplicateInstance["code"] != float64(common.CodeConflict) {
-			t.Fatalf("ambiguous duplicate instance: %v", duplicateInstance)
-		}
-		path += "/" + instance + "/models"
-		beforeCalls := calls[i].Load()
-		_, result = request("POST", path, "owner", map[string]interface{}{"model_name": "Qwen/custom", "message": "legacy chat payload"})
-		if result["code"] != float64(common.CodeBadRequest) || calls[i].Load() != beforeCalls {
-			t.Fatalf("legacy chat payload reached provider or was accepted: %v", result)
-		}
-		var declarationCount int
-		if err := readback.QueryRow(`SELECT count(*) FROM tenant_model m JOIN tenant_model_instance i ON i.id=m.instance_id WHERE m.model_name=$1 AND i.instance_name=$2`, "Qwen/custom", instance).Scan(&declarationCount); err != nil || declarationCount != 0 {
-			t.Fatalf("legacy chat payload wrote a model declaration: count=%d, err=%v", declarationCount, err)
-		}
-		_, result = request("POST", path, "owner", map[string]interface{}{"model_name": "Qwen/custom", "model_type": "chat", "max_tokens": 131072, "thinking": true})
-		if result["code"] != float64(0) {
-			t.Fatalf("add model %v", result)
-		}
-		_, result = request("POST", path, "owner", map[string]interface{}{"model_name": "Qwen/custom", "model_type": "chat", "max_tokens": 131072})
-		if result["code"] != float64(common.CodeConflict) {
-			t.Fatalf("duplicate %v", result)
-		}
-		_, result = request("POST", path, "other", map[string]interface{}{"model_name": "foreign", "model_type": "chat", "max_tokens": 1024})
-		if result["code"] == float64(0) {
-			t.Fatal("cross-tenant model creation allowed")
-		}
-		_, result = request("POST", path, "owner", map[string]interface{}{"provider_name": "Gitee", "model_name": "mismatch", "model_type": "chat", "max_tokens": 1024})
-		if result["code"] != float64(common.CodeBadRequest) {
-			t.Fatalf("route mismatch %v", result)
-		}
-		_, result = request("GET", path, "owner", nil)
-		rows := result["data"].([]interface{})
-		if len(rows) != 1 {
-			t.Fatalf("list %v", result)
-		}
-		row := rows[0].(map[string]interface{})
-		if row["status"] != "active" || row["max_tokens"] != float64(131072) || row["thinking"] != true {
-			t.Fatalf("model metadata %v", row)
-		}
-		names, err := svc.ListSupportedModelsWithContext(t.Context(), "vllm", instance, "owner")
-		if err != nil || len(names) != 1 || names[0].Name != "Qwen/custom" {
-			t.Fatalf("discovery %v %v", names, err)
-		}
-		if _, err := svc.CheckProviderConnection("vllm", instance, "owner"); err != nil {
-			t.Fatal(err)
-		}
-		body := map[string]interface{}{"provider_name": "vllm", "instance_name": instance, "model_name": "Qwen/custom", "message": "q", "thinking": false}
-		_, result = request("POST", "/api/v1/chat/completions", "owner", body)
-		if result["code"] != float64(0) || result["answer"] != fmt.Sprintf("answer-%d", i) {
-			t.Fatalf("chat %v", result)
-		}
+	if f.snapshot(t) != beforeSnapshot || f.counts(t) != before || calls[0].Load()+calls[1].Load() != supplierCalls {
+		t.Fatal("denied inference had side effects")
+	}
 
-		multimodal := []map[string]interface{}{{"role": "system", "content": "rules"}, {"role": "assistant", "content": "previous", "reasoning_content": "thought"}, {"role": "user", "content": []interface{}{map[string]interface{}{"type": "text", "text": "describe"}, map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/a.png"}}}}}
-		delete(body, "message")
-		body["messages"] = multimodal
-		_, result = request("POST", "/api/v1/chat/completions", "owner", body)
-		encoded, _ := json.Marshal(multimodal)
-		var expected interface{}
-		json.Unmarshal(encoded, &expected)
-		if result["code"] != float64(0) || result["answer"] != fmt.Sprintf("answer-%d", i) || !reflect.DeepEqual(received[i].Load(), expected) {
-			t.Fatalf("multimodal history/response lost: %v %v", result, received[i].Load())
-		}
-		body["stream"] = true
-		raw, _ := json.Marshal(body)
-		streamRequest, _ := http.NewRequest("POST", api.URL+"/api/v1/chat/completions", bytes.NewReader(raw))
-		streamRequest.Header.Set("Content-Type", "application/json")
-		streamRequest.Header.Set("X-Fixture-User", "owner")
-		streamResponse, err := http.DefaultClient.Do(streamRequest)
-		if err != nil {
-			t.Fatal(err)
-		}
-		streamBody, err := io.ReadAll(streamResponse.Body)
-		streamResponse.Body.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded, _ = json.Marshal(multimodal)
-		json.Unmarshal(encoded, &expected)
-		if streamResponse.StatusCode != 200 || !strings.Contains(string(streamBody), "[DONE]") || !strings.Contains(string(streamBody), fmt.Sprintf("answer-%d", i)) || !reflect.DeepEqual(received[i].Load(), expected) {
-			t.Fatalf("stream history lost: %s %v", streamBody, received[i].Load())
-		}
-		body["stream"] = false
-		_, result = request("POST", "/api/v1/chat/completions", "other", body)
-		if result["code"] == float64(0) {
-			t.Fatal("cross-tenant chat allowed")
-		}
-		bound, err := svc.GetChatModel("owner-tenant", "Qwen/custom@"+instance+"@vllm")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if bound.ModelConfig.Thinking == nil || !*bound.ModelConfig.Thinking {
-			t.Fatal("stored thinking default lost")
-		}
-		if _, err := svc.GetEmbeddingModel("owner-tenant", "Qwen/custom@"+instance+"@vllm"); err == nil {
-			t.Fatal("capability mismatch allowed")
-		}
-		answer, err := bound.Chat("system", []map[string]string{{"role": "assistant", "content": "history"}, {"role": "user", "content": "q"}}, map[string]interface{}{"thinking": false, "max_tokens": 64, "stop": []string{"STOP"}})
-		if err != nil || answer != fmt.Sprintf("answer-%d", i) {
-			t.Fatalf("bound %q %v", answer, err)
-		}
-		var frames []string
-		err = bound.ChatStreamlyWithSender([]models.Message{{Role: "system", Content: "system"}, {Role: "user", Content: "q"}}, map[string]interface{}{"thinking": false}, func(content, reason *string) error {
-			if content != nil {
-				frames = append(frames, *content)
-			}
-			if reason != nil {
-				frames = append(frames, *reason)
-			}
-			return nil
+	// These actual auth branches must stop the protected chain before SQL or supplier calls.
+	status, result, _ := f.request(t, "superuser", "PUT", "/api/v1/providers/", map[string]any{"provider_name": "OpenAI"})
+	if status != 403 || providerEnvelopeError(result) == nil || f.snapshot(t) != beforeSnapshot || f.counts(t) != before {
+		t.Fatal("superuser denial continued protected mutation")
+	}
+	local.SetAdminStatus(1, "controlled unavailable runtime")
+	status, result, _ = f.request(t, "owner", "PUT", "/api/v1/providers/", map[string]any{"provider_name": "OpenAI"})
+	if status != 503 || providerEnvelopeError(result) == nil || f.snapshot(t) != beforeSnapshot || f.counts(t) != before {
+		t.Fatal("license denial continued protected mutation")
+	}
+	status, result, _ = f.request(t, "owner", "POST", "/api/v1/chat/completions", map[string]any{"model_id": ids[0], "messages": history})
+	if status != 503 || providerEnvelopeError(result) == nil || calls[0].Load()+calls[1].Load() != supplierCalls {
+		t.Fatal("license denial reached supplier")
+	}
+	local.SetAdminStatus(0, "controlled owned provider fixture")
+	// Disabled registered rows must not be used by either selector route.
+	path := "/api/v1/providers/vllm/instances/instance-0/models/fixture-model"
+	f.requireSuccess(t, "owner", "PATCH", path, map[string]any{"status": "inactive"})
+	_, result, _ = f.request(t, "owner", "POST", "/api/v1/chat/completions", map[string]any{"model_id": ids[0], "messages": history})
+	if providerEnvelopeError(result) == nil {
+		t.Fatal("inactive model inferred")
+	}
+	if calls[0].Load()+calls[1].Load() != supplierCalls {
+		t.Fatal("inactive model contacted supplier")
+	}
+	f.requireSuccess(t, "owner", "PATCH", path, map[string]any{"status": "active"})
+	var metadata, modelStatus string
+	if err := f.Read.QueryRow("SELECT extra,status FROM tenant_model WHERE id=?", ids[0]).Scan(&metadata, &modelStatus); err != nil || modelStatus != "active" {
+		t.Fatal("model status readback", err)
+	}
+	var extra map[string]any
+	if json.Unmarshal([]byte(metadata), &extra) != nil || extra["max_tokens"] != float64(128) {
+		t.Fatal("canonical declaration metadata lost")
+	}
+	// Actual target Models[] declaration locks the existing instance for one concurrent winner.
+	var workers sync.WaitGroup
+	results := make(chan bool, 6)
+	for range 6 {
+		workers.Go(func() {
+			_, result, _ := f.request(t, "owner", "POST", "/api/v1/providers/vllm/instances/instance-0/models", map[string]any{"models": []any{map[string]any{"model_name": "concurrent", "model_types": []string{"chat"}}}})
+			results <- providerEnvelopeError(result) == nil
 		})
-		if err != nil || len(frames) != 3 || frames[2] != "[DONE]" {
-			t.Fatalf("stream %v %v", frames, err)
+	}
+	workers.Wait()
+	close(results)
+	successes := 0
+	for ok := range results {
+		if ok {
+			successes++
 		}
-		ctx, cancel := context.WithCancel(context.Background())
+	}
+	if successes != 1 {
+		t.Fatal("concurrent declaration winners", successes)
+	}
+	var count int
+	if err := f.Read.QueryRow("SELECT count(*) FROM tenant_model WHERE model_name=?", "concurrent").Scan(&count); err != nil || count != 1 {
+		t.Fatal("concurrent physical rows", count, err)
+	}
+	results = make(chan bool, 6)
+	for range 6 {
+		workers.Go(func() {
+			_, result, _ := f.request(t, "owner", "POST", "/api/v1/providers/vllm/instances", map[string]any{"instance_name": "concurrent-instance", "api_key": "instance-fixture", "base_url": "http://127.0.0.1:1"})
+			results <- providerEnvelopeError(result) == nil
+		})
+	}
+	workers.Wait()
+	close(results)
+	successes = 0
+	for ok := range results {
+		if ok {
+			successes++
+		}
+	}
+	if err := f.Read.QueryRow("SELECT count(*) FROM tenant_model_instance WHERE instance_name=?", "concurrent-instance").Scan(&count); err != nil || successes != 1 || count != 1 {
+		t.Fatal("concurrent instance creation duplicated or lost SQL rows", successes, count, err)
+	}
+}
+
+func TestRoot55BindingSQLFailureAndCancellation(t *testing.T) {
+	f := newCanonicalProviderFixture(t)
+	var calls atomic.Int64
+	var blocking atomic.Bool
+	entered, stopped := make(chan struct{}, 1), make(chan struct{}, 1)
+	supplier := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Header.Get("Authorization") != "Bearer stored-silicon-key" || r.URL.Path != "/embeddings" {
+			t.Error("bound supplier identity changed")
+		}
+		if blocking.Load() {
+			w.WriteHeader(200)
+			w.(http.Flusher).Flush()
+			entered <- struct{}{}
+			select {
+			case <-r.Context().Done():
+				stopped <- struct{}{}
+			case <-time.After(5 * time.Second):
+			}
+			return
+		}
+		fmt.Fprint(w, `{"data":[{"index":0,"embedding":[0,1]}]}`)
+	}))
+	id := f.enroll(t, "SiliconFlow", "sql-fault", "stored-silicon-key", supplier.URL, "BAAI/bge-m3", "embedding")
+	before := f.snapshot(t)
+	f.requireSuccess(t, "owner", "POST", "/api/v1/embeddings", map[string]any{"model_id": id, "texts": []string{"q"}})
+	count := calls.Load()
+	f.Journal.Event("reserve-owned-table-rename", map[string]any{"table": "tenant_model", "temporary": "root55_hidden_model"})
+	if _, err := f.Read.Exec("RENAME TABLE tenant_model TO root55_hidden_model"); err != nil {
+		t.Fatal(err)
+	}
+	restored := false
+	t.Cleanup(func() {
+		if !restored {
+			if _, err := f.Read.Exec("RENAME TABLE root55_hidden_model TO tenant_model"); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	_, err := f.svc.GetEmbeddingModel("owner-tenant", "BAAI/bge-m3@sql-fault@SiliconFlow")
+	var sqlError *mysql.MySQLError
+	if err == nil || !errors.As(err, &sqlError) || sqlError.Number != 1146 {
+		t.Fatal("physical SQL failure was hidden as missing/disabled model")
+	}
+	_, failed, _ := f.request(t, "owner", "POST", "/api/v1/embeddings", map[string]any{"model_id": id, "texts": []string{"q"}})
+	if providerEnvelopeError(failed) == nil || calls.Load() != count {
+		t.Fatal("SQL failure fell back to supplier")
+	}
+	if _, err := f.Read.Exec("RENAME TABLE root55_hidden_model TO tenant_model"); err != nil {
+		t.Fatal(err)
+	}
+	restored = true
+	if f.snapshot(t) != before {
+		t.Fatal("SQL fault changed committed rows")
+	}
+	f.Journal.Event("owned-table-restored-readback", map[string]any{"table": "tenant_model", "restored": true})
+	blocking.Store(true)
+	raw, _ := json.Marshal(map[string]any{"model_id": id, "texts": []string{"q"}})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	request, _ := http.NewRequestWithContext(ctx, "POST", f.url+"/api/v1/embeddings", bytes.NewReader(raw))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+f.tokens["owner"])
+	done := make(chan error, 1)
+	go func() {
+		response, err := f.client.Do(request)
+		if response != nil {
+			io.Copy(io.Discard, response.Body)
+			response.Body.Close()
+		}
+		done <- err
+	}()
+	select {
+	case <-entered:
 		cancel()
-		bound.APIConfig.Context = ctx
-		_, err = bound.Chat("", []map[string]string{{"role": "user", "content": "q"}}, map[string]interface{}{"thinking": false})
+	case <-time.After(3 * time.Second):
+		t.Fatal("stored SQL model never reached supplier")
+	}
+	select {
+	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("cancel %v", err)
+			t.Fatal("request cancellation cause lost")
 		}
-		_, result = request("PATCH", path+"/Qwen/custom", "owner", map[string]interface{}{"status": "disable"})
-		if result["code"] != float64(0) {
-			t.Fatalf("disable %v", result)
+	case <-time.After(3 * time.Second):
+		t.Fatal("incoming request failed to drain")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("bound supplier response/socket not closed")
+	}
+	if f.snapshot(t) != before {
+		t.Fatal("canceled bound inference modified SQL")
+	}
+}
+
+func TestRoot55VLLMBatchCLIHTTPAndSQL(t *testing.T) {
+	f := newCanonicalProviderFixture(t)
+	var vendorCalls atomic.Int64
+	var dimensionsMu sync.Mutex
+	var dimensions []any
+	supplier := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		vendorCalls.Add(1)
+		var body map[string]any
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
+			t.Error("invalid native body")
+			return
 		}
-		if _, err := svc.GetChatModel("owner-tenant", "Qwen/custom@"+instance+"@vllm"); err == nil {
-			t.Fatal("disabled custom model resolved")
+		if r.URL.Path != "/embeddings" || r.Header.Get("Authorization") != "Bearer vllm-key" {
+			t.Error("vllm stored URL/key lost")
 		}
-		if _, _, name, enabled, err := service.NewTenantService().GetModelInfo("owner-tenant", "Qwen/custom@"+instance+"@vllm", "chat"); err != nil || enabled || name == nil || *name != "Qwen/custom" {
-			t.Fatalf("disabled default display: name=%v enabled=%v err=%v", name, enabled, err)
+		dimensionsMu.Lock()
+		dimensions = append(dimensions, body["dimensions"])
+		dimensionsMu.Unlock()
+		texts := body["input"].([]any)
+		rows := make([]any, len(texts))
+		for i := range texts {
+			rows[len(texts)-1-i] = map[string]any{"index": i, "embedding": []float64{float64(i), 0}}
 		}
-		_, result = request("GET", path, "owner", nil)
-		if result["data"].([]interface{})[0].(map[string]interface{})["status"] != "inactive" {
-			t.Fatal("disabled list status incorrect")
-		}
-		_, result = request("PATCH", path+"/Qwen/custom", "owner", map[string]interface{}{"status": "enable"})
-		if result["code"] != float64(0) {
-			t.Fatalf("enable %v", result)
-		}
-		var extra, statusDB, instanceExtra string
-		if err := readback.QueryRow(`SELECT m.extra,m.status,i.extra FROM tenant_model m JOIN tenant_model_instance i ON i.id=m.instance_id WHERE m.model_name=$1 AND i.instance_name=$2`, "Qwen/custom", instance).Scan(&extra, &statusDB, &instanceExtra); err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"data": rows})
+	}))
+	f.enroll(t, "vllm", "batch", "vllm-key", supplier.URL, "seed", "chat")
+	syntax := "ADD MODEL 'batch-chat batch-embed' TO PROVIDER 'vllm' INSTANCE 'batch' WITH CHAT VISION TOKENS 0, EMBEDDING;"
+	command, err := cli.NewParser(syntax).Parse(cli.APIMode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRequests := f.modelMutationCalls.Load()
+	if _, err = f.cli(t, "owner").ExecuteCommand(command); err != nil {
+		t.Fatal("actual multirow CLI", err)
+	}
+	if f.modelMutationCalls.Load()-beforeRequests != 1 {
+		t.Fatal("CLI batch split into multiple HTTP requests")
+	}
+	var n int
+	if err := f.Read.QueryRow("SELECT count(*) FROM tenant_model m JOIN tenant_model_instance i ON i.id=m.instance_id WHERE i.instance_name='batch' AND m.model_name IN ('batch-chat','batch-embed')").Scan(&n); err != nil || n != 2 {
+		t.Fatal("independent CLI batch SQL count", n, err)
+	}
+	var typ, extra string
+	if err := f.Read.QueryRow("SELECT m.model_type,m.extra FROM tenant_model m JOIN tenant_model_instance i ON i.id=m.instance_id WHERE i.instance_name='batch' AND m.model_name='batch-chat'").Scan(&typ, &extra); err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if json.Unmarshal([]byte(extra), &metadata) != nil || typ != "chat" || metadata["max_tokens"] != float64(0) {
+		t.Fatal("primary type/explicit zero SQL lost")
+	}
+	before := f.snapshot(t)
+	beforeRequests = f.modelMutationCalls.Load()
+	if _, err = f.cli(t, "owner").ExecuteCommand(command); err == nil {
+		t.Fatal("duplicate batch succeeded")
+	}
+	if f.modelMutationCalls.Load()-beforeRequests != 1 || f.snapshot(t) != before {
+		t.Fatal("failed batch split or changed SQL")
+	}
+	var id string
+	if err := f.Read.QueryRow("SELECT m.id FROM tenant_model m JOIN tenant_model_instance i ON i.id=m.instance_id WHERE i.instance_name='batch' AND m.model_name='batch-embed'").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	for _, option := range []string{"", " DIMENSION 0", " DIMENSION 2"} {
+		cmd, err := cli.NewParser(fmt.Sprintf("EMBED TEXT 'a' 'b' WITH '%s'%s;", id, option)).Parse(cli.APIMode)
+		if err != nil {
 			t.Fatal(err)
 		}
-		var fields map[string]interface{}
-		json.Unmarshal([]byte(extra), &fields)
-		if fields["max_tokens"] != float64(131072) || fields["thinking"] != true || statusDB != "active" || !strings.Contains(instanceExtra, fixtures[i].URL) {
-			t.Fatalf("SQL readback %s %s %s", extra, statusDB, instanceExtra)
+		result, err := f.cli(t, "owner").ExecuteCommand(cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vectors, ok := result.(*cli.EmbeddingsResponse)
+		if !ok || len(vectors.Data) != 2 || vectors.Data[0].Index != 0 || vectors.Data[0].Embedding[0] != 0 || vectors.Data[1].Index != 1 || vectors.Data[1].Embedding[0] != 1 {
+			t.Fatal("CLI lost native indexed/zero vectors")
 		}
 	}
-	// Concurrent duplicate declarations have one physical winner in this instance.
-	var outcomes [6]common.ErrorCode
-	var group sync.WaitGroup
-	for i := range outcomes {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			outcomes[i], _ = svc.AddCustomModel(&service.AddCustomModelRequest{ProviderName: "vllm", InstanceName: "local-0", ModelName: "concurrent", ModelType: "chat", MaxTokens: 1024}, "owner")
-		}()
+	dimensionsMu.Lock()
+	got := append([]any{}, dimensions...)
+	dimensionsMu.Unlock()
+	if !reflect.DeepEqual(got, []any{nil, nil, float64(2)}) {
+		t.Fatal("frozen omitted/zero/explicit dimension wire changed", got)
 	}
-	group.Wait()
-	winners := 0
-	for _, code := range outcomes {
-		if code == common.CodeSuccess {
-			winners++
-		} else if code != common.CodeConflict {
-			t.Fatalf("concurrent add code %d", code)
-		}
+	count := vendorCalls.Load()
+	_, failed, _ := f.request(t, "foreign", "POST", "/api/v1/embeddings", map[string]any{"model_id": id, "texts": []string{"q"}})
+	if providerEnvelopeError(failed) == nil || vendorCalls.Load() != count || f.snapshot(t) != before {
+		t.Fatal("foreign batch inference side effects")
 	}
-	var physical int
-	if err := readback.QueryRow("SELECT count(*) FROM tenant_model WHERE model_name='concurrent'").Scan(&physical); err != nil || physical != 1 || winners != 1 {
-		t.Fatalf("duplicate winners %d rows %d %v", winners, physical, err)
-	}
-	if err := dao.DB.Create(&entity.Tenant{ID: "owner-tenant", Status: &active, LLMID: "Qwen/custom@local-0@vllm"}).Error; err != nil {
+	cmd, err := cli.NewParser("DROP MODEL 'batch-chat batch-embed' FROM 'vllm' 'batch';").Parse(cli.APIMode)
+	if err != nil {
 		t.Fatal(err)
 	}
-	defaultModel, err := svc.GetChatModel("owner-tenant", "")
-	if err != nil || defaultModel.ModelConfig.Thinking == nil || !*defaultModel.ModelConfig.Thinking {
-		t.Fatalf("default custom model %v %v", defaultModel, err)
+	if _, err = f.cli(t, "owner").ExecuteCommand(cmd); err != nil {
+		t.Fatal("actual batch delete CLI", err)
 	}
-	tenantSvc := service.NewTenantService()
-	if err := tenantSvc.SetTenantDefaultModels("owner", "vllm", "local-1", "Qwen/custom", "chat"); err != nil {
-		t.Fatal(err)
-	}
-	saved, err := tenantSvc.GetDefaultModelName("owner-tenant", entity.ModelTypeChat)
-	if err != nil || saved != "Qwen/custom@local-1@vllm" {
-		t.Fatalf("saved default %q %v", saved, err)
-	}
-	if _, _, _, enabled, err := tenantSvc.GetModelInfo("owner-tenant", saved, "chat"); err != nil || !enabled {
-		t.Fatalf("custom default not available: %v", err)
-	}
-	if tts, err := tenantSvc.GetDefaultModelName("owner-tenant", entity.ModelTypeTTS); err != nil || tts != "" {
-		t.Fatal("nil TTS failed", err)
-	}
-
-	instances, code, err := svc.ListProviderInstances("vllm", "owner")
-	if code != common.CodeSuccess || err != nil || len(instances) != 2 || instances[0]["extra"] == nil || instances[0]["region"] != "private" {
-		t.Fatalf("instance extras %v %v", instances, err)
-	}
-	status, _ := request("POST", "/api/v1/providers/vllm/instances/local-0/models", "", map[string]interface{}{"model_name": "noauth", "model_type": "chat", "max_tokens": 1})
-	if status != http.StatusUnauthorized {
-		t.Fatal("unauthenticated creation allowed")
-	}
-	if dao.GetModelProviderManager().FindProvider("vllm").URL["default"] != "" {
-		t.Fatal("global provider URLs polluted")
-	}
-	if calls[0].Load() != 7 || calls[1].Load() != 7 {
-		t.Fatalf("unexpected provider calls %d %d", calls[0].Load(), calls[1].Load())
-	}
-	if code, err := svc.CreateProviderInstance("vllm", "default", "fixture-key-default", "owner", "", fixtures[0].URL+"/v1"); err != nil || code != common.CodeSuccess {
-		t.Fatalf("default instance %v", err)
-	}
-	if code, err := svc.AddCustomModel(&service.AddCustomModelRequest{ProviderName: "vllm", InstanceName: "default", ModelName: "default-model", ModelType: "chat", MaxTokens: 1024}, "owner"); err != nil || code != common.CodeSuccess {
-		t.Fatal(err)
-	}
-	if _, err := svc.GetChatModel("owner-tenant", "default-model@vllm"); err != nil {
-		t.Fatal("two part default reference failed", err)
-	}
-	if _, err := svc.GetChatModel("owner-tenant", "default-model@default@vllm"); err != nil {
-		t.Fatal(err)
-	}
-	if err := dao.DB.Model(&entity.Tenant{}).Where("id = ?", "owner-tenant").Update("llm_id", "").Error; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.GetChatModel("owner-tenant", ""); err == nil || !strings.Contains(err.Error(), "no default") {
-		t.Fatal("empty default not explicit", err)
-	}
-	if code, err := svc.AlterProviderInstance("vllm", "default", "renamed", "", "owner"); err == nil || code == common.CodeSuccess {
-		t.Fatal("unsupported rename succeeded")
-	}
-
-	if err := dao.DB.Model(&entity.TenantModel{}).Where("model_name = ?", "Qwen/custom").Update("extra", "invalid").Error; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.GetChatModel("owner-tenant", "Qwen/custom@local-0@vllm"); err == nil {
-		t.Fatal("corrupt model extra accepted")
-	}
-	if err := dao.DB.Model(&entity.TenantModel{}).Where("model_name = ?", "Qwen/custom").Update("extra", `{"max_tokens":131072,"thinking":true}`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if code, err := svc.DropProviderInstances("vllm", "owner", []string{"default"}); err != nil || code != common.CodeSuccess {
-		t.Fatal(err)
-	}
-	exerciseModelDeletion(t, svc, readback, request)
-	exerciseCatalogDeletionRace(t, svc, readback)
-	if err := pool.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := svc.ChatToModelWithMessages("vllm", "local-0", "Qwen/custom", "owner", []models.Message{{Role: "user", Content: "q"}}, &models.APIConfig{}, &models.ChatConfig{}); err == nil {
-		t.Fatal("database failure became success")
+	if err := f.Read.QueryRow("SELECT count(*) FROM tenant_model WHERE id=? OR model_name='batch-chat'", id).Scan(&n); err != nil || n != 0 {
+		t.Fatal("batch delete independent readback", n, err)
 	}
 }

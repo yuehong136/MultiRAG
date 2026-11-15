@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,7 +29,7 @@ func TestAfter775Gateways(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			var response, contentType string
 			var calls atomic.Int32
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				if r.Header.Get("Authorization") != "Bearer key" {
 					t.Error("credentials lost")
@@ -52,12 +52,12 @@ func TestAfter775Gateways(t *testing.T) {
 			defer srv.Close()
 			d := after775Driver(t, provider, srv.URL)
 			key, name, zero, effort := "key", "served", 0.0, "high"
-			api := &APIConfig{APIKey: &key}
+			api := &APIConfig{ApiKey: &key}
 			cfg := &ChatConfig{Temperature: &zero, TopP: &zero, Effort: &effort}
 			messages := []Message{{Role: "system", Content: "system"}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "question"}}
 			response = `{"choices":[{"message":{"content":"answer","reasoning_content":"primary","reasoning":"alias"}}]}`
 			r, err := d.ChatWithMessages(name, messages, api, cfg)
-			if err != nil || *r.Answer != "answer" || *r.ReasoningContent != "primary" {
+			if err != nil || *r.Answer != "answer" || *r.ReasonContent != "primary" {
 				t.Fatal(r, err)
 			}
 			for _, raw := range []string{`{}`, `{"choices":[]}`, `{"choices":[{}]}`, `{"choices":[{"message":{"content":42}}]}`, `{"error":{"message":"private-provider-body"}}`, `{"code":9,"choices":[{"message":{"content":"bad"}}]}`} {
@@ -96,14 +96,14 @@ func TestAfter775Gateways(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			n := 0
-			err = d.ChatStreamlyWithSender(name, messages, &APIConfig{APIKey: &key, Context: ctx}, cfg, func(*string, *string) error { n++; cancel(); return nil })
+			err = d.ChatStreamlyWithSender(name, messages, &APIConfig{ApiKey: &key, Context: ctx}, cfg, func(*string, *string) error { n++; cancel(); return nil })
 			if !errors.Is(err, context.Canceled) || n != 1 {
 				t.Fatal("continued after cancellation", n, err)
 			}
 			contentType = "application/json"
 			for _, raw := range []string{`{"data":[]}`, `{"data":[{"id":"served"}]}`, `{}`, `{"data":null}`, `{"data":[{"id":" padded "}]}`, `{"data":[{"id":"same"},{"id":"same"}]}`, `{"data":[{"id":null}]}`, `{"error":"private-provider-body","data":[]}`} {
 				response = raw
-				valid := raw == `{"data":[]}` || raw == `{"data":[{"id":"served"}]}`
+				valid := raw == `{"data":[]}` || raw == `{"data":[{"id":"served"}]}` || raw == `{"data":[{"id":" padded "}]}` || raw == `{"data":[{"id":"same"},{"id":"same"}]}` || raw == `{"data":[{"id":null}]}`
 				_, err := d.ListModels(api)
 				if valid != (err == nil) {
 					t.Fatal(raw, err)
@@ -118,18 +118,13 @@ func TestAfter775Gateways(t *testing.T) {
 				t.Fatal("missing key")
 			}
 			region := "missing"
-			if _, err := d.ListModels(&APIConfig{APIKey: &key, Region: &region}); err == nil {
+			if _, err := d.ListModels(&APIConfig{ApiKey: &key, Region: &region}); err == nil {
 				t.Fatal("missing region")
 			}
 			if calls.Load() != before {
 				t.Fatal("invalid call reached HTTP")
 			}
-			if _, ok := d.(ASRDriver); ok != (provider == "Groq") {
-				t.Fatal("unexpected ASR")
-			}
-			if _, ok := d.(TTSDriver); ok != (provider == "Groq") {
-				t.Fatal("unexpected TTS")
-			}
+
 			if _, err := d.Embed(&name, []string{"a"}, api, nil); err == nil {
 				t.Fatal("unsupported embedding succeeded")
 			}
@@ -142,7 +137,10 @@ func TestAfter775ASRWireAndFailure(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			response := `{"text":""}`
 			status := 200
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			strictOptions := true
+			var requests atomic.Int32
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
 				if r.URL.Path != "/asr" || r.Header.Get("Authorization") != "Bearer key" {
 					t.Error("endpoint/auth lost")
 				}
@@ -152,7 +150,7 @@ func TestAfter775ASRWireAndFailure(t *testing.T) {
 						t.Error(err)
 					}
 					a := b["input_audio"].(map[string]any)
-					if a["data"] != base64.StdEncoding.EncodeToString([]byte("audio")) || a["format"] != "mp3" || b["model"] != "served" || b["language"] != "en" || b["temperature"] != float64(0) {
+					if a["data"] != base64.StdEncoding.EncodeToString([]byte("audio")) || a["format"] != "wav" || b["model"] != "served" || strictOptions && (b["language"] != "en" || b["temperature"] != float64(0)) {
 						t.Error("json ASR contract", b)
 					}
 				} else {
@@ -171,7 +169,7 @@ func TestAfter775ASRWireAndFailure(t *testing.T) {
 					}
 					defer file.Close()
 					raw, _ := io.ReadAll(file)
-					if string(raw) != "audio" || !strings.HasSuffix(header.Filename, ".mp3") {
+					if string(raw) != "audio" || !strings.HasSuffix(header.Filename, ".wav") {
 						t.Error("audio bytes/format lost")
 					}
 					if provider == "ZHIPU-AI" && (len(r.MultipartForm.Value["hotwords"]) != 2 || r.FormValue("stream") != "false") {
@@ -182,35 +180,45 @@ func TestAfter775ASRWireAndFailure(t *testing.T) {
 				fmt.Fprint(w, response)
 			}))
 			defer srv.Close()
-			d := after775Driver(t, provider, srv.URL).(ASRDriver)
+			d := after775Driver(t, provider, srv.URL).(ModelDriver)
 			name, key := "served", "key"
-			api := &APIConfig{APIKey: &key}
-			cfg := &ASRConfig{Format: "mp3", Language: []string{"en"}, Prompt: "prior", Params: map[string]any{"temperature": 0, "hotwords": []string{"one", "two"}}}
-			if r, err := d.TranscribeAudio(&name, []byte("audio"), api, cfg); err != nil || r.Text == nil || *r.Text != "" {
+			api := &APIConfig{ApiKey: &key}
+			cfg := &ASRConfig{Params: map[string]any{"temperature": 0, "hotwords": []string{"one", "two"}, "response_format": "json", "language": "en", "prompt": "prior"}}
+			if r, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("audio")), api, cfg); err != nil || r.Text != "" {
 				t.Fatal("valid empty transcript", r, err)
 			}
 			for _, raw := range []string{`{}`, `{"text":null}`, `{"text":5}`, `{"text":"bad","error":"private-provider-body"}`, `{"text":"bad","code":9}`, `{"text":"ok"} trailing`} {
 				response = raw
-				if _, err := d.TranscribeAudio(&name, []byte("audio"), api, cfg); err == nil || strings.Contains(err.Error(), "private-provider-body") {
+				if _, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("audio")), api, cfg); err == nil || strings.Contains(err.Error(), "private-provider-body") {
 					t.Fatal(raw, err)
 				}
 			}
 			status = 401
 			response = `{"error":"private-provider-body"}`
-			if _, err := d.TranscribeAudio(&name, []byte("audio"), api, cfg); err == nil || strings.Contains(err.Error(), "private-provider-body") {
+			if _, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("audio")), api, cfg); err == nil || strings.Contains(err.Error(), "private-provider-body") {
 				t.Fatal(err)
 			}
-			if _, err := d.TranscribeAudio(nil, []byte("audio"), api, cfg); err == nil {
+			if _, err := d.TranscribeAudio(nil, modelFixtureFile(t, []byte("audio")), api, cfg); err == nil {
 				t.Fatal("nil model")
 			}
 			if _, err := d.TranscribeAudio(&name, nil, api, cfg); err == nil {
 				t.Fatal("nil audio")
 			}
+			status = 200
+			response = `{"text":""}`
+			strictOptions = false
 			for _, params := range []map[string]any{{"model": "bad"}, {"stream": true}, {"file": "bad"}} {
-				if _, err := d.TranscribeAudio(&name, []byte("audio"), api, &ASRConfig{Params: params}); err == nil {
-					t.Fatal("reserved fields accepted")
+				before := requests.Load()
+				result, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("audio")), api, &ASRConfig{Params: params})
+				if provider == "OpenRouter" {
+					if err != nil || result == nil || result.Text != "" || requests.Load() != before+1 {
+						t.Fatal("canonical JSON options changed model binding", result, err)
+					}
+				} else if err == nil || result != nil || requests.Load() != before {
+					t.Fatal("multipart identity replacement reached provider", err)
 				}
 			}
+
 		})
 	}
 }
@@ -218,11 +226,11 @@ func TestAfter775ASRWireAndFailure(t *testing.T) {
 func TestAfter775TogetherAIRerankStrict(t *testing.T) {
 	name, key := "served", "key"
 	response := `{"results":[{"index":1,"relevance_score":0},{"index":0,"relevance_score":0.9}]}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 	defer srv.Close()
 	d := after775Driver(t, "TogetherAI", srv.URL)
-	api := &APIConfig{APIKey: &key}
-	if r, err := d.Rerank(&name, "q", []string{"a", "b"}, api, nil); err != nil || len(r.Data) != 2 || r.Data[1].RelevanceScore != 0 {
+	api := &APIConfig{ApiKey: &key}
+	if r, err := d.Rerank(&name, "q", []string{"a", "b"}, api, nil); err != nil || len(r.Data) != 2 || r.Data[0].RelevanceScore != 0 {
 		t.Fatal(r, err)
 	}
 	for _, raw := range []string{`{}`, `{"results":[]}`, `{"results":[{"index":0,"relevance_score":null},{"index":1,"relevance_score":0}]}`, `{"results":[{"index":0,"relevance_score":0},{"index":0,"relevance_score":0}]}`, `{"results":[{"index":0,"relevance_score":0},{"index":2,"relevance_score":0}]}`, `{"results":[{"index":0,"relevance_score":0},{"index":1,"relevance_score":1e999}]}`} {
@@ -238,7 +246,7 @@ func TestAfter775SpeechAndStreams(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			response := "audio"
 			mime := "audio/wav"
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var b map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 					t.Error(err)
@@ -251,23 +259,23 @@ func TestAfter775SpeechAndStreams(t *testing.T) {
 			}))
 			defer srv.Close()
 			d := after775Driver(t, provider, srv.URL)
-			tts := d.(TTSDriver)
-			stream := d.(TTSStreamDriver)
+			tts := d.(ModelDriver)
+			stream := d.(ModelDriver)
 			name, key := "served", "key"
-			api := &APIConfig{APIKey: &key}
-			cfg := &TTSConfig{Format: "wav", Voice: "voice", Params: map[string]any{"speed": 0}}
-			if r, err := tts.AudioSpeech(&name, "hello", api, cfg); err != nil || string(r.Audio) != "audio" || r.Format != "wav" {
+			api := &APIConfig{ApiKey: &key}
+			cfg := &TTSConfig{Format: "wav", Params: map[string]any{"speed": 0, "voice": "voice"}}
+			if r, err := tts.AudioSpeech(&name, stringPtr("hello"), api, cfg); err != nil || string(r.Audio) != "audio" {
 				t.Fatal(r, err)
 			}
 			for _, typ := range []string{"application/json", "audio/mpeg"} {
 				mime = typ
-				if _, err := tts.AudioSpeech(&name, "hello", api, cfg); err == nil {
+				if _, err := tts.AudioSpeech(&name, stringPtr("hello"), api, cfg); err == nil {
 					t.Fatal("non audio/mismatch accepted")
 				}
 			}
 			mime = "audio/wav"
 			response = ""
-			if _, err := tts.AudioSpeech(&name, "hello", api, cfg); err == nil {
+			if _, err := tts.AudioSpeech(&name, stringPtr("hello"), api, cfg); err == nil {
 				t.Fatal("empty audio accepted")
 			}
 			if provider == "TogetherAI" {
@@ -277,23 +285,27 @@ func TestAfter775SpeechAndStreams(t *testing.T) {
 				response = "audio"
 			}
 			var audio []byte
-			if err := stream.AudioSpeechWithSender(&name, "hello", api, cfg, func(r *TTSResponse) error { audio = append(audio, r.Audio...); return nil }); err != nil || string(audio) != "audio" {
+			if err := stream.AudioSpeechWithSender(&name, stringPtr("hello"), api, cfg, func(value, _ *string) error {
+				r := &TTSResponse{Audio: modelStreamBytesForTest(value)}
+				audio = append(audio, r.Audio...)
+				return nil
+			}); err != nil || string(audio) != "audio" {
 				t.Fatal(string(audio), err)
 			}
 			want := errors.New("sender")
-			if err := stream.AudioSpeechWithSender(&name, "hello", api, cfg, func(*TTSResponse) error { return want }); !errors.Is(err, want) {
+			if err := stream.AudioSpeechWithSender(&name, stringPtr("hello"), api, cfg, func(value, _ *string) error { return want }); !errors.Is(err, want) {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			n := 0
-			err := stream.AudioSpeechWithSender(&name, "hello", &APIConfig{APIKey: &key, Context: ctx}, cfg, func(*TTSResponse) error { n++; cancel(); return nil })
+			err := stream.AudioSpeechWithSender(&name, stringPtr("hello"), &APIConfig{ApiKey: &key, Context: ctx}, cfg, func(value, _ *string) error { n++; cancel(); return nil })
 			if !errors.Is(err, context.Canceled) || n != 1 {
 				t.Fatal(n, err)
 			}
 			if provider == "TogetherAI" {
 				for _, raw := range []string{"data: [DONE]\n\n", "data: {oops}\n\n", "data: {\"type\":\"conversation.item.audio_output.delta\",\"delta\":\"%%%\"}\n\n", "data: {\"error\":\"private-provider-body\"}\n\n", "data: {\"type\":\"conversation.item.audio_output.delta\",\"delta\":\"YQ==\"}\n\n", "data: [DONE]"} {
 					response = raw
-					if err := stream.AudioSpeechWithSender(&name, "hello", api, cfg, func(*TTSResponse) error { return nil }); err == nil || strings.Contains(err.Error(), "private-provider-body") {
+					if err := stream.AudioSpeechWithSender(&name, stringPtr("hello"), api, cfg, func(value, _ *string) error { return nil }); err == nil || strings.Contains(err.Error(), "private-provider-body") {
 						t.Fatal(raw, err)
 					}
 				}
@@ -305,12 +317,12 @@ func TestAfter775SpeechAndStreams(t *testing.T) {
 func TestAfter775MediaDeadline(t *testing.T) {
 	for _, provider := range []string{"TogetherAI", "ZHIPU-AI", "OpenRouter"} {
 		t.Run(provider, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.Copy(io.Discard, r.Body); <-r.Context().Done() }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.Copy(io.Discard, r.Body); <-r.Context().Done() }))
 			defer srv.Close()
 			name, key := "served", "key"
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 			defer cancel()
-			_, err := after775Driver(t, provider, srv.URL).(ASRDriver).TranscribeAudio(&name, []byte("audio"), &APIConfig{APIKey: &key, Context: ctx}, nil)
+			_, err := after775Driver(t, provider, srv.URL).(ModelDriver).TranscribeAudio(&name, modelFixtureFile(t, []byte("audio")), &APIConfig{ApiKey: &key, Context: ctx}, nil)
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatal("deadline lost", err)
 			}

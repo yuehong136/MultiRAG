@@ -3,6 +3,11 @@
   "url": {
     "default": "https://router.huggingface.co/v1"
   },
+  "url-suffix": {
+    "chat": "chat/completions",
+    "models": "models",
+    "embedding": "hf-inference/models"
+  },
   "class": "huggingface",
   "models": [
     {
@@ -12,10 +17,5 @@
         "chat"
       ]
     }
-  ],
-  "url_suffix": {
-    "chat": "chat/completions",
-    "models": "models",
-    "embedding": "hf-inference/models"
-  }
+  ]
 }

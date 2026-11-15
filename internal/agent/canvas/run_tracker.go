@@ -26,11 +26,10 @@ package canvas
 import (
 	"context"
 	"errors"
+	redis2 "multirag/internal/engine/redis"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-
-	redisengine "multirag/internal/engine/redis"
 )
 
 // runKeyPrefix is the Redis Hash key namespace for run metadata.
@@ -62,7 +61,7 @@ type RunTracker struct {
 // construction.
 func NewRunTracker(ttl time.Duration) *RunTracker {
 	var client *redis.Client
-	if rc := redisengine.Get(); rc != nil {
+	if rc := redis2.Get(); rc != nil {
 		client = rc.GetClient()
 	}
 	return &RunTracker{client: client, ttl: ttl}
@@ -148,9 +147,4 @@ func (t *RunTracker) Get(ctx context.Context, runID string) (map[string]string, 
 		return nil, errors.New("run tracker: redis client not initialized")
 	}
 	return t.client.HGetAll(ctx, runKey(runID)).Result()
-}
-
-// NewRunTrackerWithClient uses a caller-owned Redis connection pool.
-func NewRunTrackerWithClient(client *redis.Client, ttl time.Duration) *RunTracker {
-	return &RunTracker{client: client, ttl: ttl}
 }

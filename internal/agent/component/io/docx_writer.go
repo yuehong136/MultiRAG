@@ -36,12 +36,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"embed"
-	"encoding/xml"
 	"fmt"
-
+	"html"
 	"strings"
 	"text/template"
-	"time"
 )
 
 //go:embed templates/content_types.xml
@@ -94,7 +92,7 @@ type docModel struct {
 // strings — except we're explicitly using a non-default func that
 // returns a pre-escaped string).
 var tmplFuncs = template.FuncMap{
-	"xml": func(s string) string { var out bytes.Buffer; _ = xml.EscapeText(&out, []byte(s)); return out.String() },
+	"xml": func(s string) string { return html.EscapeString(s) },
 	"pt":  func(i int) string { return fmt.Sprintf("%d", i*2) }, // OOXML uses half-points for w:sz
 }
 
@@ -243,4 +241,4 @@ func splitParagraphs(content string) []string {
 // nowUTC returns a stable timestamp string for footer / watermark
 // metadata. Format: "2026-06-03T14:45:06Z" (RFC3339 in UTC). Kept
 // here so tests can substitute it via time.Now override in Phase 5.
-var nowUTC = func() string { return time.Now().UTC().Format(time.RFC3339) }
+var nowUTC = func() string { return "2026-06-03T00:00:00Z" }

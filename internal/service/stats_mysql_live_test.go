@@ -1,88 +1,50 @@
 package service
 
 import (
-	"database/sql"
-	"encoding/json"
-	mysqlDriver "github.com/go-sql-driver/mysql"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 	"multirag/internal/dao"
-	"multirag/internal/testsupport"
-	"os"
-	"strings"
+	"multirag/internal/entity"
+	"multirag/internal/testsupport/scratch"
 	"testing"
 	"time"
 )
 
 func TestBatchGMySQLStats(t *testing.T) {
-	path := os.Getenv("MULTIRAG_BATCH_G_MYSQL")
-	if path == "" {
-		if os.Getenv("REQUIRE_SERVICES") == "1" {
-			t.Fatal("owned MySQL required")
-		}
-		t.Skip("requires owned MySQL")
+	f := scratch.New(t)
+	old := dao.DB
+	dao.DB = f.DB
+	t.Cleanup(func() { dao.DB = old })
+	if err := f.DB.AutoMigrate(&entity.UserTenant{}, &entity.Tenant{}, &entity.User{}); err != nil {
+		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal("private config unavailable")
-	}
-	var config struct {
-		DSN        string
-		ServerUUID string
-	}
-	if json.Unmarshal(raw, &config) != nil {
-		t.Fatal("invalid config")
-	}
-	parsed, err := mysqlDriver.ParseDSN(config.DSN)
-	if err != nil || !strings.HasPrefix(parsed.DBName, "multirag_batch_g_") {
-		t.Fatal("unowned MySQL")
-	}
-	caseJournal := testsupport.NewCase(t)
-	caseJournal.Event("reserve-mysql-stat-tables", map[string]any{"database": parsed.DBName, "tables": []string{"t_ai_dialogs", "t_ai_api4conversations"}})
-	db, err := gorm.Open(mysql.Open(config.DSN), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal("connect owned MySQL")
-	}
-	pool, _ := db.DB()
-	defer pool.Close()
-	read, err := sql.Open("mysql", config.DSN)
-	if err != nil {
-		t.Fatal("readback connect")
-	}
-	defer read.Close()
-	var actual string
-	if err := read.QueryRow("SELECT @@server_uuid").Scan(&actual); err != nil || actual != config.ServerUUID {
-		t.Fatal("wrong MySQL server")
-	}
-	dao.DB = db
-	t.Cleanup(func() { dao.DB = nil })
-	// The Go entity's existing jsonb tags do not support a full MySQL startup.
-	// This fixture verifies only the persisted column contract used by Stats.
-	for _, statement := range []string{
-		"CREATE TABLE t_ai_dialogs(id varchar(32) PRIMARY KEY,tenant_id varchar(32) NOT NULL)",
-		"CREATE TABLE t_ai_api4conversations(id varchar(32) PRIMARY KEY,dialog_id varchar(32),user_id varchar(32),source varchar(16) NULL,tokens bigint,duration double,`round` bigint,thumb_up bigint,create_date datetime)",
-	} {
-		if err := db.Exec(statement).Error; err != nil {
+	// Match the canonical SQL table names used by the conversation statistics query.
+	for _, statement := range []string{"CREATE TABLE dialog(id varchar(32) PRIMARY KEY,tenant_id varchar(32) NOT NULL)", "CREATE TABLE api_4_conversation(id varchar(32) PRIMARY KEY,dialog_id varchar(32),user_id varchar(32),source varchar(16) NULL,tokens bigint,duration double,`round` bigint,thumb_up bigint,create_date datetime)"} {
+		if err := f.DB.Exec(statement).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	day := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
-	for _, id := range []string{"stats-owner", "stats-other"} {
-		if err := db.Exec("INSERT INTO t_ai_dialogs(id,tenant_id) VALUES (?,?)", id, id).Error; err != nil {
+	active := "1"
+	day := time.Date(2026, 10, 20, 12, 0, 0, 0, time.Local)
+	for _, id := range []string{"owner", "other"} {
+		if err := f.DB.Create(&entity.Tenant{ID: id, Status: &active}).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Exec("INSERT INTO t_ai_api4conversations(id,dialog_id,user_id,tokens,duration,`round`,thumb_up,create_date) VALUES (?,?,?,1000,0,0,0,?)", id, id, id, day).Error; err != nil {
+		if err := f.DB.Create(&entity.UserTenant{ID: id, UserID: id, TenantID: id, Role: "owner", Status: &active}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := f.DB.Exec("INSERT INTO dialog(id,tenant_id) VALUES (?,?)", id, id).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := f.DB.Exec("INSERT INTO api_4_conversation(id,dialog_id,user_id,tokens,duration,`round`,thumb_up,create_date) VALUES (?,?,?,1000,0,0,0,?)", id, id, id, day).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	result, code, err := NewSystemService().GetStats(t.Context(), "stats-owner", day.Add(-12*time.Hour), day.Add(12*time.Hour), nil)
-	if err != nil || code != 0 || len(result.PV) != 1 || result.PV[0][1] != int64(1) || result.Tokens[0][1] != float64(1) || result.Speed[0][1] != float64(0) {
-		t.Fatal("MySQL daily/tenant/zero stats", code, err)
+	result, err := NewSystemService().GetStats("owner", day.Add(-12*time.Hour).Format("2006-01-02 15:04:05"), day.Add(12*time.Hour).Format("2006-01-02 15:04:05"), nil)
+	if err != nil || len(result.PV) != 1 || result.PV[0][1] != int64(1) || result.Tokens[0][1] != float64(1) || result.Speed[0][1] != float64(10000) {
+		t.Fatal("canonical tenant/daily/zero denominator stats", result, err)
 	}
-	var n int
-	if err := read.QueryRow("SELECT count(*) FROM t_ai_api4conversations").Scan(&n); err != nil || n != 2 {
-		t.Fatal("read-only stats changed stored rows", n, err)
+	var count int
+	if err := f.Read.QueryRow("SELECT count(*) FROM api_4_conversation").Scan(&count); err != nil || count != 2 {
+		t.Fatal("read-only stats changed SQL rows", count, err)
 	}
-	caseJournal.Event("mysql-stat-readback", map[string]any{"rows": n, "scopedPV": 1, "zeroDurationSpeed": 0})
+	f.Journal.Event("canonical-stats-readback", map[string]any{"rows": count, "scoped_pv": 1, "zero_duration_formula": 10000})
 }

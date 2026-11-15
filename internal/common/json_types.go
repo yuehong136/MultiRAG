@@ -1,3 +1,19 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package common
 
 import (
@@ -6,39 +22,41 @@ import (
 	"fmt"
 )
 
-// StringSlice accepts a JSON string or string array. Omission leaves nil, an
-// empty array stays non-nil, and null is rejected rather than widening scope.
+// StringSlice is a []string that unmarshals from either a JSON string or
+// a JSON array of strings.  This matches Python endpoints that accept
+// both "kb1" and ["kb1", "kb2"] for list-valued parameters.
 type StringSlice []string
 
-func (s *StringSlice) UnmarshalJSON(raw []byte) error {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+// UnmarshalJSON implements json.Unmarshaler.
+func (s *StringSlice) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		return fmt.Errorf("string or string array required")
 	}
-	var values []string
-	if raw[0] == '"' {
-		var value string
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return err
-		}
-		values = []string{value}
-	} else {
-		// Decode elements separately: encoding/json otherwise accepts null
-		// elements as empty strings when decoding directly to []string.
-		var elements []json.RawMessage
-		if err := json.Unmarshal(raw, &elements); err != nil {
-			return err
-		}
-		values = make([]string, len(elements))
-		for i, element := range elements {
-			if bytes.Equal(bytes.TrimSpace(element), []byte("null")) {
-				return fmt.Errorf("string array required")
-			}
-			if err := json.Unmarshal(element, &values[i]); err != nil {
-				return err
+	// Try array first.
+	var values []*string
+	if err := json.Unmarshal(data, &values); err == nil {
+		for _, value := range values {
+			if value == nil {
+				return fmt.Errorf("null string element")
 			}
 		}
 	}
-	*s = values
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*s = arr
+		return nil
+	}
+
+	// Fall back to a single string → wrap as one-element slice.
+	var single string
+	if err := json.Unmarshal(data, &single); err != nil {
+		return err
+	}
+	*s = StringSlice{single}
 	return nil
+}
+
+// MarshalJSON implements json.Marshaler.
+func (s StringSlice) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]string(s))
 }

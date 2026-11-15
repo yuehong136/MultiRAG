@@ -19,19 +19,20 @@ package service
 import (
 	"context"
 	"fmt"
+	"multirag/internal/common"
+	"multirag/internal/entity"
 	"regexp"
 	"strings"
 
 	"go.uber.org/zap"
 
-	"multirag/internal/common"
 	modelModule "multirag/internal/entity/models"
 )
 
 // KeywordExtraction extracts keywords from content using LLM.
 // Corresponds to rag/prompts/generator.py:keyword_extraction().
 //
-// Uses the tenant-bound model, preserving instance URL and generation defaults.
+// Uses ChatModel to call the LLM with a keyword extraction prompt.
 // Returns comma-separated top N important keywords/phrases from the content.
 func KeywordExtraction(ctx context.Context, chatModel *modelModule.ChatModel, content string, topN int) (string, error) {
 	if chatModel == nil {
@@ -64,31 +65,75 @@ func KeywordExtraction(ctx context.Context, chatModel *modelModule.ChatModel, co
 		{Role: "user", Content: "Output: "},
 	}
 
-	// Call the bound model with a request-local context.
-	responsePtr, err := chatWithContext(ctx, chatModel, messages)
+	// Use low temperature for deterministic keyword extraction (matching Python behavior)
+	modelConfig := &modelModule.ChatConfig{
+		Temperature: func() *float64 { t := 0.2; return &t }(),
+	}
+
+	// Call LLM using ChatModel
+	response, err := chatModel.ModelDriver.ChatWithMessages(*chatModel.ModelName, messages, chatModel.APIConfig, modelConfig)
 	if err != nil {
 		return "", fmt.Errorf("failed to extract keywords: %w", err)
 	}
 
-	response := *responsePtr.Answer
-	common.Info("KeywordExtraction result", zap.String("response", response))
+	if response == nil || response.Answer == nil {
+		return "", fmt.Errorf("empty response from keyword extraction")
+	}
+
+	common.Info("KeywordExtraction result", zap.String("response", *response.Answer))
 
 	// Clean up response - remove thinking tags if present
-	response = strings.TrimSpace(response)
-	response = thinkBlockRE.ReplaceAllString(response, "")
-	response = strings.TrimSpace(response)
+	result := strings.TrimSpace(*response.Answer)
+	result = thinkBlockRE.ReplaceAllString(result, "")
+	result = strings.TrimSpace(result)
 
-	if strings.Contains(response, "**ERROR**") {
+	if strings.Contains(result, "**ERROR**") {
 		return "", fmt.Errorf("error in keyword extraction response")
 	}
 
-	return response, nil
+	return result, nil
 }
 
 // CrossLanguages translates a question into multiple languages using LLM.
-func CrossLanguages(ctx context.Context, chatModel *modelModule.ChatModel, query string, languages []string) (string, error) {
+// The model is fetched internally based on llmID:
+//   - If llmID is empty, fetches tenant's default chat model
+//   - If llmID is not empty, fetches the specified model (or image2text if type matches)
+func CrossLanguages(ctx context.Context, tenantID string, llmID string, query string, languages []string) (string, error) {
+	common.Debug("CrossLanguages invoked",
+		zap.String("tenantID", tenantID),
+		zap.String("llmID", llmID),
+		zap.Strings("languages", languages))
+
+	modelProviderSvc := NewModelProviderService()
+	var chatModel *modelModule.ChatModel
+	var err error
+
+	if llmID != "" {
+		modelTypes, err := modelProviderSvc.GetModelTypeByName(tenantID, llmID)
+		if err != nil {
+			return query, fmt.Errorf("failed to get model type: %w", err)
+		}
+		resolvedType := entity.ModelTypeChat
+		for _, mt := range modelTypes {
+			if mt == entity.ModelType("vision") {
+				resolvedType = entity.ModelType("vision")
+				break
+			}
+		}
+		driver, modelName, apiConfig, _, err := modelProviderSvc.GetModelConfigFromProviderInstance(tenantID, resolvedType, llmID)
+		if err != nil {
+			return query, fmt.Errorf("failed to get chat model: %w", err)
+		}
+		chatModel = modelModule.NewChatModel(driver, &modelName, apiConfig)
+	} else {
+		driver, modelName, apiConfig, _, err := modelProviderSvc.GetTenantDefaultModelByType(tenantID, entity.ModelTypeChat)
+		if err != nil {
+			return query, fmt.Errorf("failed to get default chat model: %w", err)
+		}
+		chatModel = modelModule.NewChatModel(driver, &modelName, apiConfig)
+	}
 	if chatModel == nil {
-		return "", fmt.Errorf("chat model is nil")
+		return query, fmt.Errorf("failed to get chat model: nil chat model")
 	}
 
 	if query == "" {
@@ -123,34 +168,35 @@ func CrossLanguages(ctx context.Context, chatModel *modelModule.ChatModel, query
 		{Role: "user", Content: userPrompt},
 	}
 
-	// Call the bound model with a request-local context.
-	responsePtr, err := chatWithContext(ctx, chatModel, messages)
+	// Use low temperature for deterministic translation (matching Python behavior)
+	modelConfig := &modelModule.ChatConfig{
+		Temperature: func() *float64 { t := 0.2; return &t }(),
+	}
+
+	// Call LLM using ChatModel
+	response, err := chatModel.ModelDriver.ChatWithMessages(*chatModel.ModelName, messages, chatModel.APIConfig, modelConfig)
 	if err != nil {
 		return query, fmt.Errorf("failed to translate question: %w", err)
 	}
 
-	response := *responsePtr.Answer
-	if strings.Contains(response, "**ERROR**") {
-		return "", fmt.Errorf("model response contains an error marker")
+	if response == nil || response.Answer == nil {
+		return query, fmt.Errorf("empty response from cross languages translation")
 	}
 
-	// Clean up response - remove think tags and trim
-	response = strings.TrimSpace(response)
-	response = thinkBlockRE.ReplaceAllString(response, "")
-	response = strings.TrimSpace(response)
+	result := *response.Answer
 
-	if strings.Contains(response, "**ERROR**") {
-		return "", fmt.Errorf("error in cross-language response")
+	// Clean up response - remove think tags and trim
+	result = thinkBlockRE.ReplaceAllString(result, "")
+
+	if strings.Contains(result, "**ERROR**") {
+		return query, nil
 	}
 
 	// Parse response
-	response = strings.TrimPrefix(response, "Output:")
-	response = strings.TrimPrefix(response, "output:")
-	response = regexp.MustCompile(`(?i)^output:\s*`).ReplaceAllString(response, "")
-	response = regexp.MustCompile(`\n+`).ReplaceAllString(response, "")
-	response = strings.TrimSpace(response)
+	result = regexp.MustCompile(`(?i)^output:\s*`).ReplaceAllString(result, "")
+	result = regexp.MustCompile(`\n+`).ReplaceAllString(result, "")
 
-	parts := strings.Split(response, "===")
+	parts := strings.Split(result, "===")
 	var translations []string
 	for _, part := range parts {
 		trimmed := strings.TrimSpace(part)
@@ -164,19 +210,4 @@ func CrossLanguages(ctx context.Context, chatModel *modelModule.ChatModel, query
 	}
 
 	return query, nil
-}
-
-// chatWithContext copies binding metadata so concurrent consumers cannot replace each other's context.
-func chatWithContext(ctx context.Context, model *modelModule.ChatModel, messages []modelModule.Message) (*modelModule.ChatResponse, error) {
-	if model == nil {
-		return nil, fmt.Errorf("chat model is nil")
-	}
-	local := *model
-	api := modelModule.APIConfig{}
-	if model.APIConfig != nil {
-		api = *model.APIConfig
-	}
-	api.Context = ctx
-	local.APIConfig = &api
-	return local.ChatWithMessages(messages, nil)
 }

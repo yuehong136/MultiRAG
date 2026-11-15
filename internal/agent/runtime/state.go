@@ -37,8 +37,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/cloudwego/eino/compose"
 )
 
 // CanvasState is the per-run shared state bag that all components read/write
@@ -55,19 +53,17 @@ import (
 //   - CancelFlag  : set when cancel signal received; nodes may poll
 //   - RunID       : unique per-run identifier (used by RunTracker + CheckPointStore)
 type CanvasState struct {
-	mu           sync.RWMutex
-	restoreMu    sync.Mutex
-	restoredFrom *CanvasState
-	Outputs      map[string]map[string]any
-	Sys          map[string]any
-	Env          map[string]any
-	Path         []string
-	History      []map[string]any
-	Retrieval    map[string]any
-	Globals      map[string]any
-	CancelFlag   *atomic.Bool
-	RunID        string
-	TaskID       string
+	mu         sync.RWMutex
+	Outputs    map[string]map[string]any
+	Sys        map[string]any
+	Env        map[string]any
+	Path       []string
+	History    []map[string]any
+	Retrieval  map[string]any
+	Globals    map[string]any
+	CancelFlag *atomic.Bool
+	RunID      string
+	TaskID     string
 }
 
 // NewCanvasState returns a zero-valued CanvasState with all maps allocated.
@@ -86,117 +82,6 @@ func NewCanvasState(runID, taskID string) *CanvasState {
 		RunID:      runID,
 		TaskID:     taskID,
 	}
-}
-
-// init registers CanvasState with eino's internal type registry so
-// that eino's StatePre/Post handler chain (which uses its own
-// InternalSerializer, NOT stdlib encoding/json) recognises the
-// type during the deepCopyState call that fires on every interrupt
-// boundary. eino's serialization registry requires the type to
-// implement both json.Marshaler AND json.Unmarshaler; CanvasState
-// has both (below). Without this init, the interrupt path surfaces
-// "failed to marshal state: unknown type: runtime.CanvasState"
-// and the resume cycle is blocked at the eino layer.
-func init() {
-	if err := compose.RegisterSerializableType[CanvasState]("multirag.agent.CanvasState"); err != nil {
-		panic(fmt.Sprintf("register canvas checkpoint state: %v", err))
-	}
-}
-
-// canvasStateJSON is the wire shape used by MarshalJSON / UnmarshalJSON.
-// Defined so the field tags and omitempty semantics are pinned in one
-// place. The CancelFlag is round-tripped as a bool (atomic.Bool can't
-// be marshalled directly without a wrapper).
-type canvasStateJSON struct {
-	Outputs    map[string]map[string]any `json:"outputs"`
-	Sys        map[string]any            `json:"sys,omitempty"`
-	Env        map[string]any            `json:"env,omitempty"`
-	Path       []string                  `json:"path,omitempty"`
-	History    []map[string]any          `json:"history,omitempty"`
-	Retrieval  map[string]any            `json:"retrieval,omitempty"`
-	Globals    map[string]any            `json:"globals,omitempty"`
-	CancelFlag bool                      `json:"cancel_flag"`
-	RunID      string                    `json:"run_id"`
-	TaskID     string                    `json:"task_id"`
-}
-
-// MarshalJSON serialises the CanvasState for eino's StatePre/Post
-// handler chain (which JSON-encodes the state on every node boundary
-// when a StateSerializer is wired) and for Redis-backed CheckPointStore
-// payloads.
-//
-// Eino's interrupt path hit "failed to marshal state: unknown
-// type: runtime.CanvasState"
-// because the struct had no MarshalJSON and contained a sync.RWMutex
-// (unexported) + atomic.Bool (indirected; serialises as 8 bytes
-// without explicit handling). This hook defines the stable wire shape
-// (canvasStateJSON) and serialises through it.
-//
-// Concurrency: the lock is held briefly while we snapshot the maps;
-// readers may briefly block during marshal, which is fine for the
-// checkpoint/serializer hot path. The lock is read-only so concurrent
-// SetVar calls also proceed.
-func (s *CanvasState) MarshalJSON() ([]byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	snap := canvasStateJSON{
-		Outputs:    s.Outputs,
-		Sys:        s.Sys,
-		Env:        s.Env,
-		Path:       s.Path,
-		History:    s.History,
-		Retrieval:  s.Retrieval,
-		Globals:    s.Globals,
-		CancelFlag: s.CancelFlag != nil && s.CancelFlag.Load(),
-		RunID:      s.RunID,
-		TaskID:     s.TaskID,
-	}
-	return json.Marshal(snap)
-}
-
-// UnmarshalJSON restores the wire shape produced by MarshalJSON.
-// Cancels the read-lock contention: an unmarshal only happens during
-// checkpoint restore (rare) and boot, so we accept the lock-acquire
-// cost. atomic.Bool is allocated so the loaded value lands on a real
-// pointer (nodes may poll it concurrently with unmarshal completion).
-func (s *CanvasState) UnmarshalJSON(b []byte) error {
-	var snap canvasStateJSON
-	decoder := json.NewDecoder(bytes.NewReader(b))
-	decoder.UseNumber()
-	if err := decoder.Decode(&snap); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Outputs = snap.Outputs
-	if s.Outputs == nil {
-		s.Outputs = make(map[string]map[string]any)
-	}
-	s.Sys = snap.Sys
-	if s.Sys == nil {
-		s.Sys = make(map[string]any)
-	}
-	s.Env = snap.Env
-	if s.Env == nil {
-		s.Env = make(map[string]any)
-	}
-	s.Path = snap.Path
-	s.History = snap.History
-	s.Retrieval = snap.Retrieval
-	if s.Retrieval == nil {
-		s.Retrieval = make(map[string]any)
-	}
-	s.Globals = snap.Globals
-	if s.Globals == nil {
-		s.Globals = make(map[string]any)
-	}
-	if s.CancelFlag == nil {
-		s.CancelFlag = &atomic.Bool{}
-	}
-	s.CancelFlag.Store(snap.CancelFlag)
-	s.RunID = snap.RunID
-	s.TaskID = snap.TaskID
-	return nil
 }
 
 // GetVar resolves a variable reference to its current value.
@@ -218,8 +103,8 @@ func (s *CanvasState) GetVar(ref string) (any, error) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	v, err := getVarLocked(s, ref)
-	return cloneValue(v), err
+	value, err := getVarLocked(s, ref)
+	return cloneValue(value), err
 }
 
 // SetVar writes Outputs[cpnID][param] = v. Nested keys separated by "." are
@@ -393,23 +278,6 @@ func step(cur any, key string) any {
 	}
 }
 
-// SetSys writes a system variable without exposing the shared map.
-func (s *CanvasState) SetSys(key string, value any) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.Sys == nil {
-		s.Sys = make(map[string]any)
-	}
-	s.Sys[key] = cloneValue(value)
-}
-
-// GetSys returns an independent copy of a system variable.
-func (s *CanvasState) GetSys(key string) any {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return cloneValue(s.Sys[key])
-}
-
 func cloneValue(value any) any {
 	switch v := value.(type) {
 	case map[string]any:
@@ -445,53 +313,57 @@ func cloneValue(value any) any {
 	}
 }
 
-// SetEnv writes a deployment variable under the same state lock as reads.
-func (s *CanvasState) SetEnv(key string, value any) {
+// MarshalJSON snapshots mutable state under its lock and persists cancellation.
+func (s *CanvasState) MarshalJSON() ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	type wire CanvasState
+	return json.Marshal(struct {
+		*wire
+		CancelFlag bool
+	}{(*wire)(s), s.CancelFlag != nil && s.CancelFlag.Load()})
+}
+
+// UnmarshalJSON preserves exact JSON numbers during checkpoint restoration.
+func (s *CanvasState) UnmarshalJSON(data []byte) error {
+	type wire CanvasState
+	var decoded wire
+	snapshot := struct {
+		*wire
+		CancelFlag bool
+	}{wire: &decoded}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&snapshot); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.Outputs = decoded.Outputs
+	if s.Outputs == nil {
+		s.Outputs = map[string]map[string]any{}
+	}
+	s.Sys = decoded.Sys
+	if s.Sys == nil {
+		s.Sys = map[string]any{}
+	}
+	s.Env = decoded.Env
 	if s.Env == nil {
-		s.Env = make(map[string]any)
+		s.Env = map[string]any{}
 	}
-	s.Env[key] = cloneValue(value)
-}
-
-// SetGlobal writes a canvas global under the same state lock as reads.
-func (s *CanvasState) SetGlobal(key string, value any) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.Path = decoded.Path
+	s.History = decoded.History
+	s.Retrieval = decoded.Retrieval
+	if s.Retrieval == nil {
+		s.Retrieval = map[string]any{}
+	}
+	s.Globals = decoded.Globals
 	if s.Globals == nil {
-		s.Globals = make(map[string]any)
+		s.Globals = map[string]any{}
 	}
-	s.Globals[key] = cloneValue(value)
-}
-
-// RestoreFrom replaces all persisted state when an Eino checkpoint is resumed.
-func (s *CanvasState) RestoreFrom(other *CanvasState) error {
-	if s == other || other == nil {
-		return nil
-	}
-	data, err := other.MarshalJSON()
-	if err != nil {
-		return err
-	}
-	return s.UnmarshalJSON(data)
-}
-
-// RestoreCheckpoint copies a resumed engine snapshot into the request state once.
-// Later nodes share the live request state; replaying the old snapshot at every
-// node would erase Loop mutations and concurrent branch results.
-func (s *CanvasState) RestoreCheckpoint(other *CanvasState) error {
-	if s == other || other == nil {
-		return nil
-	}
-	s.restoreMu.Lock()
-	defer s.restoreMu.Unlock()
-	if s.restoredFrom == other {
-		return nil
-	}
-	if err := s.RestoreFrom(other); err != nil {
-		return err
-	}
-	s.restoredFrom = other
+	s.RunID = decoded.RunID
+	s.TaskID = decoded.TaskID
+	s.CancelFlag = &atomic.Bool{}
+	s.CancelFlag.Store(snapshot.CancelFlag)
 	return nil
 }

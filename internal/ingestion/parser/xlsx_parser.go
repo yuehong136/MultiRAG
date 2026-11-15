@@ -1,124 +1,80 @@
+//
+// Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
 package parser
 
 import (
-	"encoding/xml"
 	"fmt"
-	"strconv"
-	"strings"
+
+	officeOxide "github.com/yfedoseev/office_oxide/go"
 )
 
-type richString struct {
-	Text string `xml:"t"`
-	Runs []struct {
-		Text string `xml:"t"`
-	} `xml:"r"`
+type XLSXParser struct {
+	libType string
 }
 
-func (s richString) text() string {
-	var b strings.Builder
-	b.WriteString(s.Text)
-	for _, r := range s.Runs {
-		b.WriteString(r.Text)
+func NewXLSXParser(libType string) (*XLSXParser, error) {
+	switch libType {
+	case OfficeOxide:
+		return &XLSXParser{
+			libType: OfficeOxide,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported XLSX library type: %s", libType)
 	}
-	return b.String()
 }
-func parseXLSX(a *officeArchive) (*Result, error) {
-	var workbook struct {
-		XMLName xml.Name `xml:"workbook"`
-		Sheets  []struct {
-			Name string `xml:"name,attr"`
-			ID   string `xml:"http://schemas.openxmlformats.org/officeDocument/2006/relationships id,attr"`
-		} `xml:"sheets>sheet"`
+
+func (p *XLSXParser) Parse(filename string, data []byte) error {
+	fmt.Printf("Parsing XLSX file: %s\n", filename)
+	switch p.libType {
+	case OfficeOxide:
+		return p.OfficeOxideParse(data)
+	default:
+		return fmt.Errorf("unsupported XLSX library type: %s", p.libType)
 	}
-	if err := a.decode("xl/workbook.xml", &workbook); err != nil {
-		return nil, err
+}
+
+func (p *XLSXParser) OfficeOxideParse(data []byte) error {
+	doc, err := officeOxide.OpenFromBytes(data, "xlsx")
+	if err != nil {
+		return err
 	}
-	var rels relationships
-	if err := a.decode("xl/_rels/workbook.xml.rels", &rels); err != nil {
-		return nil, err
+	defer doc.Close()
+
+	docFormat, err := doc.Format()
+	if err != nil {
+		return err
 	}
-	var shared struct {
-		XMLName xml.Name     `xml:"sst"`
-		Items   []richString `xml:"si"`
+
+	fmt.Println("Document format:", docFormat)
+
+	docContext, err := doc.PlainText()
+	if err != nil {
+		return err
 	}
-	if a.files["xl/sharedStrings.xml"] != nil {
-		if err := a.decode("xl/sharedStrings.xml", &shared); err != nil {
-			return nil, err
-		}
+	fmt.Println("Document context:", docContext)
+
+	md, err := doc.ToMarkdown()
+	if err != nil {
+		return err
 	}
-	var plain, markdown strings.Builder
-	sheetCount := 0
-	for _, sheet := range workbook.Sheets {
-		target, err := resolvePart(a, rels, sheet.ID, "xl", "worksheet")
-		if err != nil {
-			return nil, err
-		}
-		var content struct {
-			XMLName xml.Name `xml:"worksheet"`
-			Rows    []struct {
-				Cells []struct {
-					Ref    string     `xml:"r,attr"`
-					Type   string     `xml:"t,attr"`
-					Value  string     `xml:"v"`
-					Inline richString `xml:"is"`
-				} `xml:"c"`
-			} `xml:"sheetData>row"`
-		}
-		if err := a.decode(target, &content); err != nil {
-			return nil, err
-		}
-		if sheetCount > 0 {
-			if err := a.emit(&plain, "\n\n"); err != nil {
-				return nil, err
-			}
-			if err := a.emit(&markdown, "\n\n"); err != nil {
-				return nil, err
-			}
-		}
-		if err := a.emit(&plain, sheet.Name, "\n"); err != nil {
-			return nil, err
-		}
-		if err := a.emit(&markdown, "## ", sheet.Name, "\n\n"); err != nil {
-			return nil, err
-		}
-		for rowIndex, row := range content.Rows {
-			if rowIndex > 0 {
-				if err := a.emit(&plain, "\n"); err != nil {
-					return nil, err
-				}
-				if err := a.emit(&markdown, "\n"); err != nil {
-					return nil, err
-				}
-			}
-			for cellIndex, cell := range row.Cells {
-				value := cell.Value
-				switch cell.Type {
-				case "s":
-					i, err := strconv.Atoi(value)
-					if err != nil || i < 0 || i >= len(shared.Items) {
-						return nil, fmt.Errorf("invalid XLSX shared string index")
-					}
-					value = shared.Items[i].text()
-				case "inlineStr":
-					value = cell.Inline.text()
-				}
-				if cellIndex > 0 {
-					if err := a.emit(&plain, "\t"); err != nil {
-						return nil, err
-					}
-					if err := a.emit(&markdown, "\t"); err != nil {
-						return nil, err
-					}
-				}
-				if err := a.emit(&plain, cell.Ref, "=", value); err != nil {
-					return nil, err
-				}
-				if err := a.emit(&markdown, cell.Ref, "=", value); err != nil {
-					return nil, err
-				}
-			}
-		}
-		sheetCount++
-	}
-	return &Result{Text: plain.String(), Markdown: markdown.String()}, nil
+	fmt.Println("Document Markdown:", md)
+	return nil
+}
+
+func (p *XLSXParser) String() string {
+	return "XLSXParser"
 }

@@ -21,51 +21,52 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"multirag/internal/engine/types"
+	"multirag/internal/common"
+	"multirag/internal/engine/redis"
+	"multirag/internal/entity"
+	"multirag/internal/storage"
+	"multirag/internal/utility"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"multirag/internal/dao"
 	"multirag/internal/engine"
-	redisengine "multirag/internal/engine/redis"
-	"multirag/internal/entity"
+
 	"multirag/internal/server"
-	"multirag/internal/storage"
 
 	"gorm.io/gorm"
 )
 
 // DocumentService document service
 type DocumentService struct {
-	deletion    *DocumentDeleteService
-	stopping    *DocumentStopService
-	db          *gorm.DB
-	documentDAO *dao.DocumentDAO
-	kbDAO       *dao.KnowledgebaseDAO
-	docEngine   engine.DocEngine
-	engineType  server.EngineType
-	metadataSvc *MetadataService
+	documentDAO         *dao.DocumentDAO
+	kbDAO               *dao.KnowledgebaseDAO
+	ingestionTaskDAO    *dao.IngestionTaskDAO
+	ingestionTaskLogDAO *dao.IngestionTaskLogDAO
+	docEngine           engine.DocEngine
+	engineType          server.EngineType
+	metadataSvc         *MetadataService
+	taskDAO             *dao.TaskDAO
+	file2DocumentDAO    *dao.File2DocumentDAO
 }
 
 // NewDocumentService create document service
-func NewDocumentService(documentEngines ...engine.DocEngine) *DocumentService {
-	store := engine.Get()
-	if len(documentEngines) > 0 {
-		store = documentEngines[0]
-	}
+func NewDocumentService() *DocumentService {
 	cfg := server.GetConfig()
-	var engineType server.EngineType
-	if cfg != nil {
-		engineType = cfg.DocEngine.Type
-	}
 	return &DocumentService{
-		db:          dao.DB,
-		documentDAO: dao.NewDocumentDAO(),
-		kbDAO:       dao.NewKnowledgebaseDAO(),
-		docEngine:   store,
-		engineType:  engineType,
-		metadataSvc: &MetadataService{kbDAO: dao.NewKnowledgebaseDAO(), docEngine: store},
+		documentDAO:         dao.NewDocumentDAO(),
+		ingestionTaskDAO:    dao.NewIngestionTaskDAO(),
+		ingestionTaskLogDAO: dao.NewIngestionTaskLogDAO(),
+		kbDAO:               dao.NewKnowledgebaseDAO(),
+		docEngine:           engine.Get(),
+		engineType:          cfg.DocEngine.Type,
+		metadataSvc:         NewMetadataService(),
+		taskDAO:             dao.NewTaskDAO(),
+		file2DocumentDAO:    dao.NewFile2DocumentDAO(),
 	}
 }
 
@@ -113,17 +114,295 @@ type DocumentResponse struct {
 	UpdatedAt       string  `json:"updated_at"`
 }
 
+type ThumbnailResponse struct {
+	ID        string  `json:"id"`
+	Thumbnail *string `json:"thumbnail,omitempty"`
+	KbID      string  `json:"kb_id"`
+}
+
+type ArtifactResponse struct {
+	Data            []byte
+	ContentType     string
+	SafeFilename    string
+	ForceAttachment bool
+}
+
+var (
+	ErrArtifactInvalidFilename = errors.New("Invalid filename.")
+	ErrArtifactInvalidFileType = errors.New("Invalid file type.")
+	ErrArtifactNotFound        = errors.New("Artifact not found.")
+)
+
+var artifactContentTypes = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".svg":  "image/svg+xml",
+	".pdf":  "application/pdf",
+	".csv":  "text/csv",
+	".json": "application/json",
+	".html": "text/html",
+}
+
+var artifactForceAttachmentExtensions = map[string]struct{}{
+	".htm":   {},
+	".html":  {},
+	".shtml": {},
+	".xht":   {},
+	".xhtml": {},
+	".xml":   {},
+	".mhtml": {},
+	".svg":   {},
+}
+var artifactForceAttachmentContentTypes = map[string]struct{}{
+	"text/html":             {},
+	"image/svg+xml":         {},
+	"application/xhtml+xml": {},
+	"text/xml":              {},
+	"application/xml":       {},
+	"multipart/related":     {},
+}
+
+var artifactUnsafeFilenameChars = regexp.MustCompile(`[^\pL\pN_.-]`)
+
+// GetDocumentImage retrieves an image object from storage.
+func (s *DocumentService) GetDocumentImage(imageID string) ([]byte, error) {
+	parts := strings.Split(imageID, "-")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return nil, fmt.Errorf("Image not found.")
+	}
+
+	for _, part := range parts {
+		if strings.HasPrefix(part, "/") || strings.ContainsAny(part, "\\\x00") {
+			return nil, fmt.Errorf("Image not found.")
+		}
+		for _, component := range strings.Split(part, "/") {
+			if component == "" || component == "." || component == ".." {
+				return nil, fmt.Errorf("Image not found.")
+			}
+		}
+	}
+	storageImpl := storage.GetStorageFactory().GetStorage()
+	if storageImpl == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
+
+	return storageImpl.Get(parts[0], parts[1])
+}
+
+// GetDocumentArtifact retrieves a sandbox artifact from object storage.
+func (s *DocumentService) GetDocumentArtifact(filename string) (*ArtifactResponse, error) {
+	basename := filepath.Base(filename)
+	if basename != filename || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+		return nil, ErrArtifactInvalidFilename
+	}
+
+	ext := strings.ToLower(filepath.Ext(basename))
+	contentType, ok := artifactContentTypes[ext]
+	if !ok {
+		return nil, ErrArtifactInvalidFileType
+	}
+
+	storageImpl := storage.GetStorageFactory().GetStorage()
+	if storageImpl == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
+
+	bucket := sandboxArtifactBucket()
+	if !storageImpl.ObjExist(bucket, basename) {
+		return nil, ErrArtifactNotFound
+	}
+
+	data, err := storageImpl.Get(bucket, basename)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, ErrArtifactNotFound
+	}
+
+	return &ArtifactResponse{
+		Data:            data,
+		ContentType:     contentType,
+		SafeFilename:    sanitizeArtifactFilename(basename),
+		ForceAttachment: shouldForceArtifactAttachment(ext, contentType),
+	}, nil
+}
+
+func sandboxArtifactBucket() string {
+	if bucket := os.Getenv("SANDBOX_ARTIFACT_BUCKET"); bucket != "" {
+		return bucket
+	}
+	return "sandbox-artifacts"
+}
+
+func sanitizeArtifactFilename(filename string) string {
+	return artifactUnsafeFilenameChars.ReplaceAllString(filename, "_")
+}
+
+func shouldForceArtifactAttachment(ext, contentType string) bool {
+	if _, ok := artifactForceAttachmentExtensions[strings.ToLower(ext)]; ok {
+		return true
+	}
+	_, ok := artifactForceAttachmentContentTypes[strings.ToLower(contentType)]
+	return ok
+}
+
+type DocumentPreview struct {
+	Data        []byte
+	ContentType string
+	FileName    string
+}
+
+func (s *DocumentService) GetDocumentPreview(docID string) (*DocumentPreview, error) {
+	doc, err := s.documentDAO.GetByID(docID)
+	if err != nil {
+		return nil, err
+	}
+
+	bucket, name, err := s.GetDocumentStorageAddress(doc)
+	if err != nil {
+		return nil, err
+	}
+
+	storageImpl := storage.GetStorageFactory().GetStorage()
+	if storageImpl == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
+
+	data, err := storageImpl.Get(bucket, name)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, ErrArtifactNotFound
+	}
+
+	fileName := ""
+	if doc.Name != nil {
+		fileName = *doc.Name
+	}
+
+	ext := utility.GetFileExtension(fileName)
+	contentType := utility.GetContentType(ext, doc.Type)
+
+	return &DocumentPreview{
+		Data:        data,
+		ContentType: contentType,
+		FileName:    fileName,
+	}, nil
+}
+
+func (s *DocumentService) GetDocumentStorageAddress(doc *entity.Document) (string, string, error) {
+	if doc == nil {
+		return "", "", fmt.Errorf("document is nil")
+	}
+
+	file2DocumentDAO := dao.NewFile2DocumentDAO()
+	fileDAO := dao.NewFileDAO()
+
+	mappings, err := file2DocumentDAO.GetByDocumentID(doc.ID)
+	if err != nil {
+		return "", "", err
+	}
+
+	if len(mappings) > 0 && mappings[0].FileID != nil {
+		file, err := fileDAO.GetByID(*mappings[0].FileID)
+		if err != nil {
+			return "", "", err
+		}
+
+		if file.SourceType == "" || entity.FileSource(file.SourceType) == entity.FileSourceLocal {
+			if file.Location == nil || *file.Location == "" {
+				return "", "", fmt.Errorf("file location is empty")
+			}
+			for _, address := range []string{file.ParentID, *file.Location} {
+				if address == "" || strings.HasPrefix(address, "/") || strings.ContainsAny(address, "\\\x00") {
+					return "", "", fmt.Errorf("invalid document storage address")
+				}
+				for _, component := range strings.Split(address, "/") {
+					if component == "" || component == "." || component == ".." {
+						return "", "", fmt.Errorf("invalid document storage address")
+					}
+				}
+			}
+			return file.ParentID, *file.Location, nil
+		}
+	}
+
+	if doc.Location == nil || *doc.Location == "" {
+		return "", "", fmt.Errorf("document location is empty")
+	}
+	for _, address := range []string{doc.KbID, *doc.Location} {
+		if address == "" || strings.HasPrefix(address, "/") || strings.ContainsAny(address, "\\\x00") {
+			return "", "", fmt.Errorf("invalid document storage address")
+		}
+		for _, component := range strings.Split(address, "/") {
+			if component == "" || component == "." || component == ".." {
+				return "", "", fmt.Errorf("invalid document storage address")
+			}
+		}
+	}
+	return doc.KbID, *doc.Location, nil
+}
+
+type DownloadDocumentResp struct {
+	Data        []byte
+	FileName    string
+	ContentType string
+}
+
+func (s *DocumentService) DownloadDocument(datasetID, docID string) (*DownloadDocumentResp, error) {
+	if docID == "" {
+		return nil, fmt.Errorf("Specify document_id please.")
+	}
+	doc, err := s.documentDAO.GetByID(docID)
+	if err != nil || doc.KbID != datasetID {
+		return nil, fmt.Errorf("The dataset not own the document %s.", docID)
+	}
+	bucket, name, err := s.GetDocumentStorageAddress(doc)
+	if err != nil {
+		return nil, err
+	}
+
+	storageImpl := storage.GetStorageFactory().GetStorage()
+	if storageImpl == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
+
+	data, err := storageImpl.Get(bucket, name)
+	if err != nil {
+		return nil, err
+	}
+
+	if data == nil {
+		return nil, fmt.Errorf("document object is missing")
+	}
+	fileName := ""
+	if doc.Name != nil {
+		fileName = *doc.Name
+	}
+
+	return &DownloadDocumentResp{
+		Data:        data,
+		FileName:    fileName,
+		ContentType: "application/octet-stream",
+	}, nil
+}
+
 // CreateDocument create document
 func (s *DocumentService) CreateDocument(req *CreateDocumentRequest) (*entity.Document, error) {
 	document := &entity.Document{
-		Name:       &req.Name,
-		KbID:       req.KbID,
-		ParserID:   req.ParserID,
-		CreatedBy:  req.CreatedBy,
-		Type:       req.Type,
-		SourceType: req.Source,
-		Suffix:     ".doc",
-		Status:     func() *string { s := "0"; return &s }(),
+		ID:           utility.GenerateToken(),
+		ParserConfig: entity.JSONMap{},
+		Name:         &req.Name,
+		KbID:         req.KbID,
+		ParserID:     req.ParserID,
+		CreatedBy:    req.CreatedBy,
+		Type:         req.Type,
+		SourceType:   req.Source,
+		Suffix:       ".doc",
+		Status:       func() *string { s := "0"; return &s }(),
 	}
 
 	if err := s.documentDAO.Create(document); err != nil {
@@ -172,21 +451,339 @@ func (s *DocumentService) UpdateDocument(id string, req *UpdateDocumentRequest) 
 	return s.documentDAO.Update(document)
 }
 
-// SetDocumentDeleteService supplies explicit lifecycle dependencies before serving.
-func (s *DocumentService) SetDocumentDeleteService(deletion *DocumentDeleteService) {
-	s.deletion = deletion
+// DeleteDocument delete document — delegates to full cleanup logic.
+func (s *DocumentService) DeleteDocument(id string) error {
+	return s.deleteDocumentFull(id)
 }
 
-func (s *DocumentService) DeleteDocuments(ctx context.Context, datasetID, userID string, ids []string, deleteAll bool) (int, error) {
-	if s.deletion != nil {
-		return s.deletion.DeleteDocuments(ctx, datasetID, userID, ids, deleteAll)
+// DeleteDocuments deletes multiple documents under a dataset.
+//
+//	ids: specific document IDs; deleteAll: delete all docs in the dataset.
+//	Returns the number of successfully deleted documents.
+func (s *DocumentService) DeleteDocuments(ids []string, deleteAll bool, datasetID, userID string) (int, error) {
+	// 1. Check dataset is accessible by the user
+	if !s.kbDAO.Accessible(datasetID, userID) {
+		return 0, fmt.Errorf("You don't own the dataset %s.", datasetID)
 	}
-	client := redisengine.Get()
-	if client == nil {
-		return 0, ErrDocumentDeleteRetryable
+
+	// 2. Resolve document IDs
+	if deleteAll {
+		if err := dao.DB.Model(&entity.Document{}).
+			Where("kb_id = ?", datasetID).
+			Pluck("id", &ids).Error; err != nil {
+			return 0, fmt.Errorf("failed to query documents: %w", err)
+		}
 	}
-	deletion := NewDocumentDeleteService(s.db, client.GetClient(), s.docEngine, storage.GetStorageFactory().GetStorage(), s.engineType)
-	return deletion.DeleteDocuments(ctx, datasetID, userID, ids, deleteAll)
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	// 3. Deduplicate (before validation so dup count doesn't matter)
+	ids = common.Deduplicate(ids)
+
+	// 4. Validate IDs belong to this dataset (only for explicit ids; deleteAll is already scoped)
+	if !deleteAll {
+		if _, err := s.validateDocsInDataset(ids, datasetID); err != nil {
+			return 0, err
+		}
+	}
+
+	// 5. Delete each document (non-critical failures are tolerated per doc)
+	deleted := 0
+	var failures []error
+	for _, docID := range ids {
+		if err := s.deleteDocumentFull(docID); err != nil {
+			failures = append(failures, fmt.Errorf("delete document %s: %w", docID, err))
+			continue
+		}
+		deleted++
+	}
+
+	return deleted, errors.Join(failures...)
+}
+
+// deleteDocumentFull performs full document cleanup. Non-critical failures
+// are tolerated (logged and continue). Critical failures (e.g. document or
+// KB not found) return an error immediately.
+func (s *DocumentService) deleteDocumentFull(docID string) error {
+	doc, kb, err := s.resolveDocAndKB(docID)
+	if err != nil {
+		return err
+	}
+	var tasks []entity.Task
+	if err := dao.DB.Where("doc_id = ?", docID).Find(&tasks).Error; err != nil {
+		return fmt.Errorf("read document tasks before cleanup: %w", err)
+	}
+	type objectCopy struct {
+		bucket, key string
+		data        []byte
+	}
+	var objects []objectCopy
+	mappings, err := s.file2DocumentDAO.GetByDocumentID(docID)
+	if err != nil {
+		return err
+	}
+	store := storage.GetStorageFactory().GetStorage()
+	seen := map[string]bool{}
+	for _, mapping := range mappings {
+		if mapping.FileID == nil || seen[*mapping.FileID] {
+			continue
+		}
+		seen[*mapping.FileID] = true
+		references, err := s.file2DocumentDAO.GetByFileID(*mapping.FileID)
+		if err != nil {
+			return err
+		}
+		shared := false
+		for _, reference := range references {
+			if reference.DocumentID == nil || *reference.DocumentID != docID {
+				shared = true
+				break
+			}
+		}
+		if shared {
+			continue
+		}
+		file, err := dao.NewFileDAO().GetByID(*mapping.FileID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if file != nil && file.Location != nil && *file.Location != "" {
+			if store == nil {
+				return fmt.Errorf("storage not initialized")
+			}
+			data, err := store.Get(file.ParentID, *file.Location)
+			if err != nil {
+				return fmt.Errorf("read document object before cleanup: %w", err)
+			}
+			objects = append(objects, objectCopy{file.ParentID, *file.Location, data})
+		}
+	}
+	if err := s.deleteDocEngineData(docID, kb.TenantID, doc.KbID); err != nil {
+		return err
+	}
+	if err := s.deleteDocRecordWithCounters(doc, kb.ID); err != nil {
+		return err
+	}
+	if cleanupErr := s.cleanupFileReferences(docID); cleanupErr != nil {
+		// The original cleanup order commits document counters before removing its
+		// final file. Restore that persisted document and its source bytes when the
+		// later object/file cleanup fails, without reviving a runtime recovery API.
+		restoreErr := dao.DB.Transaction(func(tx *gorm.DB) error {
+			var current entity.Document
+			lookupErr := tx.Where("id = ?", doc.ID).First(&current).Error
+			if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+				if err := tx.Create(doc).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&entity.Knowledgebase{}).Where("id = ?", kb.ID).Updates(map[string]interface{}{"doc_num": gorm.Expr("doc_num + 1"), "chunk_num": gorm.Expr("chunk_num + ?", doc.ChunkNum), "token_num": gorm.Expr("token_num + ?", doc.TokenNum)}).Error; err != nil {
+					return err
+				}
+			} else if lookupErr != nil {
+				return lookupErr
+			}
+			for _, task := range tasks {
+				var current entity.Task
+				err := tx.Where("id = ?", task.ID).First(&current).Error
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					if err := tx.Create(&task).Error; err != nil {
+						return err
+					}
+				} else if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		failures := []error{cleanupErr, restoreErr}
+		for _, object := range objects {
+			if err := store.Put(object.bucket, object.key, object.data); err != nil {
+				failures = append(failures, fmt.Errorf("restore failed document cleanup object: %w", err))
+			}
+		}
+		return errors.Join(failures...)
+	}
+	return nil
+}
+
+// RemoveDocumentKeepFile removes a document's chunks/metadata and the document
+// row, decrementing the KB counters (doc_num/chunk_num/token_num), WITHOUT
+// deleting the underlying file record, its storage blob, or its file2document
+// mappings. Mirrors Python DocumentService.remove_document — the caller is
+// responsible for cleaning up the file2document mappings separately.
+func (s *DocumentService) RemoveDocumentKeepFile(docID string) error {
+	doc, kb, err := s.resolveDocAndKB(docID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.deleteDocEngineData(docID, kb.TenantID, doc.KbID); err != nil {
+		return err
+	}
+	return s.deleteDocRecordWithCounters(doc, kb.ID)
+}
+
+// InsertDocument creates a document row and increments the owning KB's doc_num
+// counter in a single transaction. Mirrors Python DocumentService.insert, which
+// updates dataset/document counters on insert. The document's ID and timestamps
+// are populated by the caller / model hooks before insertion.
+func (s *DocumentService) InsertDocument(doc *entity.Document) error {
+	return dao.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(doc).Error; err != nil {
+			return fmt.Errorf("failed to create document: %w", err)
+		}
+		// Guard the counter bump with RowsAffected: documents.kb_id has no DB-level
+		// FK, so Create can succeed against a non-existent KB and the Update would
+		// then report a nil error with 0 rows touched, silently desyncing doc_num.
+		// Roll the whole transaction back in that case (mirrors the counter checks
+		// in deleteDocRecordWithCounters).
+		result := tx.Model(&entity.Knowledgebase{}).
+			Where("id = ?", doc.KbID).
+			Update("doc_num", gorm.Expr("doc_num + 1"))
+		if result.Error != nil {
+			return fmt.Errorf("failed to increment doc_num for KB %s: %w", doc.KbID, result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("knowledgebase %s not found", doc.KbID)
+		}
+		return nil
+	})
+}
+
+// resolveDocAndKB loads the document and its knowledgebase, returning both or
+// an error.
+func (s *DocumentService) resolveDocAndKB(docID string) (*entity.Document, *entity.Knowledgebase, error) {
+	doc, err := s.documentDAO.GetByID(docID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("document not found: %w", err)
+	}
+	kb, err := s.kbDAO.GetByID(doc.KbID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("knowledgebase not found: %w", err)
+	}
+	return doc, kb, nil
+}
+
+// deleteDocEngineData removes chunks and metadata from the document engine.
+// No-op when the engine is nil.
+func (s *DocumentService) deleteDocEngineData(docID, tenantID, kbID string) error {
+	if s.docEngine == nil {
+		return nil
+	}
+	ctx := context.Background()
+	indexName := fmt.Sprintf("multirag_%s", tenantID)
+	if _, delErr := s.docEngine.DeleteChunks(ctx, map[string]interface{}{"doc_id": docID}, indexName, kbID); delErr != nil {
+		return fmt.Errorf("delete document chunks: %w", delErr)
+	}
+	if s.metadataSvc != nil {
+		if err := s.DeleteDocumentAllMetadata(docID); err != nil {
+			return fmt.Errorf("delete document metadata: %w", err)
+		}
+	}
+	return nil
+}
+
+// deleteDocRecordWithCounters hard-deletes the document row and decrements the
+// KB counters in a single transaction. Counters are only decremented when a
+// document row was actually removed (RowsAffected > 0), guarding against
+// double-decrement on retries or concurrent deletes.
+func (s *DocumentService) deleteDocRecordWithCounters(doc *entity.Document, kbID string) error {
+	return dao.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("id = ?", doc.ID).Delete(&entity.Document{})
+		if result.Error != nil {
+			return fmt.Errorf("failed to delete document %s: %w", doc.ID, result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return nil // already deleted by a concurrent request — skip counters
+		}
+
+		if err := tx.Where("doc_id = ?", doc.ID).Delete(&entity.Task{}).Error; err != nil {
+			return fmt.Errorf("delete document tasks: %w", err)
+		}
+		counter := tx.Model(&entity.Knowledgebase{}).
+			Where("id = ?", kbID).
+			Updates(map[string]interface{}{
+				"doc_num":   gorm.Expr("doc_num - 1"),
+				"chunk_num": gorm.Expr("chunk_num - ?", doc.ChunkNum),
+				"token_num": gorm.Expr("token_num - ?", doc.TokenNum),
+			})
+		if counter.Error != nil {
+			return fmt.Errorf("decrement dataset counters: %w", counter.Error)
+		}
+		if counter.RowsAffected == 0 {
+			return fmt.Errorf("knowledgebase %s not found", kbID)
+		}
+		return nil
+	})
+}
+
+// cleanupFileReferences deletes file2document mappings for docID, and for each
+// referenced file, only hard-deletes the file record and its storage blob when
+// no other document still references the same file_id.
+func (s *DocumentService) cleanupFileReferences(docID string) error {
+	mappings, err := s.file2DocumentDAO.GetByDocumentID(docID)
+	if err != nil {
+		return fmt.Errorf("read document file mappings: %w", err)
+	}
+	if len(mappings) == 0 {
+		return nil
+	}
+	files := make([]*entity.File, 0, len(mappings))
+	seen := map[string]bool{}
+	for _, mapping := range mappings {
+		if mapping.FileID == nil || seen[*mapping.FileID] {
+			continue
+		}
+		seen[*mapping.FileID] = true
+		references, err := s.file2DocumentDAO.GetByFileID(*mapping.FileID)
+		if err != nil {
+			return fmt.Errorf("read remaining file references: %w", err)
+		}
+		shared := false
+		for _, reference := range references {
+			if reference.DocumentID == nil || *reference.DocumentID != docID {
+				shared = true
+				break
+			}
+		}
+		if shared {
+			continue
+		}
+		file, err := dao.NewFileDAO().GetByID(*mapping.FileID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read document file: %w", err)
+		}
+		if file == nil {
+			continue
+		}
+		if file.Location != nil && *file.Location != "" {
+			store := storage.GetStorageFactory().GetStorage()
+			if store == nil {
+				return fmt.Errorf("storage not initialized")
+			}
+			if err := store.Remove(file.ParentID, *file.Location); err != nil {
+				return fmt.Errorf("remove document object: %w", err)
+			}
+		}
+		files = append(files, file)
+	}
+	return dao.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("document_id = ?", docID).Delete(&entity.File2Document{}).Error; err != nil {
+			return err
+		}
+		for _, file := range files {
+			if err := tx.Where("id = ?", file.ID).Delete(&entity.File{}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // ListDocuments list documents
@@ -200,6 +797,35 @@ func (s *DocumentService) ListDocuments(page, pageSize int) ([]*DocumentResponse
 	responses := make([]*DocumentResponse, len(documents))
 	for i, doc := range documents {
 		responses[i] = s.toResponse(doc)
+	}
+
+	return responses, total, nil
+}
+
+func (s *DocumentService) GetThumbnail(docID string) (*ThumbnailResponse, error) {
+	document, err := s.documentDAO.GetByID(docID)
+	if err != nil {
+		return nil, err
+	}
+
+	var result ThumbnailResponse
+	result.ID = document.ID
+	result.Thumbnail = document.Thumbnail
+	result.KbID = document.KbID
+	return &result, nil
+}
+
+// ListDocumentsByDatasetID list documents by knowledge base ID
+func (s *DocumentService) ListDocumentsByDatasetID(kbID string, page, pageSize int) ([]*entity.DocumentListItem, int64, error) {
+	offset := (page - 1) * pageSize
+	documents, total, err := s.documentDAO.ListByKBID(kbID, offset, pageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	responses := make([]*entity.DocumentListItem, len(documents))
+	for i, doc := range documents {
+		responses[i] = doc
 	}
 
 	return responses, total, nil
@@ -221,15 +847,345 @@ func (s *DocumentService) GetDocumentsByAuthorID(authorID, page, pageSize int) (
 	return responses, total, nil
 }
 
-// toResponse convert entity.Document to DocumentResponse
+func (s *DocumentService) ListIngestionTasks(userID string, datasetID *string, page, pageSize int) ([]*entity.IngestionTask, error) {
+	offset := (page - 1) * pageSize
+
+	var tasks []*entity.IngestionTask
+	var err error
+	if datasetID == nil {
+		tasks, err = s.ingestionTaskDAO.ListByUserID(userID, offset, pageSize)
+	} else {
+		tasks, err = s.ingestionTaskDAO.ListByUserIDAndDatasetID(userID, *datasetID, offset, pageSize)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return tasks, nil
+}
+
+type ParseDocumentResponse struct {
+	DocumentID string `json:"document_id"`
+	Result     string `json:"result"`
+}
+
+func (s *DocumentService) IngestDocuments(datasetID, userID string, docIDs []string) ([]*ParseDocumentResponse, error) {
+	// deduplicate the document id
+	uniqueDocIDs := common.Deduplicate(docIDs)
+	if uniqueDocIDs == nil || len(uniqueDocIDs) == 0 {
+		return nil, fmt.Errorf("no documents to parse")
+	}
+
+	var responses []*ParseDocumentResponse
+
+	// query database, if the document ids are valid
+	for _, docID := range uniqueDocIDs {
+		doc, err := s.documentDAO.GetByID(docID)
+
+		if err != nil {
+			errorMessage := err.Error()
+			responses = append(responses, &ParseDocumentResponse{
+				DocumentID: docID,
+				Result:     errorMessage,
+			})
+			continue
+		}
+
+		if doc == nil {
+			errorMessage := "no such document"
+			responses = append(responses, &ParseDocumentResponse{
+				DocumentID: docID,
+				Result:     errorMessage,
+			})
+			continue
+		}
+
+		task := &entity.IngestionTask{
+			DocumentID: docID,
+			UserID:     userID,
+			DatasetID:  datasetID,
+			Schema:     nil,
+			Status:     common.CREATED,
+		}
+
+		// save the task to database
+		task, err = s.ingestionTaskDAO.CheckAndCreate(task)
+		if err != nil {
+			errorMessage := err.Error()
+			responses = append(responses, &ParseDocumentResponse{
+				DocumentID: docID,
+				Result:     errorMessage,
+			})
+			continue
+		}
+
+		msgQueueEngine := engine.GetMessageQueueEngine()
+
+		taskMessage := common.TaskMessage{
+			TaskID:   task.ID,
+			TaskType: common.TaskTypeIngestionTask,
+		}
+
+		// convert task
+		taskMessageStr, err := json.Marshal(taskMessage)
+		if err != nil {
+			return nil, err
+		}
+
+		err = msgQueueEngine.PublishTask("tasks.RAGFLOW", taskMessageStr)
+		if err != nil {
+			return nil, err
+		}
+
+		responses = append(responses, &ParseDocumentResponse{
+			DocumentID: docID,
+			Result:     fmt.Sprintf("task_id: %s", task.ID),
+		})
+	}
+
+	common.Info(fmt.Sprintf("parse documents, dataset: %s, documents: %v", datasetID, docIDs))
+	return responses, nil
+}
+
+func (s *DocumentService) StopIngestionTasks(tasks []string, userID string) ([]*entity.IngestionTask, error) {
+
+	var taskResponses []*entity.IngestionTask
+	for _, taskID := range tasks {
+		task, err := s.ingestionTaskDAO.SetStoppingByAPIServer(taskID)
+		if err != nil {
+			return nil, err
+		}
+		taskResponses = append(taskResponses, task)
+	}
+	return taskResponses, nil
+}
+
+func (s *DocumentService) RemoveIngestionTasks(tasks []string, userID string) ([]map[string]string, error) {
+
+	var deletedTasks []map[string]string
+	for _, taskID := range tasks {
+		taskRecord := map[string]string{
+			"task_id": taskID,
+		}
+		_, err := s.ingestionTaskDAO.RemoveByAPIServerOrAdminServer(taskID, &userID)
+		if err != nil {
+			taskRecord["remove"] = fmt.Sprintf("fail: %s", err.Error())
+		} else {
+			taskRecord["remove"] = "success"
+		}
+		deletedTasks = append(deletedTasks, taskRecord)
+	}
+	return deletedTasks, nil
+}
+
+func (s *DocumentService) ParseDocuments(datasetID, userID string, docIDs []string) ([]*ParseDocumentResponse, error) {
+	// create document parse id
+	// save to task table
+	// send to message queue
+
+	// deduplicate the document id
+	uniqueDocIDs := common.Deduplicate(docIDs)
+	if uniqueDocIDs == nil || len(uniqueDocIDs) == 0 {
+		return nil, fmt.Errorf("no documents to parse")
+	}
+
+	var responses []*ParseDocumentResponse
+
+	// query database, if the document ids are valid
+	for _, docID := range uniqueDocIDs {
+		doc, err := s.documentDAO.GetByID(docID)
+		if err != nil {
+			errorMessage := err.Error()
+			responses = append(responses, &ParseDocumentResponse{
+				DocumentID: docID,
+				Result:     errorMessage,
+			})
+			continue
+		}
+		if doc == nil {
+			errorMessage := "no such document"
+			responses = append(responses, &ParseDocumentResponse{
+				DocumentID: docID,
+				Result:     errorMessage,
+			})
+			continue
+		}
+
+		if doc.Status != nil && *doc.Status != "0" {
+			errorMessage := fmt.Sprintf("document %s is already parsed", docID)
+			responses = append(responses, &ParseDocumentResponse{
+				DocumentID: docID,
+				Result:     errorMessage,
+			})
+			continue
+		}
+
+		// create task for each document
+		//task := &entity.IngestionTask{
+		//	ID:         utility.GenerateToken(),
+		//	DocumentID: docID,
+		//	UserID:     userID,
+		//}
+
+		// save the task to database
+		//err = s.ingestionTaskDAO.Create(task)
+		//if err != nil {
+		//	errorMessage := err.Error()
+		//	responses = append(responses, &ParseDocumentResponse{
+		//		DocumentID: docID,
+		//		Result:     &errorMessage,
+		//	})
+		//	continue
+		//}
+
+		// Send task to message queue
+
+	}
+
+	common.Info(fmt.Sprintf("parse documents, dataset: %s, documents: %v", datasetID, docIDs))
+	return responses, nil
+}
+
+// StopParseDocuments stops parsing for the given documents in a dataset.
+// It sets Redis cancel signals for associated tasks and updates doc.run to CANCEL.
+// Returns a map with success_count and optionally errors.
+func (s *DocumentService) StopParseDocuments(datasetID string, docIDs []string) (map[string]interface{}, error) {
+	deduped := common.Deduplicate(docIDs)
+	if len(deduped) == 0 {
+		return nil, fmt.Errorf("no document IDs provided")
+	}
+
+	docs, err := s.validateDocsInDataset(deduped, datasetID)
+	if err != nil {
+		return nil, err
+	}
+
+	var errors []string
+	successCount := 0
+	for _, doc := range docs {
+		if cancelErr := s.cancelDocParse(doc); cancelErr != nil {
+			errors = append(errors, cancelErr.Error())
+			continue
+		}
+		successCount++
+	}
+
+	result := map[string]interface{}{"success_count": successCount}
+	if len(errors) > 0 {
+		result["errors"] = errors
+	}
+	return result, nil
+}
+
+// validateDocsInDataset deduplicates IDs, fetches the documents, and ensures
+// every document exists and belongs to the given dataset. Returns the resolved
+// documents.
+func (s *DocumentService) validateDocsInDataset(docIDs []string, datasetID string) ([]*entity.Document, error) {
+	docs, err := s.documentDAO.GetByIDs(docIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch documents: %w", err)
+	}
+	if len(docs) != len(docIDs) {
+		return nil, fmt.Errorf("some document IDs not found in dataset %s", datasetID)
+	}
+	var invalid []string
+	for _, d := range docs {
+		if d.KbID != datasetID {
+			invalid = append(invalid, d.ID)
+		}
+	}
+	if len(invalid) > 0 {
+		return nil, fmt.Errorf("these documents do not belong to dataset %s: %v", datasetID, invalid)
+	}
+	return docs, nil
+}
+
+// cancelDocParse sets Redis cancel signals for the document's active tasks and
+// marks the document run status as CANCEL. Returns an error if the document is
+// not in a cancellable state or the status update fails.
+func (s *DocumentService) cancelDocParse(doc *entity.Document) error {
+	tasks, taskErr := s.taskDAO.GetByDocID(doc.ID)
+	if taskErr != nil {
+		return fmt.Errorf("failed to get tasks for %s: %v", doc.ID, taskErr)
+	}
+
+	hasUnfinishedTask := false
+	for _, t := range tasks {
+		if t.Progress < 1 {
+			hasUnfinishedTask = true
+			break
+		}
+	}
+
+	canCancel := false
+	if doc.Run != nil {
+		if *doc.Run == string(entity.TaskStatusRunning) || *doc.Run == string(entity.TaskStatusCancel) {
+			canCancel = true
+		}
+	}
+	if hasUnfinishedTask {
+		canCancel = true
+	}
+	if !canCancel {
+		return fmt.Errorf("can't stop parsing document that has not started or already completed")
+	}
+
+	// Set Redis cancel signal for each task (best-effort)
+	redisClient := redis.Get()
+	var createdSignals []string
+	for _, task := range tasks {
+		if redisClient != nil {
+			key := fmt.Sprintf("%s-cancel", task.ID)
+			previous, err := redisClient.Get(key)
+			if err != nil {
+				return fmt.Errorf("read cancellation signal: %w", err)
+			}
+			if !redisClient.Set(key, "x", 0) {
+				for _, created := range createdSignals {
+					redisClient.DeleteIfEqual(created, "x")
+				}
+				return fmt.Errorf("failed to set task cancellation signal")
+			}
+			if previous == "" {
+				createdSignals = append(createdSignals, key)
+			}
+		}
+	}
+
+	if upErr := s.documentDAO.UpdateByID(doc.ID, map[string]interface{}{"run": string(entity.TaskStatusCancel)}); upErr != nil {
+		if redisClient != nil {
+			for _, key := range createdSignals {
+				redisClient.DeleteIfEqual(key, "x")
+			}
+		}
+		return fmt.Errorf("failed to update document %s: %w", doc.ID, upErr)
+	}
+	return nil
+}
+
+// toResponse convert model.Document to DocumentResponse
 func (s *DocumentService) toResponse(doc *entity.Document) *DocumentResponse {
 	createdAt := ""
 	if doc.CreateTime != nil {
-		createdAt = entity.TimeFromTimestamp(*doc.CreateTime).Format("2006-01-02 15:04:05")
+		// Check if timestamp is in milliseconds (13 digits) or seconds (10 digits)
+		var ts int64
+		if *doc.CreateTime >= 1000000000000 {
+			// Milliseconds - convert to seconds
+			ts = *doc.CreateTime / 1000
+		} else {
+			ts = *doc.CreateTime
+		}
+		createdAt = time.Unix(ts, 0).Format("2006-01-02 15:04:05")
 	}
 	updatedAt := ""
 	if doc.UpdateTime != nil {
-		updatedAt = entity.TimeFromTimestamp(*doc.UpdateTime).Format("2006-01-02 15:04:05")
+		// Accept both historical second-based values and current millisecond-based values.
+		ts := *doc.UpdateTime
+		if ts >= 1000000000000 {
+			ts /= 1000
+		}
+		updatedAt = time.Unix(ts, 0).Format("2006-01-02 15:04:05")
 	}
 	return &DocumentResponse{
 		ID:              doc.ID,
@@ -255,138 +1211,6 @@ func (s *DocumentService) toResponse(doc *entity.Document) *DocumentResponse {
 	}
 }
 
-// ListDocumentsByKBID reads only active documents after fresh actor/dataset authorization.
-func (s *DocumentService) ListDocumentsByKBID(ctx context.Context, kbID, userID string, page, pageSize int) ([]*DocumentResponse, int64, error) {
-	if _, err := s.readableMetadataKB(ctx, kbID, userID); err != nil {
-		return nil, 0, err
-	}
-	if page < 1 || pageSize < 1 || pageSize > 100 {
-		return nil, 0, ErrInvalidChunkScope
-	}
-	query := s.db.WithContext(ctx).Model(&entity.Document{}).Where("kb_id=? AND status=?", kbID, string(entity.StatusValid))
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	var documents []entity.Document
-	if err := query.Order("id").Offset((page - 1) * pageSize).Limit(pageSize).Find(&documents).Error; err != nil {
-		return nil, 0, err
-	}
-	responses := make([]*DocumentResponse, 0, len(documents))
-	for i := range documents {
-		responses = append(responses, s.toResponse(&documents[i]))
-	}
-	return responses, total, ctx.Err()
-}
-
-// readableMetadataKB uses the DAO's active tenant/membership predicate and checks
-// the current actor's account state before any metadata index is read.
-func (s *DocumentService) readableMetadataKB(ctx context.Context, kbID, userID string) (*entity.Knowledgebase, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(kbID) == "" || strings.TrimSpace(userID) == "" {
-		return nil, ErrDatasetAccessDenied
-	}
-	if s.db == nil || s.kbDAO == nil {
-		return nil, fmt.Errorf("metadata SQL is unavailable")
-	}
-	kb, err := s.kbDAO.GetReadableByID(ctx, kbID, userID)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, ErrDatasetAccessDenied
-	}
-	if err != nil {
-		return nil, err
-	}
-	var actor entity.User
-	err = s.db.WithContext(ctx).Select("id").Where("id=? AND status=? AND is_active=?", userID, string(entity.StatusValid), true).Take(&actor).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, ErrDatasetAccessDenied
-	}
-	if err != nil {
-		return nil, err
-	}
-	if kb.ID != kbID || strings.TrimSpace(kb.TenantID) == "" {
-		return nil, fmt.Errorf("metadata dataset identity is missing")
-	}
-	return kb, nil
-}
-
-// scopedMetadataRows validates the complete SQL document selection before the
-// index call and checks every returned row before decoding any metadata.
-func (s *DocumentService) scopedMetadataRows(ctx context.Context, kb *entity.Knowledgebase, docIDs []string) ([]map[string]interface{}, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if docIDs != nil && len(docIDs) == 0 {
-		return []map[string]interface{}{}, nil
-	}
-	query := s.db.WithContext(ctx).Model(&entity.Document{}).Where("kb_id=? AND status=?", kb.ID, string(entity.StatusValid))
-	selected := map[string]bool{}
-	if docIDs != nil {
-		for _, id := range docIDs {
-			if strings.TrimSpace(id) == "" {
-				return nil, ErrInvalidChunkScope
-			}
-			selected[id] = true
-		}
-		query = query.Where("id IN ?", docIDs)
-	}
-	var activeIDs []string
-	if err := query.Order("id").Pluck("id", &activeIDs).Error; err != nil {
-		return nil, err
-	}
-	if docIDs != nil && len(activeIDs) != len(selected) {
-		return nil, ErrChunkNotFound
-	}
-	if len(activeIDs) == 0 {
-		return []map[string]interface{}{}, nil
-	}
-	allowed := make(map[string]bool, len(activeIDs))
-	for _, id := range activeIDs {
-		allowed[id] = true
-	}
-	if s.metadataSvc == nil {
-		return nil, fmt.Errorf("document metadata service is unavailable")
-	}
-	var found *SearchMetadataResult
-	var err error
-	if docIDs == nil {
-		// Keep the metadata directory's complete paged scan for an all-documents
-		// request. SQL's active selection filters stale directory rows below.
-		found, err = s.metadataSvc.SearchMetadataByKBsContext(ctx, []string{kb.ID}, 1000)
-	} else {
-		found, err = s.metadataSvc.SearchMetadataContext(ctx, kb.ID, kb.TenantID, activeIDs, len(activeIDs))
-	}
-	if err != nil {
-		return nil, err
-	}
-	if found == nil {
-		return nil, fmt.Errorf("document metadata result is unavailable")
-	}
-	rows := make([]map[string]interface{}, 0, len(found.Chunks))
-	seen := map[string]bool{}
-	for _, row := range found.Chunks {
-		id, ok := row["id"].(string)
-		if !ok || id == "" || row["kb_id"] != kb.ID || seen[id] {
-			return nil, fmt.Errorf("document metadata scope mismatch")
-		}
-		seen[id] = true
-		if !allowed[id] {
-			if docIDs == nil {
-				continue
-			}
-			return nil, fmt.Errorf("document metadata scope mismatch")
-		}
-		fields, err := decodeDocumentMetadata(row["meta_fields"])
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, map[string]interface{}{"id": id, "kb_id": kb.ID, "meta_fields": fields})
-	}
-	return rows, ctx.Err()
-}
-
 // GetMetadataSummaryRequest request for metadata summary
 type GetMetadataSummaryRequest struct {
 	KBID   string   `json:"kb_id" binding:"required"`
@@ -398,143 +1222,222 @@ type GetMetadataSummaryResponse struct {
 	Summary map[string]interface{} `json:"summary"`
 }
 
-// GetMetadataSummary authorizes the full selection and preserves nil versus empty.
-func (s *DocumentService) GetMetadataSummary(ctx context.Context, kbID, userID string, docIDs []string) (map[string]interface{}, error) {
-	kb, err := s.readableMetadataKB(ctx, kbID, userID)
+// GetMetadataSummary get metadata summary for documents
+func (s *DocumentService) GetMetadataSummary(kbID string, docIDs []string) (map[string]interface{}, error) {
+	tenantID, err := s.metadataSvc.GetTenantIDByKBID(kbID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.scopedMetadataRows(ctx, kb, docIDs)
+
+	searchResult, err := s.metadataSvc.SearchMetadata(kbID, tenantID, docIDs, 1000)
 	if err != nil {
 		return nil, err
 	}
-	return aggregateMetadata(rows), nil
+
+	// Aggregate metadata from results
+	return aggregateMetadata(searchResult.MetadataRecords), nil
 }
 
-// metadataScope authorizes SQL identities before touching the document engine.
-func (s *DocumentService) metadataScope(ctx context.Context, docID, userID string) (*entity.Document, *entity.Knowledgebase, error) {
-	if strings.TrimSpace(docID) == "" {
-		return nil, nil, ErrInvalidChunkScope
-	}
-	var doc entity.Document
-	err := s.db.WithContext(ctx).Where("id = ? AND status = ?", docID, string(entity.StatusValid)).First(&doc).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil, ErrChunkNotFound
-	}
+// SetDocumentMetadata sets metadata for a document in the document engine
+func (s *DocumentService) SetDocumentMetadata(docID string, meta map[string]interface{}) error {
+	// Get document to find kb_id
+	doc, err := s.documentDAO.GetByID(docID)
 	if err != nil {
-		return nil, nil, err
+		return fmt.Errorf("document not found: %w", err)
 	}
-	kb, err := s.readableMetadataKB(ctx, doc.KbID, userID)
+
+	// Get tenant ID
+	tenantID, err := s.metadataSvc.GetTenantIDByKBID(doc.KbID)
 	if err != nil {
-		return nil, nil, err
+		return fmt.Errorf("failed to get tenant ID: %w", err)
 	}
-	if s.docEngine == nil || strings.TrimSpace(kb.TenantID) == "" {
-		return nil, nil, fmt.Errorf("document engine or tenant identity is missing")
+
+	// Update metadata using the document engine (merges with existing)
+	err = s.docEngine.UpdateMetadata(context.Background(), docID, doc.KbID, meta, tenantID)
+	if err != nil {
+		return fmt.Errorf("failed to update metadata: %w", err)
 	}
-	return &doc, kb, nil
+
+	return nil
 }
 
-// SetDocumentMetadata merges keys after SQL authorization.
-func (s *DocumentService) SetDocumentMetadata(ctx context.Context, docID, userID string, meta map[string]interface{}) error {
-	doc, kb, err := s.metadataScope(ctx, docID, userID)
+// DeleteDocumentMetadata deletes metadata keys for a document in the document engine
+func (s *DocumentService) DeleteDocumentMetadata(docID string, keys []string) error {
+	// Get document to find kb_id
+	doc, err := s.documentDAO.GetByID(docID)
 	if err != nil {
-		return err
+		return fmt.Errorf("document not found: %w", err)
 	}
-	return s.docEngine.UpdateMetadata(ctx, doc.ID, kb.ID, meta, kb.TenantID)
+
+	// Get tenant ID
+	tenantID, err := s.metadataSvc.GetTenantIDByKBID(doc.KbID)
+	if err != nil {
+		return fmt.Errorf("failed to get tenant ID: %w", err)
+	}
+
+	// Delete metadata using the document engine
+	err = s.docEngine.DeleteMetadataKeys(context.Background(), docID, doc.KbID, keys, tenantID)
+	if err != nil {
+		return fmt.Errorf("failed to delete metadata: %w", err)
+	}
+
+	return nil
 }
 
-// DeleteDocumentMetadata uses nil only for an omitted keys selection. An explicit
-// empty selection is rejected before SQL or storage and never deletes the row.
-func (s *DocumentService) DeleteDocumentMetadata(ctx context.Context, docID, userID string, keys []string) error {
-	if keys != nil {
-		if err := types.ValidateMetadataKeys(keys); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidChunkScope, err)
-		}
-	}
-	doc, kb, err := s.metadataScope(ctx, docID, userID)
+// DeleteDocumentAllMetadata deletes all metadata for a document in the document engine
+func (s *DocumentService) DeleteDocumentAllMetadata(docID string) error {
+	// Get document to find kb_id
+	doc, err := s.documentDAO.GetByID(docID)
 	if err != nil {
-		return err
+		return fmt.Errorf("document not found: %w", err)
 	}
-	if keys != nil {
-		return s.docEngine.DeleteMetadataKeys(ctx, doc.ID, kb.ID, keys, kb.TenantID)
+
+	// Get tenant ID
+	tenantID, err := s.metadataSvc.GetTenantIDByKBID(doc.KbID)
+	if err != nil {
+		return fmt.Errorf("failed to get tenant ID: %w", err)
 	}
-	_, err = s.docEngine.DeleteMetadata(ctx, map[string]interface{}{"id": doc.ID, "kb_id": kb.ID}, kb.TenantID)
-	return err
+
+	// Build condition to match the document
+	condition := map[string]interface{}{
+		"id":    docID,
+		"kb_id": doc.KbID,
+	}
+
+	// Delete entire document metadata
+	_, err = s.docEngine.DeleteMetadata(context.Background(), condition, tenantID)
+	if err != nil {
+		return fmt.Errorf("failed to delete document metadata: %w", err)
+	}
+
+	return nil
 }
 
-// GetDocumentMetadataByID validates an active exact-KB document before index access.
-func (s *DocumentService) GetDocumentMetadataByID(ctx context.Context, docID, userID string) (map[string]interface{}, error) {
-	doc, kb, err := s.metadataScope(ctx, docID, userID)
+// GetDocumentMetadataByID get metadata for a specific document
+func (s *DocumentService) GetDocumentMetadataByID(docID string) (map[string]interface{}, error) {
+	// Get document to find kb_id
+	doc, err := s.documentDAO.GetByID(docID)
+	if err != nil {
+		return nil, fmt.Errorf("document not found: %w", err)
+	}
+
+	tenantID, err := s.metadataSvc.GetTenantIDByKBID(doc.KbID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.scopedMetadataRows(ctx, kb, []string{doc.ID})
+
+	searchResult, err := s.metadataSvc.SearchMetadata(doc.KbID, tenantID, []string{docID}, 1)
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
-		return map[string]interface{}{}, nil
+
+	// Return metadata if found
+	if len(searchResult.MetadataRecords) > 0 {
+		metadata := searchResult.MetadataRecords[0]
+		return ExtractMetaFields(metadata)
 	}
-	return rows[0]["meta_fields"].(map[string]interface{}), nil
+
+	return make(map[string]interface{}), nil
 }
 
-// GetMetadataByKBs authorizes every dataset before reading the first index.
-func (s *DocumentService) GetMetadataByKBs(ctx context.Context, userID string, kbIDs []string) (map[string]interface{}, error) {
-	if err := ctx.Err(); err != nil {
+// GetMetadataByKBs get metadata for knowledge bases
+func (s *DocumentService) GetMetadataByKBs(kbIDs []string) (map[string]interface{}, error) {
+	if len(kbIDs) == 0 {
+		return make(map[string]interface{}), nil
+	}
+
+	searchResult, err := s.metadataSvc.SearchMetadataByKBs(kbIDs, 10000)
+	if err != nil {
 		return nil, err
 	}
-	kbs := make([]*entity.Knowledgebase, 0, len(kbIDs))
-	seen := map[string]bool{}
-	for _, id := range kbIDs {
-		if seen[id] {
-			continue
-		}
-		kb, err := s.readableMetadataKB(ctx, id, userID)
-		if err != nil {
-			return nil, err
-		}
-		seen[id] = true
-		kbs = append(kbs, kb)
-	}
-	flattened := map[string]map[string][]string{}
-	for _, kb := range kbs {
-		rows, err := s.scopedMetadataRows(ctx, kb, nil)
-		if err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			docID := row["id"].(string)
-			for field, raw := range row["meta_fields"].(map[string]interface{}) {
-				if field == "kb_id" || field == "id" {
-					continue
-				}
-				if flattened[field] == nil {
-					flattened[field] = map[string][]string{}
-				}
-				values, ok := raw.([]interface{})
-				if !ok {
-					values = []interface{}{raw}
-					if list, ok := raw.([]string); ok {
-						values = make([]interface{}, len(list))
-						for i, value := range list {
-							values[i] = value
-						}
-					}
-				}
-				for _, value := range values {
-					if value != nil {
-						label := fmt.Sprintf("%v", value)
-						flattened[field][label] = append(flattened[field][label], docID)
-					}
-				}
+
+	flattenedMeta := make(map[string]map[string][]string)
+	numMetadata := len(searchResult.MetadataRecords)
+
+	var allMetaFields []map[string]interface{}
+	if numMetadata > 1 && len(searchResult.MetadataRecords) > 0 {
+		firstMetadata := searchResult.MetadataRecords[0]
+		if metaFieldsVal := firstMetadata["meta_fields"]; metaFieldsVal != nil {
+			if v, ok := metaFieldsVal.([]byte); ok {
+				allMetaFields = ParseAllLengthPrefixedJSON(v)
 			}
 		}
 	}
-	result := map[string]interface{}{}
-	for field, values := range flattened {
-		result[field] = values
+
+	allowed := map[string]bool{}
+	for _, id := range kbIDs {
+		allowed[id] = true
 	}
-	return result, ctx.Err()
+	seen := map[string]bool{}
+	for idx, metadata := range searchResult.MetadataRecords {
+		docID, ok := ExtractDocumentID(metadata)
+		if !ok || docID == "" || seen[docID] {
+			return nil, fmt.Errorf("invalid metadata document identity")
+		}
+		seen[docID] = true
+		if kb, exists := metadata["kb_id"]; exists {
+			if id, ok := kb.(string); !ok || !allowed[id] {
+				return nil, fmt.Errorf("metadata escaped dataset scope")
+			}
+		}
+
+		var metaFields map[string]interface{}
+
+		if len(allMetaFields) > 0 && idx < len(allMetaFields) {
+			// Use pre-parsed meta_fields from concatenated data
+			metaFields = allMetaFields[idx]
+		} else {
+			var err error
+			metaFields, err = ExtractMetaFields(metadata)
+			if err != nil {
+				return nil, fmt.Errorf("invalid document metadata: %w", err)
+			}
+		}
+
+		if metaFields == nil {
+			continue
+		}
+
+		// Process each metadata field
+		for fieldName, fieldValue := range metaFields {
+			if fieldName == "kb_id" || fieldName == "id" {
+				continue
+			}
+
+			if _, ok := flattenedMeta[fieldName]; !ok {
+				flattenedMeta[fieldName] = make(map[string][]string)
+			}
+
+			// Handle list and single values
+			var values []interface{}
+			switch v := fieldValue.(type) {
+			case []interface{}:
+				values = v
+			case []string:
+				for _, value := range v {
+					values = append(values, value)
+				}
+			default:
+				values = []interface{}{v}
+			}
+
+			for _, val := range values {
+				if val == nil {
+					continue
+				}
+				strVal := fmt.Sprintf("%v", val)
+				flattenedMeta[fieldName][strVal] = append(flattenedMeta[fieldName][strVal], docID)
+			}
+		}
+	}
+
+	// Convert to map[string]interface{} for return
+	var metaResult map[string]interface{} = make(map[string]interface{})
+	for k, v := range flattenedMeta {
+		metaResult[k] = v
+	}
+
+	return metaResult, nil
 }
 
 // valueInfo holds count and order of first appearance
@@ -682,9 +1585,9 @@ func aggregateMetadata(chunks []map[string]interface{}) map[string]interface{} {
 			}
 
 			// Aggregate value counts
-			var values interface{} = v
-			if vl, ok := v.([]interface{}); ok {
-				values = vl
+			values := v
+			if v, ok := v.([]interface{}); ok {
+				values = v
 			} else {
 				values = []interface{}{v}
 			}
@@ -775,7 +1678,7 @@ func getMetaValueType(value interface{}) string {
 		return "string"
 	case int, int8, int16, int32, int64:
 		return "number"
-	case float32, float64, json.Number:
+	case float32, float64:
 		return "number"
 	case string:
 		if isTimeString(v) {

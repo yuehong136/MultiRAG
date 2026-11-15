@@ -102,7 +102,8 @@ func TestSSEWriteDeadlineHTTP(t *testing.T) {
 }
 
 func TestSSEWriteDeadlineDoesNotCommitHeaders(t *testing.T) {
-	c, w := searchbotContext(`{}`)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
 	disableWriteDeadlineForSSE(c) // Unsupported recorder is also usable.
 	if c.Writer.Written() || w.Header().Get("Content-Type") != "" {
 		t.Fatal("deadline helper committed a stream before authorization")

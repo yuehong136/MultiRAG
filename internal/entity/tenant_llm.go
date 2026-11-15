@@ -22,11 +22,11 @@ type TenantLLM struct {
 	ID         int64   `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	TenantID   string  `gorm:"column:tenant_id;size:32;not null;index:idx_tenant_llm_unique,unique" json:"tenant_id"`
 	LLMFactory string  `gorm:"column:llm_factory;size:128;not null;index:idx_tenant_llm_unique,unique" json:"llm_factory"`
-	ModelType  *string `gorm:"column:mdl_type;size:128;index" json:"model_type,omitempty"`
+	ModelType  *string `gorm:"column:model_type;size:128;index" json:"model_type,omitempty"`
 	LLMName    *string `gorm:"column:llm_name;size:128;index:idx_tenant_llm_unique,unique;default:\"\"" json:"llm_name,omitempty"`
-	APIKey     *string `gorm:"column:api_key;type:text" json:"api_key,omitempty"`
+	APIKey     *string `gorm:"column:api_key;type:longtext" json:"api_key,omitempty"`
 	APIBase    *string `gorm:"column:api_base;size:255" json:"api_base,omitempty"`
-	MaxTokens  int64   `gorm:"column:max_tokens;default:8192;index" json:"max_tokens"`
+	MaxTokens  int64   `gorm:"column:max_tokens;default:0;index" json:"max_tokens"`
 	UsedTokens int64   `gorm:"column:used_tokens;default:0;index" json:"used_tokens"`
 	Status     string  `gorm:"column:status;size:1;not null;default:1;index" json:"status"`
 	BaseModel
@@ -34,5 +34,5 @@ type TenantLLM struct {
 
 // TableName specify table name
 func (TenantLLM) TableName() string {
-	return "t_ai_tenant_llms"
+	return "tenant_llm"
 }

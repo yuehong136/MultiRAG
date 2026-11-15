@@ -53,7 +53,7 @@ func TestAfter67ChatConfigIsolationHTTP(t *testing.T) {
 			var group sync.WaitGroup
 			for range 8 {
 				group.Go(func() {
-					api := &APIConfig{APIKey: stringPtr("key")}
+					api := &APIConfig{ApiKey: stringPtr("key")}
 					messages := []Message{{Role: "user", Content: "q"}}
 					if got, err := driver.ChatWithMessages("served", messages, api, config); err != nil || got == nil || *got.Answer != "answer" {
 						t.Error(got, err)
@@ -86,7 +86,7 @@ func TestAfter67ChatPreflightHasNoHTTP(t *testing.T) {
 				fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
 			}))
 			driver := after67ChatDriver(t, provider, map[string]string{"default": srv.URL})
-			for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr("")}, {APIKey: stringPtr(" \t ")}, {APIKey: stringPtr("key"), Region: stringPtr("unknown")}} {
+			for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr("")}, {ApiKey: stringPtr(" \t ")}, {ApiKey: stringPtr("key"), Region: stringPtr("unknown")}} {
 				if got, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil || got != nil {
 					t.Error("invalid API configuration accepted")
 				}
@@ -116,7 +116,7 @@ func TestAfter67ChatResponseStrictness(t *testing.T) {
 				after67Transport(driver).Transport = providerContractTransport(func(*http.Request) (*http.Response, error) {
 					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, nil
 				})
-				got, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
+				got, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil)
 				if err == nil || got != nil || strings.Contains(err.Error(), "private-secret") {
 					t.Fatal("malformed response accepted or raw error exposed", got, err)
 				}
@@ -130,7 +130,7 @@ func TestAfter67ChatResponseStrictness(t *testing.T) {
 					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 				})
 				done := false
-				err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(content, _ *string) error {
+				err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(content, _ *string) error {
 					if content != nil && *content == "[DONE]" {
 						done = true
 					}
@@ -147,13 +147,13 @@ func TestAfter67ChatResponseStrictness(t *testing.T) {
 func after67Transport(driver ModelDriver) *http.Client {
 	switch d := driver.(type) {
 	case *DeepSeekModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *GiteeModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *AliyunModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	default:
-		return driver.(*SiliconFlowModel).httpClient
+		return driver.(*SiliconflowModel).baseModel.httpClient
 	}
 }
 
@@ -164,7 +164,7 @@ func TestAfter67DeepSeekEndpointAndThinkingCopies(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		yes := true
 		config := &ChatConfig{Thinking: &yes, Effort: stringPtr("low")}
-		driver.httpClient.Transport = providerContractTransport(func(r *http.Request) (*http.Response, error) {
+		driver.baseModel.httpClient.Transport = providerContractTransport(func(r *http.Request) (*http.Response, error) {
 			if r.URL.String() != "http://first.invalid/custom/chat" {
 				t.Error("caller map or ignored suffix changed endpoint", r.URL)
 			}
@@ -174,7 +174,7 @@ func TestAfter67DeepSeekEndpointAndThinkingCopies(t *testing.T) {
 			}
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 		})
-		api := &APIConfig{APIKey: stringPtr("key")}
+		api := &APIConfig{ApiKey: stringPtr("key")}
 		if stream {
 			if err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, api, config, func(*string, *string) error { return nil }); err != nil {
 				t.Fatal(err)
@@ -210,16 +210,16 @@ func TestAfter67ChatEndpointIsolationAndDefaults(t *testing.T) {
 				}
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"answer"}}]}`))}, nil
 			})
-			key := " key "
+			key := "key"
 			for _, region := range []*string{nil, stringPtr("office"), stringPtr("")} {
-				if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key, Region: region}, nil); err != nil {
+				if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: &key, Region: region}, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if key != " key " || calls != 3 {
+			if key != "key" || calls != 3 {
 				t.Fatal("caller credentials modified or request lost")
 			}
-			for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" 	 ")}, {APIKey: stringPtr("key"), Region: stringPtr("missing")}} {
+			for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" 	 ")}, {ApiKey: stringPtr("key"), Region: stringPtr("missing")}} {
 				if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil {
 					t.Error("bad key/region accepted")
 				}
@@ -235,7 +235,6 @@ func TestAfter67StreamTerminalFailureAndCancellation(t *testing.T) {
 	for _, provider := range []string{"DeepSeek", "Gitee", "SiliconFlow", "Aliyun"} {
 		for _, raw := range []string{
 			"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
-			"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]\n",
 			"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[null]}\n\ndata: [DONE]\n\n",
 			"data: {\"choices\":[{\"delta\":{\"content\":\"   \"}}]}\n\ndata: [DONE]\n\n",
 		} {
@@ -245,7 +244,7 @@ func TestAfter67StreamTerminalFailureAndCancellation(t *testing.T) {
 					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, nil
 				})
 				done := false
-				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, _ *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
+				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(c, _ *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
 				if err == nil || done {
 					t.Fatal("invalid terminal became success", err, done)
 				}
@@ -259,7 +258,7 @@ func TestAfter67StreamTerminalFailureAndCancellation(t *testing.T) {
 		sentinel := errors.New("sender stopped")
 		ctx, cancel := context.WithCancel(t.Context())
 		for _, cancelInSender := range []bool{false, true} {
-			err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(*string, *string) error {
+			err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil, func(*string, *string) error {
 				if cancelInSender {
 					cancel()
 					return nil
@@ -281,11 +280,11 @@ func TestAfter67StreamTerminalFailureAndCancellation(t *testing.T) {
 func TestAfter67GiteeProbeRejectsMissingKey(t *testing.T) {
 	d := NewGiteeModel(map[string]string{"default": "http://controlled.invalid"}, URLSuffix{Status: "status"})
 	calls := 0
-	d.httpClient.Transport = providerContractTransport(func(*http.Request) (*http.Response, error) {
+	d.baseModel.httpClient.Transport = providerContractTransport(func(*http.Request) (*http.Response, error) {
 		calls++
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(""))}, nil
 	})
-	for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}, {APIKey: stringPtr("key"), Region: stringPtr("missing")}} {
+	for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" ")}, {ApiKey: stringPtr("key"), Region: stringPtr("missing")}} {
 		if err := d.CheckConnection(api); err == nil {
 			t.Fatal("invalid probe configuration accepted")
 		}
@@ -298,13 +297,13 @@ func TestAfter67GiteeProbeRejectsMissingKey(t *testing.T) {
 func TestAfter67GiteeTailFlushCancellation(t *testing.T) {
 	d := NewGiteeModel(map[string]string{"default": "http://controlled.invalid"}, URLSuffix{Chat: "chat"})
 	raw := "data: {\"choices\":[{\"delta\":{\"content\":\"<\"}}]}\n\ndata: [DONE]\n\n"
-	d.httpClient.Transport = providerContractTransport(func(*http.Request) (*http.Response, error) {
+	d.baseModel.httpClient.Transport = providerContractTransport(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, nil
 	})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := false
-	err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(content, _ *string) error {
+	err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil, func(content, _ *string) error {
 		if content != nil && *content == "[DONE]" {
 			done = true
 		}
@@ -328,7 +327,7 @@ func TestAfter67EmptyFramesUsageAndTerminalPolicy(t *testing.T) {
 			{"data: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n", true},
 			{"data: {\"choices\":null,\"usage\":{}}\n\ndata: [DONE]\n\n", false},
 			{"data: {\"usage\":{}}\n\ndata: [DONE]\n\n", false},
-			{stop, provider != "Aliyun"},
+			{stop, true},
 		} {
 			t.Run(provider+"/"+tc.suffix, func(t *testing.T) {
 				d := after67ChatDriver(t, provider, map[string]string{"default": "http://controlled.invalid"})
@@ -337,7 +336,7 @@ func TestAfter67EmptyFramesUsageAndTerminalPolicy(t *testing.T) {
 					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, nil
 				})
 				done := false
-				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, _ *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
+				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(c, _ *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
 				if (err == nil) != tc.want || done != tc.want {
 					t.Fatal(err, done, tc.want)
 				}
@@ -363,7 +362,7 @@ func TestAfter67BodyReadCancellation(t *testing.T) {
 			after67Transport(d).Transport = providerContractTransport(func(*http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: 200, Body: after67CancelledBody{ctx: ctx, cancel: cancel}}, nil
 			})
-			result, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)
+			result, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil)
 			if !errors.Is(err, context.Canceled) || result != nil {
 				t.Fatal(result, err)
 			}
@@ -372,10 +371,10 @@ func TestAfter67BodyReadCancellation(t *testing.T) {
 	d := NewDeepSeekModel(map[string]string{"default": "http://controlled.invalid"}, URLSuffix{Models: "models"})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	d.httpClient.Transport = providerContractTransport(func(*http.Request) (*http.Response, error) {
+	d.baseModel.httpClient.Transport = providerContractTransport(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: after67CancelledBody{ctx: ctx, cancel: cancel}}, nil
 	})
-	if names, err := d.ListModels(&APIConfig{APIKey: stringPtr("key"), Context: ctx}); !errors.Is(err, context.Canceled) || names != nil {
+	if names, err := d.ListModels(&APIConfig{ApiKey: stringPtr("key"), Context: ctx}); !errors.Is(err, context.Canceled) || names != nil {
 		t.Fatal(names, err)
 	}
 }

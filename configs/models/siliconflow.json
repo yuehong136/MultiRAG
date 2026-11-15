@@ -1,6 +1,5 @@
 {
   "name": "SiliconFlow",
-  "tags": "LLM,TEXT EMBEDDING,TEXT RE-RANK,IMAGE2TEXT",
   "url": {
     "default": "https://api.siliconflow.cn/v1"
   },
@@ -112,7 +111,7 @@
       "name": "FunAudioLLM/SenseVoiceSmall",
       "max_tokens": 8192,
       "model_types": [
-        "speech2text"
+        "asr"
       ]
     }
   ]

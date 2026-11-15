@@ -3,7 +3,7 @@ package models
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"testing"
 )
@@ -27,7 +27,7 @@ func TestNVIDIACancelHTTP(t *testing.T)   { testHostedCancellation(t, "NVIDIA", 
 
 func TestNVIDIADiscoveryOptionalKeyHTTP(t *testing.T) {
 	for _, key := range []*string{nil, stringPtr(""), stringPtr("fixture")} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet || r.URL.Path != "/nim/models" || r.ContentLength > 0 {
 				t.Errorf("invalid discovery request: %s %s", r.Method, r.URL.Path)
 			}
@@ -40,14 +40,23 @@ func TestNVIDIADiscoveryOptionalKeyHTTP(t *testing.T) {
 			}
 			fmt.Fprint(w, `{"data":[{"id":"nvidia/model"}]}`)
 		}))
-		driver := NewNVIDIAModel(map[string]string{"default": server.URL + "/nim/"}, URLSuffix{Models: "models", Chat: "chat/completions"})
-		configs := []*APIConfig{{APIKey: key, Region: stringPtr("")}}
+		driver := NewNvidiaModel(map[string]string{"default": server.URL + "/nim"}, URLSuffix{Models: "models", Chat: "chat/completions"})
+		configs := []*APIConfig{{ApiKey: key, Region: stringPtr("")}}
 		if key == nil {
 			configs = append(configs, nil)
 		}
 		for _, api := range configs {
+			if key == nil || *key == "" {
+				if _, err := driver.ListModels(api); err == nil {
+					t.Fatal("missing discovery key accepted")
+				}
+				if err := driver.CheckConnection(api); err == nil {
+					t.Fatal("missing probe key accepted")
+				}
+				continue
+			}
 			names, err := driver.ListModels(api)
-			if err != nil || !reflect.DeepEqual(names, []string{"nvidia/model"}) {
+			if err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{"nvidia/model"}) {
 				t.Fatal(names, err)
 			}
 			if err := driver.CheckConnection(api); err != nil {
@@ -61,7 +70,7 @@ func TestNVIDIADiscoveryOptionalKeyHTTP(t *testing.T) {
 		}
 		server.Close()
 	}
-	missing := NewNVIDIAModel(nil, URLSuffix{Models: "models"})
+	missing := NewNvidiaModel(nil, URLSuffix{Models: "models"})
 	if err := missing.CheckConnection(nil); err == nil {
 		t.Fatal("missing URL succeeded")
 	}
@@ -71,21 +80,21 @@ func TestNVIDIAThinkingAndUnsupportedBalance(t *testing.T) {
 	history := []Message{{Role: "user", Content: "q"}}
 	for _, mode := range []string{"omitted", "enabled", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/local/v1/chat/completions" {
 					t.Error("wrong custom endpoint")
 				}
-				fmt.Fprint(w, `{"choices":[{"message":{"content":"<think>reason</think>answer"}}]}`)
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"reason"}}]}`)
 			}))
 			defer server.Close()
-			driver := NewNVIDIAModel(map[string]string{"default": server.URL + "/local/v1/"}, URLSuffix{Chat: "chat/completions"})
+			driver := NewNvidiaModel(map[string]string{"default": server.URL + "/local/v1"}, URLSuffix{Chat: "chat/completions"})
 			config := &ChatConfig{ModelClass: stringPtr("qwen3")}
 			if mode != "omitted" {
 				on := mode == "enabled"
 				config.Thinking = &on
 			}
 			for _, stream := range []bool{false, true} {
-				body, err := nvidiaChatBody("qwen3", history, config, stream)
+				body, err := captureChatBodyForTest(t, "NVIDIA", "qwen3", history, config, stream)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -93,7 +102,7 @@ func TestNVIDIAThinkingAndUnsupportedBalance(t *testing.T) {
 					if body["thinking"] != nil {
 						t.Fatal("thinking default changed")
 					}
-				} else if !reflect.DeepEqual(body["thinking"], map[string]string{"type": mode}) {
+				} else if !reflect.DeepEqual(body["thinking"], map[string]any{"type": mode}) {
 					t.Fatal(body)
 				}
 				if body["temperature"] != nil {
@@ -101,13 +110,17 @@ func TestNVIDIAThinkingAndUnsupportedBalance(t *testing.T) {
 				}
 			}
 			key := "fixture"
-			response, err := driver.ChatWithMessages("qwen3", history, &APIConfig{APIKey: &key}, config)
-			if err != nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
+			response, err := driver.ChatWithMessages("qwen3", history, &APIConfig{ApiKey: &key}, config)
+			wantReason := ""
+			if mode == "enabled" {
+				wantReason = "reason"
+			}
+			if err != nil || *response.Answer != "answer" || *response.ReasonContent != wantReason {
 				t.Fatal(response, err)
 			}
 		})
 	}
-	driver := NewNVIDIAModel(nil, URLSuffix{})
+	driver := NewNvidiaModel(nil, URLSuffix{})
 	for _, call := range []func() error{
 		func() error { _, e := driver.Balance(nil); return e },
 	} {

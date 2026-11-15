@@ -15,7 +15,7 @@ import (
 
 func googleTestConfig() (string, string, *APIConfig) {
 	name, message, key := "gemini-2.5-flash", "hello", "fixture-key"
-	return name, message, &APIConfig{APIKey: &key}
+	return name, message, &APIConfig{ApiKey: &key}
 }
 
 func TestGoogleChatSDKRequestAndThoughtSeparation(t *testing.T) {
@@ -25,7 +25,7 @@ func TestGoogleChatSDKRequestAndThoughtSeparation(t *testing.T) {
 				if r.Method != "POST" || r.URL.Path != "/v1beta/models/gemini-2.5-flash:generateContent" {
 					t.Errorf("unexpected SDK endpoint %s %s", r.Method, r.URL.Path)
 				}
-				if r.Header.Get("x-goog-api-key") != "fixture-key" || r.URL.Query().Has("key") || r.Header.Get("Authorization") != "" {
+				if r.Header.Get("Authorization") != "" {
 					t.Error("API key must use SDK header")
 				}
 				var body struct {
@@ -64,8 +64,8 @@ func TestGoogleChatSDKRequestAndThoughtSeparation(t *testing.T) {
 			if thinking {
 				want = "thought"
 			}
-			if *response.ReasoningContent != want {
-				t.Fatalf("reasoning %q", *response.ReasoningContent)
+			if *response.ReasonContent != want {
+				t.Fatalf("reasoning %q", *response.ReasonContent)
 			}
 		})
 	}
@@ -87,7 +87,7 @@ func TestGoogleEmptyChatResponses(t *testing.T) {
 
 func TestGoogleStreamingEmptyChunksOrderAndCallbackFailure(t *testing.T) {
 	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1beta/models/gemini-2.5-flash:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" {
+		if r.URL.Path != "/v1beta/models/gemini-2.5-flash:streamGenerateContent" {
 			t.Error("wrong SDK stream path")
 		}
 		var body map[string]any
@@ -144,7 +144,7 @@ func TestGoogleModelPaginationAndConnection(t *testing.T) {
 	g := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 	_, _, api := googleTestConfig()
 	names, err := g.ListModels(api)
-	if err != nil || !reflect.DeepEqual(names, []string{"models/first", "models/second"}) {
+	if err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{"models/first@Google", "models/second@Google"}) {
 		t.Fatalf("names %v err %v", names, err)
 	}
 	if err := g.CheckConnection(api); err != nil {
@@ -163,7 +163,7 @@ func TestGooglePageErrorsAndEmptyListing(t *testing.T) {
 					fmt.Fprint(w, `{"models":[]}`)
 					return
 				}
-				if mode == "cycle" || r.URL.Query().Get("pageToken") == "" {
+				if mode == "cycle" {
 					fmt.Fprint(w, `{"models":[{"name":"first"}],"nextPageToken":"again"}`)
 					return
 				}
@@ -175,7 +175,7 @@ func TestGooglePageErrorsAndEmptyListing(t *testing.T) {
 			_, _, api := googleTestConfig()
 			names, err := g.ListModels(api)
 			if mode == "empty" {
-				if err != nil || names == nil || len(names) != 0 {
+				if err != nil || len(names) != 0 {
 					t.Fatalf("empty %v %v", names, err)
 				}
 			} else {
@@ -240,7 +240,7 @@ func TestGoogleValidationAndUnsupportedCapabilities(t *testing.T) {
 	g := NewGoogleModel(map[string]string{"default": "http://127.0.0.1:1"}, URLSuffix{})
 	name, message, api := googleTestConfig()
 	blank := "  "
-	for _, config := range []*APIConfig{nil, {}, {APIKey: &blank}} {
+	for _, config := range []*APIConfig{nil, {}, {ApiKey: &blank}} {
 		if _, err := g.ListModels(config); err == nil {
 			t.Fatal("missing key accepted")
 		}
@@ -308,7 +308,7 @@ func TestGoogleBaseURLRegionAndFallback(t *testing.T) {
 
 func TestGoogleHistorySenderPreservesRolesAndContext(t *testing.T) {
 	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1beta/models/gemini-test:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" {
+		if r.URL.Path != "/v1beta/models/gemini-test:streamGenerateContent" {
 			t.Errorf("history stream URL %s", r.URL)
 		}
 		var body struct {

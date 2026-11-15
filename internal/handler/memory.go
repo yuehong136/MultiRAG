@@ -73,10 +73,16 @@ func NewMemoryHandler(memoryService *service.MemoryService) *MemoryHandler {
 //   - code: Status code (0=success, other=error)
 //   - message: true on success, error message on failure
 //   - data: Memory object on success
+//
+// Business Logic (matching Python create_memory):
+//  1. Validate user login status
+//  2. Parse and validate request parameters
+//  3. Call service layer to create memory
+//  4. Return creation result
 func (h *MemoryHandler) CreateMemory(c *gin.Context) {
 	// Check if API timing is enabled
-	// If MULTIRAG_API_TIMING environment variable is set, request processing time will be logged
-	timingEnabled := os.Getenv("MULTIRAG_API_TIMING")
+	// If RAGFLOW_API_TIMING environment variable is set, request processing time will be logged
+	timingEnabled := os.Getenv("RAGFLOW_API_TIMING")
 	var tStart time.Time
 	if timingEnabled != "" {
 		tStart = time.Now()
@@ -201,6 +207,22 @@ func (h *MemoryHandler) CreateMemory(c *gin.Context) {
 //   - Updates configuration information for the specified memory
 //   - Supports partial updates: only update passed fields
 //
+// Request Parameters (JSON Body):
+//   - name (optional): Memory name
+//   - permissions (optional): Permission setting ["me", "team", "all"]
+//   - llm_id (optional): LLM model ID
+//   - embd_id (optional): Embedding model ID
+//   - tenant_llm_id (optional): Tenant LLM model ID
+//   - tenant_embd_id (optional): Tenant embedding model ID
+//   - memory_type (optional): Memory type array
+//   - memory_size (optional): Memory size, range (0, 5242880]
+//   - forgetting_policy (optional): Forgetting policy, default "FIFO"
+//   - temperature (optional): Temperature parameter, range [0, 1]
+//   - avatar (optional): Avatar URL
+//   - description (optional): Description
+//   - system_prompt (optional): System prompt
+//   - user_prompt (optional): User prompt
+//
 // Business Rules:
 //   - name length <= 128 characters
 //   - Cannot update tenant_embd_id, embd_id, memory_type when memory_size > 0
@@ -239,10 +261,6 @@ func (h *MemoryHandler) UpdateMemory(c *gin.Context) {
 	// Call service layer to update memory
 	result, err := h.memoryService.UpdateMemory(userID, memoryID, &req)
 	if err != nil {
-		if errors.Is(err, service.ErrMemoryAccessDenied) {
-			jsonError(c, common.CodeForbidden, err.Error())
-			return
-		}
 		errMsg := err.Error()
 		// Check if it's a "not found" error
 		if strings.Contains(errMsg, "not found") {
@@ -287,6 +305,11 @@ func (h *MemoryHandler) UpdateMemory(c *gin.Context) {
 // Function:
 //   - Deletes the specified memory record
 //   - Also deletes associated message data
+//
+// Business Logic:
+//  1. Check if memory exists
+//  2. Delete memory record
+//  3. Delete associated message index
 func (h *MemoryHandler) DeleteMemory(c *gin.Context) {
 	// Get memory_id from URL path
 	memoryID := c.Param("memory_id")
@@ -345,6 +368,12 @@ func (h *MemoryHandler) DeleteMemory(c *gin.Context) {
 //   - keywords (optional): Keyword search (fuzzy match on name)
 //   - page (optional): Page number, default 1
 //   - page_size (optional): Items per page, default 50
+//
+// Response Format:
+//   - code: Status code
+//   - message: true
+//   - data.memory_list: Array of Memory objects
+//   - data.total_count: Total record count
 func (h *MemoryHandler) ListMemories(c *gin.Context) {
 	// Get current logged-in user information
 	user, errorCode, errorMessage := GetUser(c)
@@ -419,6 +448,11 @@ func (h *MemoryHandler) ListMemories(c *gin.Context) {
 // Function:
 //   - Gets complete configuration information for the specified memory
 //   - Includes owner name (obtained via JOIN with user table)
+//
+// Response Format:
+//   - code: Status code
+//   - message: true
+//   - data: Memory object, including owner_name field
 func (h *MemoryHandler) GetMemoryConfig(c *gin.Context) {
 	// Get memory_id from URL path
 	memoryID := c.Param("memory_id")
@@ -465,6 +499,23 @@ func (h *MemoryHandler) GetMemoryConfig(c *gin.Context) {
 // GetMemoryMessages handles GET request for getting Memory messages
 // API Path: GET /api/v1/memories/:memory_id
 //
+// Function:
+//   - Gets message list associated with the specified memory
+//   - Supports filtering by agent_id
+//   - Supports keyword search and pagination
+//
+// Query Parameters:
+//   - agent_id (optional): Agent ID filter, supports comma-separated multiple
+//   - keywords (optional): Keyword search
+//   - page (optional): Page number, default 1
+//   - page_size (optional): Items per page, default 50
+//
+// Response Format:
+//   - code: Status code
+//   - message: true
+//   - data.messages: Array of message objects
+//   - data.storage_type: Storage type
+//
 // TODO: Implementation pending - depends on CanvasService and TaskService
 func (h *MemoryHandler) GetMemoryMessages(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
@@ -477,6 +528,19 @@ func (h *MemoryHandler) GetMemoryMessages(c *gin.Context) {
 // AddMessage handles POST request for adding messages
 // API Path: POST /api/v1/messages
 //
+// Function:
+//   - Adds messages to one or more memories
+//   - Messages will be embedded and saved to vector database
+//   - Creates asynchronous task for processing
+//
+// Request Parameters (JSON Body):
+//   - memory_id (required): Memory ID or ID array
+//   - agent_id (required): Agent ID
+//   - session_id (required): Session ID
+//   - user_input (required): User input
+//   - agent_response (required): Agent response
+//   - user_id (optional): User ID
+//
 // TODO: Implementation pending - depends on embedding engine
 func (h *MemoryHandler) AddMessage(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
@@ -486,57 +550,101 @@ func (h *MemoryHandler) AddMessage(c *gin.Context) {
 	})
 }
 
-// ForgetMessage handles DELETE request for forgetting messages
-// API Path: DELETE /api/v1/messages/:memory_message
+// ForgetMessage handles DELETE request for forgetting messages.
+// API Path: DELETE /api/v1/messages/{memory_id}:{message_id}
+//
+// Function:
+//   - Soft-deletes the specified message (sets forget_at timestamp)
+//   - Message is not immediately deleted from database, but marked as "forgotten"
+//
+// Parameter Format:
+//   - memory_id: Memory ID
+//   - message_id: Message ID (integer)
 func (h *MemoryHandler) ForgetMessage(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
 		return
 	}
+
 	memoryID, messageID, err := parseMemoryMessagePath(c.Param("memory_message"))
 	if err != nil {
-		jsonError(c, common.CodeArgumentError, err.Error())
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeArgumentError,
+			"message": err.Error(),
+			"data":    nil,
+		})
 		return
 	}
-	if err = h.memoryService.ForgetMessage(c.Request.Context(), user.ID, memoryID, messageID); err != nil {
-		if errors.Is(err, service.ErrMemoryUnavailable) {
-			jsonResponse(c, common.CodeNotFound, false, service.ErrMemoryUnavailable.Error())
-		} else {
-			jsonResponse(c, common.CodeServerError, false, "Internal server error")
+
+	if err := h.memoryService.ForgetMessage(c.Request.Context(), user.ID, memoryID, messageID); err != nil {
+		errMsg := err.Error()
+		if isMemoryServiceNotFound(err) {
+			c.JSON(http.StatusOK, gin.H{
+				"code":    common.CodeNotFound,
+				"message": errMsg,
+				"data":    nil,
+			})
+			return
 		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeServerError,
+			"message": "Internal server error",
+			"data":    nil,
+		})
 		return
 	}
-	jsonResponse(c, common.CodeSuccess, true, "")
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"message": true,
+		"data":    nil,
+	})
 }
 
-func parseMemoryMessagePath(value string) (string, int64, error) {
-	parts := strings.Split(value, ":")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.TrimSpace(value) != value {
-		return "", 0, errors.New("message path must be memory_id:message_id")
+func isMemoryServiceNotFound(err error) bool {
+	var notFoundErr *service.ResourceNotFoundError
+	return errors.As(err, &notFoundErr) && notFoundErr.Resource == "Memory"
+}
+
+func parseMemoryMessagePath(memoryMessage string) (string, int64, error) {
+	memoryMessage = strings.TrimSpace(memoryMessage)
+	if memoryMessage == "" {
+		return "", 0, errors.New("memory_id and message_id are required")
 	}
-	for _, c := range parts[0] {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
-			return "", 0, errors.New("invalid memory id")
-		}
+
+	parts := strings.Split(memoryMessage, ":")
+	if len(parts) != 2 {
+		return "", 0, errors.New("message path must be formatted as memory_id:message_id")
 	}
-	if len(parts[0]) > 128 {
-		return "", 0, errors.New("invalid memory id")
+
+	memoryID := strings.TrimSpace(parts[0])
+	messageIDText := strings.TrimSpace(parts[1])
+	if memoryID == "" {
+		return "", 0, errors.New("memory_id is required")
 	}
-	for _, c := range parts[1] {
-		if c < '0' || c > '9' {
-			return "", 0, errors.New("message_id must be a non-negative integer")
-		}
+	if messageIDText == "" {
+		return "", 0, errors.New("message_id is required")
 	}
-	id, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
+
+	messageID, err := strconv.ParseInt(messageIDText, 10, 64)
+	if err != nil || messageID < 0 {
 		return "", 0, errors.New("message_id must be a non-negative integer")
 	}
-	return parts[0], id, nil
+
+	return memoryID, messageID, nil
 }
 
 // UpdateMessage handles PUT request for updating message status
 // API Path: PUT /api/v1/messages/:memory_id/:message_id
+//
+// Function:
+//   - Updates status of the specified message
+//   - status is a boolean, converted to integer for storage (true=1, false=0)
+//
+// Request Parameters (JSON Body):
+//   - status (required): Message status, boolean
 //
 // TODO: Implementation pending - depends on embedding engine
 func (h *MemoryHandler) UpdateMessage(c *gin.Context) {
@@ -550,6 +658,21 @@ func (h *MemoryHandler) UpdateMessage(c *gin.Context) {
 // SearchMessage handles GET request for searching messages
 // API Path: GET /api/v1/messages/search
 //
+// Function:
+//   - Searches messages across multiple memories
+//   - Supports vector similarity search and keyword search
+//   - Fuses results from both search methods
+//
+// Query Parameters:
+//   - memory_id (optional): Memory ID list, supports comma separation
+//   - query (optional): Search query text
+//   - similarity_threshold (optional): Similarity threshold, default 0.2
+//   - keywords_similarity_weight (optional): Keyword weight, default 0.7
+//   - top_n (optional): Number of results to return, default 5
+//   - agent_id (optional): Agent ID filter
+//   - session_id (optional): Session ID filter
+//   - user_id (optional): User ID filter
+//
 // TODO: Implementation pending - depends on embedding engine
 func (h *MemoryHandler) SearchMessage(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
@@ -562,6 +685,16 @@ func (h *MemoryHandler) SearchMessage(c *gin.Context) {
 // GetMessages handles GET request for getting message list
 // API Path: GET /api/v1/messages
 //
+// Function:
+//   - Gets recent messages from specified memories
+//   - Supports filtering by agent_id and session_id
+//
+// Query Parameters:
+//   - memory_id (required): Memory ID list, supports comma separation
+//   - agent_id (optional): Agent ID filter
+//   - session_id (optional): Session ID filter
+//   - limit (optional): Number of results to return, default 10
+//
 // TODO: Implementation pending - depends on embedding engine
 func (h *MemoryHandler) GetMessages(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
@@ -573,6 +706,14 @@ func (h *MemoryHandler) GetMessages(c *gin.Context) {
 
 // GetMessageContent handles GET request for getting message content
 // API Path: GET /api/v1/messages/:memory_id/:message_id/content
+//
+// Function:
+//   - Gets complete content of the specified message
+//   - doc_id format: memory_id + "_" + message_id
+//
+// Parameter Format:
+//   - memory_id: Memory ID
+//   - message_id: Message ID (integer)
 //
 // TODO: Implementation pending - depends on embedding engine
 func (h *MemoryHandler) GetMessageContent(c *gin.Context) {
@@ -588,6 +729,12 @@ func (h *MemoryHandler) GetMessageContent(c *gin.Context) {
 // Function:
 //   - Checks if the error message contains any argument validation-related prefixes
 //   - Used to distinguish argument errors from server errors
+//
+// Parameters:
+//   - msg: Error message string
+//
+// Returns:
+//   - bool: true if it's an argument error, false otherwise
 func isArgumentError(msg string) bool {
 	// Define list of argument error prefixes
 	// Matches Python ArgumentException error messages

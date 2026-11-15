@@ -24,21 +24,21 @@ import (
 )
 
 var (
-	multiragVersionInfo = "unknown"
+	ragflowVersionInfo = "unknown"
 	versionOnce        sync.Once
 )
 
-// GetMultiRAGVersion gets the MultiRAG version information
+// GetRAGFlowVersion gets the RAGFlow version information
 // It reads from VERSION file or falls back to git describe command
-func GetMultiRAGVersion() string {
+func GetRAGFlowVersion() string {
 	versionOnce.Do(func() {
-		multiragVersionInfo = getMultiRAGVersionInternal()
+		ragflowVersionInfo = getRAGFlowVersionInternal()
 	})
-	return multiragVersionInfo
+	return ragflowVersionInfo
 }
 
-// getMultiRAGVersionInternal internal function to get version
-func getMultiRAGVersionInternal() string {
+// getRAGFlowVersionInternal internal function to get version
+func getRAGFlowVersionInternal() string {
 	// Get the path to VERSION file
 	// Assuming this file is in internal/utility, VERSION is in project root
 	exePath, err := os.Executable()

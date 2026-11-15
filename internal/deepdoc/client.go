@@ -1,5 +1,27 @@
-// Package deepdoc implements the optional DLA multipart wire contract.
-// It does not provide a local ONNX OCR/TSR implementation.
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
+// Package deepdoc — Go client for the optional deepdoc vision service
+// (DLA / OCR / TSR).
+//
+// Wire contract reconstructed from `deepdoc/vision/dla_cli.py` (fork)
+// and the Phase 0 research deliverable
+// `docs/agent-port/deepdoc-endpoints.md`. Only DLA has a remote HTTP
+// endpoint; OCR and TSR are 100% local ONNX in Python and stubbed
+// here as ErrNoRemoteEndpoint.
 package deepdoc
 
 import (
@@ -12,127 +34,216 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-var ErrNoURL = errors.New("deepdoc: DLA URL not configured")
-var ErrNoRemoteEndpoint = errors.New("deepdoc: no verified remote OCR/TSR endpoint; local ONNX implementation required")
+// ErrNoURL is returned by methods when the client was constructed
+// without a base URL (DEEPDOC_URL / TENSORRT_DLA_SVR unset).
+var ErrNoURL = errors.New("deepdoc: not configured (set DEEPDOC_URL or TENSORRT_DLA_SVR)")
+
+// ErrNoRemoteEndpoint is returned by OCR/TSR because the Python
+// deepdoc service exposes no remote endpoint for those — they're
+// local ONNX only (deepdoc/vision/ocr.py:542, table_structure_recognizer.py:30).
+var ErrNoRemoteEndpoint = errors.New("deepdoc: no remote endpoint exists (Python deepdoc is local-ONNX only)")
+
+// ErrInvalidResponse is returned when the server returns a payload
+// that doesn't validate (e.g. DLA response missing "bboxes" key).
+// Per the Python contract, this triggers the retry loop.
 var ErrInvalidResponse = errors.New("deepdoc: invalid response")
 
+// DefaultPerAttemptTimeout matches Python's @timeout(18) decorator
+// on DLAClient.predict (deepdoc/vision/dla_cli.py:23).
 const DefaultPerAttemptTimeout = 18 * time.Second
-const DefaultMaxAttempts = 3
-const DefaultBackoff = 200 * time.Millisecond
-const MaxBackoff = 3 * time.Second
-const maxResponseBytes = 4 << 20
 
+// DefaultMaxAttempts matches Python's `for _ in range(3)` retry loop.
+const DefaultMaxAttempts = 3
+
+// DefaultBackoff is the initial backoff between retries; doubled
+// each attempt, capped at MaxBackoff.
+const DefaultBackoff = 200 * time.Millisecond
+
+// MaxBackoff caps the exponential backoff between retries.
+const MaxBackoff = 3 * time.Second
+
+// predictPath is the DLA endpoint per
+// docs/agent-port/deepdoc-endpoints.md §2.1.
+const predictPath = "/predict"
+
+// Client talks to an optional deepdoc service. When baseURL is empty,
+// Enabled() reports false and HTTP methods return ErrNoURL without
+// making any network call.
 type Client struct {
 	baseURL     string
 	httpClient  *http.Client
 	maxAttempts int
 	backoff     time.Duration
-	configErr   error
 }
+
+// Option mutates a Client at construction time. Used by tests to
+// point at httptest servers, override timeouts, etc.
 type Option func(*Client)
 
-func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.httpClient = h } }
-func WithMaxAttempts(n int) Option         { return func(c *Client) { c.maxAttempts = n } }
-func WithBackoff(d time.Duration) Option   { return func(c *Client) { c.backoff = d } }
-func NewClient(options ...Option) *Client {
-	address := os.Getenv("DEEPDOC_URL")
-	if address == "" {
-		address = os.Getenv("TENSORRT_DLA_SVR")
-	}
-	return NewClientWithURL(address, options...)
+// WithHTTPClient overrides the underlying *http.Client.
+func WithHTTPClient(hc *http.Client) Option {
+	return func(c *Client) { c.httpClient = hc }
 }
-func NewClientWithURL(address string, options ...Option) *Client {
-	c := &Client{baseURL: strings.TrimRight(address, "/"), maxAttempts: DefaultMaxAttempts, backoff: DefaultBackoff}
-	for _, option := range options {
-		option(c)
+
+// WithMaxAttempts overrides the per-call retry count (default 3).
+func WithMaxAttempts(n int) Option {
+	return func(c *Client) { c.maxAttempts = n }
+}
+
+// WithBackoff overrides the initial backoff between retries.
+func WithBackoff(d time.Duration) Option {
+	return func(c *Client) { c.backoff = d }
+}
+
+// NewClient returns a Client configured from the environment. The
+// base URL is read from DEEPDOC_URL (preferred) or TENSORRT_DLA_SVR
+// (legacy alias per deepdoc/vision/layout_recognizer.py:52). When
+// both are unset, Enabled() reports false.
+func NewClient(opts ...Option) *Client {
+	url := os.Getenv("DEEPDOC_URL")
+	if url == "" {
+		url = os.Getenv("TENSORRT_DLA_SVR")
 	}
-	if c.maxAttempts < 1 || c.maxAttempts > DefaultMaxAttempts || c.backoff < 0 || c.backoff > MaxBackoff {
-		c.configErr = fmt.Errorf("deepdoc: invalid retry configuration")
-	}
-	if address != "" {
-		u, err := url.Parse(address)
-		if err != nil || u.Host == "" || u.Scheme != "http" && u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			c.configErr = fmt.Errorf("deepdoc: invalid DLA URL")
+	return NewClientWithURL(url, opts...)
+}
+
+// NewClientWithURL is NewClient with an explicit base URL. Primarily
+// used by tests pointing at httptest servers.
+func NewClientWithURL(baseURL string, opts ...Option) *Client {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL != "" {
+		parsed, err := url.Parse(baseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			baseURL = ""
 		}
+	}
+	c := &Client{
+		baseURL:     baseURL,
+		maxAttempts: DefaultMaxAttempts,
+		backoff:     DefaultBackoff,
+	}
+	for _, opt := range opts {
+		opt(c)
 	}
 	if c.httpClient == nil {
-		c.httpClient = &http.Client{}
+		// otelhttp.NewTransport is a no-op when no OTel exporter is
+		// configured (see plan §2.10.4) — safe default.
+		c.httpClient = &http.Client{
+			Timeout:   DefaultPerAttemptTimeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		}
 	}
-	// An injected transport is borrowed; leave it untouched. Redirects are not
-	// part of the protocol, and should not disclose document bytes elsewhere.
-	clone := *c.httpClient
-	clone.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	c.httpClient = &clone
 	return c
 }
-func (c *Client) Enabled() bool { return c != nil && c.baseURL != "" && c.configErr == nil }
 
+// Enabled reports whether a remote deepdoc URL is configured. When
+// false, HTTP methods return ErrNoURL immediately.
+func (c *Client) Enabled() bool {
+	return c != nil && c.baseURL != ""
+}
+
+// bodyBuilder is a factory that produces a fresh request body per
+// retry attempt. Returns (body, contentType). The body is consumed
+// by http.Client.Do and must be readable (multipart.Writer writes
+// into a buffer so this is straightforward).
 type bodyBuilder func() (io.Reader, string)
 
-func (c *Client) doPost(ctx context.Context, build bodyBuilder, validate func([]byte) error) ([]byte, error) {
-	if c == nil || c.baseURL == "" {
+// doPost issues a POST with retry + exponential backoff, matching
+// the Python DLAClient semantics (3 attempts, session rebuild on
+// failure, 18s per-attempt timeout, 200ms initial backoff).
+//
+// Retries on: network errors, 5xx, validation failure (validate
+// non-nil + returns error). Does NOT retry on: 4xx, ctx done.
+// Returns the validated response body bytes on success.
+func (c *Client) doPost(ctx context.Context, url string, buildBody bodyBuilder, validate func([]byte) error) ([]byte, error) {
+	if !c.Enabled() {
 		return nil, ErrNoURL
 	}
-	if c.configErr != nil {
-		return nil, c.configErr
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	var last error
+	if c.maxAttempts < 1 {
+		return nil, errors.New("deepdoc: max attempts must be positive")
+	}
+	httpClient := *c.httpClient
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	var lastErr error
 	backoff := c.backoff
-	for attempt := 0; attempt < c.maxAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
+	for attempt := 1; attempt <= c.maxAttempts; attempt++ {
+		body, contentType := buildBody()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+		if err != nil {
 			return nil, err
 		}
-		requestCtx, cancel := context.WithTimeout(ctx, DefaultPerAttemptTimeout)
-		body, contentType := build()
-		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, c.baseURL+"/predict", body)
-		if err != nil {
-			cancel()
-			return nil, err
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
 		}
-		req.Header.Set("Content-Type", contentType)
-		response, err := c.httpClient.Do(req)
-		retry := true
+		resp, err := httpClient.Do(req)
 		if err != nil {
-			last = fmt.Errorf("deepdoc: DLA request failed: %w", err)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			lastErr = err
 		} else {
-			data, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
-			response.Body.Close()
+			data, readErr := io.ReadAll(io.LimitReader(resp.Body, (20<<20)+1))
+			resp.Body.Close()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if len(data) > 20<<20 {
+				return nil, errors.New("deepdoc: response exceeds size limit")
+			}
 			switch {
 			case readErr != nil:
-				last = readErr
-			case len(data) > maxResponseBytes:
-				last = fmt.Errorf("%w: response exceeds limit", ErrInvalidResponse)
-				retry = false
-			case response.StatusCode != http.StatusOK:
-				last = fmt.Errorf("deepdoc: DLA HTTP %d", response.StatusCode)
-				retry = response.StatusCode >= 500
-			default:
-				last = validate(data)
-				if last == nil {
-					cancel()
+				lastErr = readErr
+			case resp.StatusCode >= 500:
+				lastErr = &httpError{Status: resp.Status, retryable: true}
+			case resp.StatusCode >= 300:
+				// 4xx is a config error, not transient — surface
+				// immediately without retrying.
+				return nil, &httpError{Status: resp.Status, retryable: false}
+			case resp.StatusCode < 200:
+				return nil, fmt.Errorf("deepdoc: unexpected HTTP status %d", resp.StatusCode)
+			case validate != nil:
+				if vErr := validate(data); vErr != nil {
+					lastErr = vErr
+				} else {
 					return data, nil
 				}
+			default:
+				return data, nil
 			}
 		}
-		cancel()
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if !retry {
-			return nil, last
-		}
-		if attempt+1 < c.maxAttempts {
-			timer := time.NewTimer(backoff)
+		if attempt < c.maxAttempts {
 			select {
 			case <-ctx.Done():
-				timer.Stop()
 				return nil, ctx.Err()
-			case <-timer.C:
+			case <-time.After(backoff):
 			}
-			backoff = min(backoff*2, MaxBackoff)
+			backoff *= 2
+			if backoff > MaxBackoff {
+				backoff = MaxBackoff
+			}
 		}
 	}
-	return nil, last
+	if lastErr == nil {
+		lastErr = ErrInvalidResponse
+	}
+	return nil, lastErr
+}
+
+// httpError carries the HTTP status + body so callers can inspect.
+// retryable=true means the doPost loop already exhausted retries.
+type httpError struct {
+	Status    string
+	Body      string
+	retryable bool
+}
+
+func (e *httpError) Error() string {
+	return "deepdoc: " + e.Status
 }

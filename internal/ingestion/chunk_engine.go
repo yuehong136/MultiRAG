@@ -25,7 +25,7 @@ import (
 )
 
 /*
- DSL reference — see README.md for the JSON structure.
+ DSL reference — see comment block above for the full JSON structure.
 
  Pipeline stages:
    1. "preprocess"  → chunk.PreprocessOperator
@@ -121,11 +121,14 @@ func (e *ChunkEngine) Compile(dsl string) (*ChunkPlan, error) {
 
 func (e *ChunkEngine) Execute(plan *ChunkPlan, text string) (*chunk.ChunkContext, error) {
 	if plan == nil {
-		return nil, fmt.Errorf("compiled plan required")
+		return nil, fmt.Errorf("chunk plan is nil")
 	}
 	chunkContext := &chunk.ChunkContext{Origin: text, TextAfterPreprocess: text}
 
 	for i, op := range plan.Operators {
+		if op == nil {
+			return nil, fmt.Errorf("operator[%d] is nil", i)
+		}
 		if err := op.Prepare(chunkContext); err != nil {
 			return nil, fmt.Errorf("re-prepare operator[%d]: %w", i, err)
 		}
@@ -138,14 +141,10 @@ func (e *ChunkEngine) Execute(plan *ChunkPlan, text string) (*chunk.ChunkContext
 			return nil, fmt.Errorf("finish operator[%d]: %w", i, err)
 		}
 	}
+
 	if chunkContext.ResultChunks == nil {
 		chunkContext.ResultChunks = chunkContext.SplitChunks
 	}
-	for i := range chunkContext.ResultChunks {
-		chunkContext.ResultChunks[i].Index = i
-		chunkContext.ResultChunks[i].Size = chunk.RuneCount(chunkContext.ResultChunks[i].Content)
-	}
-
 	return chunkContext, nil
 }
 
@@ -155,7 +154,7 @@ func (e *ChunkEngine) Execute(plan *ChunkPlan, text string) (*chunk.ChunkContext
 
 func (e *ChunkEngine) Explain(plan *ChunkPlan) (string, error) {
 	if plan == nil {
-		return "", fmt.Errorf("compiled plan required")
+		return "", fmt.Errorf("chunk plan is nil")
 	}
 	var buf strings.Builder
 	buf.WriteString("Chunk Pipeline Plan:\n")

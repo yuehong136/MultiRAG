@@ -1,328 +1,443 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package kg
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"math"
-	"net/http"
-	"reflect"
-	"strings"
-	"sync/atomic"
 	"testing"
 
 	"multirag/internal/engine"
-	"multirag/internal/engine/elasticsearch"
 	"multirag/internal/engine/types"
-	"multirag/internal/entity"
-	"multirag/internal/entity/models"
-	"multirag/internal/server"
-	"multirag/internal/testsupport"
-	"multirag/tests/support"
+	modelModule "multirag/internal/entity/models"
 )
 
-type kgReader struct {
-	calls  int
-	deny   string
-	cancel context.CancelFunc
+// --- buildEntitySearchRequest ---
+
+func TestBuildEntitySearchRequest_TextOnly(t *testing.T) {
+	req := buildEntitySearchRequest([]string{"kb1"}, "Elon Musk", nil, 10)
+	if req == nil {
+		t.Fatal("expected non-nil request")
+	}
+	if req.Filter["knowledge_graph_kwd"] != "entity" {
+		t.Errorf("expected 'entity' filter, got %v", req.Filter["knowledge_graph_kwd"])
+	}
+	if req.Limit != 10 {
+		t.Errorf("expected limit 10, got %d", req.Limit)
+	}
+	if len(req.MatchExprs) != 1 {
+		t.Fatalf("expected 1 MatchExpr (text only), got %d", len(req.MatchExprs))
+	}
+	if _, ok := req.MatchExprs[0].(*types.MatchTextExpr); !ok {
+		t.Error("expected MatchTextExpr")
+	}
 }
 
-func (r *kgReader) GetReadableByID(ctx context.Context, id, user string) (*entity.Knowledgebase, error) {
-	r.calls++
-	if r.cancel != nil {
-		r.cancel()
+func TestBuildEntitySearchRequest_EmptyQuestion(t *testing.T) {
+	req := buildEntitySearchRequest([]string{"kb1"}, "", nil, 10)
+	if len(req.MatchExprs) != 0 {
+		t.Error("expected no MatchExprs for empty question")
 	}
-	if id == r.deny || user != "owner" {
-		return nil, errors.New("forbidden")
-	}
-	tenant := "a"
-	if id == "kb-b" {
-		tenant = "b"
-	}
-	return &entity.Knowledgebase{ID: id, TenantID: tenant}, ctx.Err()
 }
 
-type kgStore struct {
+func TestBuildEntitySearchRequest_Hybrid(t *testing.T) {
+	dense := &types.MatchDenseExpr{
+		VectorColumnName:  "q_768_vec",
+		EmbeddingData:     []float64{0.1, 0.2, 0.3},
+		EmbeddingDataType: "float",
+		DistanceType:      "cosine",
+		TopN:              10,
+	}
+	req := buildEntitySearchRequest([]string{"kb1"}, "test question", dense, 10)
+	if len(req.MatchExprs) != 3 {
+		t.Fatalf("expected 3 MatchExprs (dense + text + fusion), got %d", len(req.MatchExprs))
+	}
+	if _, ok := req.MatchExprs[0].(*types.MatchDenseExpr); !ok {
+		t.Error("expected MatchDenseExpr at [0]")
+	}
+	if _, ok := req.MatchExprs[1].(*types.MatchTextExpr); !ok {
+		t.Error("expected MatchTextExpr at [1]")
+	}
+	fusion, ok := req.MatchExprs[2].(*types.FusionExpr)
+	if !ok {
+		t.Fatal("expected FusionExpr at [2]")
+	}
+	if fusion.Method != "weighted_sum" {
+		t.Errorf("expected 'weighted_sum', got %q", fusion.Method)
+	}
+}
+
+// --- buildEntityTypeSearchRequest ---
+
+func TestBuildEntityTypeSearchRequest_Basic(t *testing.T) {
+	req := buildEntityTypeSearchRequest([]string{"kb1"}, []string{"PERSON", "ORGANIZATION"}, 10)
+	if req.Filter["knowledge_graph_kwd"] != "entity" {
+		t.Errorf("expected 'entity' filter, got %v", req.Filter["knowledge_graph_kwd"])
+	}
+	filter, ok := req.Filter["entity_type_kwd"].([]interface{})
+	if !ok || len(filter) != 2 {
+		t.Errorf("expected 2 entity_type filters, got %v", filter)
+	}
+}
+
+func TestBuildEntityTypeSearchRequest_EmptyTypes(t *testing.T) {
+	req := buildEntityTypeSearchRequest([]string{"kb1"}, nil, 10)
+	if _, ok := req.Filter["entity_type_kwd"]; ok {
+		t.Error("expected no entity_type_kwd filter for empty types")
+	}
+}
+
+// --- buildRelationSearchRequest ---
+
+func TestBuildRelationSearchRequest_Basic(t *testing.T) {
+	req := buildRelationSearchRequest([]string{"kb1"}, "test", nil, 10)
+	if req.Filter["knowledge_graph_kwd"] != "relation" {
+		t.Errorf("expected 'relation' filter, got %v", req.Filter["knowledge_graph_kwd"])
+	}
+}
+
+func TestBuildRelationSearchRequest_EmptyQuestion(t *testing.T) {
+	req := buildRelationSearchRequest([]string{"kb1"}, "", nil, 10)
+	if len(req.MatchExprs) != 0 {
+		t.Error("expected no MatchExprs for empty question")
+	}
+}
+
+func TestBuildRelationSearchRequest_Hybrid(t *testing.T) {
+	dense := &types.MatchDenseExpr{
+		VectorColumnName: "q_768_vec",
+		EmbeddingData:    []float64{0.1, 0.2},
+		TopN:             5,
+	}
+	req := buildRelationSearchRequest([]string{"kb1"}, "test", dense, 5)
+	if len(req.MatchExprs) != 3 {
+		t.Fatalf("expected 3 MatchExprs (dense + text + fusion), got %d", len(req.MatchExprs))
+	}
+}
+
+// --- buildCommunitySearchRequest ---
+
+func TestBuildCommunitySearchRequest_Basic(t *testing.T) {
+	req := buildCommunitySearchRequest([]string{"kb1"}, []string{"Elon Musk"}, 5)
+	if req.Filter["knowledge_graph_kwd"] != "community_report" {
+		t.Errorf("expected 'community_report' filter, got %v", req.Filter["knowledge_graph_kwd"])
+	}
+	if req.OrderBy == nil {
+		t.Error("expected OrderBy")
+	}
+}
+
+func TestBuildCommunitySearchRequest_EmptyNames(t *testing.T) {
+	req := buildCommunitySearchRequest([]string{"kb1"}, nil, 5)
+	if _, ok := req.Filter["entities_kwd"]; ok {
+		t.Error("expected no entities_kwd filter for empty names")
+	}
+}
+
+// --- buildTypeSamplesSearchRequest ---
+
+func TestBuildTypeSamplesSearchRequest(t *testing.T) {
+	req := buildTypeSamplesSearchRequest([]string{"kb1"})
+	if req.Filter["knowledge_graph_kwd"] != "ty2ents" {
+		t.Errorf("expected 'ty2ents' filter, got %v", req.Filter["knowledge_graph_kwd"])
+	}
+	if req.Limit != 10000 {
+		t.Errorf("expected 10000, got %d", req.Limit)
+	}
+}
+
+// --- ParseEntityChunks ---
+
+func TestParseEntityChunks_Basic(t *testing.T) {
+	chunks := []map[string]interface{}{
+		{"entity_kwd": "Elon Musk", "entity_type_kwd": "PERSON", "rank_flt": 0.9, "_score": 0.85, "content_with_weight": "Founder of SpaceX"},
+	}
+	entities := ParseEntityChunks(chunks)
+	if len(entities) != 1 {
+		t.Fatalf("expected 1, got %d", len(entities))
+	}
+	if entities[0].Name != "Elon Musk" || entities[0].Type != "PERSON" || entities[0].PageRank != 0.9 || entities[0].Similarity != 0.85 {
+		t.Errorf("unexpected entity fields: %+v", entities[0])
+	}
+}
+
+func TestParseEntityChunks_List(t *testing.T) {
+	chunks := []map[string]interface{}{
+		{"entity_kwd": []interface{}{"Elon Musk", "elon_musk"}},
+	}
+	entities := ParseEntityChunks(chunks)
+	if len(entities) != 1 || entities[0].Name != "Elon Musk" {
+		t.Errorf("expected first list element, got %q", entities[0].Name)
+	}
+}
+
+func TestParseEntityChunks_EmptyName(t *testing.T) {
+	chunks := []map[string]interface{}{{"entity_type_kwd": "PERSON"}}
+	if len(ParseEntityChunks(chunks)) != 0 {
+		t.Error("expected 0 for missing name")
+	}
+}
+
+func TestParseEntityChunks_ScoreFallback(t *testing.T) {
+	chunks := []map[string]interface{}{{"entity_kwd": "Test", "score": 0.75}}
+	if ParseEntityChunks(chunks)[0].Similarity != 0.75 {
+		t.Error("expected 0.75 from score field")
+	}
+}
+
+func TestParseEntityChunks_NilInput(t *testing.T) {
+	if len(ParseEntityChunks(nil)) != 0 {
+		t.Error("expected 0 for nil input")
+	}
+}
+
+// --- ParseRelationChunks ---
+
+func TestParseRelationChunks_Basic(t *testing.T) {
+	chunks := []map[string]interface{}{
+		{"from_entity_kwd": "Elon Musk", "to_entity_kwd": "SpaceX", "weight_int": float64(5), "content_with_weight": "Founder"},
+	}
+	relations := ParseRelationChunks(chunks)
+	if len(relations) != 1 || relations[0].From != "Elon Musk" || relations[0].PageRank != 5 {
+		t.Errorf("unexpected: %+v", relations[0])
+	}
+}
+
+func TestParseRelationChunks_IntWeight(t *testing.T) {
+	chunks := []map[string]interface{}{{"from_entity_kwd": "A", "to_entity_kwd": "B", "weight_int": 3}}
+	if ParseRelationChunks(chunks)[0].PageRank != 3 {
+		t.Error("expected weight 3")
+	}
+}
+
+func TestParseRelationChunks_EmptyFrom(t *testing.T) {
+	if len(ParseRelationChunks([]map[string]interface{}{{"to_entity_kwd": "B"}})) != 0 {
+		t.Error("expected 0 for missing from")
+	}
+}
+
+func TestParseRelationChunks_NilInput(t *testing.T) {
+	if len(ParseRelationChunks(nil)) != 0 {
+		t.Error("expected 0 for nil")
+	}
+}
+
+// --- ParseCommunityReportChunks ---
+
+func TestParseCommunityReportChunks_Basic(t *testing.T) {
+	chunks := []map[string]interface{}{
+		{"docnm_kwd": "Report 1", "content_with_weight": "content", "weight_flt": 0.95, "entities_kwd": "A, B"},
+	}
+	reports := ParseCommunityReportChunks(chunks)
+	if len(reports) != 1 || reports[0].Title != "Report 1" || reports[0].Weight != 0.95 {
+		t.Errorf("unexpected: %+v", reports[0])
+	}
+}
+
+func TestParseCommunityReportChunks_EmptyTitle(t *testing.T) {
+	if len(ParseCommunityReportChunks([]map[string]interface{}{{"weight_flt": 0.5}})) != 0 {
+		t.Error("expected 0 for empty title and content")
+	}
+}
+
+func TestParseCommunityReportChunks_NilInput(t *testing.T) {
+	if len(ParseCommunityReportChunks(nil)) != 0 {
+		t.Error("expected 0 for nil")
+	}
+}
+
+// --- ParseTypeSamplesChunks ---
+
+func TestParseTypeSamplesChunks_ValidJSON(t *testing.T) {
+	chunks := []map[string]interface{}{
+		{"content_with_weight": `{"PERSON": ["Elon Musk", "Einstein"], "ORGANIZATION": ["SpaceX"]}`},
+	}
+	result := ParseTypeSamplesChunks(chunks)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 types, got %d: %v", len(result), result)
+	}
+	if len(result["PERSON"]) != 2 || result["PERSON"][0] != "Elon Musk" {
+		t.Errorf("expected PERSON entities, got %v", result["PERSON"])
+	}
+	if len(result["ORGANIZATION"]) != 1 || result["ORGANIZATION"][0] != "SpaceX" {
+		t.Errorf("expected ORGANIZATION entities, got %v", result["ORGANIZATION"])
+	}
+}
+
+func TestParseTypeSamplesChunks_InvalidJSON(t *testing.T) {
+	chunks := []map[string]interface{}{
+		{"content_with_weight": "not json"},
+	}
+	result := ParseTypeSamplesChunks(chunks)
+	if len(result) != 0 {
+		t.Error("expected empty for invalid JSON")
+	}
+}
+
+func TestParseTypeSamplesChunks_Empty(t *testing.T) {
+	result := ParseTypeSamplesChunks(nil)
+	if len(result) != 0 {
+		t.Error("expected empty for nil")
+	}
+}
+
+// --- NhopEntityNames ---
+
+func TestNhopEntityNames_ValidJSON(t *testing.T) {
+	input := `[{"path": ["A", "B", "C"], "weights": [0.8, 0.5]}, {"path": ["C", "D"], "weights": [0.3]}]`
+	names := NhopEntityNames(input)
+	if len(names) != 4 {
+		t.Fatalf("expected 4 unique names, got %d: %v", len(names), names)
+	}
+}
+
+func TestNhopEntityNames_Dedup(t *testing.T) {
+	input := `[{"path": ["A", "B"], "weights": [0.9]}, {"path": ["A", "C"], "weights": [0.8]}]`
+	names := NhopEntityNames(input)
+	if len(names) != 3 {
+		t.Errorf("expected 3 unique names (A,B,C), got %d: %v", len(names), names)
+	}
+}
+
+func TestNhopEntityNames_InvalidJSON(t *testing.T) {
+	result := NhopEntityNames("not json")
+	if result != nil {
+		t.Error("expected nil for invalid JSON")
+	}
+}
+
+// --- Mock engine ---
+
+type mockKGEngine struct {
 	engine.DocEngine
-	calls     int
-	err       error
-	cancel    context.CancelFunc
-	nilResult bool
+	searchFunc func(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error)
 }
 
-func (s *kgStore) Search(ctx context.Context, r *types.SearchRequest) (*types.SearchResult, error) {
-	s.calls++
-	if s.cancel != nil {
-		s.cancel()
+func (m *mockKGEngine) Search(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error) {
+	if m.searchFunc != nil {
+		return m.searchFunc(ctx, req)
 	}
-	if s.nilResult {
-		return nil, nil
-	}
-	return &types.SearchResult{}, s.err
+	return &types.SearchResult{}, nil
 }
 
-func TestKGSearchFailClosed(t *testing.T) {
-	store := &kgStore{}
-	reader := &kgReader{}
-	svc := &KGSearchService{store: store, kbReader: reader}
-	for _, ids := range [][]string{nil, {}, {""}} {
-		rows, err := svc.SearchKGEntities(t.Context(), "owner", ids, "q", nil, 2)
-		if len(ids) > 0 {
-			if err == nil {
-				t.Fatal("empty ID accepted")
-			}
-		} else if err != nil || len(rows) != 0 {
-			t.Fatal(rows, err)
-		}
-	}
-	if store.calls != 0 {
-		t.Fatal("empty scope reached engine")
-	}
-	for _, limit := range []int{-1, 10001} {
-		if _, err := svc.SearchKGEntities(t.Context(), "owner", []string{"kb-a"}, "q", nil, limit); err == nil {
-			t.Fatal("invalid limit accepted")
-		}
-	}
-	reader.deny = "kb-b"
-	if _, err := svc.SearchKGEntities(t.Context(), "owner", []string{"kb-a", "kb-b"}, "q", nil, 2); err == nil || store.calls != 0 {
-		t.Fatal("partial authorization queried", err, store.calls)
-	}
-	reader.deny = ""
-	for _, actor := range []string{"", "foreign"} {
-		if _, err := svc.SearchKGEntities(t.Context(), actor, []string{"kb-a"}, "q", nil, 2); err == nil || store.calls != 0 {
-			t.Fatal(actor, err)
-		}
-	}
-	if _, err := svc.SearchKGEntities(t.Context(), "owner", []string{"kb-a"}, "q", nil, 0); err != nil || store.calls != 0 {
-		t.Fatal("zero limit broadened", err)
-	}
-	if _, err := svc.SearchKGEntitiesByTypes(t.Context(), "owner", []string{"kb-a"}, []string{}, 2); err != nil || store.calls != 0 {
-		t.Fatal("empty types broadened", err)
-	}
-	if _, err := svc.SearchKGCommunityReports(t.Context(), "owner", []string{"kb-a"}, nil, 2); err != nil || store.calls != 0 {
-		t.Fatal("empty entities broadened", err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	before := reader.calls
-	if _, err := svc.SearchKGEntities(ctx, "owner", []string{"kb-a"}, "q", nil, 2); !errors.Is(err, context.Canceled) || reader.calls != before || store.calls != 0 {
-		t.Fatal("cancelled work executed", err)
-	}
-	for _, mode := range []string{"nil", "error", "cancel"} {
-		t.Run(mode, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			store.nilResult = mode == "nil"
-			store.err = nil
-			store.cancel = nil
-			if mode == "error" {
-				store.err = errors.New("engine-failure")
-			}
-			if mode == "cancel" {
-				store.cancel = cancel
-			}
-			if rows, err := svc.SearchKGEntities(ctx, "owner", []string{"kb-a"}, "q", nil, 2); err == nil || rows != nil {
-				t.Fatal("bad engine result accepted", rows, err)
-			}
-		})
-	}
+// --- Mock model driver for Embed tests ---
+
+type fakeEmbedDriver struct {
+	modelModule.ModelDriver
+	name   string
+	vector []float64
 }
 
-func TestKGSearchRealElasticsearchHTTP(t *testing.T) {
-	journal := testsupport.NewCase(t)
-	journal.Event("register-controlled-engine-scope", map[string]any{"indices": []string{"multirag_a", "multirag_b"}, "datasets": []string{"kb-a", "kb-b"}, "mode": "HTTP fixture; no remote storage created"})
-	var calls atomic.Int64
-	fixture := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/" {
-			fmt.Fprint(w, `{"version":{"number":"8.19.1"}}`)
-			return
-		}
-		calls.Add(1)
-		var req map[string]any
-		if json.NewDecoder(r.Body).Decode(&req) != nil {
-			t.Error("invalid request")
-			w.WriteHeader(400)
-			return
-		}
-		raw, _ := json.Marshal(req)
-		body := string(raw)
-		id := "kb-a"
-		if r.URL.Path == "/multirag_b/_search" {
-			id = "kb-b"
-		} else if r.URL.Path != "/multirag_a/_search" {
-			t.Error("index scope", r.URL.Path)
-		}
-		if !strings.Contains(body, `"kb_id":["`+id+`"]`) {
-			t.Error("KB scope", body)
-		}
-		other := "kb-b"
-		if id == other {
-			other = "kb-a"
-		}
-		if strings.Contains(body, other) {
-			t.Error("cross tenant KB request", body)
-		}
-		for _, field := range []string{"_source", "knowledge_graph_kwd"} {
-			if !strings.Contains(body, field) {
-				t.Error("missing projection/filter", body)
-			}
-		}
-		journal.Event("controlled-engine-request", map[string]any{"path": r.URL.Path, "body": req})
-		source := map[string]any{}
-		switch {
-		case strings.Contains(body, `"community_report"`):
-			if !strings.Contains(body, `"weight_flt":{"order":"desc","unmapped_type":"float"}`) {
-				t.Error("community sort ignored", body)
-			}
-			source = map[string]any{"docnm_kwd": "report", "content_with_weight": "community", "weight_flt": 0.0, "entities_kwd": "A"}
-		case strings.Contains(body, `"ty2ents"`):
-			source = map[string]any{"content_with_weight": `{"person":["A"]}`}
-		case strings.Contains(body, `"relation"`):
-			source = map[string]any{"from_entity_kwd": []string{"A"}, "to_entity_kwd": []string{"B"}, "weight_int": 0, "content_with_weight": "relation"}
-		default:
-			if !strings.Contains(body, "entity_type_kwd") {
-				t.Error("entity projection", body)
-			}
-			if !strings.Contains(body, "entity_type_kwd\":") && !strings.Contains(body, "entity_kwd^10") {
-				t.Error("KG text fields ignored", body)
-			}
-			source = map[string]any{"entity_kwd": []string{"A"}, "entity_type_kwd": "person", "rank_flt": 0.0, "content_with_weight": "entity", "n_hop_with_weight": "[]"}
-		}
-		json.NewEncoder(w).Encode(map[string]any{"hits": map[string]any{"total": map[string]any{"value": 1}, "hits": []any{map[string]any{"_id": "kg", "_score": 0.0, "_source": source}}}})
-	}))
-	store, err := elasticsearch.NewEngine(&server.ElasticsearchConfig{Hosts: fixture.URL})
+func (f *fakeEmbedDriver) Name() string { return f.name }
+
+func (f *fakeEmbedDriver) Embed(modelName *string, texts []string, apiConfig *modelModule.APIConfig, config *modelModule.EmbeddingConfig) ([]modelModule.EmbeddingData, error) {
+	return []modelModule.EmbeddingData{{Embedding: f.vector}}, nil
+}
+
+func TestBuildKGDenseExpr_WithModel(t *testing.T) {
+	embModel := &modelModule.EmbeddingModel{
+		ModelName: strPtr("test-model"),
+		ModelDriver: &fakeEmbedDriver{
+			name:   "test",
+			vector: []float64{0.1, 0.2, 0.3},
+		},
+		APIConfig: &modelModule.APIConfig{},
+	}
+	dense, err := buildDenseExpr(embModel, "test question", 10)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("buildDenseExpr failed: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
-	svc := &KGSearchService{store: store, kbReader: &kgReader{}}
-	ids := []string{"kb-a", "kb-b"}
-	ents, err := svc.SearchKGEntities(t.Context(), "owner", ids, "A", nil, 1)
-	if err != nil || len(ents) != 1 || ents[0].PageRank != 0 || ents[0].NhopJSON != "[]" {
-		t.Fatal(ents, err)
+	if dense == nil {
+		t.Fatal("expected non-nil MatchDenseExpr")
 	}
-	byType, err := svc.SearchKGEntitiesByTypes(t.Context(), "owner", ids, []string{"person"}, 2)
-	if err != nil || len(byType) != 2 {
-		t.Fatal(byType, err)
+	if dense.VectorColumnName != "q_3_vec" {
+		t.Errorf("expected 'q_3_vec', got %q", dense.VectorColumnName)
 	}
-	rels, err := svc.SearchKGRelations(t.Context(), "owner", ids, "A", nil, 2)
-	if err != nil || len(rels) != 2 || rels[0].From != "A" || rels[0].Weight != 0 {
-		t.Fatal(rels, err)
-	}
-	reports, err := svc.SearchKGCommunityReports(t.Context(), "owner", ids, []string{"A"}, 1)
-	if err != nil || len(reports) != 1 || reports[0].Content != "community" {
-		t.Fatal(reports, err)
-	}
-	samples, err := svc.SearchKGTypeSamples(t.Context(), "owner", ids)
-	if err != nil || !reflect.DeepEqual(samples["person"], []string{"A", "A"}) {
-		t.Fatal(samples, err)
-	}
-	if calls.Load() != 10 {
-		t.Fatal("query count", calls.Load())
-	}
-	journal.Event("controlled-engine-result-readback", map[string]any{"requests": calls.Load(), "entity_count": len(ents), "relation_count": len(rels), "report_count": len(reports)})
-}
-
-type kgEmbedDriver struct {
-	models.ModelDriver
-	calls   int
-	invalid bool
-	cancel  context.CancelFunc
-}
-
-func (d *kgEmbedDriver) Embed(_ *string, _ []string, api *models.APIConfig, cfg *models.EmbeddingConfig) ([]models.EmbeddingData, error) {
-	d.calls++
-	if api.Context == nil || !cfg.Query {
-		return nil, errors.New("missing query context")
-	}
-	if d.cancel != nil {
-		d.cancel()
-	}
-	v := 1.0
-	if d.invalid {
-		v = math.NaN()
-	}
-	return []models.EmbeddingData{{Index: 0, Embedding: []float64{v, 0}}}, nil
-}
-func TestKGEmbeddingContract(t *testing.T) {
-	name := "embed"
-	driver := &kgEmbedDriver{}
-	model := models.NewEmbeddingModel(driver, &name, &models.APIConfig{})
-	model.EmbeddingConfig = &models.EmbeddingConfig{Dimension: 2}
-	dense, err := buildKGDenseExpr(t.Context(), model, "q", 2)
-	if err != nil || dense.VectorColumnName != "q_2_vec" || dense.EmbeddingData[1] != 0 {
-		t.Fatal(dense, err)
-	}
-	if model.APIConfig.Context != nil || model.EmbeddingConfig.Query {
-		t.Fatal("shared binding mutated")
-	}
-	driver.invalid = true
-	if _, err := buildKGDenseExpr(t.Context(), model, "q", 2); err == nil {
-		t.Fatal("invalid vector accepted")
-	}
-	driver.invalid = false
-	ctx, cancel := context.WithCancel(t.Context())
-	driver.cancel = cancel
-	if _, err := buildKGDenseExpr(ctx, model, "q", 2); !errors.Is(err, context.Canceled) {
-		t.Fatal("cancellation lost", err)
-	}
-	store := &kgStore{}
-	svc := &KGSearchService{store: store, kbReader: &kgReader{deny: "kb-b"}}
-	before := driver.calls
-	if _, err := svc.SearchKGEntities(t.Context(), "owner", []string{"kb-b"}, "q", model, 2); err == nil || driver.calls != before || store.calls != 0 {
-		t.Fatal("unauthorized embedding side effect", err)
+	if dense.TopN != 10 {
+		t.Errorf("expected TopN 10, got %d", dense.TopN)
 	}
 }
 
-func TestKGParsersRejectMalformedNumbersAndKeepArrays(t *testing.T) {
-	rows := ParseKGEntityChunks([]map[string]any{{"entity_kwd": []string{"A"}, "rank_flt": 0.0}, {"entity_kwd": "bad", "rank_flt": "bad"}, {"entity_kwd": "nan", "_score": math.NaN()}})
-	if len(rows) != 1 || rows[0].Name != "A" || rows[0].PageRank != 0 {
-		t.Fatal(rows)
-	}
-	rels := ParseKGRelationChunks([]map[string]any{{"from_entity_kwd": []string{"A"}, "to_entity_kwd": []string{"B"}, "weight_int": 0}, {"from_entity_kwd": "A", "to_entity_kwd": "B", "weight_int": "bad"}, {"from_entity_kwd": "A", "to_entity_kwd": "B", "weight_int": 1.5}})
-	if len(rels) != 1 || rels[0].Weight != 0 {
-		t.Fatal(rels)
-	}
-	reports := ParseKGCommunityReportChunks([]map[string]any{{"docnm_kwd": "report", "entities_kwd": []string{"A", "B"}}})
-	if len(reports) != 1 || !reflect.DeepEqual(reports[0].EntityNames, []string{"A", "B"}) {
-		t.Fatal(reports)
-	}
-	samples := ParseKGTypeSamplesChunks([]map[string]any{{"content_with_weight": `{"person":[null,"A"],"": ["bad"],"null":null}`}})
-	if !reflect.DeepEqual(samples, map[string][]string{"person": {"A"}}) {
-		t.Fatal(samples)
+func TestBuildKGDenseExpr_NilModel(t *testing.T) {
+	dense, err := buildDenseExpr(nil, "test", 10)
+	if dense != nil || err != nil {
+		t.Errorf("expected nil,nil for nil model, got dense=%v err=%v", dense, err)
 	}
 }
 
-type kgPerDatasetStore struct {
-	engine.DocEngine
-	calls int
+func TestBuildKGDenseExpr_EmptyQuestion(t *testing.T) {
+	dense, err := buildDenseExpr(&modelModule.EmbeddingModel{}, "", 10)
+	if dense != nil || err != nil {
+		t.Errorf("expected nil,nil for empty question, got dense=%v err=%v", dense, err)
+	}
 }
 
-func (s *kgPerDatasetStore) Search(_ context.Context, req *types.SearchRequest) (*types.SearchResult, error) {
-	s.calls++
-	if len(req.KbIDs) != 1 {
-		return nil, errors.New("Infinity merges after truncation")
+// --- Search integration with mock ---
+
+func TestSearchEntities_WithMock(t *testing.T) {
+	mock := &mockKGEngine{
+		searchFunc: func(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error) {
+			if req.Filter["knowledge_graph_kwd"] != "entity" {
+				t.Error("expected entity filter")
+			}
+			return &types.SearchResult{
+				Chunks: []map[string]interface{}{
+					{"entity_kwd": "Elon Musk", "entity_type_kwd": "PERSON"},
+				},
+			}, nil
+		},
 	}
-	name := "low"
-	weight := 1.0
-	if req.KbIDs[0] == "kb-high" {
-		name = "high"
-		weight = 100
+	entities, err := SearchEntities(context.Background(), mock, []string{"kb1"}, "Elon", nil, 10)
+	if err != nil {
+		t.Fatalf("SearchEntities failed: %v", err)
 	}
-	return &types.SearchResult{Chunks: []map[string]any{{"entity_kwd": name, "rank_flt": weight, "docnm_kwd": name, "weight_flt": weight}}}, nil
+	if len(entities) != 1 || entities[0].Name != "Elon Musk" {
+		t.Errorf("expected [Elon Musk], got %v", entities)
+	}
 }
-func TestKGGlobalLimitAcrossSameTenantDatasets(t *testing.T) {
-	store := &kgPerDatasetStore{}
-	svc := &KGSearchService{store: store, kbReader: &kgReader{}}
-	ents, err := svc.SearchKGEntitiesByTypes(t.Context(), "owner", []string{"kb-low", "kb-high"}, []string{"person"}, 1)
-	if err != nil || len(ents) != 1 || ents[0].Name != "high" {
-		t.Fatal(ents, err)
+
+func TestSearchEntitiesByTypes_WithMock(t *testing.T) {
+	mock := &mockKGEngine{
+		searchFunc: func(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error) {
+			return &types.SearchResult{
+				Chunks: []map[string]interface{}{
+					{"entity_kwd": "SpaceX", "entity_type_kwd": "ORGANIZATION"},
+				},
+			}, nil
+		},
 	}
-	reports, err := svc.SearchKGCommunityReports(t.Context(), "owner", []string{"kb-low", "kb-high"}, []string{"A"}, 1)
-	if err != nil || len(reports) != 1 || reports[0].Title != "high" || store.calls != 4 {
-		t.Fatal(reports, err, store.calls)
+	entities, err := SearchEntitiesByTypes(context.Background(), mock, []string{"kb1"}, []string{"ORGANIZATION"}, 10)
+	if err != nil {
+		t.Fatalf("SearchEntitiesByTypes failed: %v", err)
+	}
+	if len(entities) != 1 || entities[0].Type != "ORGANIZATION" {
+		t.Errorf("expected ORGANIZATION, got %v", entities)
+	}
+}
+
+func TestSearchTypeSamples_WithMock(t *testing.T) {
+	mock := &mockKGEngine{}
+	samples, err := SearchTypeSamples(context.Background(), mock, []string{"kb1"})
+	if err != nil {
+		t.Fatalf("SearchTypeSamples failed: %v", err)
+	}
+	if samples == nil {
+		samples = map[string][]string{}
+	}
+	if len(samples) != 0 {
+		t.Errorf("expected empty, got %d", len(samples))
 	}
 }

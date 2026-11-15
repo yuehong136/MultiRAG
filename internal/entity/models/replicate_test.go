@@ -14,7 +14,7 @@ import (
 
 func newReplicateTestModel(base string) *ReplicateModel {
 	r := NewReplicateModel(map[string]string{"default": base}, URLSuffix{Chat: "v1/predictions", Models: "v1/models"})
-	r.pollInterval = time.Millisecond
+	// Polling cadence is owned by the frozen driver.
 	return r
 }
 
@@ -53,7 +53,7 @@ func TestReplicatePredictionRoutesAndPrompt(t *testing.T) {
 				t.Fatal(driver, err)
 			}
 			maxTokens, temperature, stop := 12, 0.0, []string{"stop"}
-			resp, err := driver.ChatWithMessages(name, []Message{{Role: "system", Content: "system"}, {Role: "user", Content: "hello"}, {Role: "assistant", Content: "hi"}, {Role: "user", Content: "again"}}, &APIConfig{APIKey: &key}, &ChatConfig{MaxTokens: &maxTokens, Temperature: &temperature, Stop: &stop})
+			resp, err := driver.ChatWithMessages(name, []Message{{Role: "system", Content: "system"}, {Role: "user", Content: "hello"}, {Role: "assistant", Content: "hi"}, {Role: "user", Content: "again"}}, &APIConfig{ApiKey: &key}, &ChatConfig{MaxTokens: &maxTokens, Temperature: &temperature, Stop: &stop})
 			if err != nil || resp.Answer == nil || *resp.Answer != "hello world" {
 				t.Fatal(resp, err)
 			}
@@ -62,7 +62,7 @@ func TestReplicatePredictionRoutesAndPrompt(t *testing.T) {
 }
 
 func TestReplicatePollingAndFallbackTerminalState(t *testing.T) {
-	for _, status := range []string{"succeeded", "failed", "canceled", "successful", "unknown"} {
+	for _, status := range []string{"succeeded", "failed", "canceled", "succeeded", "unknown"} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s-stream=%v", status, stream), func(t *testing.T) {
 				var polls atomic.Int64
@@ -83,9 +83,9 @@ func TestReplicatePollingAndFallbackTerminalState(t *testing.T) {
 				var chunks []string
 				var err error
 				if stream {
-					err = m.ChatStreamlyWithSender("owner/model", []Message{{Role: "user", Content: "hello"}}, &APIConfig{APIKey: &key}, nil, func(content, _ *string) error { chunks = append(chunks, *content); return nil })
+					err = m.ChatStreamlyWithSender("owner/model", []Message{{Role: "user", Content: "hello"}}, &APIConfig{ApiKey: &key}, nil, func(content, _ *string) error { chunks = append(chunks, *content); return nil })
 				} else {
-					_, err = m.ChatWithMessages("owner/model", []Message{{Role: "user", Content: "hello"}}, &APIConfig{APIKey: &key}, nil)
+					_, err = m.ChatWithMessages("owner/model", []Message{{Role: "user", Content: "hello"}}, &APIConfig{ApiKey: &key}, nil)
 				}
 				if status == "succeeded" {
 					if err != nil || stream && strings.Join(chunks, "") != "partial[DONE]" {
@@ -131,7 +131,7 @@ func TestReplicateSSETerminalContract(t *testing.T) {
 			}))
 			defer srv.Close()
 			var chunks []string
-			err := newReplicateTestModel(srv.URL).ChatStreamlyWithSender("owner/model", []Message{{Role: "user", Content: "hello"}}, &APIConfig{APIKey: &key}, nil, func(content, _ *string) error { chunks = append(chunks, *content); return nil })
+			err := newReplicateTestModel(srv.URL).ChatStreamlyWithSender("owner/model", []Message{{Role: "user", Content: "hello"}}, &APIConfig{ApiKey: &key}, nil, func(content, _ *string) error { chunks = append(chunks, *content); return nil })
 			done := len(chunks) > 0 && chunks[len(chunks)-1] == "[DONE]"
 			if tc.valid != (err == nil && done) || !tc.valid && (err == nil || done) || err != nil && strings.Contains(err.Error(), "private-provider-body") {
 				t.Fatal("wrong SSE completion", done, err)
@@ -142,10 +142,10 @@ func TestReplicateSSETerminalContract(t *testing.T) {
 
 func TestReplicateInvalidResponsesAndInputs(t *testing.T) {
 	key := "key"
-	for _, response := range []string{`{}`, `{"id":"pred-1","status":"successful","output":"bad"}`, `{"id":"pred-1","status":"succeeded","output":null}`, `{"id":"pred-1","status":"succeeded","output":{}}`, `{"id":"pred-1","status":"succeeded","output":[null,"text"]}`, `{"id":"pred-1","status":"succeeded","output":" "}`, `{"id":"pred-1","status":"succeeded","error":"private-provider-body","output":"text"}`, `{"id":"pred-1","status":"starting","urls":{"get":"https://untrusted.invalid/poll"}}`} {
+	for _, response := range []string{`{}`, `{"id":"pred-1","status":"succeeded","output":null}`, `{"id":"pred-1","status":"succeeded","output":{}}`, `{"id":"pred-1","status":"succeeded","output":[null,"text"]}`, `{"id":"pred-1","status":"succeeded","output":" "}`, `{"id":"pred-1","status":"succeeded","error":"private-provider-body","output":"text"}`, `{"id":"pred-1","status":"starting","urls":{"get":"https://untrusted.invalid/poll"}}`} {
 		srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 		m := newReplicateTestModel(srv.URL)
-		if _, err := m.ChatWithMessages("owner/model", []Message{{Role: "user", Content: "hello"}}, &APIConfig{APIKey: &key}, nil); err == nil || strings.Contains(err.Error(), "private-provider-body") {
+		if _, err := m.ChatWithMessages("owner/model", []Message{{Role: "user", Content: "hello"}}, &APIConfig{ApiKey: &key}, nil); err == nil || strings.Contains(err.Error(), "private-provider-body") {
 			t.Fatal("malformed prediction accepted or leaked", response, err)
 		}
 		srv.Close()
@@ -155,7 +155,7 @@ func TestReplicateInvalidResponsesAndInputs(t *testing.T) {
 	defer srv.Close()
 	m := newReplicateTestModel(srv.URL)
 	for _, name := range []string{"", " ", "owner/../model", "../model", "owner/model:bad", "bad-version", "owner/model?query"} {
-		if _, err := m.ChatWithMessages(name, []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, nil); err == nil {
+		if _, err := m.ChatWithMessages(name, []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: &key}, nil); err == nil {
 			t.Fatal("invalid name accepted", name)
 		}
 	}
@@ -184,70 +184,107 @@ func TestReplicateDiscoveryCancellationAndSender(t *testing.T) {
 	}))
 	defer srv.Close()
 	m := newReplicateTestModel(srv.URL)
-	if names, err := m.ListModels(&APIConfig{APIKey: &key}); err != nil || strings.Join(names, ",") != "owner/model" {
+	if names, err := m.ListModels(&APIConfig{ApiKey: &key}); err != nil || joinModelNames(names, ",") != "owner/model" {
 		t.Fatal(names, err)
 	}
-	if err := m.CheckConnection(&APIConfig{APIKey: &key}); err != nil {
+	if err := m.CheckConnection(&APIConfig{ApiKey: &key}); err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("sender failed")
-	if err := m.ChatStreamlyWithSender("owner/model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
+	if err := m.ChatStreamlyWithSender("owner/model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: &key}, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
 		t.Fatal("sender error lost", err)
 	}
-	m.URLSuffix.Models = "wait"
+	m.baseModel.URLSuffix.Models = "wait"
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
-	if _, err := m.ListModels(&APIConfig{APIKey: &key, Context: ctx}); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := m.ListModels(&APIConfig{ApiKey: &key, Context: ctx}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("deadline lost", err)
 	}
 }
 
-func TestReplicateTextPartsAndMediaPreflight(t *testing.T) {
-	key := "key"
-	var calls atomic.Int64
-	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		var body struct {
-			Input map[string]any `json:"input"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Input["prompt"] != "hello again" {
-			t.Error("text parts did not become text", body, err)
-		}
-		fmt.Fprint(w, `{"id":"pred-1","status":"succeeded","output":"answer"}`)
-	}))
-	defer srv.Close()
-	m := newReplicateTestModel(srv.URL)
+// Structured content follows the frozen JSON prompt conversion. Replicate's
+// prompt input is model-specific; this does not claim native media execution.
+func TestReplicateStructuredContentUsesJSONPrompt(t *testing.T) {
 	texts := []map[string]any{{"type": "text", "text": "hello "}, {"type": "text", "text": "again"}}
+	encoded, err := json.Marshal(texts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := replicateMessageContent(texts); got != string(encoded) {
+		t.Fatalf("frozen structured prompt changed: %q", got)
+	}
+}
+
+func TestReplicateStreamCancellationClosesProviderRequest(t *testing.T) {
+	started, closed := make(chan struct{}), make(chan struct{})
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			fmt.Fprintf(w, `{"id":"pred-1","status":"processing","urls":{"stream":"http://%s/stream"}}`, r.Host)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: output\ndata: first\n\n")
+		w.(http.Flusher).Flush()
+		close(started)
+		<-r.Context().Done()
+		close(closed)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- newReplicateTestModel(server.URL).ChatStreamlyWithSender("owner/model", []Message{{Role: "user", Content: "hello"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil, func(content, _ *string) error {
+			if *content == "[DONE]" {
+				t.Error("cancelled stream completed")
+			}
+			return nil
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream never opened")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatal("caller cancellation lost", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("provider request leaked")
+	}
+}
+
+func TestReplicatePredictionURLCannotForwardCredentials(t *testing.T) {
+	var calls atomic.Int32
+	foreign := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		t.Error("credentials sent to foreign origin")
+	}))
+	defer foreign.Close()
 	for _, stream := range []bool{false, true} {
-		messages := []Message{{Role: "user", Content: texts}}
-		if stream {
-			if err := m.ChatStreamlyWithSender("owner/model", messages, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return nil }); err != nil {
-				t.Fatal(err)
-			}
-		} else if _, err := m.ChatWithMessages("owner/model", messages, &APIConfig{APIKey: &key}, nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	before := calls.Load()
-	for _, kind := range []string{"image_url", "video_url", "file_url", "input_audio"} {
-		for _, stream := range []bool{false, true} {
-			part := map[string]any{"type": kind, kind: map[string]any{"url": "https://files.invalid/media"}}
-			if kind == "input_audio" {
-				part[kind] = map[string]any{"data": "eA==", "format": "wav"}
-			}
-			messages := []Message{{Role: "user", Content: []map[string]any{part}}}
-			var err error
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			key := "get"
 			if stream {
-				err = m.ChatStreamlyWithSender("owner/model", messages, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return nil })
-			} else {
-				_, err = m.ChatWithMessages("owner/model", messages, &APIConfig{APIKey: &key}, nil)
+				key = "stream"
 			}
-			if !errors.Is(err, ErrUnsupportedCapability) {
-				t.Fatal("media must fail before HTTP", kind, err)
-			}
+			fmt.Fprintf(w, `{"id":"pred-1","status":"processing","urls":{%q:%q}}`, key, foreign.URL)
+		}))
+		model := newReplicateTestModel(server.URL)
+		var err error
+		if stream {
+			err = model.ChatStreamlyWithSender("owner/model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: stringPtr("private-key")}, nil, func(*string, *string) error { t.Error("foreign origin emitted output"); return nil })
+		} else {
+			_, err = model.ChatWithMessages("owner/model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: stringPtr("private-key")}, nil)
+		}
+		server.Close()
+		if err == nil || strings.Contains(err.Error(), "private-key") {
+			t.Fatal("foreign prediction URL accepted", err)
 		}
 	}
-	if calls.Load() != before {
-		t.Fatal("unsupported media called provider")
+	if calls.Load() != 0 {
+		t.Fatal("foreign requests", calls.Load())
 	}
 }

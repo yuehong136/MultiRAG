@@ -32,10 +32,8 @@ package component
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
-	"math"
 	"strconv"
 
 	"multirag/internal/agent/runtime"
@@ -46,19 +44,13 @@ const componentNameSwitch = "Switch"
 // SwitchComponent implements the Switch routing node. It is stateless
 // across invocations: the inputs map carries everything it needs.
 type SwitchComponent struct {
-	name   string
-	params map[string]any
+	name string
 }
 
-// NewSwitchComponent retains saved conditions/default; invocation inputs may override them.
-func NewSwitchComponent(params map[string]any) (Component, error) {
-	retained := make(map[string]any, 2)
-	for _, key := range []string{"conditions", "default"} {
-		if value, present := params[key]; present {
-			retained[key] = value
-		}
-	}
-	return &SwitchComponent{name: componentNameSwitch, params: retained}, nil
+// NewSwitchComponent constructs a Switch component. params is unused
+// in P0 (Switch config lives in the inputs map at Invoke time).
+func NewSwitchComponent(_ map[string]any) (Component, error) {
+	return &SwitchComponent{name: componentNameSwitch}, nil
 }
 
 // Name returns the registered component name.
@@ -71,14 +63,6 @@ func (s *SwitchComponent) Name() string { return s.name }
 // wiring). Unknown / empty inputs are tolerated: an absent "conditions"
 // list yields outputs["_next"] = inputs["default"].
 func (s *SwitchComponent) Invoke(ctx context.Context, inputs map[string]any) (map[string]any, error) {
-	merged := map[string]any{}
-	for key, value := range s.params {
-		merged[key] = value
-	}
-	for key, value := range inputs {
-		merged[key] = value
-	}
-	inputs = merged
 	state, _, err := runtime.GetStateFromContext[*runtime.CanvasState](ctx)
 	if err != nil {
 		return nil, fmt.Errorf("Switch: %w", err)
@@ -279,10 +263,7 @@ func numericize(v any) (float64, bool) {
 	case int64:
 		return float64(x), true
 	case float64:
-		return x, !math.IsNaN(x) && !math.IsInf(x, 0)
-	case json.Number:
-		value, err := x.Float64()
-		return value, err == nil && !math.IsNaN(value) && !math.IsInf(value, 0)
+		return x, true
 	case float32:
 		return float64(x), true
 	case string:

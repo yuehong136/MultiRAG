@@ -5,7 +5,7 @@
   },
   "url_suffix": {
     "models": "model",
-    "balance": "wallet/self/api-credit",
+    "balance": "self/package",
     "tts": "v1/tts",
     "asr": "v1/asr"
   },

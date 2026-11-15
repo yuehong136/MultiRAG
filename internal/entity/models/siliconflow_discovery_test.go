@@ -23,8 +23,8 @@ func TestSiliconFlowDiscoveryIdentityAndFailuresHTTP(t *testing.T) {
 		{"null-item", `{"data":[null]}`, nil},
 		{"bad-id", `{"data":[{"id":1}]}`, nil},
 		{"empty-id", `{"data":[{"id":""}]}`, nil},
-		{"whitespace-id", `{"data":[{"id":" raw "}]}`, nil},
-		{"duplicate", `{"data":[{"id":"raw","owned_by":"one"},{"id":"raw","owned_by":"two"}]}`, nil},
+		{"whitespace-id", `{"data":[{"id":" raw "}]}`, []string{"raw"}},
+		{"duplicate", `{"data":[{"id":"raw","owned_by":"one"},{"id":"raw","owned_by":"two"}]}`, []string{"raw@one", "raw@two"}},
 		{"error", `{"data":[{"id":"raw"}],"error":"private provider message"}`, nil},
 		{"trailing", `{"data":[]} {}`, nil},
 	} {
@@ -35,14 +35,14 @@ func TestSiliconFlowDiscoveryIdentityAndFailuresHTTP(t *testing.T) {
 				}
 				fmt.Fprint(w, test.body)
 			}))
-			driver := NewSiliconFlowModel(map[string]string{"default": server.URL + "/instance"}, URLSuffix{Models: "models"})
-			api := &APIConfig{APIKey: stringPtr("fixture")}
+			driver := NewSiliconflowModel(map[string]string{"default": server.URL + "/instance"}, URLSuffix{Models: "models"})
+			api := &APIConfig{ApiKey: stringPtr("fixture")}
 			got, err := driver.ListModels(api)
 			if test.want == nil {
 				if err == nil || got != nil || strings.Contains(err.Error(), "private provider message") {
 					t.Fatalf("invalid discovery published %v, %v", got, err)
 				}
-			} else if err != nil || !reflect.DeepEqual(got, test.want) {
+			} else if err != nil || !reflect.DeepEqual(modelNamesForTest(got), test.want) {
 				t.Fatalf("discovery = %#v, %v; want %#v", got, err, test.want)
 			}
 			if api.Context != nil {
@@ -78,26 +78,26 @@ func TestSiliconFlowDiscoveryReadBoundAndClose(t *testing.T) {
 			defer cancel()
 			raw := `{"data":[{"id":"raw","owned_by":"owner"}]}`
 			if scenario == "oversized" {
-				raw += strings.Repeat(" ", int(MaxMediaBytes)+4096)
+				raw += strings.Repeat(" ", int(modelResponseLimitForTest)+4096)
 			}
 			body := &siliconFlowDiscoveryBody{Reader: strings.NewReader(raw)}
 			if scenario == "cancel" {
 				body.cancel = cancel
 			}
-			driver := NewSiliconFlowModel(map[string]string{"default": "http://controlled.invalid"}, URLSuffix{Models: "models"})
-			driver.httpClient.Transport = providerContractTransport(func(r *http.Request) (*http.Response, error) {
+			driver := NewSiliconflowModel(map[string]string{"default": "http://controlled.invalid"}, URLSuffix{Models: "models"})
+			driver.baseModel.httpClient.Transport = providerContractTransport(func(r *http.Request) (*http.Response, error) {
 				status := http.StatusOK
 				if scenario == "status" {
 					status = http.StatusUnauthorized
 				}
 				return &http.Response{StatusCode: status, Body: body}, nil
 			})
-			names, err := driver.ListModels(&APIConfig{APIKey: stringPtr("fixture"), Context: ctx})
-			if !body.closed || body.read > int(MaxMediaBytes)+1 {
+			names, err := driver.ListModels(&APIConfig{ApiKey: stringPtr("fixture"), Context: ctx})
+			if !body.closed || body.read > int(modelResponseLimitForTest)+1 {
 				t.Fatalf("unclosed or unbounded discovery body: closed=%v, read=%d", body.closed, body.read)
 			}
 			if scenario == "success" {
-				if err != nil || !reflect.DeepEqual(names, []string{"raw@owner"}) {
+				if err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{"raw@owner"}) {
 					t.Fatal(names, err)
 				}
 			} else if err == nil || names != nil || scenario == "cancel" && !errors.Is(err, context.Canceled) {

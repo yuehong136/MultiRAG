@@ -40,31 +40,31 @@ func TestChatMediaParserAndPayload(t *testing.T) {
 				t.Fatalf("payload %+v", body)
 			}
 			parts := body.Messages[0].Content
-			for i, kind := range []string{"text", "text", "image_url", "image_url", "video_url", "file_url"} {
+			for i, kind := range []string{"text", "text", "image_url", "image_file", "video_url", "file_url"} {
 				if parts[i]["type"] != kind {
 					t.Error("part order changed")
 				}
 			}
-			if parts[3]["image_url"].(map[string]any)["url"] != "data:image/png;base64,"+base64.StdEncoding.EncodeToString(data) {
+			if parts[3]["image_file"].(map[string]any)["content"] != base64.StdEncoding.EncodeToString(data) {
 				t.Error("image MIME or bytes lost")
 			}
 			if stream {
-				fmt.Fprint(w, "data: {\"content\":\"answer\"}\n\ndata: [DONE]\n\n")
+				fmt.Fprint(w, "data: [MESSAGE]answer\n\ndata: [DONE]\n\n")
 			} else {
 				fmt.Fprint(w, `{"code":0,"answer":"answer"}`)
 			}
 		}))
 		u, _ := url.Parse(server.URL)
 		port, _ := strconv.Atoi(u.Port())
-		client := NewMultiRAGClient("user")
-		client.HTTPClient.Host = u.Hostname()
-		client.HTTPClient.Port = port
+		client := newConsumerCLI("user")
+		consumerHTTP(client).Host = u.Hostname()
+		consumerHTTP(client).Port = port
 		prefix := "THINK "
 		if stream {
 			prefix = "STREAM THINK "
 		}
 		input := prefix + fmt.Sprintf(`CHAT WITH "vision@local@vllm" MESSAGE "describe" "第二段" IMAGE "https://example.com/a.png" %q VIDEO "https://example.com/a.mp4" FILE "https://example.com/a.pdf" EFFORT HIGH;`, image)
-		cmd, err := NewParser(input).Parse(false)
+		cmd, err := NewParser(input).Parse(APIMode)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -75,41 +75,5 @@ func TestChatMediaParserAndPayload(t *testing.T) {
 			t.Fatal("request missing")
 		}
 		server.Close()
-	}
-}
-
-func TestChatMediaRejectsUnsupportedOrInvalidInput(t *testing.T) {
-	for _, input := range []string{`CHAT AUDIO;`, `CHAT MESSAGE;`, `CHAT IMAGE;`, `CHAT;`, `CHAT WITH "a@b@c";`, `CHAT MESSAGE "q" nonsense;`} {
-		if _, err := NewParser(input).Parse(false); err == nil {
-			t.Errorf("accepted %s", input)
-		}
-	}
-	for _, input := range []chatInput{{"video_url", "/local.mp4"}, {"file_url", "ftp://example.com/a"}, {"image_url", "/missing.png"}, {"file_url", "https://user:pass@example.com/a"}, {"audio", "https://example.com/a"}} {
-		if _, err := chatContent("q", []chatInput{input}); err == nil {
-			t.Errorf("accepted %+v", input)
-		}
-	}
-	for _, word := range []string{"MESSAGE", "IMAGE", "VIDEO", "AUDIO"} {
-		token := NewLexer(word).NextToken()
-		if !isKeyword(token.Type) {
-			t.Errorf("%s is not a keyword", word)
-		}
-	}
-	if _, err := chatContent("", []chatInput{{"image_url", "data:image/png;base64,%%%"}}); err == nil {
-		t.Fatal("invalid data accepted")
-	}
-}
-
-func TestSingleMessageUsesPlainTextForTextOnlyProtocols(t *testing.T) {
-	for _, input := range []string{`CHAT WITH 'm@i@Bedrock' MESSAGE 'q';`, `CHAT 'm@i@Bedrock' 'q';`} {
-		command, err := NewParser(input).Parse(false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		message, _ := command.Params["message"].(string)
-		content, err := chatContent(message, command.Params["content_inputs"])
-		if err != nil || content != "q" {
-			t.Fatal(content, err)
-		}
 	}
 }

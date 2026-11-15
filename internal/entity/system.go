@@ -21,11 +21,11 @@ type SystemSettings struct {
 	Name     string `gorm:"column:name;primaryKey;size:128" json:"name"`
 	Source   string `gorm:"column:source;size:32;not null" json:"source"`
 	DataType string `gorm:"column:data_type;size:32;not null" json:"data_type"`
-	Value    string `gorm:"column:value;type:text;not null" json:"value"`
+	Value    string `gorm:"column:value;type:longtext;not null" json:"value"`
 	BaseModel
 }
 
 // TableName specify table name
 func (SystemSettings) TableName() string {
-	return "t_ai_system_settings"
+	return "system_settings"
 }

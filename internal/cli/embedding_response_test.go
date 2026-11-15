@@ -19,8 +19,8 @@ func TestEmbeddingCLIRejectsMalformedVectors(t *testing.T) {
 		`{"code":0,"data":[{"index":1,"embedding":[1,2]}]}`,
 	} {
 		client := skillTestClient(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) })
-		c := &MultiRAGClient{HTTPClient: client, ServerType: "user"}
-		cmd, _ := NewParser("embed text 'a' with 'm@i@p' dimension 2;").Parse(false)
+		c := consumerCLIWithHTTP(client)
+		cmd, _ := NewParser("embed text 'a' with 'm@i@p' dimension 2;").Parse(APIMode)
 		if _, err := c.ExecuteUserCommand(cmd); err == nil {
 			t.Fatal("accepted malformed embedding", body)
 		}
@@ -31,8 +31,8 @@ func TestEmbeddingCLIReordersAndDisplaysComputedDimension(t *testing.T) {
 	client := skillTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"code":0,"data":[{"index":1,"embedding":[1,0]},{"index":0,"embedding":[0,2]}]}`)
 	})
-	c := &MultiRAGClient{HTTPClient: client, ServerType: "user"}
-	cmd, _ := NewParser("embed text 'a' 'b' with 'm@i@p' dimension 2;").Parse(false)
+	c := consumerCLIWithHTTP(client)
+	cmd, _ := NewParser("embed text 'a' 'b' with 'm@i@p' dimension 2;").Parse(APIMode)
 	result, err := c.ExecuteUserCommand(cmd)
 	if err != nil {
 		t.Fatal(err)

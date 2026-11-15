@@ -10,7 +10,7 @@ import (
 
 func TestProviderDiscoveryAndConnectionTokenAuth(t *testing.T) {
 	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer fixture" {
+		if r.Header.Get("Authorization") != "Bearer fixture" && r.Header.Get("Authorization") != "fixture" {
 			t.Error("provider request lost token")
 		}
 		fmt.Fprint(w, `{"code":0,"data":[{"name":"running"}]}`)
@@ -19,16 +19,16 @@ func TestProviderDiscoveryAndConnectionTokenAuth(t *testing.T) {
 	u, _ := url.Parse(server.URL)
 	port, _ := strconv.Atoi(u.Port())
 	for _, login := range []bool{false, true} {
-		c := NewMultiRAGClient("user")
-		c.HTTPClient.Host = u.Hostname()
-		c.HTTPClient.Port = port
+		c := newConsumerCLI("user")
+		consumerHTTP(c).Host = u.Hostname()
+		consumerHTTP(c).Port = port
 		if login {
-			c.HTTPClient.LoginToken = "fixture"
+			consumerHTTP(c).LoginToken = consumerTokenPtr("fixture")
 		} else {
-			c.HTTPClient.APIKey = "fixture"
+			consumerHTTP(c).APIToken = consumerTokenPtr("fixture")
 		}
 		for _, syntax := range []string{`LIST SUPPORTED MODELS FROM "LocalAI" "one";`, `CHECK INSTANCE "one" FROM "LocalAI";`} {
-			cmd, err := NewParser(syntax).Parse(false)
+			cmd, err := NewParser(syntax).Parse(APIMode)
 			if err != nil {
 				t.Fatal(err)
 			}

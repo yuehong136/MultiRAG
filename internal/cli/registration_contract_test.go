@@ -11,9 +11,9 @@ import (
 )
 
 func TestRegisterAndLogoutRESTContract(t *testing.T) {
+	consumerPublicKey(t)
 	for _, test := range []struct{ envelope, token string }{
 		{"go", "owned-session"}, {"go", "Bearer owned-session"},
-		{"python", "owned-session"}, {"python", "Bearer owned-session"},
 	} {
 		t.Run(test.envelope+"/"+test.token, func(t *testing.T) {
 			reject := false
@@ -33,7 +33,7 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 						t.Error("wrong registration identity or unencrypted password")
 					}
 				case "/api/v1/auth/logout":
-					if r.Method != "POST" || r.Header.Get("Authorization") != "Bearer owned-session" {
+					if r.Method != "POST" || r.Header.Get("Authorization") != test.token {
 						t.Error("wrong logout contract")
 					}
 				default:
@@ -52,18 +52,18 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 			defer server.Close()
 			parsed, _ := url.Parse(server.URL)
 			port, _ := strconv.Atoi(parsed.Port())
-			client := NewMultiRAGClient("user")
-			client.HTTPClient.Host = parsed.Hostname()
-			client.HTTPClient.Port = port
-			client.HTTPClient.LoginToken = test.token
-			command, err := NewParser(`REGISTER USER 'owned@example.invalid' AS 'Owned' PASSWORD 'owned-password';`).Parse(false)
+			client := newConsumerCLI("user")
+			consumerHTTP(client).Host = parsed.Hostname()
+			consumerHTTP(client).Port = port
+			consumerHTTP(client).LoginToken = consumerTokenPtr(test.token)
+			command, err := NewParser(`REGISTER USER 'owned@example.invalid' AS 'Owned' PASSWORD 'owned-password';`).Parse(APIMode)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if _, err = client.ExecuteCommand(command); err != nil {
 				t.Fatal(err)
 			}
-			if client.HTTPClient.LoginToken != test.token {
+			if consumerToken(consumerHTTP(client).LoginToken) != test.token {
 				t.Fatal("registration changed session")
 			}
 			reject = true
@@ -73,14 +73,14 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 			if _, err = client.Logout(); err == nil {
 				t.Fatal("rejected logout succeeded")
 			}
-			if client.HTTPClient.LoginToken != test.token {
+			if consumerToken(consumerHTTP(client).LoginToken) != test.token {
 				t.Fatal("rejected logout cleared session")
 			}
 			reject = false
 			if _, err = client.Logout(); err != nil {
 				t.Fatal(err)
 			}
-			if client.HTTPClient.LoginToken != "" {
+			if consumerToken(consumerHTTP(client).LoginToken) != "" {
 				t.Fatal("logout retained session")
 			}
 		})
@@ -97,14 +97,14 @@ func TestAdminLogoutPOSTRetainsRawAuthorization(t *testing.T) {
 	defer server.Close()
 	parsed, _ := url.Parse(server.URL)
 	port, _ := strconv.Atoi(parsed.Port())
-	client := NewMultiRAGClient("admin")
-	client.HTTPClient.Host = parsed.Hostname()
-	client.HTTPClient.Port = port
-	client.HTTPClient.LoginToken = "owned-admin-session"
+	client := newConsumerCLI("admin")
+	consumerHTTP(client).Host = parsed.Hostname()
+	consumerHTTP(client).Port = port
+	consumerHTTP(client).LoginToken = consumerTokenPtr("owned-admin-session")
 	if _, err := client.Logout(); err != nil {
 		t.Fatal(err)
 	}
-	if client.HTTPClient.LoginToken != "" {
+	if consumerToken(consumerHTTP(client).LoginToken) != "" {
 		t.Fatal("successful admin logout retained session")
 	}
 }

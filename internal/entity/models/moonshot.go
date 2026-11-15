@@ -1,333 +1,598 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package models
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"maps"
-	"math"
 	"net/http"
 	"strings"
-	"time"
 )
 
-// MoonshotModel implements Moonshot text chat, reasoning streams and discovery.
+// MoonshotModel implements ModelDriver for Moonshot
 type MoonshotModel struct {
-	BaseURL           map[string]string
-	URLSuffix         URLSuffix
-	httpClient        *http.Client
-	streamIdleTimeout time.Duration
+	baseModel BaseModel
 }
 
+// NewMoonshotModel creates a new Moonshot model instance
 func NewMoonshotModel(baseURL map[string]string, urlSuffix URLSuffix) *MoonshotModel {
-	return &MoonshotModel{
-		BaseURL:           maps.Clone(baseURL),
-		URLSuffix:         urlSuffix,
-		httpClient:        &http.Client{Transport: openAIChatTransport, CheckRedirect: rejectModelRedirect},
-		streamIdleTimeout: 60 * time.Second,
+	if baseURL != nil {
+		copied := make(map[string]string, len(baseURL))
+		for region, value := range baseURL {
+			copied[region] = value
+		}
+		baseURL = copied
 	}
+	return &MoonshotModel{
+		baseModel: BaseModel{
+			BaseURL:    baseURL,
+			URLSuffix:  urlSuffix,
+			httpClient: NewDriverHTTPClient(),
+		},
+	}
+}
+
+func (m *MoonshotModel) NewInstance(baseURL map[string]string) ModelDriver {
+	return NewMoonshotModel(baseURL, m.baseModel.URLSuffix)
 }
 
 func (m *MoonshotModel) Name() string {
 	return "moonshot"
 }
 
-func (m *MoonshotModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
-	return m.chat(modelName, messages, apiConfig, modelConfig)
+func validateMoonshotModelName(modelName string) (string, error) {
+	if strings.TrimSpace(modelName) == "" {
+		return "", fmt.Errorf("model name is required")
+	}
+	return strings.TrimSpace(modelName), nil
 }
 
-func moonshotChatBody(modelName string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
-	modelName = strings.TrimSpace(modelName)
-	if modelName == "" {
-		return nil, fmt.Errorf("moonshot: model name is required")
+func (m *MoonshotModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	if chatModelConfig != nil && chatModelConfig.Stream != nil && *chatModelConfig.Stream {
+		return nil, fmt.Errorf("stream must be false in ChatWithMessages")
 	}
-	if err := ValidateMessages(messages); err != nil {
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return nil, err
 	}
-	apiMessages := messages
+	apiKey := strings.TrimSpace(*apiConfig.ApiKey)
+	modelName, err := validateMoonshotModelName(modelName)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(modelName) == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("messages is empty")
+	}
 
-	// The entry point determines the response protocol, regardless of config.Stream.
-	body := map[string]interface{}{"model": modelName, "messages": apiMessages, "stream": stream, "temperature": 0.6}
-	if config == nil {
-		return body, nil
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
 	}
-	if config.MaxTokens != nil {
-		body["max_tokens"] = *config.MaxTokens
-	}
-	if config.Temperature != nil {
-		body["temperature"] = *config.Temperature
-	}
-	if config.TopP != nil {
-		body["top_p"] = *config.TopP
-	}
-	if config.DoSample != nil {
-		body["do_sample"] = *config.DoSample
-	}
-	if config.Stop != nil {
-		body["stop"] = *config.Stop
-	}
-	if config.Thinking != nil {
-		mode := "disabled"
-		if *config.Thinking {
-			mode = "enabled"
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(resolvedBaseURL, "/"), strings.TrimLeft(m.baseModel.URLSuffix.Chat, "/"))
+
+	// Convert messages to the format expected by API
+	apiMessages := make([]map[string]interface{}, len(messages))
+	for i, msg := range messages {
+		apiMessages[i] = map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
 		}
-		body["thinking"] = map[string]string{"type": mode}
 	}
-	return body, nil
-}
 
-func (m *MoonshotModel) requestChat(body map[string]interface{}, config *APIConfig) (*http.Response, error) {
-	if config == nil || config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "" {
-		return nil, fmt.Errorf("moonshot: API key is required")
+	// Build request body
+	reqBody := map[string]interface{}{
+		"model":       modelName,
+		"messages":    apiMessages,
+		"stream":      false,
+		"temperature": 0.6,
 	}
-	if m.URLSuffix.Chat == "" {
-		return nil, fmt.Errorf("moonshot: chat endpoint suffix is missing")
+
+	if chatModelConfig != nil {
+		if chatModelConfig.DoSample != nil {
+			reqBody["do_sample"] = *chatModelConfig.DoSample
+		}
+		if chatModelConfig.MaxTokens != nil {
+			reqBody["max_tokens"] = *chatModelConfig.MaxTokens
+		}
+
+		if chatModelConfig.Temperature != nil {
+			reqBody["temperature"] = *chatModelConfig.Temperature
+		}
+
+		if chatModelConfig.TopP != nil {
+			reqBody["top_p"] = *chatModelConfig.TopP
+		}
+
+		if chatModelConfig.Stop != nil {
+			reqBody["stop"] = *chatModelConfig.Stop
+		}
+
+		if chatModelConfig.Thinking != nil {
+			if *chatModelConfig.Thinking {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "enabled",
+				}
+			} else {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "disabled",
+				}
+			}
+		}
 	}
-	baseURL, err := resolveModelBaseURL(m.BaseURL, config.Region)
+
+	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	data, err := json.Marshal(body)
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("moonshot: encode request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(requestContext(config), http.MethodPost, joinModelURL(baseURL, m.URLSuffix.Chat), bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("moonshot: create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*config.APIKey))
+
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if body["stream"] == true {
-		req.Header.Set("Accept", "text/event-stream")
-	}
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("moonshot: send request: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("moonshot: request failed (HTTP %d)", resp.StatusCode)
-	}
-	return resp, nil
-}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 
-func (m *MoonshotModel) chat(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
-	body, err := moonshotChatBody(modelName, messages, config, false)
+	resp, err := m.baseModel.httpClient.Do(req)
 	if err != nil {
-		return nil, err
-	}
-	local, cancel := modelCallConfig(apiConfig)
-	defer cancel()
-	resp, err := m.requestChat(body, local)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	var result aliyunChatResponse
-	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
-		return nil, fmt.Errorf("moonshot: decode response: %w", err)
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if err == nil && len(body) > 20*1024*1024 {
+		err = fmt.Errorf("response exceeds limit")
 	}
-	if len(result.Error) != 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("moonshot: provider returned an error")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	if len(result.Choices) == 0 || result.Choices[0].Message.Content == nil || *result.Choices[0].Message.Content == "" {
-		return nil, fmt.Errorf("moonshot: no text answer")
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
 	}
-	message := result.Choices[0].Message
-	// Reasoning is optional, including when the provider enables thinking by default.
-	if message.ReasoningContent != nil {
-		reasoning := strings.TrimPrefix(*message.ReasoningContent, "\n")
-		message.ReasoningContent = &reasoning
+
+	// Parse response
+	var result map[string]interface{}
+
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope == nil {
+		return nil, fmt.Errorf("invalid provider JSON response")
 	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
+	if raw, exists := envelope["error"]; exists && string(raw) != "null" {
+		return nil, fmt.Errorf("provider response error")
 	}
-	return &ChatResponse{Answer: message.Content, ReasoningContent: message.ReasoningContent}, nil
+	if raw, exists := envelope["base_resp"]; exists {
+		var status struct {
+			Code int `json:"status_code"`
+		}
+		if json.Unmarshal(raw, &status) != nil || status.Code != 0 {
+			return nil, fmt.Errorf("provider response error")
+		}
+	}
+	if err = json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	choices, ok := result["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return nil, fmt.Errorf("no choices in response")
+	}
+
+	firstChoice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid choice format")
+	}
+
+	messageMap, ok := firstChoice["message"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid message format")
+	}
+
+	content, ok := messageMap["content"].(string)
+	if !ok || strings.TrimSpace(content) == "" {
+		return nil, fmt.Errorf("invalid content format")
+	}
+
+	var reasonContent string
+	if chatModelConfig != nil && chatModelConfig.Thinking != nil && *chatModelConfig.Thinking {
+		reasonContent, _ = messageMap["reasoning_content"].(string)
+		// if first char of reasonContent is \n remove the \n
+		if reasonContent != "" && reasonContent[0] == '\n' {
+			reasonContent = reasonContent[1:]
+		}
+	}
+
+	chatResponse := &ChatResponse{
+		Answer:        &content,
+		ReasonContent: &reasonContent,
+	}
+
+	return chatResponse, nil
 }
 
-func (m *MoonshotModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) (streamErr error) {
-	apiConfig, cancelCall := modelStreamConfig(apiConfig)
-	defer cancelCall()
+// ChatStreamlyWithSender sends messages and streams response via sender function (best performance, no channel)
+func (m *MoonshotModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
 	if sender == nil {
-		return fmt.Errorf("stream sender is required")
+		return fmt.Errorf("sender is required")
 	}
-	body, err := moonshotChatBody(modelName, messages, modelConfig, true)
+	if chatModelConfig != nil && chatModelConfig.Stream != nil && !*chatModelConfig.Stream {
+		return fmt.Errorf("stream must be true in ChatStreamlyWithSender")
+	}
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return err
+	}
+	apiKey := strings.TrimSpace(*apiConfig.ApiKey)
+	modelName, err := validateMoonshotModelName(modelName)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancelCause(requestContext(apiConfig))
-	local := APIConfig{Context: ctx}
-	if apiConfig != nil {
-		local = *apiConfig
-		local.Context = ctx
+	if len(messages) == 0 {
+		return fmt.Errorf("messages is empty")
 	}
-	idle := m.streamIdleTimeout
-	if idle <= 0 {
-		idle = 60 * time.Second
+	if sender == nil {
+		return fmt.Errorf("sender is required")
 	}
-	idleError := fmt.Errorf("moonshot: stream idle timeout: %w", context.DeadlineExceeded)
-	timer := time.AfterFunc(idle, func() { cancel(idleError) })
-	defer func() {
-		timer.Stop()
-		if context.Cause(ctx) == idleError {
-			streamErr = idleError
+
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(resolvedBaseURL, "/"), strings.TrimLeft(m.baseModel.URLSuffix.Chat, "/"))
+
+	// Convert messages to API format
+	apiMessages := make([]map[string]interface{}, len(messages))
+	for i, msg := range messages {
+		apiMessages[i] = map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
 		}
-		cancel(nil)
-	}()
-	resp, err := m.requestChat(body, &local)
+	}
+
+	// Build request body with streaming enabled
+	reqBody := map[string]interface{}{
+		"model":    modelName,
+		"messages": apiMessages,
+		"stream":   true,
+	}
+
+	if chatModelConfig != nil {
+		if chatModelConfig.MaxTokens != nil {
+			reqBody["max_tokens"] = *chatModelConfig.MaxTokens
+		}
+
+		if chatModelConfig.Temperature != nil {
+			reqBody["temperature"] = *chatModelConfig.Temperature
+		}
+
+		if chatModelConfig.DoSample != nil {
+			reqBody["do_sample"] = *chatModelConfig.DoSample
+		}
+
+		if chatModelConfig.TopP != nil {
+			reqBody["top_p"] = *chatModelConfig.TopP
+		}
+
+		if chatModelConfig.Stop != nil {
+			reqBody["stop"] = *chatModelConfig.Stop
+		}
+
+		if chatModelConfig.Thinking != nil {
+			if *chatModelConfig.Thinking {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "enabled",
+				}
+			} else {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "disabled",
+				}
+			}
+		}
+	}
+
+	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), streamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := m.baseModel.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	resp.Body = &activeModelStream{ReadCloser: resp.Body, active: func() { timer.Reset(idle) }}
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	receivedAnswer := false
-	for scanner.Scan() {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
-			continue
-		}
-		if data == "[DONE]" {
-			if !receivedAnswer {
-				return fmt.Errorf("moonshot: stream returned no text answer")
-			}
-			return sender(&data, nil)
-		}
-		var event struct {
-			Choices []struct {
-				Delta struct {
-					Content          *string `json:"content"`
-					ReasoningContent *string `json:"reasoning_content"`
-				} `json:"delta"`
-			} `json:"choices"`
-			Error json.RawMessage `json:"error"`
-		}
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return fmt.Errorf("moonshot: decode stream: %w", err)
-		}
-		if len(event.Error) != 0 && string(event.Error) != "null" {
-			return fmt.Errorf("moonshot: provider stream error")
-		}
-		if len(event.Choices) == 0 {
-			continue
-		}
-		delta := event.Choices[0].Delta
-		if delta.ReasoningContent != nil && *delta.ReasoningContent != "" {
-			if err := sender(nil, delta.ReasoningContent); err != nil {
-				return err
-			}
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if delta.Content != nil && *delta.Content != "" {
-			if err := sender(delta.Content, nil); err != nil {
-				return err
-			}
-			receivedAnswer = true
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("moonshot: read stream: %w", err)
-	}
-	return io.ErrUnexpectedEOF
-}
 
-func (m *MoonshotModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
-	suffix := m.URLSuffix.Embedding
-	if suffix == "" {
-		suffix = "embeddings"
-	}
-	return embedHTTPWithConfig(m.httpClient, m.BaseURL, suffix, modelName, texts, apiConfig, embeddingConfig)
-}
-
-func (m *MoonshotModel) get(suffix string, api *APIConfig) (*http.Response, error) {
-	if api == nil || api.APIKey == nil || strings.TrimSpace(*api.APIKey) == "" {
-		return nil, fmt.Errorf("moonshot: API key required")
-	}
-	if suffix == "" {
-		return nil, fmt.Errorf("moonshot: endpoint missing")
-	}
-	base, err := resolveModelBaseURL(m.BaseURL, api.Region)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(requestContext(api), http.MethodGet, joinModelURL(base, suffix), nil)
-	if err != nil {
-		return nil, fmt.Errorf("moonshot: invalid endpoint")
-	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*api.APIKey))
-	req.Header.Set("Accept", "application/json")
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("moonshot: GET failed: %w", err)
-	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("moonshot: GET failed (HTTP %d)", resp.StatusCode)
+
+		return fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
 	}
-	return resp, nil
+
+	// SSE parsing: read line by line
+	sawTerminal := false
+	sawAnswer := false
+	done, err := ParseSSEStream[map[string]interface{}](resp.Body, func(event map[string]interface{}) error {
+		if event["error"] != nil {
+			return fmt.Errorf("provider stream error")
+		}
+		choices, ok := event["choices"].([]interface{})
+		if !ok || len(choices) == 0 {
+			if event["usage"] != nil {
+				return nil
+			}
+			return fmt.Errorf("invalid stream choices")
+		}
+
+		firstChoice, ok := choices[0].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid stream choice")
+		}
+
+		delta, ok := firstChoice["delta"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid stream delta")
+		}
+
+		reasoningContent, ok := delta["reasoning_content"].(string)
+		if ok && reasoningContent != "" {
+			if err := sender(nil, &reasoningContent); err != nil {
+				return err
+			}
+		}
+
+		content, ok := delta["content"].(string)
+		if ok && content != "" {
+			sawAnswer = true
+			if err := sender(&content, nil); err != nil {
+				return err
+			}
+		}
+
+		finishReason, ok := firstChoice["finish_reason"].(string)
+		if ok && finishReason != "" {
+			sawTerminal = true
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to scan response body: %w", err)
+	}
+	if !done && !sawTerminal {
+		return fmt.Errorf("moonshot: stream ended before [DONE] or finish_reason: %w", io.ErrUnexpectedEOF)
+	}
+
+	if !sawAnswer {
+		return fmt.Errorf("stream returned no answer")
+	}
+	if err := apiConfig.RequestContext().Err(); err != nil {
+		return err
+	}
+	// Send [DONE] marker for OpenAI compatibility
+	endOfStream := "[DONE]"
+	if err = sender(&endOfStream, nil); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (m *MoonshotModel) ListModels(api *APIConfig) ([]string, error) {
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	resp, err := m.get(m.URLSuffix.Models, local)
+// Embed embeds a list of texts into embeddings
+func (m *MoonshotModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *MoonshotModel) ListModels(apiConfig *APIConfig) ([]ListModelResponse, error) {
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	apiKey := strings.TrimSpace(*apiConfig.ApiKey)
+
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	names, err := strictProviderModelNames(resp.Body)
-	if err == nil {
-		err = requestContext(local).Err()
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(resolvedBaseURL, "/"), strings.TrimLeft(m.baseModel.URLSuffix.Models, "/"))
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	return names, err
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := m.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if err == nil && len(body) > 20*1024*1024 {
+		err = fmt.Errorf("response exceeds limit")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
+	}
+
+	// Parse response
+
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil || envelope == nil {
+		return nil, fmt.Errorf("invalid models response")
+	}
+	if raw, ok := envelope["error"]; ok && string(raw) != "null" {
+		return nil, fmt.Errorf("provider models error")
+	}
+	var modelRows []map[string]json.RawMessage
+	if json.Unmarshal(envelope["data"], &modelRows) != nil || modelRows == nil {
+		return nil, fmt.Errorf("invalid models data")
+	}
+	for _, row := range modelRows {
+		var id string
+		if json.Unmarshal(row["id"], &id) != nil || strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("invalid model id")
+		}
+	}
+	var modelList ModelList
+	if err = json.Unmarshal(body, &modelList); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	if modelList.Models == nil {
+		return nil, fmt.Errorf("invalid models list format")
+	}
+	models := ParseListModel(modelList)
+	if len(models) == 0 {
+		return nil, fmt.Errorf("invalid models list format")
+	}
+	return models, nil
 }
 
-func (m *MoonshotModel) Balance(api *APIConfig) (map[string]interface{}, error) {
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	resp, err := m.get(m.URLSuffix.Balance, local)
+func (m *MoonshotModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	apiKey := strings.TrimSpace(*apiConfig.ApiKey)
+
+	baseURL, err := m.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
 		return nil, err
 	}
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(baseURL, "/"), strings.TrimLeft(m.baseModel.URLSuffix.Balance, "/"))
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := m.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
 	defer resp.Body.Close()
-	var payload struct {
-		Data struct {
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if err == nil && len(body) > 20*1024*1024 {
+		err = fmt.Errorf("response exceeds limit")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Data *struct {
 			AvailableBalance *float64 `json:"available_balance"`
 		} `json:"data"`
-		Error json.RawMessage `json:"error"`
 	}
-	if err := decodeBoundedModelJSON(resp.Body, &payload); err != nil || payload.Data.AvailableBalance == nil || len(payload.Error) > 0 && string(payload.Error) != "null" {
-		return nil, fmt.Errorf("moonshot: invalid balance response")
+	if err = json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-	amount := *payload.Data.AvailableBalance
-	if math.IsNaN(amount) || math.IsInf(amount, 0) {
-		return nil, fmt.Errorf("moonshot: invalid balance amount")
+	if result.Data == nil || result.Data.AvailableBalance == nil {
+		return nil, fmt.Errorf("balance response missing available_balance")
 	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
+
+	var response = map[string]interface{}{
+		"balance":  *result.Data.AvailableBalance,
+		"currency": "CNY",
 	}
-	return map[string]interface{}{"balance": amount, "currency": "CNY"}, nil
+
+	return response, nil
 }
 
 func (m *MoonshotModel) CheckConnection(apiConfig *APIConfig) error {
 	_, err := m.ListModels(apiConfig)
-	return err
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func (m *MoonshotModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
-	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
+// Rerank calculates similarity scores between query and documents
+func (m *MoonshotModel) Rerank(modelName *string, query string, documents []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return nil, fmt.Errorf("%s, Rerank not implemented", m.Name())
+}
+
+// TranscribeAudio transcribe audio
+func (m *MoonshotModel) TranscribeAudio(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig) (*ASRResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
+}
+
+func (m *MoonshotModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", m.Name())
+}
+
+// AudioSpeech convert text to audio
+func (m *MoonshotModel) AudioSpeech(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig) (*TTSResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
+}
+
+func (m *MoonshotModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", m.Name())
+}
+
+// OCRFile OCR file
+func (m *MoonshotModel) OCRFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, ocrConfig *OCRConfig) (*OCRFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
+}
+
+// ParseFile parse file
+func (m *MoonshotModel) ParseFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, parseFileConfig *ParseFileConfig) (*ParseFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
+}
+
+func (m *MoonshotModel) ListTasks(apiConfig *APIConfig) ([]ListTaskStatus, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
+}
+
+func (m *MoonshotModel) ShowTask(taskID string, apiConfig *APIConfig) (*TaskResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
 }

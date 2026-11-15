@@ -1,88 +1,511 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package models
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
-	"math"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
-// FishAudioModel supports speech synthesis, transcription, discovery and credit balance.
 type FishAudioModel struct {
-	*DummyModel
-	driver *openAIChatDriver
+	baseModel BaseModel
 }
 
-func NewFishAudioModel(baseURL map[string]string, suffix URLSuffix) *FishAudioModel {
-	driver := newOpenAIChatDriver(baseURL, suffix, "fishaudio", nil)
-	return &FishAudioModel{DummyModel: driver.DummyModel, driver: driver}
+func NewFishAudioModel(baseURL map[string]string, urlSuffix URLSuffix) *FishAudioModel {
+	if baseURL != nil {
+		copied := make(map[string]string, len(baseURL))
+		for region, value := range baseURL {
+			copied[region] = value
+		}
+		baseURL = copied
+	}
+	return &FishAudioModel{
+		baseModel: BaseModel{
+			BaseURL:    baseURL,
+			URLSuffix:  urlSuffix,
+			httpClient: NewDriverHTTPClient(),
+		},
+	}
 }
 
-func (f *FishAudioModel) Name() string { return "fishaudio" }
+func (f *FishAudioModel) NewInstance(baseURL map[string]string) ModelDriver {
+	return NewFishAudioModel(baseURL, f.baseModel.URLSuffix)
+}
 
-func (f *FishAudioModel) ListModels(api *APIConfig) ([]string, error) {
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	resp, err := f.driver.request(http.MethodGet, f.URLSuffix.Models, local, nil)
+func (f *FishAudioModel) Name() string {
+	return "fishaudio"
+}
+
+func (f *FishAudioModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", f.Name())
+}
+
+func (f *FishAudioModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", f.Name())
+}
+
+func (f *FishAudioModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	return nil, fmt.Errorf("no such method")
+}
+
+func (f *FishAudioModel) Rerank(modelName *string, query string, documents []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return nil, fmt.Errorf("no such method")
+}
+
+// TranscribeAudio transcribe audio
+func (f *FishAudioModel) TranscribeAudio(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig) (*ASRResponse, error) {
+	if err := f.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
+	if file == nil || *file == "" {
+		return nil, fmt.Errorf("file is missing")
+	}
+
+	resolvedBaseURL, err := f.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
 		return nil, err
 	}
+	url := fmt.Sprintf("%s/%s", resolvedBaseURL, f.baseModel.URLSuffix.ASR)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	// audio file
+	audioFile, err := os.Open(*file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open audio file: %w", err)
+	}
+	defer audioFile.Close()
+
+	part, err := writer.CreateFormFile("audio", filepath.Base(*file))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create multipart file: %w", err)
+	}
+
+	if _, err = io.Copy(part, audioFile); err != nil {
+		return nil, fmt.Errorf("failed to copy audio data: %w", err)
+	}
+
+	// extra params
+	if asrConfig != nil && asrConfig.Params != nil {
+		for key, value := range asrConfig.Params {
+
+			var val string
+
+			switch v := value.(type) {
+			case string:
+				val = v
+			case bool:
+				val = strconv.FormatBool(v)
+			case int:
+				val = strconv.Itoa(v)
+			case float64:
+				val = strconv.FormatFloat(v, 'f', -1, 64)
+			default:
+				val = fmt.Sprintf("%v", v)
+			}
+
+			if err := writer.WriteField(key, val); err != nil {
+				return nil, fmt.Errorf("failed to write field %s: %w", key, err)
+			}
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+
+	// request
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), longOpCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, &body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.ApiKey))
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := f.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
 	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("FishAudio ASR error: %s - %s", resp.Status, "[redacted]")
+	}
+
+	// result
 	var result struct {
-		Items *[]struct {
-			ID    string `json:"_id"`
-			Title string `json:"title"`
-		} `json:"items"`
-		Error any `json:"error"`
+		Text *string `json:"text"`
 	}
-	if err := decodeCoHereJSON(resp.Body, &result); err != nil {
-		return nil, err
+
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	if result.Items == nil || result.Error != nil {
-		return nil, fmt.Errorf("fishaudio: missing model list or provider error")
+
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(respBody, &envelope) != nil || envelope == nil || envelope["error"] != nil {
+		return nil, fmt.Errorf("invalid transcription response")
 	}
-	names := make([]string, 0, len(*result.Items))
-	for _, item := range *result.Items {
-		name := strings.TrimSpace(item.Title)
-		if name == "" {
-			name = strings.TrimSpace(item.ID)
+	if code := envelope["code"]; code != nil {
+		var n float64
+		if json.Unmarshal(code, &n) != nil || n != 0 {
+			return nil, fmt.Errorf("transcription provider error")
 		}
-		if name == "" {
-			return nil, fmt.Errorf("fishaudio: model has no title or ID")
-		}
-		names = append(names, name)
 	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
+	if result.Text == nil {
+		return nil, fmt.Errorf("ASR response missing text")
 	}
-	return names, nil
+	return &ASRResponse{
+		Text: *result.Text,
+	}, nil
 }
 
-func (f *FishAudioModel) Balance(api *APIConfig) (map[string]interface{}, error) {
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	resp, err := f.driver.request(http.MethodGet, f.URLSuffix.Balance, local, nil)
+func (f *FishAudioModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", f.Name())
+}
+
+// AudioSpeech convert text to audio
+func (f *FishAudioModel) AudioSpeech(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig) (*TTSResponse, error) {
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	if err := f.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
+	if audioContent == nil || *audioContent == "" {
+		return nil, fmt.Errorf("text content is missing")
+	}
+
+	resolvedBaseURL, err := f.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
 		return nil, err
 	}
+	url := fmt.Sprintf("%s/%s", resolvedBaseURL, f.baseModel.URLSuffix.TTS)
+
+	reqBody := map[string]interface{}{
+		"text": *audioContent,
+	}
+
+	if ttsConfig != nil && ttsConfig.Params != nil {
+		for key, value := range ttsConfig.Params {
+			reqBody[key] = value
+		}
+	}
+	if ttsConfig != nil && ttsConfig.Format != "" {
+		reqBody["format"] = ttsConfig.Format
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), longOpCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.ApiKey))
+	req.Header.Set("model", *modelName)
+
+	resp, err := f.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
 	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (20<<20)+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if len(body) > 20<<20 {
+		return nil, fmt.Errorf("speech response exceeds limit")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s - %s", resp.Status, "[redacted]")
+	}
+
+	if strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/") {
+		return nil, fmt.Errorf("speech response is not audio")
+	}
+	if len(bytes.TrimSpace(body)) == 0 || json.Valid(body) || strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "json") {
+		return nil, fmt.Errorf("speech response contains no audio")
+	}
+	return &TTSResponse{Audio: body}, nil
+}
+
+func (f *FishAudioModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return fmt.Errorf("model name is required")
+	}
+	if sender == nil {
+		return fmt.Errorf("sender is required")
+	}
+
+	if err := f.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return err
+	}
+
+	if audioContent == nil || *audioContent == "" {
+		return fmt.Errorf("text content is missing")
+	}
+
+	resolvedBaseURL, err := f.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/%s/%s", resolvedBaseURL, f.baseModel.URLSuffix.TTS, "stream/with-timestamp")
+
+	reqBody := map[string]interface{}{
+		"text": *audioContent,
+	}
+
+	if ttsConfig != nil && ttsConfig.Params != nil {
+		for key, value := range ttsConfig.Params {
+			reqBody[key] = value
+		}
+	}
+	if ttsConfig != nil && ttsConfig.Format != "" {
+		reqBody["format"] = ttsConfig.Format
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Build Request
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), streamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.ApiKey))
+	req.Header.Set("model", *modelName)
+
+	resp, err := f.baseModel.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("FishAudio stream API error: %d - %s", resp.StatusCode, "[redacted]")
+	}
+
+	totalAudio := 0
+	if _, err := ParseSSEStream[struct {
+		AudioBase64 string          `json:"audio_base64"`
+		Error       json.RawMessage `json:"error"`
+	}](resp.Body, func(event struct {
+		AudioBase64 string          `json:"audio_base64"`
+		Error       json.RawMessage `json:"error"`
+	}) error {
+		if event.AudioBase64 == "" || (len(event.Error) > 0 && string(event.Error) != "null") {
+			return fmt.Errorf("invalid FishAudio speech frame")
+		}
+		audioBytes, err := base64.StdEncoding.Strict().DecodeString(event.AudioBase64)
+		if err != nil || len(audioBytes) == 0 {
+			return fmt.Errorf("invalid FishAudio audio encoding")
+		}
+		totalAudio += len(audioBytes)
+		if totalAudio > 20<<20 {
+			return fmt.Errorf("speech stream exceeds limit")
+		}
+		chunk := string(audioBytes)
+		if err := sender(&chunk, nil); err != nil {
+			return err
+		}
+		return apiConfig.RequestContext().Err()
+	}); err != nil {
+		return fmt.Errorf("failed to scan response body: %w", err)
+	}
+	if totalAudio == 0 {
+		return fmt.Errorf("FishAudio stream contains no audio")
+	}
+
+	return nil
+}
+
+// OCRFile OCR file
+func (f *FishAudioModel) OCRFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, ocrConfig *OCRConfig) (*OCRFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", f.Name())
+}
+
+// ParseFile parse file
+func (f *FishAudioModel) ParseFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, parseFileConfig *ParseFileConfig) (*ParseFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", f.Name())
+}
+
+func (f *FishAudioModel) ListModels(apiConfig *APIConfig) ([]ListModelResponse, error) {
+	if err := f.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
+	resolvedBaseURL, err := f.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/%s", resolvedBaseURL, f.baseModel.URLSuffix.Models)
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.ApiKey))
+
+	resp, err := f.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Fish Audio API request failed with status %d: %s", resp.StatusCode, "[redacted]")
+	}
+
+	var result struct {
+		Items []struct {
+			ID    string  `json:"_id"`
+			Title *string `json:"title"`
+		} `json:"items"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil || envelope == nil || envelope["items"] == nil || string(envelope["items"]) == "null" || envelope["error"] != nil {
+		return nil, fmt.Errorf("invalid FishAudio inventory")
+	}
+	models := make([]ListModelResponse, 0, len(result.Items))
+	for _, item := range result.Items {
+		if item.Title == nil {
+			return nil, fmt.Errorf("FishAudio model missing title")
+		}
+		models = append(models, ListModelResponse{
+			Name: *item.Title,
+		})
+	}
+
+	return models, nil
+}
+
+func (f *FishAudioModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	if err := f.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
+	baseURL, err := f.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf("%s/wallet/self/api-credit", strings.TrimSuffix(baseURL, "/"))
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.ApiKey))
+
+	resp, err := f.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Fish Audio balance API error: status %d, body: %s", resp.StatusCode, "[redacted]")
+	}
+
 	var result map[string]interface{}
-	if err := decodeCoHereJSON(resp.Body, &result); err != nil {
-		return nil, err
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-	credit, ok := result["credit"].(float64)
-	if !ok || math.IsNaN(credit) || math.IsInf(credit, 0) || result["error"] != nil {
-		return nil, fmt.Errorf("fishaudio: missing or invalid credit balance")
+
+	if result == nil || result["error"] != nil {
+		return nil, fmt.Errorf("invalid FishAudio credit response")
 	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
+	if _, ok := result["credit"].(float64); !ok {
+		return nil, fmt.Errorf("FishAudio credit is missing or invalid")
 	}
 	return result, nil
 }
 
-func (f *FishAudioModel) CheckConnection(api *APIConfig) error {
-	_, err := f.ListModels(api)
+func (f *FishAudioModel) CheckConnection(apiConfig *APIConfig) error {
+	_, err := f.ListModels(apiConfig)
 	return err
 }
 
-var _ ModelDriver = (*FishAudioModel)(nil)
+func (f *FishAudioModel) ListTasks(apiConfig *APIConfig) ([]ListTaskStatus, error) {
+	return nil, fmt.Errorf("%s, no such method", f.Name())
+}
+
+func (f *FishAudioModel) ShowTask(taskID string, apiConfig *APIConfig) (*TaskResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", f.Name())
+}

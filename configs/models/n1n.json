@@ -16,7 +16,7 @@
       "max_tokens": 128000,
       "model_types": [
         "chat",
-        "image2text"
+        "vision"
       ]
     },
     {
@@ -24,7 +24,7 @@
       "max_tokens": 128000,
       "model_types": [
         "chat",
-        "image2text"
+        "vision"
       ]
     },
     {
@@ -32,7 +32,7 @@
       "max_tokens": 400000,
       "model_types": [
         "chat",
-        "image2text"
+        "vision"
       ]
     },
     {
@@ -40,7 +40,7 @@
       "max_tokens": 200000,
       "model_types": [
         "chat",
-        "image2text"
+        "vision"
       ]
     },
     {

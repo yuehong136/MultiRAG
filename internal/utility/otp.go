@@ -16,7 +16,7 @@
 
 // OTP / captcha helpers for the forgot-password flow.
 // Constants and key shapes mirror api/utils/web_utils.py so the Python
-// and Go backends share OTP challenges. Verified Go sessions are separate.
+// and Go backends share the same Redis namespace and contract.
 package utility
 
 import (
@@ -54,8 +54,16 @@ func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
-// CaptchaRedisKey follows the active email-keyed raw-image contract.
-func CaptchaRedisKey(email string) string { return "captcha:" + normalizeEmail(email) }
+// CaptchaIDRedisKey returns the Redis key that holds the active captcha
+// for a server-issued captcha_id. The handler returns the id to the
+// client and never the code itself, so an attacker cannot read the
+// expected answer from the response. Diverges from Python's
+// email-keyed “captcha_key“ on purpose — captchas are 60s-lived
+// and never cross between Go and Python in practice, so there is no
+// shared-state requirement.
+func CaptchaIDRedisKey(captchaID string) string {
+	return "captcha:" + captchaID
+}
 
 // OTPRedisKeys returns the four Redis keys used by the forgot-password
 // flow, in the same order as Python's “otp_keys“ helper:
@@ -69,10 +77,11 @@ func OTPRedisKeys(email string) (codeKey, attemptsKey, lastSentKey, lockKey stri
 		"otp_lock:" + email
 }
 
-// OTPVerifiedRedisKey holds a digest of the Go client's recovery credential.
-// The legacy Python email-only flag cannot authorize this flow.
+// OTPVerifiedRedisKey returns the Redis key that records a successful OTP
+// verification, used as the gate for the password-reset step (matches
+// Python “_verified_key“).
 func OTPVerifiedRedisKey(email string) string {
-	return "otp:go:verified:" + normalizeEmail(email)
+	return "otp:verified:" + normalizeEmail(email)
 }
 
 // HashOTPCode computes the HMAC-SHA256 of an OTP using the given salt and
@@ -124,19 +133,19 @@ func DecodeOTPStorageValue(stored string) (codeHash string, salt []byte, err err
 	if len(parts) != 2 {
 		return "", nil, fmt.Errorf("otp storage value missing salt separator")
 	}
-	salt, err = hex.DecodeString(parts[1])
-	if err != nil {
-		return "", nil, fmt.Errorf("otp storage salt is not valid hex: %w", err)
+	hash, hashErr := hex.DecodeString(parts[0])
+	if hashErr != nil || len(hash) != sha256.Size {
+		return "", nil, fmt.Errorf("invalid OTP hash")
 	}
-	hashBytes, hashErr := hex.DecodeString(parts[0])
-	if hashErr != nil || len(hashBytes) != sha256.Size || len(salt) != 16 {
-		return "", nil, fmt.Errorf("invalid otp storage value")
+	salt, err = hex.DecodeString(parts[1])
+	if err != nil || len(salt) != 16 {
+		return "", nil, fmt.Errorf("invalid OTP salt")
 	}
 	return parts[0], salt, nil
 }
 
 func randomStringFromAlphabet(alphabet string, length int) (string, error) {
-	if length <= 0 || alphabet == "" {
+	if length <= 0 {
 		return "", fmt.Errorf("random string length must be positive")
 	}
 	out := make([]byte, length)

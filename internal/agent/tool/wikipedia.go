@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -138,10 +137,6 @@ func (w *WikipediaTool) InvokableRun(ctx context.Context, argsJSON string, _ ...
 			fmt.Errorf("wikipedia: query is required")
 	}
 
-	if p.Lang != "" && !regexp.MustCompile(`^[a-z][a-z0-9-]{0,15}$`).MatchString(p.Lang) {
-		err := fmt.Errorf("wikipedia: invalid language")
-		return wikipediaErrJSON(err), err
-	}
 	endpoint := buildWikipediaURL(p.Lang, p.Query, p.MaxResults)
 	resp, err := w.helper.Do(ctx, http.MethodGet, endpoint, "", "", nil)
 	if err != nil {

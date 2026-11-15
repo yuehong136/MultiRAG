@@ -56,13 +56,12 @@ type SkillSearchConfig struct {
 	TenantRerankID         *int64     `gorm:"column:tenant_rerank_id" json:"tenant_rerank_id,omitempty"`
 	TopK                   int64      `gorm:"column:top_k;default:10" json:"top_k"`
 	IndexVersion           string     `gorm:"column:index_version;size:32;default:'1.0.0'" json:"index_version"`
-	CreateTime             *int64     `gorm:"column:create_time" json:"create_time,omitempty"`
-	UpdateTime             *time.Time `gorm:"column:update_time" json:"update_time,omitempty"`
+	BaseModel
 }
 
 // TableName returns the table name for SkillSearchConfig model
 func (SkillSearchConfig) TableName() string {
-	return "t_ai_go_skill_search_configs"
+	return "skill_search_configs"
 }
 
 // ToMap converts SkillSearchConfig to a map for JSON response
@@ -70,7 +69,7 @@ func (s *SkillSearchConfig) ToMap() map[string]interface{} {
 	result := map[string]interface{}{
 		"id":                       s.ID,
 		"tenant_id":                s.TenantID,
-		"space_id":                 s.SpaceID,
+		"space_id":                  s.SpaceID,
 		"embd_id":                  s.EmbdID,
 		"vector_similarity_weight": s.VectorSimilarityWeight,
 		"similarity_threshold":     s.SimilarityThreshold,
@@ -90,7 +89,7 @@ func (s *SkillSearchConfig) ToMap() map[string]interface{} {
 		result["create_time"] = s.CreateTime
 	}
 	if s.UpdateTime != nil {
-		result["update_time"] = s.UpdateTime.Format("2006-01-02 15:04:05")
+		result["update_time"] = time.UnixMilli(*s.UpdateTime).Format("2006-01-02 15:04:05")
 	}
 
 	return result

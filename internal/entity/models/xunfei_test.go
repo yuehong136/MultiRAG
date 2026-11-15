@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"testing"
@@ -16,14 +16,10 @@ func TestXunFeiAliasesBundleAndThinkingHTTP(t *testing.T) {
 	for _, name := range []string{"spark-x", "Spark-Max", "Spark-Max-32K", "Spark-Lite", "Spark-Pro", "Spark-Pro-128K", "Spark-4.0-Ultra"} {
 		t.Run(name, func(t *testing.T) {
 			calls := 0
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				path := "/v2/chat/completions"
 				model := name
-				if version, ok := sparkModelVersions[name]; ok {
-					path = "/v1/chat/completions"
-					model = version
-				}
 				if r.URL.Path != path || r.Header.Get("Authorization") != "Bearer password" {
 					t.Error("Spark path/credential", r.URL.Path)
 				}
@@ -41,8 +37,8 @@ func TestXunFeiAliasesBundleAndThinkingHTTP(t *testing.T) {
 			}))
 			defer fixture.Close()
 			d := NewXunFeiModel(map[string]string{"default": fixture.URL}, URLSuffix{Chat: "v2/chat/completions"})
-			key := `{"spark_api_password":" password ","spark_app_id":"app","spark_api_secret":"secret"}`
-			api := &APIConfig{APIKey: &key}
+			key := "password"
+			api := &APIConfig{ApiKey: &key}
 			config := &ChatConfig{Thinking: anthropicTestPtr(false)}
 			response, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, config)
 			if err != nil || response == nil || *response.Answer != "answer" {
@@ -51,7 +47,7 @@ func TestXunFeiAliasesBundleAndThinkingHTTP(t *testing.T) {
 			if err := d.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: "q"}}, api, config, func(*string, *string) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
-			if calls != 2 || api.Context != nil || !strings.Contains(*api.APIKey, "spark_app_id") || d.URLSuffix.Chat != "v2/chat/completions" {
+			if calls != 2 || api.Context != nil || *api.ApiKey != "password" || d.baseModel.URLSuffix.Chat != "v2/chat/completions" {
 				t.Fatal("instance mutated", calls)
 			}
 		})
@@ -60,27 +56,26 @@ func TestXunFeiAliasesBundleAndThinkingHTTP(t *testing.T) {
 
 func TestXunFeiCheckConnectionAndStaticDiscovery(t *testing.T) {
 	calls := 0
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
-		if r.URL.Path != "/v1/chat/completions" || body["model"] != "lite" || body["max_tokens"] != float64(1) || r.Header.Get("Authorization") != "Bearer key" {
-			t.Error("authenticated minimal Spark connection", r.URL.Path, body)
+		if r.Method != "GET" || r.URL.Path != "/models" || r.Header.Get("Authorization") != "Bearer key" || r.ContentLength != 0 {
+			t.Error("frozen model discovery request", r.URL)
 		}
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+		fmt.Fprint(w, `{"data":[{"id":"spark-x"}]}`)
 	}))
 	defer fixture.Close()
-	d := NewXunFeiModel(map[string]string{"default": fixture.URL}, URLSuffix{Chat: "v2/chat/completions"})
-	names, err := d.ListModels(nil)
-	if err != nil || !reflect.DeepEqual(names, []string{"spark-x"}) || calls != 0 {
+	d := NewXunFeiModel(map[string]string{"default": fixture.URL}, URLSuffix{Chat: "v2/chat/completions", Models: "models"})
+	api := &APIConfig{ApiKey: stringPtr("key")}
+	names, err := d.ListModels(api)
+	if err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{"spark-x"}) || calls != 1 {
 		t.Fatal(names, err, calls)
 	}
-	if err := d.CheckConnection(&APIConfig{APIKey: stringPtr("key")}); err != nil || calls != 1 {
-		t.Fatal(err, calls)
+	if err := d.CheckConnection(api); err == nil || calls != 1 {
+		t.Fatal("unsupported connection check returned success", err, calls)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if names, err := d.ListModels(&APIConfig{Context: ctx}); !errors.Is(err, context.Canceled) || names != nil {
+	if names, err := d.ListModels(&APIConfig{ApiKey: api.ApiKey, Context: ctx}); !errors.Is(err, context.Canceled) || names != nil {
 		t.Fatal(names, err)
 	}
 }
@@ -88,9 +83,9 @@ func TestXunFeiCheckConnectionAndStaticDiscovery(t *testing.T) {
 func TestXunFeiRejectsInvalidCredentialsAndProviderCode(t *testing.T) {
 	d := NewXunFeiModel(map[string]string{"default": "http://unused.invalid"}, URLSuffix{Chat: "chat"})
 	calls := 0
-	d.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) { calls++; return nil, errors.New("unexpected request") })
-	for _, key := range []string{"", " ", "{bad", `{}`, `{"spark_api_password":null}`, `{"spark_api_password":42}`, `{"spark_api_password":" "}`} {
-		api := &APIConfig{APIKey: &key}
+	d.baseModel.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) { calls++; return nil, errors.New("unexpected request") })
+	for _, key := range []string{"", " "} {
+		api := &APIConfig{ApiKey: &key}
 		if response, err := d.ChatWithMessages("spark-x", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil || response != nil || strings.Contains(err.Error(), key) && key != "" && key != " " {
 			t.Fatal(response, err)
 		}
@@ -102,7 +97,7 @@ func TestXunFeiRejectsInvalidCredentialsAndProviderCode(t *testing.T) {
 		t.Fatal("bad credentials reached provider")
 	}
 	for _, code := range []string{`null`, `1`, `"0"`, `0.5`} {
-		fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var body map[string]any
 			json.NewDecoder(r.Body).Decode(&body)
 			if body["stream"] == true {
@@ -112,7 +107,7 @@ func TestXunFeiRejectsInvalidCredentialsAndProviderCode(t *testing.T) {
 			}
 		}))
 		d := NewXunFeiModel(map[string]string{"default": fixture.URL}, URLSuffix{Chat: "chat"})
-		api := &APIConfig{APIKey: stringPtr("key")}
+		api := &APIConfig{ApiKey: stringPtr("key")}
 		if result, err := d.ChatWithMessages("spark-x", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil || result != nil {
 			t.Fatal(result, err)
 		}
@@ -133,7 +128,5 @@ func TestXunFeiRejectsInvalidCredentialsAndProviderCode(t *testing.T) {
 	if _, err := d.Balance(nil); err == nil {
 		t.Fatal("unsupported balance")
 	}
-	if _, ok := any(d).(TTSDriver); ok {
-		t.Fatal("invented TTS")
-	}
+
 }

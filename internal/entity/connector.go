@@ -28,7 +28,7 @@ type Connector struct {
 	Name          string     `gorm:"column:name;size:128;not null" json:"name"`
 	Source        string     `gorm:"column:source;size:128;not null;index" json:"source"`
 	InputType     string     `gorm:"column:input_type;size:128;not null;index" json:"input_type"`
-	Config        JSONMap    `gorm:"column:config;type:jsonb;not null" json:"config"`
+	Config        JSONMap    `gorm:"column:config;type:longtext;not null" json:"config"`
 	RefreshFreq   int64      `gorm:"column:refresh_freq;default:0" json:"refresh_freq"`
 	PruneFreq     int64      `gorm:"column:prune_freq;default:0" json:"prune_freq"`
 	TimeoutSecs   int64      `gorm:"column:timeout_secs;default:3600" json:"timeout_secs"`
@@ -39,7 +39,54 @@ type Connector struct {
 
 // TableName specify table name
 func (Connector) TableName() string {
-	return "t_ai_connectors"
+	return "connector"
+}
+
+// MarshalJSON formats connector timestamps to match the Python API contract.
+func (c Connector) MarshalJSON() ([]byte, error) {
+	type connectorJSON struct {
+		ID            string  `json:"id"`
+		TenantID      string  `json:"tenant_id"`
+		Name          string  `json:"name"`
+		Source        string  `json:"source"`
+		InputType     string  `json:"input_type"`
+		Config        JSONMap `json:"config"`
+		RefreshFreq   int64   `json:"refresh_freq"`
+		PruneFreq     int64   `json:"prune_freq"`
+		TimeoutSecs   int64   `json:"timeout_secs"`
+		IndexingStart *string `json:"indexing_start"`
+		Status        string  `json:"status"`
+		CreateTime    *int64  `json:"create_time,omitempty"`
+		CreateDate    *string `json:"create_date,omitempty"`
+		UpdateTime    *int64  `json:"update_time,omitempty"`
+		UpdateDate    *string `json:"update_date,omitempty"`
+	}
+
+	return json.Marshal(connectorJSON{
+		ID:            c.ID,
+		TenantID:      c.TenantID,
+		Name:          c.Name,
+		Source:        c.Source,
+		InputType:     c.InputType,
+		Config:        c.Config,
+		RefreshFreq:   c.RefreshFreq,
+		PruneFreq:     c.PruneFreq,
+		TimeoutSecs:   c.TimeoutSecs,
+		IndexingStart: formatConnectorTime(c.IndexingStart),
+		Status:        c.Status,
+		CreateTime:    c.CreateTime,
+		CreateDate:    formatConnectorTime(c.CreateDate),
+		UpdateTime:    c.UpdateTime,
+		UpdateDate:    formatConnectorTime(c.UpdateDate),
+	})
+}
+
+func formatConnectorTime(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := value.Format("2006-01-02T15:04:05")
+	return &formatted
 }
 
 // Connector2Kb connector to knowledge base mapping model
@@ -53,7 +100,7 @@ type Connector2Kb struct {
 
 // TableName specify table name
 func (Connector2Kb) TableName() string {
-	return "t_ai_connector2kb"
+	return "connector2kb"
 }
 
 // SyncLogs sync logs model
@@ -66,9 +113,9 @@ type SyncLogs struct {
 	NewDocsIndexed       int64      `gorm:"column:new_docs_indexed;default:0" json:"new_docs_indexed"`
 	TotalDocsIndexed     int64      `gorm:"column:total_docs_indexed;default:0" json:"total_docs_indexed"`
 	DocsRemovedFromIndex int64      `gorm:"column:docs_removed_from_index;default:0" json:"docs_removed_from_index"`
-	ErrorMsg             string     `gorm:"column:error_msg;type:text;not null" json:"error_msg"`
+	ErrorMsg             string     `gorm:"column:error_msg;type:longtext;not null" json:"error_msg"`
 	ErrorCount           int64      `gorm:"column:error_count;default:0" json:"error_count"`
-	FullExceptionTrace   *string    `gorm:"column:full_exception_trace;type:text" json:"full_exception_trace,omitempty"`
+	FullExceptionTrace   *string    `gorm:"column:full_exception_trace;type:longtext" json:"full_exception_trace,omitempty"`
 	TimeStarted          *time.Time `gorm:"column:time_started;index" json:"time_started,omitempty"`
 	PollRangeStart       *string    `gorm:"column:poll_range_start;size:255;index" json:"poll_range_start,omitempty"`
 	PollRangeEnd         *string    `gorm:"column:poll_range_end;size:255;index" json:"poll_range_end,omitempty"`
@@ -78,7 +125,7 @@ type SyncLogs struct {
 
 // TableName specify table name
 func (SyncLogs) TableName() string {
-	return "t_ai_sync_logs"
+	return "sync_logs"
 }
 
 // ConnectorSyncLog is the API projection used by the connector logs endpoint.
@@ -100,7 +147,7 @@ type ConnectorSyncLog struct {
 	Status               string     `gorm:"column:status" json:"status"`
 }
 
-// MarshalJSON emits public log timestamps in UTC without exposing exception traces.
+// MarshalJSON formats datetime fields to match the Python API encoder.
 func (c ConnectorSyncLog) MarshalJSON() ([]byte, error) {
 	type connectorSyncLogJSON struct {
 		ID                   string  `json:"id"`
@@ -143,6 +190,6 @@ func formatConnectorLogTime(value *time.Time) *string {
 	if value == nil {
 		return nil
 	}
-	formatted := value.UTC().Format(time.RFC3339Nano)
+	formatted := value.Format("2006-01-02 15:04:05")
 	return &formatted
 }

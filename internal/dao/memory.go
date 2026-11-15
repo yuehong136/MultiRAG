@@ -22,9 +22,8 @@ package dao
 import (
 	"context"
 	"fmt"
-	"strings"
-
 	"multirag/internal/entity"
+	"strings"
 )
 
 // Memory type bit flag constants, consistent with Python MemoryType enum
@@ -122,12 +121,13 @@ func (dao *MemoryDAO) Create(memory *entity.Memory) error {
 //   - id: Memory ID
 //
 // Returns:
-//   - *entity.Memory: Memory model pointer
+//   - *model.Memory: Memory model pointer
 //   - error: Database operation error
 func (dao *MemoryDAO) GetByID(id string) (*entity.Memory, error) {
 	return dao.GetByIDWithContext(context.Background(), id)
 }
 
+// GetByIDWithContext retrieves a memory record by ID from database with context.
 func (dao *MemoryDAO) GetByIDWithContext(ctx context.Context, id string) (*entity.Memory, error) {
 	var memory entity.Memory
 	err := DB.WithContext(ctx).Where("id = ?", id).First(&memory).Error
@@ -143,7 +143,7 @@ func (dao *MemoryDAO) GetByIDWithContext(ctx context.Context, id string) (*entit
 //   - tenantID: Tenant ID
 //
 // Returns:
-//   - []*entity.Memory: Memory model pointer array
+//   - []*model.Memory: Memory model pointer array
 //   - error: Database operation error
 func (dao *MemoryDAO) GetByTenantID(tenantID string) ([]*entity.Memory, error) {
 	var memories []*entity.Memory
@@ -159,7 +159,7 @@ func (dao *MemoryDAO) GetByTenantID(tenantID string) ([]*entity.Memory, error) {
 //   - tenantID: Tenant ID
 //
 // Returns:
-//   - []*entity.Memory: Matching memory list (for existence check)
+//   - []*model.Memory: Matching memory list (for existence check)
 //   - error: Database operation error
 func (dao *MemoryDAO) GetByNameAndTenant(name string, tenantID string) ([]*entity.Memory, error) {
 	var memories []*entity.Memory
@@ -173,7 +173,7 @@ func (dao *MemoryDAO) GetByNameAndTenant(name string, tenantID string) ([]*entit
 //   - ids: Memory ID list
 //
 // Returns:
-//   - []*entity.Memory: Memory model pointer array
+//   - []*model.Memory: Memory model pointer array
 //   - error: Database operation error
 func (dao *MemoryDAO) GetByIDs(ids []string) ([]*entity.Memory, error) {
 	var memories []*entity.Memory
@@ -247,7 +247,7 @@ func (dao *MemoryDAO) DeleteByID(id string) error {
 //   - id: Memory ID
 //
 // Returns:
-//   - *entity.MemoryListItem: Memory detail with owner name populated
+//   - *model.MemoryListItem: Memory detail with owner name populated
 //   - error: Database operation error
 //
 // Example:
@@ -261,8 +261,8 @@ func (dao *MemoryDAO) GetWithOwnerNameByID(id string) (*entity.MemoryListItem, e
 			m.temperature, m.system_prompt, m.user_prompt, m.create_time, m.create_date,
 			m.update_time, m.update_date,
 			u.nickname as owner_name
-		FROM t_ai_memories m
-		LEFT JOIN t_ai_users u ON m.tenant_id = u.id
+		FROM memory m
+		LEFT JOIN user u ON m.tenant_id = u.id
 		WHERE m.id = ?
 	`
 
@@ -294,7 +294,7 @@ func (dao *MemoryDAO) GetWithOwnerNameByID(id string) (*entity.MemoryListItem, e
 //   - pageSize: Number of items per page
 //
 // Returns:
-//   - []*entity.MemoryListItem: Memory list items with owner name populated
+//   - []*model.MemoryListItem: Memory list items with owner name populated
 //   - int64: Total count of matching memories
 //   - error: Database operation error
 //
@@ -331,7 +331,7 @@ func (dao *MemoryDAO) GetByFilter(tenantIDs []string, memoryTypes []string, stor
 		whereClause = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM t_ai_memories m %s", whereClause)
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM memory m %s", whereClause)
 	var total int64
 	if err := DB.Raw(countSQL, args...).Scan(&total).Error; err != nil {
 		return nil, 0, err
@@ -345,8 +345,8 @@ func (dao *MemoryDAO) GetByFilter(tenantIDs []string, memoryTypes []string, stor
 			m.temperature, m.system_prompt, m.user_prompt, m.create_time, m.create_date,
 			m.update_time, m.update_date,
 			u.nickname as owner_name
-		FROM t_ai_memories m
-		LEFT JOIN t_ai_users u ON m.tenant_id = u.id
+		FROM memory m
+		LEFT JOIN user u ON m.tenant_id = u.id
 		%s
 		ORDER BY m.update_time DESC
 		LIMIT ? OFFSET ?

@@ -6,6 +6,5 @@
     "embedding": "embeddings",
     "rerank": "rerank"
   },
-  "class": "local",
-  "models": []
+  "class": "local"
 }

@@ -4,251 +4,216 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
-	"multirag/internal/service/nlp"
-
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	"multirag/internal/server"
+	"multirag/internal/testsupport"
+	"multirag/internal/testsupport/scratch"
 )
 
-func TestSplitModelInstance(t *testing.T) {
-	for _, test := range []struct{ value, name, instance, provider string }{
-		{"BAAI/bge@SiliconFlow", "BAAI/bge", "default", "SiliconFlow"},
-		{"BAAI/bge@fixture@SiliconFlow", "BAAI/bge", "fixture", "SiliconFlow"},
-	} {
-		name, instance, provider, err := splitModelInstance(test.value)
-		if err != nil || name != test.name || instance != test.instance || provider != test.provider {
-			t.Fatalf("split %q = %q %q %q, %v", test.value, name, instance, provider, err)
+func canonicalModelDatabase(t *testing.T) *scratch.Services {
+	t.Helper()
+	s := scratch.New(t)
+	_, source, _, _ := runtime.Caller(0)
+	t.Chdir(filepath.Join(filepath.Dir(source), "..", ".."))
+	configPath := filepath.Join(filepath.Dir(os.Getenv("MULTIRAG_GO_ALIGNMENT_CONFIG")), "service_conf.yaml")
+	if err := server.Init(configPath); err != nil {
+		t.Fatal("private canonical config initialization")
+	}
+	server.GetConfig().Database = s.Config.Database
+	previous := dao.DB
+	if err := dao.InitDB(); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := dao.DB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); dao.DB = previous })
+	active := "1"
+	for _, id := range []string{"model-owner", "model-other"} {
+		if err := dao.DB.Create(&entity.Tenant{ID: id, Status: &active}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := dao.DB.Create(&entity.UserTenant{ID: id, UserID: id, TenantID: id, Role: "owner", InvitedBy: id, Status: &active}).Error; err != nil {
+			t.Fatal(err)
 		}
 	}
-	for _, value := range []string{"model", "@provider", "model@", "model@@provider", "model@instance@provider@extra"} {
-		if _, _, _, err := splitModelInstance(value); err == nil {
-			t.Fatalf("accepted %q", value)
-		}
-	}
+	return s
 }
 
-// Opt-in integration uses only a separately created database with an owned name.
-func TestModelBindingScratchPostgres(t *testing.T) {
-	dsn := os.Getenv("MULTIRAG_GO_MODELS_DSN")
-	if dsn == "" {
-		t.Skip("requires an owned model-binding scratch database")
-	}
-	parsed, err := url.Parse(dsn)
-	if err != nil || !strings.HasPrefix(strings.TrimPrefix(parsed.Path, "/"), "multirag_go_models_") {
-		t.Fatal("scratch DB name is not owned")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal("scratch database connection failed")
-	}
-	pool, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	oldDB := dao.DB
-	dao.DB = db
-	t.Cleanup(func() { dao.DB = oldDB })
-	if err := db.AutoMigrate(&entity.TenantModelProvider{}, &entity.TenantModelInstance{}, &entity.TenantModel{}, &entity.TenantLLM{}, &entity.Tenant{}); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var paths []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		if r.Header.Get("Authorization") != "Bearer fixture-key" && r.Header.Get("Authorization") != "Bearer fixture-key-VolcEngine" {
-			t.Error("wrong tenant key")
+func TestCanonicalModelBindingsSQLHTTP(t *testing.T) {
+	s := canonicalModelDatabase(t)
+	svc := NewModelProviderService()
+	var calls atomic.Int32
+	var malformed atomic.Bool
+	fixture := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if !strings.HasPrefix(r.URL.Path, "/one/") && !strings.HasPrefix(r.URL.Path, "/two/") {
+			t.Error("instance endpoint lost")
+			w.WriteHeader(400)
+			return
 		}
-		switch r.URL.Path {
-		case "/fixture/embeddings", "/legacy/embeddings":
-			fmt.Fprint(w, `{"data":[{"index":0,"embedding":[1,2]}]}`)
-		case "/fixture/rerank":
-			fmt.Fprint(w, `{"results":[{"index":0,"relevance_score":0.8}]}`)
-		case "/fixture/chat/completions":
-			fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
-		case "/fixture/embeddings/multimodal":
-			fmt.Fprint(w, `{"data":{"embedding":[1,2]}}`)
+		instance := strings.Split(r.URL.Path, "/")[1]
+		if r.Header.Get("Authorization") != "Bearer "+instance {
+			t.Error("instance credentials lost")
+			w.WriteHeader(401)
+			return
+		}
+		if malformed.Load() {
+			fmt.Fprint(w, `{"data":[{"id":17}]}`)
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			fmt.Fprint(w, `{"data":[{"id":"text-embedding-3-small"},{"id":"unknown-provider-model"}]}`)
+		case strings.HasSuffix(r.URL.Path, "/embeddings"):
+			var body struct {
+				Model string   `json:"model"`
+				Input []string `json:"input"`
+			}
+			if json.NewDecoder(r.Body).Decode(&body) != nil || body.Model != "text-embedding-3-small" {
+				t.Error("bound model identity lost")
+			}
+			rows := make([]map[string]any, len(body.Input))
+			for i := range rows {
+				rows[i] = map[string]any{"index": i, "embedding": []float64{1, 2}}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": rows})
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			var body struct {
+				Model    string           `json:"model"`
+				Messages []models.Message `json:"messages"`
+			}
+			if json.NewDecoder(r.Body).Decode(&body) != nil || body.Model != "gpt-4o" || len(body.Messages) != 2 {
+				t.Error("messages or model lost")
+			}
+			fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, instance)
 		default:
-			t.Errorf("unexpected URL %s", r.URL.Path)
+			t.Error("unexpected provider path", r.URL.Path)
 			w.WriteHeader(404)
 		}
 	}))
-	defer server.Close()
-	for _, name := range []string{"SiliconFlow", "VolcEngine"} {
-		provider := manager.FindProvider(name)
-		provider.URL["fixture"] = server.URL + "/fixture"
-		if err := db.Create(&entity.TenantModelProvider{ID: name, TenantID: "tenant", ProviderName: name}).Error; err != nil {
-			t.Fatal(err)
+	providerName := "OpenAI"
+	provider := dao.GetModelProviderManager().FindProvider(providerName)
+	original, _ := json.Marshal(provider.URL)
+	if code, err := svc.AddModelProvider(providerName, "model-owner"); err != nil || code != common.CodeSuccess {
+		t.Fatal(code, err)
+	}
+	for _, instance := range []string{"one", "two"} {
+		if code, err := svc.CreateProviderInstance(providerName, instance, instance, fixture.URL+"/"+instance, "default", "model-owner"); err != nil || code != common.CodeSuccess {
+			t.Fatal(code, err)
 		}
-		if err := db.Create(&entity.TenantModelInstance{ID: name + "-instance", ProviderID: name, InstanceName: "fixture", APIKey: func() string {
-			if name == "VolcEngine" {
-				return "fixture-key-VolcEngine"
-			}
-			return "fixture-key"
-		}(), Extra: `{"region":"fixture"}`}).Error; err != nil {
-			t.Fatal(err)
+		if code, err := svc.AddModel(&AddModelRequest{ProviderName: providerName, InstanceName: instance, Models: []ModelRequest{{ModelName: "gpt-4o", ModelTypes: []string{"chat"}}, {ModelName: "text-embedding-3-small", ModelTypes: []string{"embedding"}}}}, "model-owner"); err != nil || code != common.CodeSuccess {
+			t.Fatal(code, err)
 		}
-	}
-	svc := NewModelProviderService()
-	svc.providerManager = manager
-	embedding, err := svc.GetEmbeddingModel("tenant", "Qwen/Qwen3-Embedding-0.6B@fixture@SiliconFlow")
-	if err != nil {
-		t.Fatal(err)
-	}
-	vector, err := embeddingVectorsForTest(embedding.Embed([]string{"q"}))
-	if err != nil || !reflect.DeepEqual(vector, [][]float64{{1, 2}}) {
-		t.Fatalf("vector=%v, error=%v", vector, err)
-	}
-	queryVectors, err := embeddingVectorsForTest(embedding.Embed([]string{"question"}))
-	if err != nil || !reflect.DeepEqual(queryVectors, [][]float64{{1, 2}}) {
-		t.Fatalf("bound query=%v error=%v", queryVectors, err)
-	}
-	queryVector := queryVectors[0]
-	expression, err := nlp.NewRetrievalService(nil).GetVector("question", embedding, 7, 0.4)
-	if err != nil || expression.VectorColumnName != "q_2_vec" || !reflect.DeepEqual(expression.EmbeddingData, queryVector) {
-		t.Fatalf("bound retrieval expression=%v error=%v", expression, err)
-	}
-	rerank, err := svc.GetRerankModel("tenant", "BAAI/bge-reranker-v2-m3@fixture@SiliconFlow")
-	if err != nil {
-		t.Fatal(err)
-	}
-	scores, err := rerank.Rerank("q", []string{"doc"})
-	if err != nil || !reflect.DeepEqual(scores, []float64{0.8}) {
-		t.Fatalf("scores=%v, error=%v", scores, err)
-	}
-	name := "doubao-seed-2-0-pro-260215@fixture@VolcEngine"
-	chat, err := svc.GetChatModel("tenant", name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	answer, err := chat.Chat("system", []map[string]string{{"role": "user", "content": "q"}}, nil)
-	if err != nil || answer != "answer" {
-		t.Fatalf("answer=%q, error=%v", answer, err)
-	}
-	volcEmbedding, err := svc.GetEmbeddingModel("tenant", "doubao-embedding-vision-250615@fixture@VolcEngine")
-	if err != nil {
-		t.Fatal(err)
-	}
-	volcExpression, err := nlp.NewRetrievalService(nil).GetVector("question", volcEmbedding, 7, 0.4)
-	if err != nil || volcExpression.VectorColumnName != "q_2_vec" || !reflect.DeepEqual(volcExpression.EmbeddingData, []float64{1, 2}) {
-		t.Fatalf("VolcEngine bound retrieval expression=%v error=%v", volcExpression, err)
-	}
-	tenantName, tenantStatus := "fixture", "1"
-	if err := db.Create(&entity.Tenant{ID: "tenant", Name: &tenantName, LLMID: name, Status: &tenantStatus}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.GetChatModel("tenant", ""); err != nil {
-		t.Fatalf("default model: %v", err)
-	}
-	if _, err := svc.GetEmbeddingModel("tenant", name); err == nil {
-		t.Fatal("wrong model type accepted")
-	}
-	if _, err := svc.GetChatModel("other-tenant", name); err == nil {
-		t.Fatal("foreign tenant credentials resolved")
-	}
-	blocked := &entity.TenantModel{ID: "disabled", ProviderID: "VolcEngine", InstanceID: "VolcEngine-instance", ModelName: "doubao-seed-2-0-pro-260215", ModelType: "chat", Status: "disabled"}
-	if err := db.Create(blocked).Error; err != nil {
-		t.Fatal(err)
-	}
-	before := len(paths)
-	if _, err := svc.GetChatModel("tenant", name); err == nil {
-		t.Fatal("disabled model resolved")
-	}
-	if len(paths) != before {
-		t.Fatal("disabled model reached provider")
-	}
-	// Legacy credentials and a custom URL remain callable after retiring the old factory.
-	legacyName, key, base, typ := "legacy-embedding", "fixture-key", server.URL+"/legacy", string(entity.ModelTypeEmbedding)
-	if err := db.Create(&entity.TenantLLM{TenantID: "legacy", LLMFactory: "OpenAI", LLMName: &legacyName, APIKey: &key, APIBase: &base, ModelType: &typ, Status: "1"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	legacy, err := svc.GetEmbeddingModel("legacy", legacyName+"@OpenAI")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := embeddingVectorsForTest(legacy.Embed([]string{"q"})); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&entity.TenantModelProvider{ID: "legacy-openai", TenantID: "legacy", ProviderName: "OpenAI"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	legacy, err = svc.GetEmbeddingModel("legacy", legacyName+"@OpenAI")
-	if err != nil {
-		t.Fatalf("missing default instance compatibility: %v", err)
-	}
-	if _, err := embeddingVectorsForTest(legacy.Embed([]string{"q"})); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.GetEmbeddingModel("legacy", legacyName+"@missing@OpenAI"); err == nil {
-		t.Fatal("explicit missing instance switched credentials")
-	}
-	if err := db.Model(&entity.TenantLLM{}).Where("tenant_id = ?", "legacy").Update("mdl_type", nil).Error; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.GetEmbeddingModel("legacy", legacyName+"@OpenAI"); err == nil {
-		t.Fatal("unknown nullable legacy capability accepted")
-	}
-	if err := db.Create(&entity.TenantLLM{TenantID: "custom", LLMFactory: "OpenAI-API-Compatible", LLMName: &legacyName, APIKey: &key, Status: "1"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.GetEmbeddingModel("custom", legacyName+"@OpenAI-API-Compatible"); err == nil {
-		t.Fatal("missing custom URL accepted")
-	}
+		rows, err := svc.ListSupportedModels(t.Context(), providerName, instance, "model-owner")
+		if err != nil || len(rows) != 2 {
+			t.Fatal("typed discovery duplicate/missing", len(rows), err)
+		}
+		if _, exists := rows[0]["max_dimension"]; !exists {
+			t.Fatal("typed dimension metadata lost")
+		}
+		if _, exists := rows[0]["dimension"]; exists {
+			t.Fatal("retired dimension alias returned")
+		}
+		name := "gpt-4o"
+		response, code, err := svc.ChatToModelWithMessages(&providerName, &instance, &name, nil, "model-owner", []models.Message{{Role: "system", Content: "system"}, {Role: "user", Content: "q"}}, nil, nil)
+		if err != nil || code != common.CodeSuccess || response == nil || response.Answer == nil || *response.Answer != instance {
+			t.Fatal("canonical chat", code, err)
+		}
 
-	if err := db.Exec("ALTER TABLE tenant_model RENAME TO hidden_tenant_model").Error; err != nil {
-		t.Fatal(err)
+		var modelID string
+		if err := s.Read.QueryRow("SELECT m.id FROM tenant_model m JOIN tenant_model_instance i ON i.id=m.instance_id WHERE m.model_name=? AND i.instance_name=?", "gpt-4o", instance).Scan(&modelID); err != nil {
+			t.Fatal(err)
+		}
+		byID, code, err := svc.ChatToModelWithMessages(nil, nil, nil, &modelID, "model-owner", []models.Message{{Role: "system", Content: "system"}, {Role: "user", Content: "q"}}, nil, nil)
+		if err != nil || code != common.CodeSuccess || byID == nil || byID.Answer == nil || *byID.Answer != instance {
+			t.Fatal("UUID modelID canonical route", code, err)
+		}
+		before := calls.Load()
+		if result, _, err := svc.ChatToModelWithMessages(nil, nil, nil, &modelID, "model-other", []models.Message{{Role: "user", Content: "q"}}, nil, nil); err == nil || result != nil {
+			t.Fatal("foreign UUID modelID accepted")
+		}
+		if calls.Load() != before {
+			t.Fatal("foreign modelID reached provider")
+		}
+		emb, err := svc.GetEmbeddingModel("model-owner", "text-embedding-3-small@"+instance+"@OpenAI")
+		if err != nil {
+			t.Fatal(err)
+		}
+		vectors, err := embeddingVectorsForTest(emb.ModelDriver.Embed(emb.ModelName, []string{"query", "document"}, emb.APIConfig, nil))
+		if err != nil || !reflect.DeepEqual(vectors, [][]float64{{1, 2}, {1, 2}}) {
+			t.Fatal(vectors, err)
+		}
 	}
-	if _, err := svc.GetEmbeddingModel("tenant", "Qwen/Qwen3-Embedding-0.6B@fixture@SiliconFlow"); err == nil {
-		t.Fatal("SQL failure treated as missing disabled row")
+	current, _ := json.Marshal(provider.URL)
+	if string(original) != string(current) {
+		t.Fatal("instance mutated global catalog")
 	}
-	if err := db.Exec("ALTER TABLE hidden_tenant_model RENAME TO tenant_model").Error; err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(paths, []string{"/fixture/embeddings", "/fixture/embeddings", "/fixture/embeddings", "/fixture/rerank", "/fixture/chat/completions", "/fixture/embeddings/multimodal", "/legacy/embeddings", "/legacy/embeddings"}) {
-		t.Fatalf("paths=%v", paths)
-	}
-	// Independent SQL readback verifies the persisted denial record.
 	var count int
-	if err := pool.QueryRow(`SELECT count(*) FROM tenant_model WHERE id='disabled' AND status='disabled'`).Scan(&count); err != nil || count != 1 {
-		t.Fatal("disabled state readback failed")
+	if err := s.Read.QueryRow("SELECT COUNT(*) FROM tenant_model_instance").Scan(&count); err != nil || count != 2 {
+		t.Fatal("independent SQL instance readback", count, err)
 	}
-	data, _ := json.Marshal(paths)
-	t.Logf("real PostgreSQL + provider HTTP paths: %s", data)
+	before := calls.Load()
+	if _, err := svc.ListSupportedModels(t.Context(), providerName, "one", "model-other"); err == nil {
+		t.Fatal("foreign tenant inventory exposed")
+	}
+	if _, err := svc.GetEmbeddingModel("model-other", "text-embedding-3-small@one@OpenAI"); err == nil {
+		t.Fatal("foreign credentials resolved")
+	}
+	if _, err := svc.GetEmbeddingModel("model-owner", "gpt-4o@one@OpenAI"); err == nil {
+		t.Fatal("wrong model type resolved")
+	}
+	if calls.Load() != before {
+		t.Fatal("denied lookup reached provider")
+	}
+	var enrolled entity.TenantModel
+	if err := dao.DB.Table("tenant_model").Select("tenant_model.*").Joins("JOIN tenant_model_instance i ON i.id = tenant_model.instance_id").Where("tenant_model.model_name = ? AND i.instance_name = ?", "text-embedding-3-small", "one").First(&enrolled).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := dao.DB.Model(&enrolled).Update("status", "inactive").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetEmbeddingModel("model-owner", "text-embedding-3-small@one@OpenAI"); err == nil {
+		t.Fatal("inactive model resolved")
+	}
+	if calls.Load() != before {
+		t.Fatal("inactive model reached provider")
+	}
+	malformed.Store(true)
+	if rows, err := svc.ListSupportedModels(t.Context(), providerName, "two", "model-owner"); err == nil || len(rows) != 0 {
+		t.Fatal("malformed inventory returned partial success")
+	}
 }
 
-func TestEmbeddingUsesResolvedBoundName(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Model string `json:"model"`
+func TestCanonicalModelIDOwnershipAndInputFailures(t *testing.T) {
+	canonicalModelDatabase(t)
+	svc := NewModelProviderService()
+	for _, id := range []*string{nil, new(string)} {
+		if result, err := svc.getModelInstanceAndProviderByID(id, "model-owner", nil); err == nil || result != nil {
+			t.Fatal("invalid modelID accepted")
 		}
-		json.NewDecoder(r.Body).Decode(&body)
-		if body.Model != "resolved-name" {
-			t.Errorf("model=%q", body.Model)
-		}
-		fmt.Fprint(w, `{"data":[{"index":0,"embedding":[1,2]}]}`)
-	}))
-	defer server.Close()
-	key, name := "key", "resolved-name"
-	driver := models.NewSiliconFlowModel(map[string]string{"default": server.URL}, models.URLSuffix{Embedding: "embeddings"})
-	bound := models.NewEmbeddingModel(driver, &name, &models.APIConfig{APIKey: &key})
-	vectors, err := embeddingVectorsForTest(bound.Embed([]string{"q"}))
-	if err != nil || !reflect.DeepEqual(vectors, [][]float64{{1, 2}}) {
-		t.Fatalf("vectors=%v error=%v", vectors, err)
 	}
-
+	for _, name := range []string{"", "model", "@provider", "model@", "model@@provider", "model@i@p@x"} {
+		if _, _, _, err := parseModelName(name); err == nil {
+			t.Fatalf("invalid identity %q accepted", name)
+		}
+	}
+	if code, err := svc.AddModel(nil, "model-owner"); err == nil || code != common.CodeBadRequest {
+		t.Fatal("nil enrollment accepted")
+	}
+	if code, err := svc.AddModel(&AddModelRequest{}, "model-owner"); err == nil || code != common.CodeBadRequest {
+		t.Fatal("empty enrollment accepted")
+	}
 }

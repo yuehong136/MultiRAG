@@ -17,10 +17,13 @@
 package admin
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	"multirag/internal/engine"
+	"multirag/internal/engine/redis"
 	"multirag/internal/server"
 	"multirag/internal/service"
 	"multirag/internal/utility"
@@ -30,11 +33,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-)
-
-// Common errors
-var (
-	ErrUserNotFound = errors.New("user not found")
 )
 
 // Handler admin handler
@@ -104,14 +102,14 @@ func responseWithCode(c *gin.Context, message string, httpCode int, errorCode co
 	}
 }
 
-// Health health check
+// Health check
 func (h *Handler) Health(c *gin.Context) {
 	c.JSON(200, gin.H{"status": "ok"})
 }
 
 // Ping ping endpoint
 func (h *Handler) Ping(c *gin.Context) {
-	successNoData(c, "PONG")
+	successNoData(c, "pong")
 }
 
 // Login handle admin login
@@ -134,8 +132,8 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 
 	// Use userService.LoginByEmail with adminLogin=true
-	// This allows default admin account to login admin system
-	user, code, err := h.userService.LoginAdmin(&req)
+	// This allows default admin account to log in admin system
+	user, code, err := h.userService.LoginByEmail(&req)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    code,
@@ -153,8 +151,16 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
-	secretKey := server.GetSecretKey()
-	authToken, err := utility.SignUserJWT(user.Email, secretKey)
+	secretKey, err := server.GetSecretKey(redis.Get())
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeServerError,
+			"message": fmt.Sprintf("Failed to get secret key: %s", err.Error()),
+		})
+		return
+	}
+
+	authToken, err := utility.DumpAccessToken(*user.AccessToken, secretKey)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeServerError,
@@ -197,16 +203,6 @@ func (h *Handler) Logout(c *gin.Context) {
 // AuthCheck check admin auth
 func (h *Handler) AuthCheck(c *gin.Context) {
 	successNoData(c, "Admin is authorized")
-}
-
-// ListTasks returns ingestion task summaries for authenticated administrators.
-func (h *Handler) ListTasks(c *gin.Context) {
-	tasks, err := h.service.ListTasks()
-	if err != nil {
-		responseWithCode(c, err.Error(), http.StatusInternalServerError, common.CodeServerError)
-		return
-	}
-	success(c, tasks, "Get all tasks")
 }
 
 // ListUsers handle list users
@@ -258,7 +254,7 @@ func (h *Handler) GetUser(c *gin.Context) {
 
 	userDetails, err := h.service.GetUserDetails(username)
 	if err != nil {
-		if errors.Is(err, ErrUserNotFound) {
+		if errors.Is(err, common.ErrUserNotFound) {
 			errorResponse(c, "User not found", 404)
 			return
 		}
@@ -431,7 +427,7 @@ func (h *Handler) GetUserAgents(c *gin.Context) {
 	success(c, agents, "")
 }
 
-// ListUserAPITokens handle get user API tokens
+// ListUserAPITokens handle get user API keys
 func (h *Handler) ListUserAPITokens(c *gin.Context) {
 	username := c.Param("username")
 	if username == "" {
@@ -439,16 +435,16 @@ func (h *Handler) ListUserAPITokens(c *gin.Context) {
 		return
 	}
 
-	apiTokens, err := h.service.ListUserAPITokens(username)
+	apiKeys, err := h.service.ListUserAPITokens(username)
 	if err != nil {
 		errorResponse(c, err.Error(), 500)
 		return
 	}
 
-	success(c, apiTokens, "Get user API tokens")
+	success(c, apiKeys, "Get user API keys")
 }
 
-// GenerateUserAPIToken handle generate user API token
+// GenerateUserAPIToken handle generate user API key
 func (h *Handler) GenerateUserAPIToken(c *gin.Context) {
 	username := c.Param("username")
 	if username == "" {
@@ -456,21 +452,21 @@ func (h *Handler) GenerateUserAPIToken(c *gin.Context) {
 		return
 	}
 
-	apiToken, err := h.service.GenerateUserAPIToken(username)
+	apiKey, err := h.service.GenerateUserAPIToken(username)
 	if err != nil {
 		errorResponse(c, err.Error(), 500)
 		return
 	}
 
-	success(c, apiToken, "API token generated successfully")
+	success(c, apiKey, "API key generated successfully")
 }
 
-// DeleteUserAPIToken handle delete user API token
+// DeleteUserAPIToken handle delete user API key
 func (h *Handler) DeleteUserAPIToken(c *gin.Context) {
 	username := c.Param("username")
 	key := c.Param("token")
 	if username == "" || key == "" {
-		errorResponse(c, "Username and token are required", 400)
+		errorResponse(c, "Username and key are required", 400)
 		return
 	}
 
@@ -479,7 +475,7 @@ func (h *Handler) DeleteUserAPIToken(c *gin.Context) {
 		return
 	}
 
-	successNoData(c, "API token deleted successfully")
+	successNoData(c, "API key deleted successfully")
 }
 
 // ListRoles handle list roles
@@ -805,6 +801,7 @@ func (h *Handler) RestartService(c *gin.Context) {
 }
 
 func (h *Handler) ListProviders(c *gin.Context) {
+
 	keywords := ""
 	if queryKeywords := c.Query("available"); queryKeywords != "" {
 		keywords = queryKeywords
@@ -828,17 +825,7 @@ func (h *Handler) ListProviders(c *gin.Context) {
 			"message": "success",
 			"data":    providers,
 		})
-		return
 	}
-
-	// TODO(#16243): list providers configured by the current tenant. ragflow's
-	// upstream relies on modelProviderService.ListProvidersOfTenant, which has
-	// not been ported yet; return an empty list to avoid a missing response.
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    []any{},
-	})
 }
 
 func (h *Handler) ShowProvider(c *gin.Context) {
@@ -925,31 +912,48 @@ func (h *Handler) ShowModel(c *gin.Context) {
 // GetVariables handle get variables
 // Python logic: if request body is empty, list all variables; otherwise get single variable by var_name from body
 func (h *Handler) GetVariables(c *gin.Context) {
-	if c.Request.ContentLength != 0 || len(c.Request.TransferEncoding) > 0 {
-		errorResponse(c, "Use the var_name query parameter", 400)
+	// Check if request has body content
+	if c.Request.ContentLength < 0 {
+		errorResponse(c, "Request body length is required", 400)
 		return
 	}
-	varName, specified := c.GetQuery("var_name")
-	var variables []map[string]interface{}
-	var err error
-	if specified {
-		if strings.TrimSpace(varName) == "" {
-			errorResponse(c, "Var name is required", 400)
+	if c.Request.ContentLength == 0 {
+		// List all variables
+		variables, err := h.service.GetAllVariables()
+		if err != nil {
+			errorResponse(c, err.Error(), 500)
 			return
 		}
-		variables, err = h.service.GetVariable(varName)
-	} else {
-		variables, err = h.service.GetAllVariables()
-	}
-	if err != nil {
-		if adminErr, ok := err.(*AdminException); ok {
-			errorResponse(c, adminErr.Message, 400)
-		} else {
-			errorResponse(c, "Failed to read variables", 500)
-		}
+		success(c, variables, "")
 		return
 	}
-	success(c, variables, "")
+
+	// Get single variable by var_name from request body
+	var req struct {
+		VarName string `json:"var_name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorResponse(c, "Invalid request body", 400)
+		return
+	}
+
+	if req.VarName == "" {
+		errorResponse(c, "Var name is required", 400)
+		return
+	}
+
+	variable, err := h.service.GetVariable(req.VarName)
+	if err != nil {
+		// Check if it's an AdminException
+		if adminErr, ok := err.(*AdminException); ok {
+			errorResponse(c, adminErr.Message, 400)
+			return
+		}
+		errorResponse(c, err.Error(), 500)
+		return
+	}
+
+	success(c, variable, "")
 }
 
 // SetVariableHTTPRequest set variable request
@@ -1169,7 +1173,7 @@ func (h *Handler) TestSandboxConnection(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    common.CodeBadRequest,
-			"message": "Invalid access token",
+			"message": err.Error(),
 		})
 		return
 	}
@@ -1199,7 +1203,7 @@ func (h *Handler) AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		if user.IsSuperuser == nil || !*user.IsSuperuser {
+		if user == nil || user.IsSuperuser == nil || !*user.IsSuperuser {
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":    common.CodeForbidden,
 				"message": "Permission denied",
@@ -1250,6 +1254,223 @@ func (h *Handler) SetLogLevel(c *gin.Context) {
 	success(c, gin.H{"level": req.Level}, "Log level updated successfully")
 }
 
+func (h *Handler) ListMessagesFromQueue(c *gin.Context) {
+
+	msgQueueEngine := engine.GetMessageQueueEngine()
+	messages, err := msgQueueEngine.ListMessages("ingestion", false)
+	if err != nil {
+		errorResponse(c, err.Error(), 400)
+		return
+	}
+	var result []map[string]string
+	for _, message := range messages {
+		var taskMessage common.TaskMessage
+		err = json.Unmarshal([]byte(message["message"]), &taskMessage)
+		if err != nil {
+			return
+		}
+		result = append(result, map[string]string{
+			"subject": message["subject"],
+			"id":      taskMessage.TaskID,
+			"type":    taskMessage.TaskType,
+		})
+	}
+
+	success(c, result, "List messages from queue successfully")
+}
+
+type PublishMessageToQueueRequest struct {
+	Message string `json:"message" binding:"required"`
+}
+
+func (h *Handler) PublishMessageToQueue(c *gin.Context) {
+	var req PublishMessageToQueueRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorResponse(c, "message is required", 400)
+		return
+	}
+
+	taskMessage := common.TaskMessage{
+		TaskID:   req.Message,
+		TaskType: common.TaskTypeIngestionTest,
+	}
+
+	// convert task
+	taskMessageStr, err := json.Marshal(taskMessage)
+	if err != nil {
+		errorResponse(c, err.Error(), 400)
+		return
+	}
+
+	msgQueueEngine := engine.GetMessageQueueEngine()
+	err = msgQueueEngine.PublishTask("tasks.RAGFLOW", taskMessageStr)
+	if err != nil {
+		errorResponse(c, err.Error(), 400)
+		return
+	}
+
+	success(c, nil, "Publish message successfully")
+}
+
+type PullMessageFromQueueRequest struct {
+	MessageCount int    `json:"message_count" binding:"required"`
+	AckPolicy    string `json:"ack_policy" binding:"required"`
+}
+
+func (h *Handler) PullMessageFromQueue(c *gin.Context) {
+	var req PullMessageFromQueueRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorResponse(c, fmt.Sprintf("message count and ack_policy are required, error: %s", err.Error()), 400)
+		return
+	}
+
+	msgQueueEngine := engine.GetMessageQueueEngine()
+	err := msgQueueEngine.InitConsumer("tasks.RAGFLOW")
+	if err != nil {
+		errorResponse(c, err.Error(), 400)
+		return
+	}
+	messages, err := msgQueueEngine.GetMessages(req.MessageCount)
+	var result []map[string]string
+	if req.AckPolicy == "ACK" {
+		for _, message := range messages {
+			taskMessage := message.GetMessage()
+			resultMessage := map[string]string{
+				"id":   taskMessage.TaskID,
+				"type": taskMessage.TaskType,
+			}
+			err = message.Ack()
+			if err == nil {
+				resultMessage["ack"] = "true"
+			} else {
+				resultMessage["ack"] = "false"
+			}
+			result = append(result, resultMessage)
+		}
+	} else {
+		for _, message := range messages {
+			taskMessage := message.GetMessage()
+			resultMessage := map[string]string{
+				"id":   taskMessage.TaskID,
+				"type": taskMessage.TaskType,
+			}
+			if err == nil {
+				resultMessage["nack"] = "true"
+			} else {
+				resultMessage["nack"] = "false"
+			}
+			result = append(result, resultMessage)
+		}
+	}
+
+	success(c, result, "Pull messages from queue successfully")
+}
+
+func (h *Handler) ShowMessageQueue(c *gin.Context) {
+
+	msgQueueEngine := engine.GetMessageQueueEngine()
+	result, err := msgQueueEngine.ShowMessageQueue()
+	if err != nil {
+		errorResponse(c, err.Error(), 400)
+		return
+	}
+
+	success(c, result, "show message queue successfully")
+}
+
+type RemoveIngestionTaskRequest struct {
+	Tasks []string `json:"tasks" binding:"required"`
+}
+
+func (h *Handler) RemoveIngestionTasks(c *gin.Context) {
+	var req RemoveIngestionTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorResponse(c, "task id is required", 400)
+		return
+	}
+
+	tasks, err := h.service.RemoveIngestionTasks(req.Tasks)
+	if err != nil {
+		errorResponse(c, err.Error(), 400)
+		return
+	}
+
+	success(c, tasks, "Remove tasks successfully")
+}
+
+type StopIngestionTaskRequest struct {
+	Tasks []string `json:"tasks" binding:"required"`
+}
+
+func (h *Handler) StopIngestionTasks(c *gin.Context) {
+	var req StopIngestionTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorResponse(c, "task id and from is required", 400)
+		return
+	}
+
+	tasks, err := h.service.StopIngestionTasks(req.Tasks)
+	if err != nil {
+		errorResponse(c, err.Error(), 400)
+		return
+	}
+
+	var result []map[string]string
+	for _, task := range tasks {
+		result = append(result, map[string]string{
+			"task_id": task.ID,
+			"status":  task.Status,
+		})
+	}
+
+	success(c, result, "Stop tasks successfully")
+}
+
+// ListIngestionTasks
+func (h *Handler) ListIngestionTasks(c *gin.Context) {
+	tasks, err := h.service.ListIngestionTasks()
+	if err != nil {
+		errorResponse(c, err.Error(), 500)
+		return
+	}
+	success(c, tasks, "Get all tasks")
+}
+
+func (h *Handler) ListIngestors(c *gin.Context) {
+	serverList := GlobalServerStore.ListInfos()
+	var ingestorResults []map[string]string
+	now := time.Now()
+	for _, ingestorServer := range serverList {
+		if ingestorServer.ServerType == common.ServerTypeIngestion {
+			ingestorResult := map[string]string{}
+			ingestorResult["name"] = ingestorServer.ServerName
+			ingestorResult["host"] = ingestorServer.Host
+			ingestorResult["status"] = ingestorServer.Version
+			if now.Sub(ingestorServer.Timestamp) < 30*time.Second {
+				ingestorResult["status"] = "alive"
+			} else {
+				ingestorResult["status"] = "timeout"
+			}
+			ingestorResults = append(ingestorResults, ingestorResult)
+		}
+	}
+	success(c, ingestorResults, "Get all tasks")
+}
+
+type ShutdownIngestorRequest struct {
+	IngestorID string `json:"ingestor_name" binding:"required"`
+}
+
+func (h *Handler) ShutdownIngestor(c *gin.Context) {
+	var req ShutdownIngestorRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorResponse(c, "file uri is required", 400)
+		return
+	}
+
+	errorResponse(c, "ingestor shutdown: not implemented", 501)
+}
+
 // Reports handle heartbeat reports from servers
 func (h *Handler) Reports(c *gin.Context) {
 	var req common.BaseMessage
@@ -1282,5 +1503,5 @@ func (h *Handler) Reports(c *gin.Context) {
 		return
 	}
 
-	responseWithCode(c, message, int(http.StatusOK), errCode)
+	responseWithCode(c, message, http.StatusOK, errCode)
 }

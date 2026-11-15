@@ -26,5 +26,19 @@
         "embedding"
       ]
     }
-  ]
+  ],
+  "features": {
+    "thinking": {
+      "default_value": true,
+      "supported_models": [
+        "gemini-2.5-flash"
+      ]
+    },
+    "reasoning_effort": {
+      "default_value": "high",
+      "supported_modes": [
+        "gemini-2.5-flash"
+      ]
+    }
+  }
 }

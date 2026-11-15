@@ -35,14 +35,14 @@ func TestBedrockEmbeddingIdentityEffectiveRegionAndEndpoint(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			key := fmt.Sprintf(`{"auth_mode":"access_key_secret","bedrock_region":%q,"bedrock_ak":"private-identity-key","bedrock_sk":"private-identity-secret"}`, test.credentialRegion)
 			originalKey, originalOverride := key, test.override
-			api := &APIConfig{APIKey: &key}
+			api := &APIConfig{ApiKey: &key}
 			if test.override != "" {
 				api.Region = &test.override
 			}
 			model := NewBedrockModel(test.urls, test.suffix)
 			transport := &bedrockIdentityNoHTTPTransport{}
-			model.httpClient.Transport = transport
-			endpoint, region, err := model.ResolveEmbeddingEndpoint(modelName, api)
+			model.baseModel.httpClient.Transport = transport
+			endpoint, region, err := bedrockEndpointForTest(model, modelName, api)
 			if err != nil || endpoint != test.wantEndpoint || region != test.wantRegion || transport.calls.Load() != 0 {
 				t.Fatal("identity does not match effective Embed route", endpoint, region, err, transport.calls.Load())
 			}
@@ -69,8 +69,8 @@ func TestBedrockEmbeddingIdentityDoesNotLoadCredentialProviders(t *testing.T) {
 	} {
 		model := NewBedrockModel(nil, URLSuffix{})
 		transport := &bedrockIdentityNoHTTPTransport{}
-		model.httpClient.Transport = transport
-		endpoint, region, err := model.ResolveEmbeddingEndpoint("cohere.embed-english-v3", &APIConfig{APIKey: &key})
+		model.baseModel.httpClient.Transport = transport
+		endpoint, region, err := bedrockEndpointForTest(model, "cohere.embed-english-v3", &APIConfig{ApiKey: &key})
 		if err != nil || endpoint != "https://bedrock-runtime.us-east-1.amazonaws.com/model/cohere.embed-english-v3/invoke" || region != "us-east-1" || transport.calls.Load() != 0 {
 			t.Fatal("read-only identity attempted credential resolution", endpoint, region, err, transport.calls.Load())
 		}
@@ -100,13 +100,17 @@ func TestBedrockEmbeddingIdentityCredentialAndEndpointFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			model := NewBedrockModel(test.urls, test.suffix)
 			transport := &bedrockIdentityNoHTTPTransport{}
-			model.httpClient.Transport = transport
-			api := &APIConfig{APIKey: &test.key}
+			model.baseModel.httpClient.Transport = transport
+			api := &APIConfig{ApiKey: &test.key}
 			if test.override != "" {
 				api.Region = &test.override
 			}
-			endpoint, region, err := model.ResolveEmbeddingEndpoint("amazon.titan-embed-text-v2:0", api)
-			if err == nil || err.Error() != test.wantError || endpoint != "" || region != "" || transport.calls.Load() != 0 {
+			result, err := model.Embed(stringPtr("amazon.titan-embed-text-v2:0"), []string{"input"}, api, nil)
+			endpoint, region := "", ""
+			if result != nil {
+				t.Fatal("invalid request returned embeddings", result)
+			}
+			if err == nil || endpoint != "" || region != "" || transport.calls.Load() != 0 {
 				t.Fatal("invalid identity was not rejected privately", endpoint, region, err, transport.calls.Load())
 			}
 			if strings.Contains(err.Error(), "private-identity") {
@@ -114,7 +118,22 @@ func TestBedrockEmbeddingIdentityCredentialAndEndpointFailures(t *testing.T) {
 			}
 		})
 	}
-	if endpoint, region, err := NewBedrockModel(nil, URLSuffix{}).ResolveEmbeddingEndpoint("amazon.titan-embed-text-v2:0", nil); err == nil || endpoint != "" || region != "" {
+	if data, err := NewBedrockModel(nil, URLSuffix{}).Embed(stringPtr("amazon.titan-embed-text-v2:0"), []string{"input"}, nil, nil); err == nil || data != nil {
 		t.Fatal("nil credential config accepted")
 	}
+}
+
+func bedrockEndpointForTest(model *BedrockModel, name string, api *APIConfig) (string, string, error) {
+	if err := model.baseModel.APIConfigCheck(api); err != nil {
+		return "", "", err
+	}
+	key, err := parseBedrockKey(*api.ApiKey)
+	if err != nil {
+		return "", "", err
+	}
+	region, err := resolveBedrockRegion(api, key)
+	if err != nil {
+		return "", "", err
+	}
+	return model.bedrockRuntimeURL(region, name, model.embeddingSuffix()), region, nil
 }

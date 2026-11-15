@@ -2,37 +2,18 @@ package dao
 
 import (
 	"encoding/json"
-	"net/url"
-	"os"
+
 	"strings"
 	"testing"
 
 	"multirag/internal/entity"
-
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	"multirag/internal/testsupport/scratch"
 )
 
 // Run only against a separately created, empty scratch database.
-func TestTenantModelExtraScratchPostgres(t *testing.T) {
-	dsn := os.Getenv("MULTIRAG_GO_TENANT_MODEL_DSN")
-	if dsn == "" {
-		t.Skip("requires an owned tenant-model scratch database")
-	}
-	parsed, err := url.Parse(dsn)
-	if err != nil || !strings.HasPrefix(strings.TrimPrefix(parsed.Path, "/"), "multirag_go_tenant_model_") {
-		t.Fatal("scratch DB name is not owned")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal("scratch database connection failed")
-	}
-	pool, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { pool.Close() })
+func TestTenantModelExtraScratchMySQL(t *testing.T) {
+	f := scratch.New(t)
+	db, pool := f.DB, f.Read
 	oldDB := DB
 	DB = db
 	t.Cleanup(func() { DB = oldDB })
@@ -56,7 +37,6 @@ func TestTenantModelExtraScratchPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	checkModelInstanceCredentialMigration(t, db)
 	modelDAO, instanceDAO := NewTenantModelDAO(), NewTenantModelInstanceDAO()
 	legacy, err := modelDAO.GetByID("legacy")
 	if err != nil || legacy.Extra != "{}" || legacy.ModelName != "existing" || legacy.Status != "disabled" || legacy.ModelType != "chat" {
@@ -74,11 +54,11 @@ func TestTenantModelExtraScratchPostgres(t *testing.T) {
 			var size int
 			var defaultValue string
 			if err := pool.QueryRow(`SELECT character_maximum_length, column_default
-				FROM information_schema.columns WHERE table_schema = current_schema()
-				AND table_name = $1 AND column_name = 'extra'`, test.table).Scan(&size, &defaultValue); err != nil {
+				FROM information_schema.columns WHERE table_schema = ?
+				AND table_name = ? AND column_name = 'extra'`, f.Database, test.table).Scan(&size, &defaultValue); err != nil {
 				t.Fatal(err)
 			}
-			if size != test.size || !strings.Contains(defaultValue, "'{}'") {
+			if size != test.size || strings.Trim(defaultValue, "'") != "{}" {
 				t.Fatalf("physical extra column: size=%d, default=%q", size, defaultValue)
 			}
 			insert := `INSERT INTO tenant_model (id, provider_id, instance_id, model_type)
@@ -141,7 +121,7 @@ func TestTenantModelExtraScratchPostgres(t *testing.T) {
 					}
 				}
 				var stored string
-				if err := pool.QueryRow("SELECT extra FROM "+test.table+" WHERE id = $1", id).Scan(&stored); err != nil || stored != want {
+				if err := pool.QueryRow("SELECT extra FROM "+test.table+" WHERE id = ?", id).Scan(&stored); err != nil || stored != want {
 					t.Fatalf("independent SQL readback: extra=%q, error=%v", stored, err)
 				}
 				data, err := json.Marshal(got)

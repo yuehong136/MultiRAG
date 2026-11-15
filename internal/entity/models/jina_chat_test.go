@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -15,7 +15,7 @@ import (
 
 func TestJinaChatHTTP(t *testing.T) {
 	var calls atomic.Int32
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -35,7 +35,7 @@ func TestJinaChatHTTP(t *testing.T) {
 	d := NewJinaModel(urls, URLSuffix{Chat: "chat/completions"})
 	urls["office"] = "http://mutated.invalid"
 	limit, temp, topP, stop := 128, 0.2, 0.8, []string{"END"}
-	api := &APIConfig{APIKey: stringPtr(" key "), Region: stringPtr("office")}
+	api := &APIConfig{ApiKey: stringPtr("key"), Region: stringPtr("office")}
 	response, err := d.ChatWithMessages("jina-vlm", []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "q"}}, api, &ChatConfig{MaxTokens: &limit, Temperature: &temp, TopP: &topP, Stop: &stop})
 	if err != nil || response == nil || response.Answer == nil || *response.Answer != "answer" || calls.Load() != 1 || api.Context != nil {
 		t.Fatal(response, err, calls.Load())
@@ -60,10 +60,10 @@ func TestJinaChatHTTP(t *testing.T) {
 func TestJinaChatFailuresHTTP(t *testing.T) {
 	for _, response := range []string{``, `null`, `{}`, `{"choices":[]}`, `{"choices":[{}]}`, `{"choices":[{"message":{"content":null}}]}`, `{"choices":[{"message":{"content":" "}}]}`, `{"choices":[{"message":{"content":42}}]}`, `{"choices":[{"message":{"content":"ok"}}],"error":{"message":"private-body"}}`, `{"choices":[{"message":{"content":"ok"}}]} {}`} {
 		t.Run(response, func(t *testing.T) {
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 			defer fixture.Close()
 			d := NewJinaModel(map[string]string{"default": fixture.URL}, URLSuffix{Chat: "chat"})
-			answer, err := d.ChatWithMessages("jina-vlm", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
+			answer, err := d.ChatWithMessages("jina-vlm", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil)
 			if err == nil || answer != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(answer, err)
 			}
@@ -71,10 +71,10 @@ func TestJinaChatFailuresHTTP(t *testing.T) {
 	}
 	for _, status := range []int{401, 429, 500} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status); fmt.Fprint(w, "private-body") }))
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status); fmt.Fprint(w, "private-body") }))
 			defer fixture.Close()
 			d := NewJinaModel(map[string]string{"default": fixture.URL}, URLSuffix{Chat: "chat"})
-			answer, err := d.ChatWithMessages("jina-vlm", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
+			answer, err := d.ChatWithMessages("jina-vlm", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil)
 			if err == nil || answer != nil || !strings.Contains(err.Error(), fmt.Sprint(status)) || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(answer, err)
 			}
@@ -85,13 +85,13 @@ func TestJinaChatFailuresHTTP(t *testing.T) {
 func TestJinaChatPreflightAndCancellation(t *testing.T) {
 	d := NewJinaModel(map[string]string{"default": "http://unused.invalid"}, URLSuffix{Chat: "chat"})
 	var calls int
-	d.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) { calls++; return nil, errors.New("unexpected request") })
-	for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}, {APIKey: stringPtr("key"), Region: stringPtr("missing")}} {
+	d.baseModel.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) { calls++; return nil, errors.New("unexpected request") })
+	for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" ")}, {ApiKey: stringPtr("key"), Region: stringPtr("missing")}} {
 		if answer, err := d.ChatWithMessages("jina-vlm", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil || answer != nil {
 			t.Fatal(answer, err)
 		}
 	}
-	api := &APIConfig{APIKey: stringPtr("key")}
+	api := &APIConfig{ApiKey: stringPtr("key")}
 	if _, err := d.ChatWithMessages(" ", []Message{{Role: "user", Content: "q"}}, api, nil); err == nil {
 		t.Fatal("empty name")
 	}
@@ -102,7 +102,7 @@ func TestJinaChatPreflightAndCancellation(t *testing.T) {
 		t.Fatal("invalid request reached provider")
 	}
 	started := make(chan struct{})
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body any
 		json.NewDecoder(r.Body).Decode(&body)
 		close(started)
@@ -114,7 +114,7 @@ func TestJinaChatPreflightAndCancellation(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		_, err := d.ChatWithMessages("jina-vlm", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)
+		_, err := d.ChatWithMessages("jina-vlm", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil)
 		result <- err
 	}()
 	<-started

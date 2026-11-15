@@ -2,7 +2,7 @@ package tool
 
 import (
 	"context"
-	"errors"
+	einotool "github.com/cloudwego/eino/components/tool"
 	"strings"
 	"testing"
 )
@@ -187,9 +187,17 @@ func indexOf(xs []string, s string) int {
 }
 
 func TestUnavailableToolsFailBeforeExecution(t *testing.T) {
-	for name := range unavailableTools {
-		if _, err := BuildByName(name, nil); !errors.Is(err, ErrToolUnavailable) {
-			t.Errorf("%s: %v", name, err)
+	for _, name := range []string{"akshare", "code_exec", "jin10", "retrieval", "search_my_dateset", "wencai"} {
+		built, err := BuildByName(name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runnable, ok := built.(einotool.InvokableTool)
+		if !ok {
+			t.Fatalf("%s not invokable", name)
+		}
+		if _, err := runnable.InvokableRun(context.Background(), `{}`); err == nil {
+			t.Errorf("%s falsely succeeded", name)
 		}
 	}
 }

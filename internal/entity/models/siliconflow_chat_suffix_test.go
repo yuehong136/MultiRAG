@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"testing"
 )
 
 func TestSiliconFlowConfiguredChatSuffixHTTP(t *testing.T) {
 	calls := 0
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if r.URL.Path != "/instance/custom/chat" || r.Header.Get("Authorization") != "Bearer key" {
 			t.Error("configured endpoint was not honored", r.URL.Path)
@@ -24,8 +24,8 @@ func TestSiliconFlowConfiguredChatSuffixHTTP(t *testing.T) {
 		}
 	}))
 	defer fixture.Close()
-	d := NewSiliconFlowModel(map[string]string{"default": fixture.URL + "/instance/"}, URLSuffix{Chat: "/custom/chat"})
-	api := &APIConfig{APIKey: stringPtr("key")}
+	d := NewSiliconflowModel(map[string]string{"default": fixture.URL + "/instance"}, URLSuffix{Chat: "custom/chat"})
+	api := &APIConfig{ApiKey: stringPtr("key")}
 	response, err := d.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, api, nil)
 	if err != nil || response == nil || *response.Answer != "answer" {
 		t.Fatal(response, err)

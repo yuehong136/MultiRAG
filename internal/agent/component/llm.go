@@ -16,13 +16,12 @@ import (
 	"fmt"
 	"log"
 	"math"
-
-	"multirag/internal/agent/runtime"
+	"strings"
 	"sync"
 
 	"github.com/cloudwego/eino/schema"
 
-	"github.com/cloudwego/eino/components/model"
+	"multirag/internal/entity/models"
 )
 
 // LLMComponent is a one-shot chat call.
@@ -131,63 +130,62 @@ func getDefaultChatInvoker() ChatInvoker {
 	return defaultChatInvoker
 }
 
-// ModelResolver resolves an already authorized tenant model in the request context.
-// DSL parameters never supply credentials or a provider endpoint.
-type ModelResolver func(context.Context, string) (model.ToolCallingChatModel, error)
-type modelResolverContextKey struct{}
-type chatInvokerContextKey struct{}
-
-func WithModelResolver(ctx context.Context, resolve ModelResolver) context.Context {
-	return context.WithValue(ctx, modelResolverContextKey{}, resolve)
-}
-
-func WithChatInvoker(ctx context.Context, invoker ChatInvoker) context.Context {
-	return context.WithValue(ctx, chatInvokerContextKey{}, invoker)
-}
-
-func chatInvokerFor(ctx context.Context) ChatInvoker {
-	if invoker, ok := ctx.Value(chatInvokerContextKey{}).(ChatInvoker); ok && invoker != nil {
-		return invoker
-	}
-	return getDefaultChatInvoker()
-}
-
-func resolveChatModel(ctx context.Context, modelID string) (model.ToolCallingChatModel, error) {
-	resolve, ok := ctx.Value(modelResolverContextKey{}).(ModelResolver)
-	if !ok || resolve == nil {
-		return nil, fmt.Errorf("authorized model resolver: %w", ErrNotImplemented)
-	}
-	return resolve(ctx, modelID)
-}
-
+// einoChatInvoker is the production ChatInvoker — it constructs a fresh
+// models.EinoChatModel per call from the request and dispatches.
 type einoChatInvoker struct{}
 
+// Invoke satisfies ChatInvoker.
 func (e *einoChatInvoker) Invoke(ctx context.Context, req ChatInvokeRequest) (*ChatInvokeResponse, error) {
-	if req.Driver != "" || req.APIKey != "" || req.BaseURL != "" {
-		return nil, fmt.Errorf("component: DSL provider credentials and endpoints are not accepted")
+	if req.ModelName == "" {
+		return nil, fmt.Errorf("component: LLM: model_id is required")
 	}
-	chatModel, err := resolveChatModel(ctx, req.ModelName)
+	driver := req.Driver
+	if driver == "" || driver == "dummy" {
+		return nil, fmt.Errorf("component: LLM: provider driver is required: %w", ErrNotImplemented)
+	}
+	// baseURL: drivers consult map["default"] as the canonical endpoint
+	// (see internal/entity/models/base_model.go:GetBaseURL). When the
+	// caller did not override, leave the driver default in place by
+	// passing nil — every driver seeds its own map at construction time.
+	var baseURL map[string]string
+	if req.BaseURL != "" {
+		baseURL = map[string]string{"default": req.BaseURL}
+	}
+	// urlSuffix: each driver appends URLSuffix.Chat to baseURL to form
+	// the chat-completions endpoint (e.g. "chat/completions" for
+	// openai-compatible drivers, "v1/messages" for anthropic). The
+	// factory's NewModelDriver accepts a zero URLSuffix and stores it
+	// as-is; the openai driver then builds `<base>/` (with no path),
+	// which is the wrong endpoint for a v1-root base URL. We seed
+	// the right suffix per driver here so the factory and the
+	// openai driver's URL construction agree.
+	urlSuffix := chatURLSuffixFor(driver)
+	d, err := models.NewModelFactory().CreateModelDriver(driver, baseURL, urlSuffix)
+	if err != nil {
+		return nil, fmt.Errorf("component: LLM: resolve driver %q: %w", driver, err)
+	}
+	if d == nil {
+		return nil, fmt.Errorf("component: LLM: no driver for %q", driver)
+	}
+	apiKey := req.APIKey
+	cfg := &models.APIConfig{ApiKey: &apiKey, Context: ctx}
+	cm := models.NewChatModel(d, &req.ModelName, cfg)
+
+	chatCfg := &models.ChatConfig{
+		Temperature: req.Temperature,
+		MaxTokens:   req.MaxTokens,
+	}
+	wrapper := models.NewEinoChatModel(cm, chatCfg)
+	out, err := wrapper.Generate(ctx, toEinoMessages(req.Messages))
 	if err != nil {
 		return nil, err
 	}
-	if chatModel == nil {
-		return nil, fmt.Errorf("component: resolved model is nil")
-	}
-	options := []model.Option{}
-	if req.Temperature != nil {
-		options = append(options, model.WithTemperature(float32(*req.Temperature)))
-	}
-	if req.MaxTokens != nil {
-		options = append(options, model.WithMaxTokens(*req.MaxTokens))
-	}
-	out, err := chatModel.Generate(ctx, toEinoMessages(req.Messages), options...)
-	if err != nil {
-		return nil, err
-	}
-	if out == nil {
-		return nil, fmt.Errorf("component: model returned no response")
-	}
-	return &ChatInvokeResponse{Content: out.Content, Model: req.ModelName, Stopped: true}, nil
+	return &ChatInvokeResponse{
+		Content: out.Content,
+		Model:   req.ModelName,
+		Stopped: true,
+		Tokens:  0,
+	}, nil
 }
 
 // toEinoMessages converts the LLM component's Message slice to eino's.
@@ -207,6 +205,23 @@ func toEinoMessages(msgs []schema.Message) []*schema.Message {
 	return out
 }
 
+// chatURLSuffixFor returns the URLSuffix the factory should pass to
+// the driver for the chat endpoint. Each driver's ChatWithMessages
+// builds `baseURL/URLSuffix.Chat`, so the suffix has to match the
+// provider's actual chat path. We seed the common ones here; for any
+// driver the factory has no entry for, we fall through to a default
+// "chat/completions" path (the openai-compatible default), which
+// matches the dummy driver and any third-party openai-compatible
+// gateway.
+func chatURLSuffixFor(driver string) models.URLSuffix {
+	switch strings.ToLower(driver) {
+	case "anthropic":
+		return models.URLSuffix{Chat: "v1/messages"}
+	default:
+		return models.URLSuffix{Chat: "chat/completions"}
+	}
+}
+
 // NewLLMComponent builds an LLMComponent from raw params.
 func NewLLMComponent(p LLMParam) *LLMComponent {
 	return &LLMComponent{param: p}
@@ -217,13 +232,7 @@ func (c *LLMComponent) Name() string { return "LLM" }
 
 // Invoke runs the LLM and returns the output map.
 func (c *LLMComponent) Invoke(ctx context.Context, inputs map[string]any) (map[string]any, error) {
-	if err := validateLLMOptions(inputs); err != nil {
-		return nil, err
-	}
 	p := mergeLLMParam(c.param, inputs)
-	if p.Driver != "" || p.APIKey != "" || p.BaseURL != "" {
-		return nil, fmt.Errorf("DSL provider credentials and endpoints are not accepted")
-	}
 	if p.ModelID == "" {
 		return nil, &ParamError{Field: "model_id", Reason: "required"}
 	}
@@ -242,17 +251,8 @@ func (c *LLMComponent) Invoke(ctx context.Context, inputs map[string]any) (map[s
 		p.UserPrompt = p.SystemPrompt
 	}
 
-	var err error
-	p.SystemPrompt, err = resolvePrompt(ctx, p.SystemPrompt)
-	if err != nil {
-		return nil, fmt.Errorf("LLM system prompt: %w", err)
-	}
-	p.UserPrompt, err = resolvePrompt(ctx, p.UserPrompt)
-	if err != nil {
-		return nil, fmt.Errorf("LLM user prompt: %w", err)
-	}
 	msgs := buildMessages(p.SystemPrompt, p.UserPrompt)
-	inv := chatInvokerFor(ctx)
+	inv := getDefaultChatInvoker()
 	resp, err := inv.Invoke(ctx, ChatInvokeRequest{
 		Driver:      p.Driver,
 		ModelName:   p.ModelID,
@@ -265,10 +265,10 @@ func (c *LLMComponent) Invoke(ctx context.Context, inputs map[string]any) (map[s
 	if err != nil {
 		return nil, fmt.Errorf("component: LLM.Invoke: %w", err)
 	}
+
 	if resp == nil {
 		return nil, fmt.Errorf("component: LLM: model returned no response")
 	}
-
 	out := map[string]any{
 		"content": resp.Content,
 		"model":   resp.Model,
@@ -306,14 +306,14 @@ func (c *LLMComponent) Stream(ctx context.Context, inputs map[string]any) (<-cha
 // Inputs returns parameter metadata for tooling.
 func (c *LLMComponent) Inputs() map[string]string {
 	return map[string]string{
-		"model_id":      "Authorized tenant model ID",
+		"model_id":      "Provider-side model identifier (e.g. \"gpt-4o-mini\")",
 		"system_prompt": "Optional system prompt prepended to the conversation",
 		"user_prompt":   "User prompt; supports {{cpn_id@param}} references resolved by the canvas engine",
 		"temperature":   "Sampling temperature (0.0-2.0). Optional.",
 		"max_tokens":    "Maximum tokens to generate. Optional.",
 		"json_output":   "If true, attempt to JSON-parse \"content\" into \"json\" output key.",
-		"driver":        "Provider driver name (openai, anthropic, …). Resolved by the authorized tenant model.",
-		"api_key":       "Unsupported: credentials come from saved tenant models.",
+		"driver":        "Provider driver name (openai, anthropic, …). Defaults to \"dummy\".",
+		"api_key":       "Override API key for this call. Empty defers to env.",
 	}
 }
 
@@ -482,44 +482,9 @@ func intFrom(inputs map[string]any, name string) (int, bool) {
 	return 0, false
 }
 
-// resolvePrompt substitutes only supported canvas references. Ordinary JSON
-// braces remain literal; missing referenced state is an execution error.
-func resolvePrompt(ctx context.Context, text string) (string, error) {
-	if !runtime.VarRefPattern.MatchString(text) {
-		return text, nil
-	}
-	state, _, err := runtime.GetStateFromContext[*runtime.CanvasState](ctx)
-	if err != nil {
-		return "", err
-	}
-	if state == nil {
-		return "", fmt.Errorf("canvas state is required for prompt references")
-	}
-	return runtime.ResolveTemplate(text, state)
-}
-
-func validateLLMOptions(inputs map[string]any) error {
-	if _, present := inputs["temperature"]; present {
-		value, ok := floatFrom(inputs, "temperature")
-		if !ok || value < 0 || value > 2 {
-			return &ParamError{Field: "temperature", Reason: "must be a finite number between 0 and 2"}
-		}
-	}
-	if _, present := inputs["max_tokens"]; present {
-		value, ok := intFrom(inputs, "max_tokens")
-		if !ok || value <= 0 {
-			return &ParamError{Field: "max_tokens", Reason: "must be a positive integer"}
-		}
-	}
-	return nil
-}
-
 // init registers LLMComponent with the orchestrator-owned registry.
 func init() {
 	Register("LLM", func(params map[string]any) (Component, error) {
-		if err := validateLLMOptions(params); err != nil {
-			return nil, err
-		}
 		var p LLMParam
 		if v, ok := stringFrom(params, "model_id"); ok {
 			p.ModelID = v

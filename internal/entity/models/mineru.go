@@ -1,26 +1,108 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package models
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
-// MinerUModel submits public document URLs and reads asynchronous parse jobs.
 type MinerUModel struct {
-	*DummyModel
-	httpClient *http.Client
+	baseModel BaseModel
 }
 
-func NewMinerUModel(urls map[string]string, suffix URLSuffix) *MinerUModel {
-	return &MinerUModel{NewDummyModel(maps.Clone(urls), suffix), &http.Client{Transport: providerModelTransport}}
+func NewMinerUModel(baseURL map[string]string, urlSuffix URLSuffix) *MinerUModel {
+	if baseURL != nil {
+		copied := make(map[string]string, len(baseURL))
+		for region, value := range baseURL {
+			copied[region] = value
+		}
+		baseURL = copied
+	}
+	return &MinerUModel{
+		baseModel: BaseModel{
+			BaseURL:    baseURL,
+			URLSuffix:  urlSuffix,
+			httpClient: NewDriverHTTPClient(),
+		},
+	}
 }
 
-func (m *MinerUModel) Name() string { return "mineru" }
+func (m *MinerUModel) NewInstance(baseURL map[string]string) ModelDriver {
+	return NewMinerUModel(baseURL, m.baseModel.URLSuffix)
+}
+
+func (m *MinerUModel) Name() string {
+	return "mineru.net"
+}
+
+func (m *MinerUModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) Rerank(modelName *string, query string, documents []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) TranscribeAudio(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig) (*ASRResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) AudioSpeech(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig) (*TTSResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) OCRFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, ocrConfig *OCRConfig) (*OCRFileResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) ListModels(apiConfig *APIConfig) ([]ListModelResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerUModel) CheckConnection(apiConfig *APIConfig) error {
+	return fmt.Errorf("%s no such method", m.Name())
+}
 
 type mineruTaskSubmitResponse struct {
 	Code  *int            `json:"code"`
@@ -28,147 +110,190 @@ type mineruTaskSubmitResponse struct {
 	Data  struct {
 		TaskID string `json:"task_id"`
 	} `json:"data"`
+	Msg     string `json:"msg"`
+	TraceID string `json:"trace_id"`
+}
+
+func (m *MinerUModel) ParseFile(modelName *string, content []byte, documentURL *string, apiConfig *APIConfig, parseFileConfig *ParseFileConfig) (*ParseFileResponse, error) {
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
+	if documentURL == nil || *documentURL == "" {
+		return nil, fmt.Errorf("MinerU API requires a valid public document URL; direct file upload is not supported")
+	}
+	document, err := url.Parse(*documentURL)
+	if err != nil || document.Hostname() == "" || (document.Scheme != "http" && document.Scheme != "https") || document.User != nil || document.Fragment != "" {
+		return nil, fmt.Errorf("invalid MinerU document URL")
+	}
+
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	apiURL := fmt.Sprintf("%s/api/%s", resolvedBaseURL, m.baseModel.URLSuffix.DocumentParse)
+
+	reqBody := map[string]interface{}{
+		"url": *documentURL,
+	}
+
+	if modelName != nil && *modelName != "" {
+		reqBody["model_version"] = *modelName
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), longOpCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.ApiKey))
+
+	resp, err := m.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("MinerU API failed with status %d: %s", resp.StatusCode, "[redacted]")
+	}
+
+	var taskResp mineruTaskSubmitResponse
+	if err := json.Unmarshal(body, &taskResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if taskResp.Code == nil || *taskResp.Code != 0 || (len(taskResp.Error) > 0 && string(taskResp.Error) != "null") {
+		return nil, fmt.Errorf("MinerU task submission failed")
+	}
+	id := taskResp.Data.TaskID
+	if strings.TrimSpace(id) == "" || strings.ContainsAny(id, "/\\?#") || id == "." || id == ".." {
+		return nil, fmt.Errorf("invalid MinerU task ID")
+	}
+
+	return &ParseFileResponse{
+		TaskID: taskResp.Data.TaskID,
+	}, nil
+}
+
+func (m *MinerUModel) ListTasks(apiConfig *APIConfig) ([]ListTaskStatus, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
 }
 
 type mineruTaskQueryResponse struct {
 	Code  *int            `json:"code"`
 	Error json.RawMessage `json:"error"`
 	Data  struct {
-		TaskID     string `json:"task_id"`
-		State      string `json:"state"`
-		FullZipURL string `json:"full_zip_url"`
+		TaskID          string `json:"task_id"`
+		State           string `json:"state"` // including: pending, running, done, failed, converting
+		FullZipURL      string `json:"full_zip_url"`
+		ErrMsg          string `json:"err_msg"`
+		ExtractProgress struct {
+			ExtractedPages int `json:"extracted_pages"`
+			TotalPages     int `json:"total_pages"`
+		} `json:"extract_progress"`
 	} `json:"data"`
+	Msg string `json:"msg"`
 }
 
-// parseTaskRequest is shared by MinerU-compatible URL task APIs. Provider bodies
-// never enter errors, and a missing business code is not a successful response.
-func parseTaskRequest(client *http.Client, urls map[string]string, suffix, method string, api *APIConfig, body any, result any) error {
-	if api == nil || api.APIKey == nil || strings.TrimSpace(*api.APIKey) == "" {
-		return fmt.Errorf("parse API key is required")
+func (m *MinerUModel) ShowTask(taskID string, apiConfig *APIConfig) (*TaskResponse, error) {
+	if strings.TrimSpace(taskID) == "" || strings.ContainsAny(taskID, "/\\?#% \t\r\n") || taskID == "." || taskID == ".." {
+		return nil, fmt.Errorf("invalid MinerU task ID")
 	}
-	if suffix == "" {
-		return fmt.Errorf("parse endpoint is missing")
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
 	}
-	base, err := resolveModelBaseURL(urls, api.Region)
+
+	// URL: https://mineru.net/api/v4/extract/task/{task_id}
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	var reader io.Reader
-	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("invalid parse request")
-		}
-		reader = bytes.NewReader(raw)
-	}
-	req, err := http.NewRequestWithContext(requestContext(api), method, joinModelURL(base, suffix), reader)
+	apiURL := fmt.Sprintf("%s/api/%s/%s", resolvedBaseURL, m.baseModel.URLSuffix.DocumentParse, taskID)
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		return fmt.Errorf("invalid parse endpoint")
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*api.APIKey))
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := client.Do(req)
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.ApiKey))
+
+	resp, err := m.baseModel.httpClient.Do(req)
 	if err != nil {
-		if err := requestContext(api).Err(); err != nil {
-			return err
-		}
-		return fmt.Errorf("parse request failed")
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("parse request failed (HTTP %d)", resp.StatusCode)
+		return nil, fmt.Errorf("MinerU query API failed with status %d: %s", resp.StatusCode, "[redacted]")
 	}
-	if err := decodeBoundedModelJSON(resp.Body, result); err != nil {
-		if err := requestContext(api).Err(); err != nil {
-			return err
-		}
-		return fmt.Errorf("invalid parse response")
-	}
-	return requestContext(api).Err()
-}
 
-func submitMinerUTask(client *http.Client, urls map[string]string, suffix string, name *string, content []byte, documentURL string, api *APIConfig) (*ParseTask, error) {
-	if name == nil || strings.TrimSpace(*name) == "" {
-		return nil, fmt.Errorf("parse model is required")
+	var queryResp mineruTaskQueryResponse
+	if err := json.Unmarshal(body, &queryResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-	if err := ValidateParseInput(content, documentURL); err != nil {
-		return nil, err
+	if queryResp.Data.TaskID != taskID {
+		return nil, fmt.Errorf("MinerU task response ID mismatch")
 	}
-	if len(content) != 0 {
-		return nil, fmt.Errorf("parse API requires a public document URL; direct file upload is unsupported")
-	}
-	local, cancel := modelLongOpConfig(api)
-	defer cancel()
-	var response mineruTaskSubmitResponse
-	body := map[string]any{"url": documentURL, "model_version": *name}
-	if err := parseTaskRequest(client, urls, suffix, http.MethodPost, local, body, &response); err != nil {
-		return nil, err
-	}
-	if response.Code == nil || *response.Code != 0 || len(response.Error) > 0 && string(response.Error) != "null" {
-		return nil, fmt.Errorf("parse task submission failed or missing code")
-	}
-	result := &ParseTask{TaskID: response.Data.TaskID, Status: "pending"}
-	if err := ValidateParseTask(result, true); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
 
-func readMinerUTask(client *http.Client, urls map[string]string, suffix, id string, api *APIConfig) (*ParseTask, error) {
-	if err := ValidateTaskID(id); err != nil {
-		return nil, err
+	if queryResp.Code == nil || *queryResp.Code != 0 || (len(queryResp.Error) > 0 && string(queryResp.Error) != "null") {
+		return nil, fmt.Errorf("MinerU task query failed")
 	}
-	if suffix == "" {
-		return nil, fmt.Errorf("parse task endpoint is missing")
-	}
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	var response mineruTaskQueryResponse
-	if err := parseTaskRequest(client, urls, strings.TrimRight(suffix, "/")+"/"+id, http.MethodGet, local, nil, &response); err != nil {
-		return nil, err
-	}
-	if response.Code == nil || *response.Code != 0 || response.Data.TaskID != id || len(response.Error) > 0 && string(response.Error) != "null" {
-		return nil, fmt.Errorf("parse task query failed, missing code, or task ID mismatch")
-	}
-	result := &ParseTask{TaskID: id}
-	switch response.Data.State {
-	case "pending":
-		result.Status = "pending"
-	case "running":
-		result.Status = "running"
-	case "converting":
-		result.Status = "processing"
-	case "done":
-		if err := ValidateOCRURL(response.Data.FullZipURL); err != nil {
-			return nil, fmt.Errorf("parse task has no valid artifact URL")
-		}
-		result.Status = "success"
-		result.Segments = []TaskSegment{{Index: 0, Content: response.Data.FullZipURL}}
+	switch queryResp.Data.State {
+	case "pending", "running", "converting", "done":
 	case "failed":
-		return nil, fmt.Errorf("parse task failed")
+		return nil, fmt.Errorf("MinerU task failed")
 	default:
-		return nil, fmt.Errorf("unknown parse task state")
+		return nil, fmt.Errorf("invalid MinerU task state")
 	}
-	if err := ValidateParseTask(result, true); err != nil {
-		return nil, err
+	if queryResp.Data.State == "done" {
+		parsed, err := url.Parse(queryResp.Data.FullZipURL)
+		if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Fragment != "" {
+			return nil, fmt.Errorf("invalid MinerU result URL")
+		}
 	}
-	return result, nil
-}
 
-func (m *MinerUModel) ParseFile(name *string, content []byte, documentURL string, api *APIConfig) (*ParseTask, error) {
-	return submitMinerUTask(m.httpClient, m.BaseURL, m.URLSuffix.DocumentParse, name, content, documentURL, api)
-}
+	// failed state
+	if queryResp.Data.State == "failed" {
+		return nil, fmt.Errorf("MinerU task failed: %s", queryResp.Data.ErrMsg)
+	}
 
-func (m *MinerUModel) ListTasks(*APIConfig) ([]ParseTask, error) {
-	return nil, fmt.Errorf("%w: MinerU task listing", ErrUnsupportedCapability)
-}
+	if queryResp.Data.State != "done" {
+		return nil, fmt.Errorf("MinerU task has no document result yet")
+	}
+	content := queryResp.Data.FullZipURL
+	if strings.TrimSpace(content) == "" {
+		return nil, fmt.Errorf("MinerU task result URL is missing")
+	}
 
-func (m *MinerUModel) ShowTask(id string, api *APIConfig) (*ParseTask, error) {
-	return readMinerUTask(m.httpClient, m.BaseURL, m.URLSuffix.DocumentParse, id, api)
+	return &TaskResponse{
+		Segments: []TaskSegment{
+			{
+				Index:   0,
+				Content: content,
+			},
+		},
+	}, nil
 }
-
-var _ ModelDriver = (*MinerUModel)(nil)
-var _ FileParser = (*MinerUModel)(nil)
-var _ TaskReader = (*MinerUModel)(nil)

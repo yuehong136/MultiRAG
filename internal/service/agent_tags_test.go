@@ -20,9 +20,14 @@ func TestNormalizeAgentTags(t *testing.T) {
 			t.Fatalf("normalization %v: %q %v", tc.raw, got, err)
 		}
 	}
-	for _, raw := range []any{nil, 0, []any{"a"}, []int{1}, map[string]string{"a": "b"}} {
+	for _, raw := range []any{0, []int{1}, map[string]string{"a": "b"}} {
 		if _, err := normalizeAgentTags(raw); err == nil {
 			t.Fatalf("invalid type accepted: %T", raw)
+		}
+	}
+	for _, raw := range []any{nil, []any{"a"}} {
+		if _, err := normalizeAgentTags(raw); err != nil {
+			t.Fatal("target array/null contract", err)
 		}
 	}
 	tags := []string{}

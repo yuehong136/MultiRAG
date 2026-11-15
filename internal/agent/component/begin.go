@@ -71,14 +71,18 @@ func (b *BeginComponent) Invoke(ctx context.Context, inputs map[string]any) (map
 		return nil, fmt.Errorf("Begin: nil canvas state")
 	}
 
-	uid, _ := inputs["user_id"].(string)
-	if current, _ := state.GetSys("user_id").(string); uid != "" && current != "" && current != uid {
-		return nil, fmt.Errorf("Begin: user_id does not match the authenticated run")
-	}
+	// Query: required to drive downstream components.
 	query, _ := inputs["query"].(string)
-	state.SetSys("query", query)
-	if uid != "" {
-		state.SetSys("user_id", uid)
+	state.Sys["query"] = query
+
+	// Optional user_id — present in interactive chat flows, absent in
+	// background jobs. Always a string when set; cast failure silently
+	// drops the value (mirrors Python's getattr fallback).
+	if uid, ok := inputs["user_id"].(string); ok && uid != "" {
+		if actor, exists := state.Sys["user_id"]; exists && actor != uid {
+			return nil, fmt.Errorf("Begin: user_id cannot override the authenticated actor")
+		}
+		state.Sys["user_id"] = uid
 	}
 
 	// Passthrough: a shallow copy keeps the caller's map un-aliased.

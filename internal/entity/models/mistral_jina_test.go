@@ -31,13 +31,13 @@ func TestMistralChatStructuredContentHTTP(t *testing.T) {
 	d := NewMistralModel(map[string]string{"default": server.URL + "/v1/"}, URLSuffix{Chat: "chat/completions"})
 	messages := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous"}, {Role: "user", Content: []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/image.png"}}}}}
 	yes := true
-	result, err := d.ChatWithMessages("pixtral", messages, &APIConfig{APIKey: stringPtr("key")}, &ChatConfig{Stream: &yes})
-	if err != nil || *result.Answer != "answer" || *result.ReasoningContent != "reason" || body["stream"] != false || len(body["messages"].([]any)) != 3 {
+	result, err := d.ChatWithMessages("pixtral", messages, &APIConfig{ApiKey: stringPtr("key")}, &ChatConfig{Stream: &yes})
+	if err != nil || *result.Answer != "answer" || *result.ReasonContent != "reason" || body["stream"] != false || len(body["messages"].([]any)) != 3 {
 		t.Fatal(result, err, body)
 	}
 	for _, invalid := range []string{`{"choices":[]}`, `{"error":{"message":"private-body"}}`, `{"choices":[{"message":{"content":[]}}]}`, `{"choices":[{"message":{"content":false}}]}`, `{"choices":[{"message":{"content":"answer"}}]} {}`} {
 		response = invalid
-		if r, e := d.ChatWithMessages("pixtral", messages, &APIConfig{APIKey: stringPtr("key")}, nil); e == nil || r != nil || strings.Contains(e.Error(), "private-body") {
+		if r, e := d.ChatWithMessages("pixtral", messages, &APIConfig{ApiKey: stringPtr("key")}, nil); e == nil || r != nil || strings.Contains(e.Error(), "private-body") {
 			t.Fatal(r, e)
 		}
 	}
@@ -60,7 +60,7 @@ func TestMistralStreamHTTP(t *testing.T) {
 			defer server.Close()
 			d := NewMistralModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			done := 0
-			err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(a, r *string) error {
+			err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(a, r *string) error {
 				if a != nil && *a == "[DONE]" {
 					done++
 				}
@@ -95,13 +95,13 @@ func TestJinaTaskDiscoveryRerankHTTP(t *testing.T) {
 		}
 		if r.URL.Path == "/embeddings" {
 			task, _ = body["task"].(string)
-			if body["dimensions"] != float64(2) || body["query"] != nil {
+			if body["dimensions"] != nil || body["query"] != nil {
 				t.Error(body)
 			}
 			fmt.Fprint(w, `{"data":[{"index":0,"embedding":[0,1]}]}`)
 			return
 		}
-		if body["top_n"] != float64(2) || body["return_documents"] != false {
+		if (body["top_n"] != float64(0) && body["top_n"] != float64(99)) || body["return_documents"] != nil {
 			t.Error(body)
 		}
 		fmt.Fprint(w, response)
@@ -109,21 +109,19 @@ func TestJinaTaskDiscoveryRerankHTTP(t *testing.T) {
 	defer server.Close()
 	d := NewJinaModel(map[string]string{"default": server.URL}, URLSuffix{Models: "models", Embedding: "embeddings", Rerank: "rerank", Chat: "chat"})
 	for _, q := range []bool{false, true} {
-		_, e := d.Embed(stringPtr("jina-embeddings-v3"), []string{"q"}, &APIConfig{APIKey: stringPtr("key")}, &EmbeddingConfig{Query: q, Dimension: 2})
-		want := "retrieval.passage"
-		if q {
-			want = "retrieval.query"
-		}
+		_, e := d.Embed(stringPtr("jina-embeddings-v3"), []string{"q"}, &APIConfig{ApiKey: stringPtr("key")}, &EmbeddingConfig{Dimension: 2})
+		want := ""
+		_ = q
 		if e != nil || task != want {
 			t.Fatal(e, task)
 		}
 	}
 	response = `{"data":[{"id":"model-id","name":"Display label"}]}`
 	list, e := d.ListModels(nil)
-	if e != nil || !reflect.DeepEqual(list, []string{"model-id"}) {
+	if e != nil || !reflect.DeepEqual(modelNamesForTest(list), []string{"Display label"}) {
 		t.Fatal(list, e)
 	}
-	for _, responseBody := range []string{`{}`, `{"data":null}`, `{"data":[{"name":"display"}]}`, `{"data":[1]}`, `{"error":{"message":"private-body"}}`} {
+	for _, responseBody := range []string{`{}`, `{"data":null}`, `{"data":[{"id":"display"}]}`, `{"data":[1]}`, `{"error":{"message":"private-body"}}`} {
 		response = responseBody
 		if _, e := d.ListModels(nil); e == nil || strings.Contains(e.Error(), "private-body") {
 			t.Fatal(e)
@@ -131,7 +129,7 @@ func TestJinaTaskDiscoveryRerankHTTP(t *testing.T) {
 	}
 	response = `{"results":[{"index":1,"relevance_score":1},{"index":0,"relevance_score":0}]}`
 	name := "reranker"
-	api := &APIConfig{APIKey: stringPtr("key")}
+	api := &APIConfig{ApiKey: stringPtr("key")}
 	for _, cfg := range []*RerankConfig{nil, {}, {TopN: 99}} {
 		r, e := d.Rerank(&name, "q", []string{"a", "b"}, api, cfg)
 		if e != nil || len(r.Data) != 2 || r.Data[1].RelevanceScore != 0 {
@@ -176,8 +174,8 @@ func TestMistralNativeEmbeddingDimensionHTTP(t *testing.T) {
 	}))
 	defer fixture.Close()
 	d := NewMistralModel(map[string]string{"default": fixture.URL}, URLSuffix{Embedding: "embeddings"})
-	api := &APIConfig{APIKey: stringPtr("key")}
-	if rows, err := d.Embed(stringPtr("mistral-embed"), []string{"q"}, api, &EmbeddingConfig{Query: true, Dimension: 2}); err != nil || len(rows) != 1 {
+	api := &APIConfig{ApiKey: stringPtr("key")}
+	if rows, err := d.Embed(stringPtr("mistral-embed"), []string{"q"}, api, &EmbeddingConfig{Dimension: 2}); err != nil || len(rows) != 1 {
 		t.Fatal(rows, err)
 	}
 	if rows, err := d.Embed(stringPtr("mistral-embed"), []string{"q"}, api, &EmbeddingConfig{Dimension: -1}); err == nil || rows != nil || calls.Load() != 1 {

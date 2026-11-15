@@ -17,28 +17,26 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
-
-	"github.com/google/uuid"
-
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/entity"
 	"multirag/internal/storage"
 	"multirag/internal/utility"
-)
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
-// ErrFileNoAuthorization is returned when the actor cannot read a file ancestry.
-var ErrFileNoAuthorization = errors.New("No authorization.")
+	"github.com/google/uuid"
+)
 
 // FileService file service
 type FileService struct {
@@ -78,13 +76,9 @@ func (s *FileService) GetRootFolder(tenantID string) (map[string]interface{}, er
 	return s.toFileResponse(file), nil
 }
 
-// ListFiles lists files by parent folder ID (matching Python /files endpoint).
-// When pfID is empty it resolves the root folder and lazily initializes the
-// dataset docs, matching Python FileService.list_files.
+// ListFiles lists files by parent folder ID (matching Python /files endpoint)
+// This method includes init_dataset_docs initialization when parent_id is empty
 func (s *FileService) ListFiles(tenantID, pfID string, page, pageSize int, orderby string, desc bool, keywords string) (*ListFilesResponse, error) {
-	if err := dao.GuardSkillFile(pfID); err != nil {
-		return nil, err
-	}
 	// If pfID is empty, get root folder and initialize dataset docs
 	if pfID == "" {
 		rootFolder, err := s.fileDAO.GetRootFolder(tenantID)
@@ -93,16 +87,14 @@ func (s *FileService) ListFiles(tenantID, pfID string, page, pageSize int, order
 		}
 		pfID = rootFolder.ID
 
-		// Mirror Python init_knowledgebase_docs: lazily materialize the
-		// .knowledgebase folder and dataset documents when listing the root.
+		// Initialize dataset docs (matching Python init_knowledgebase_docs logic)
 		if err := s.initDatasetDocs(pfID, tenantID); err != nil {
 			return nil, fmt.Errorf("failed to initialize dataset docs: %w", err)
 		}
 	}
 
 	// Check if parent folder exists
-	folder, err := s.fileDAO.GetByID(pfID)
-	if err != nil || folder.TenantID != tenantID {
+	if _, err := s.fileDAO.GetByID(pfID); err != nil {
 		return nil, fmt.Errorf("Folder not found!")
 	}
 
@@ -153,11 +145,17 @@ func (s *FileService) ListFiles(tenantID, pfID string, page, pageSize int, order
 	}, nil
 }
 
-// initDatasetDocs lazily mirrors dataset documents into the file tree.
-// Mirrors Python FileService.init_knowledgebase_docs.
+// initDatasetDocs initializes dataset documents for tenant
+// This matches Python's FileService.init_dataset_docs method
 func (s *FileService) initDatasetDocs(rootID, tenantID string) error {
-	return s.fileDAO.InitDatasetDocs(rootID, tenantID)
+	return s.fileDAO.InitDatasetDocs(rootID, tenantID, s.file2DocumentDAO)
 }
+
+// DatasetFolderName is the folder name for dataset
+const DatasetFolderName = ".knowledgebase"
+
+// FileSourceDataset represents dataset as file source
+const FileSourceDataset = "knowledgebase"
 
 // toFileResponse converts file model to response format
 func (s *FileService) toFileResponse(file *entity.File) map[string]interface{} {
@@ -220,9 +218,6 @@ func (s *FileService) fileInfoToResponse(info *FileInfo) map[string]interface{} 
 
 // GetParentFolder gets parent folder of a file with permission check
 func (s *FileService) GetParentFolder(userID, fileID string) (map[string]interface{}, error) {
-	if err := dao.GuardSkillFile(fileID); err != nil {
-		return nil, err
-	}
 	// Get file
 	file, err := s.fileDAO.GetByID(fileID)
 	if err != nil {
@@ -231,7 +226,7 @@ func (s *FileService) GetParentFolder(userID, fileID string) (map[string]interfa
 
 	// Permission check
 	if !s.checkFileTeamPermission(file, userID) {
-		return nil, ErrFileNoAuthorization
+		return nil, fmt.Errorf("No authorization.")
 	}
 
 	// Get parent folder
@@ -245,9 +240,6 @@ func (s *FileService) GetParentFolder(userID, fileID string) (map[string]interfa
 
 // GetAllParentFolders gets all parent folders in path with permission check
 func (s *FileService) GetAllParentFolders(userID, fileID string) ([]map[string]interface{}, error) {
-	if err := dao.GuardSkillFile(fileID); err != nil {
-		return nil, err
-	}
 	// Get file
 	file, err := s.fileDAO.GetByID(fileID)
 	if err != nil {
@@ -256,7 +248,7 @@ func (s *FileService) GetAllParentFolders(userID, fileID string) ([]map[string]i
 
 	// Permission check
 	if !s.checkFileTeamPermission(file, userID) {
-		return nil, ErrFileNoAuthorization
+		return nil, fmt.Errorf("No authorization.")
 	}
 
 	// Get all parent folders
@@ -286,15 +278,52 @@ func (s *FileService) GetDocCount(tenantID string) (int64, error) {
 }
 
 // UploadFile uploads files to a folder
-func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.FileHeader) ([]map[string]interface{}, error) {
-	release, lockErr := lockCoreFileMutation(context.Background(), tenantID, parentID)
-	if lockErr != nil {
-		return nil, lockErr
+func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.FileHeader) (result []map[string]interface{}, uploadErr error) {
+	if strings.TrimSpace(tenantID) == "" {
+		return nil, fmt.Errorf("tenant is required")
 	}
-	defer release()
-	if err := dao.GuardSkillFile(parentID); err != nil {
-		return nil, err
+	if len(files) == 0 {
+		return nil, fmt.Errorf("No file selected!")
 	}
+	// Validate the complete batch before creating folders or writing objects.
+	filenames := make([]string, len(files))
+	for index, header := range files {
+		if header == nil || header.Filename == "" {
+			return nil, fmt.Errorf("No file selected!")
+		}
+		name := header.Filename
+		// net/multipart sanitizes FileHeader.Filename with filepath.Base. The
+		// original header retains the relative path sent by the skill uploader.
+		if disposition := header.Header.Get("Content-Disposition"); disposition != "" {
+			_, parameters, err := mime.ParseMediaType(disposition)
+			if err != nil {
+				return nil, fmt.Errorf("invalid multipart file name")
+			}
+			if raw, exists := parameters["filename"]; exists {
+				if header.Filename != filepath.Base(raw) {
+					return nil, fmt.Errorf("multipart filename does not match its header")
+				}
+				name = raw
+			}
+		}
+		filenames[index] = name
+		if strings.HasPrefix(name, "/") || strings.ContainsAny(name, "\\\x00") {
+			return nil, fmt.Errorf("invalid file path")
+		}
+		for _, component := range strings.Split(name, "/") {
+			if component == "" || component == "." || component == ".." {
+				return nil, fmt.Errorf("invalid file path")
+			}
+		}
+		src, err := header.Open()
+		if err != nil {
+			return nil, fmt.Errorf("failed to open uploaded file: %w", err)
+		}
+		if err := src.Close(); err != nil {
+			return nil, err
+		}
+	}
+
 	if parentID == "" {
 		rootFolder, err := s.fileDAO.GetRootFolder(tenantID)
 		if err != nil {
@@ -304,8 +333,25 @@ func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.F
 	}
 
 	parent, err := s.fileDAO.GetByID(parentID)
-	if err != nil || parent.TenantID != tenantID {
-		return nil, fmt.Errorf("folder not found")
+	if err != nil || parent == nil {
+		return nil, fmt.Errorf("Can't find this folder!")
+	}
+	if parent.TenantID != tenantID || parent.Type != FileTypeFolder {
+		return nil, fmt.Errorf("No authorization.")
+	}
+
+	maxFileNumPerUser := os.Getenv("MAX_FILE_NUM_PER_USER")
+	if maxFileNumPerUser != "" {
+		var maxNum int64
+		if _, err := fmt.Sscanf(maxFileNumPerUser, "%d", &maxNum); err == nil && maxNum > 0 {
+			docCount, err := s.GetDocCount(tenantID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get document count: %w", err)
+			}
+			if docCount >= maxNum {
+				return nil, fmt.Errorf("Exceed the maximum file number of a free user!")
+			}
+		}
 	}
 
 	storageImpl := storage.GetStorageFactory().GetStorage()
@@ -313,64 +359,77 @@ func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.F
 		return nil, fmt.Errorf("storage not initialized")
 	}
 
-	var result []map[string]interface{}
-
-	for _, fileHeader := range files {
-		filename := fileHeader.Filename
+	type uploadedObject struct{ bucket, key string }
+	var attempted []uploadedObject
+	var insertedIDs []string
+	var createdFolderIDs []string
+	defer func() {
+		if uploadErr == nil {
+			return
+		}
+		for i := len(insertedIDs) - 1; i >= 0; i-- {
+			if err := dao.DB.Where("id = ? AND tenant_id = ?", insertedIDs[i], tenantID).Delete(&entity.File{}).Error; err != nil {
+				uploadErr = errors.Join(uploadErr, fmt.Errorf("remove failed upload metadata: %w", err))
+			}
+		}
+		for _, id := range createdFolderIDs {
+			if err := dao.DB.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&entity.File{}).Error; err != nil {
+				uploadErr = errors.Join(uploadErr, fmt.Errorf("remove failed upload folder: %w", err))
+			}
+		}
+		for i := len(attempted) - 1; i >= 0; i-- {
+			if err := storageImpl.Remove(attempted[i].bucket, attempted[i].key); err != nil {
+				uploadErr = errors.Join(uploadErr, fmt.Errorf("remove failed upload object: %w", err))
+			}
+		}
+	}()
+	for index, fileHeader := range files {
+		filename := filenames[index]
 		if filename == "" {
 			return nil, fmt.Errorf("No file selected!")
 		}
 
-		maxFileNumPerUser := os.Getenv("MAX_FILE_NUM_PER_USER")
-		if maxFileNumPerUser != "" {
-			var maxNum int64
-			if _, err := fmt.Sscanf(maxFileNumPerUser, "%d", &maxNum); err == nil && maxNum > 0 {
-				docCount, err := s.GetDocCount(tenantID)
-				if err != nil {
-					return nil, fmt.Errorf("failed to get document count: %w", err)
-				}
-				if docCount >= maxNum {
-					return nil, fmt.Errorf("Exceed the maximum file number of a free user!")
-				}
-			}
-		}
+		fileType := utility.FilenameType(filename)
 
-		// Mirror the Python file_obj_names: prepend an empty leading segment
-		// ("/"+filename then split) so the recursive index arithmetic below
-		// stays identical to FileService.get_id_list_by_id / create_folder.
 		fileObjNames := s.parseFilePath(filename)
-		fileLen := len(fileObjNames)
 
-		idList, err := s.fileDAO.GetIDListByID(parentID, fileObjNames, 1, []string{parentID})
+		idList, err := s.fileDAO.GetIDListByID(parentID, fileObjNames, 0, []string{parentID})
 		if err != nil {
 			return nil, fmt.Errorf("failed to get file ID list: %w", err)
 		}
-		lenIDList := len(idList)
 
 		var lastFolder *entity.File
-		if fileLen != lenIDList {
-			folder, err := s.fileDAO.GetByID(idList[lenIDList-1])
+		if len(fileObjNames) != len(idList)-1 {
+			lastID := idList[len(idList)-1]
+			lastFolder, err = s.fileDAO.GetByID(lastID)
 			if err != nil {
 				return nil, fmt.Errorf("Folder not found!")
 			}
-			lastFolder, err = s.createFolder(folder, idList[lenIDList-1], fileObjNames, lenIDList, tenantID)
+			createdFolder, err := s.createFolderRecursive(lastFolder, fileObjNames, len(idList)-1, tenantID)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create folder: %w", err)
 			}
+			for created := createdFolder; created != nil && created.ID != lastID; {
+				createdFolderIDs = append(createdFolderIDs, created.ID)
+				ancestor, lookupErr := s.fileDAO.GetByID(created.ParentID)
+				if lookupErr != nil {
+					return nil, fmt.Errorf("verify created folder ancestry: %w", lookupErr)
+				}
+				created = ancestor
+			}
+			lastFolder = createdFolder
 		} else {
-			folder, err := s.fileDAO.GetByID(idList[lenIDList-2])
+			lastID := idList[len(idList)-2]
+			lastFolder, err = s.fileDAO.GetByID(lastID)
 			if err != nil {
 				return nil, fmt.Errorf("Folder not found!")
-			}
-			lastFolder, err = s.createFolder(folder, idList[lenIDList-2], fileObjNames, lenIDList, tenantID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create folder: %w", err)
 			}
 		}
 
-		fileType := utility.FilenameType(fileObjNames[fileLen-1])
-
-		location := fileObjNames[fileLen-1]
+		if lastFolder.TenantID != tenantID || lastFolder.Type != FileTypeFolder {
+			return nil, fmt.Errorf("No authorization.")
+		}
+		location := fileObjNames[len(fileObjNames)-1]
 		for storageImpl.ObjExist(lastFolder.ID, location) {
 			location += "_"
 		}
@@ -379,37 +438,28 @@ func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.F
 		if err != nil {
 			return nil, fmt.Errorf("failed to open uploaded file: %w", err)
 		}
-		data := make([]byte, fileHeader.Size)
-		if _, err := io.ReadFull(src, data); err != nil {
-			src.Close()
+		data, err := io.ReadAll(src)
+		closeErr := src.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
 			return nil, fmt.Errorf("failed to read file data: %w", err)
 		}
-		src.Close()
 
-		var putErr error
-		coreSpaceID := ""
-		if core, lookupErr := dao.FindSkillCoreSpace(parentID); lookupErr != nil {
-			return nil, lookupErr
-		} else if core != nil {
-			_, blobs := skillCoreResources()
-			if blobs == nil {
-				return nil, fmt.Errorf("storage unavailable")
-			}
-			coreSpaceID = core.ID
-			// Fresh keys are never reused, including after a late provider write.
-			location = s.generateUUID()
-			if err := beginCoreUpload(core.ID, lastFolder.ID, location); err != nil {
-				return nil, err
-			}
-			putErr = blobs.Put(lastFolder.ID, location, data)
-		} else {
-			putErr = storageImpl.Put(lastFolder.ID, location, data)
-		}
-		if err := putErr; err != nil {
+		attempted = append(attempted, uploadedObject{lastFolder.ID, location})
+		if err := storageImpl.Put(lastFolder.ID, location, data); err != nil {
 			return nil, fmt.Errorf("failed to store file: %w", err)
 		}
 
-		uniqueName := s.getUniqueFilename(fileObjNames[fileLen-1], lastFolder.ID)
+		stored, err := storageImpl.Get(lastFolder.ID, location)
+		if err != nil {
+			return nil, fmt.Errorf("failed to verify stored file: %w", err)
+		}
+		if !bytes.Equal(stored, data) {
+			return nil, fmt.Errorf("stored file contents do not match upload")
+		}
+		uniqueName := s.getUniqueFilename(fileObjNames[len(fileObjNames)-1], lastFolder.ID)
 
 		fileRecord := &entity.File{
 			ID:         s.generateUUID(),
@@ -419,48 +469,44 @@ func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.F
 			Name:       uniqueName,
 			Location:   &location,
 			Size:       int64(len(data)),
-			Type:       fileType,
+			Type:       string(fileType),
 			SourceType: "",
 		}
 
 		if err := s.fileDAO.Insert(fileRecord); err != nil {
-			if coreSpaceID != "" {
-				return nil, fmt.Errorf("UPLOAD_METADATA_FAILED")
-			}
 			return nil, fmt.Errorf("failed to insert file record: %w", err)
 		}
 
-		if coreSpaceID != "" {
-			if err := claimCoreUpload(coreSpaceID); err != nil {
-				return nil, err
-			}
-		}
+		insertedIDs = append(insertedIDs, fileRecord.ID)
 		result = append(result, s.toFileResponse(fileRecord))
 	}
 
 	return result, nil
 }
 
-// parseFilePath splits an uploaded filename into path segments, mirroring the
-// Python behavior of prepending an empty leading segment ("/"+name then split).
 func (s *FileService) parseFilePath(filename string) []string {
-	return strings.Split("/"+filename, "/")
+	filename = strings.TrimPrefix(filename, "/")
+	parts := strings.Split(filename, "/")
+	var result []string
+	for _, part := range parts {
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
 }
 
-// createFolder recursively creates the folder chain along names, mirroring
-// FileService.create_folder: it stops once count exceeds len(names)-2 so the
-// trailing element (the file name) is never turned into a folder.
-func (s *FileService) createFolder(file *entity.File, parentID string, names []string, count int, tenantID string) (*entity.File, error) {
+func (s *FileService) createFolderRecursive(parentFolder *entity.File, names []string, count int, tenantID string) (*entity.File, error) {
 	if count > len(names)-2 {
-		return file, nil
+		return parentFolder, nil
 	}
 
-	newFolder, err := s.fileDAO.CreateFolder(parentID, tenantID, names[count], FileTypeFolder)
+	newFolder, err := s.fileDAO.CreateFolder(parentFolder.ID, tenantID, names[count], FileTypeFolder)
 	if err != nil {
 		return nil, err
 	}
 
-	return s.createFolder(newFolder, newFolder.ID, names, count+1, tenantID)
+	return s.createFolderRecursive(newFolder, names, count+1, tenantID)
 }
 
 func (s *FileService) getUniqueFilename(name, parentID string) string {
@@ -491,14 +537,6 @@ func (s *FileService) generateUUID() string {
 
 // CreateFolder creates a new folder or virtual file
 func (s *FileService) CreateFolder(tenantID, name, parentID, fileType string) (map[string]interface{}, error) {
-	release, lockErr := lockCoreFileMutation(context.Background(), tenantID, parentID)
-	if lockErr != nil {
-		return nil, lockErr
-	}
-	defer release()
-	if err := dao.GuardSkillFile(parentID); err != nil {
-		return nil, err
-	}
 	if parentID == "" {
 		rootFolder, err := s.fileDAO.GetRootFolder(tenantID)
 		if err != nil {
@@ -514,6 +552,10 @@ func (s *FileService) CreateFolder(tenantID, name, parentID, fileType string) (m
 	existingFiles := s.fileDAO.Query(name, parentID)
 	if len(existingFiles) > 0 {
 		return nil, fmt.Errorf("Duplicated folder name in the same folder.")
+	}
+
+	if fileType == "" {
+		fileType = FileTypeVirtual
 	}
 
 	if fileType == FileTypeFolder {
@@ -533,19 +575,6 @@ func (s *FileService) CreateFolder(tenantID, name, parentID, fileType string) (m
 // DeleteFiles deletes files by IDs
 // Returns (success, message) where success is true if all files were deleted
 func (s *FileService) DeleteFiles(ctx context.Context, uid string, fileIDs []string) (bool, string) {
-	if handled, err := deleteSkillCoreFiles(ctx, uid, fileIDs); handled {
-		if err != nil {
-			return false, err.Error()
-		}
-		return true, ""
-	} else if err != nil {
-		return false, err.Error()
-	}
-	for _, id := range fileIDs {
-		if err := dao.GuardSkillFileTree(id); err != nil {
-			return false, err.Error()
-		}
-	}
 	for _, fileID := range fileIDs {
 		// 1. Get file
 		file, err := s.fileDAO.GetByID(fileID)
@@ -569,7 +598,7 @@ func (s *FileService) DeleteFiles(ctx context.Context, uid string, fileIDs []str
 		}
 
 		// 4. Skip dataset source files
-		if entity.FileSource(file.SourceType) == entity.FileSourceKnowledgebase {
+		if file.SourceType == FileSourceDataset {
 			continue
 		}
 
@@ -652,15 +681,12 @@ func (s *FileService) checkDatasetTeamPermission(ds *entity.Knowledgebase, uid s
 // deleteSingleFile deletes a single file (not folder)
 // Matches Python's _delete_single_file function
 func (s *FileService) deleteSingleFile(ctx context.Context, file *entity.File) error {
-	if err := dao.GuardSkillFile(file.ID); err != nil {
-		return err
-	}
 	// 1. Delete storage object
 	if file.Location != nil && *file.Location != "" {
 		storageImpl := storage.GetStorageFactory().GetStorage()
 		if storageImpl != nil {
 			if err := storageImpl.Remove(file.ParentID, *file.Location); err != nil {
-				common.Error(fmt.Sprintf("Fail to remove object: %s/%s", file.ParentID, *file.Location), err)
+				return fmt.Errorf("failed to remove file object: %w", err)
 			}
 		}
 	}
@@ -689,14 +715,14 @@ func (s *FileService) deleteSingleFile(ctx context.Context, file *entity.File) e
 					if tenantID != "" {
 						// Delete from document engine
 						if err := s.deleteDocumentFromEngine(ctx, doc, tenantID); err != nil {
-							common.Error(fmt.Sprintf("Fail to delete document from engine: %s", doc.ID), err)
+							common.Logger.Error(fmt.Sprintf("Fail to delete document from engine: %s, error: %v", doc.ID, err))
 						}
 					}
 				}
 
 				// Delete document record
-				if err := documentDAO.Delete(docID); err != nil {
-					common.Error(fmt.Sprintf("Fail to delete document: %s", docID), err)
+				if _, err := documentDAO.Delete(docID); err != nil {
+					common.Logger.Error(fmt.Sprintf("Fail to delete document: %s, error: %v", docID, err))
 				}
 			}
 
@@ -724,8 +750,8 @@ func (s *FileService) deleteDocumentFromEngine(ctx context.Context, doc *entity.
 		return nil
 	}
 
-	// Build index name: multirag_<tenant_id>
-	indexName := fmt.Sprintf("multirag_%s", tenantID)
+	// Build index name: multirag_<tenant_id>_<kb_id>
+	indexName := fmt.Sprintf("multirag_%s_%s", tenantID, doc.KbID)
 
 	// Delete document from engine with timeout
 	reqCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
@@ -740,9 +766,6 @@ func (s *FileService) deleteDocumentFromEngine(ctx context.Context, doc *entity.
 // deleteFolderRecursive recursively deletes a folder and its contents
 // Matches Python's _delete_folder_recursive function
 func (s *FileService) deleteFolderRecursive(ctx context.Context, folder *entity.File, uid string) error {
-	if err := dao.GuardSkillFileTree(folder.ID); err != nil {
-		return err
-	}
 	// Get all sub-files
 	subFiles, err := s.fileDAO.ListByParentID(folder.ID)
 	if err != nil {
@@ -771,29 +794,19 @@ func (s *FileService) deleteFolderRecursive(ctx context.Context, folder *entity.
 	return nil
 }
 
+// MoveFileReq represents the request body for move files operation
+type MoveFileReq struct {
+	SrcFileIDs []string `json:"src_file_ids" binding:"required,min=1"`
+	DestFileID string   `json:"dest_file_id"`
+	NewName    string   `json:"new_name"`
+}
+
 // MoveFiles moves and/or renames files
 // Follows Linux mv semantics:
 // - new_name only: rename in place (no storage operation)
 // - dest_file_id only: move to new folder (keep names)
 // - both: move and rename simultaneously
 func (s *FileService) MoveFiles(uid string, srcFileIDs []string, destFileID string, newName string) (bool, string) {
-	for _, id := range append(append([]string{}, srcFileIDs...), destFileID) {
-		space, e := dao.FindSkillCoreSpace(id)
-		if e != nil {
-			return false, e.Error()
-		}
-		if space != nil {
-			return false, "SKILL_CORE_MOVE_UNAVAILABLE: move and rename require a Skills domain operation"
-		}
-	}
-	if err := dao.GuardSkillFile(destFileID); err != nil {
-		return false, err.Error()
-	}
-	for _, id := range srcFileIDs {
-		if err := dao.GuardSkillFileTree(id); err != nil {
-			return false, err.Error()
-		}
-	}
 	// 1. Get all source files
 	files, err := s.fileDAO.GetByIDs(srcFileIDs)
 	if err != nil || len(files) == 0 {
@@ -911,12 +924,6 @@ func (s *FileService) MoveFiles(uid string, srcFileIDs []string, destFileID stri
 
 // moveEntryRecursive recursively moves a file or folder entry
 func (s *FileService) moveEntryRecursive(sourceFile *entity.File, destFolder *entity.File, overrideName string) error {
-	if err := dao.GuardSkillFileTree(sourceFile.ID); err != nil {
-		return err
-	}
-	if err := dao.GuardSkillFile(destFolder.ID); err != nil {
-		return err
-	}
 	effectiveName := overrideName
 	if effectiveName == "" {
 		effectiveName = sourceFile.Name
@@ -1014,9 +1021,6 @@ func (s *FileService) moveEntryRecursive(sourceFile *entity.File, destFolder *en
 // GetFileContent gets file metadata and checks permission for download
 // Matches Python's file_api_service.get_file_content function
 func (s *FileService) GetFileContent(uid, fileID string) (*entity.File, error) {
-	if err := dao.GuardSkillFile(fileID); err != nil {
-		return nil, err
-	}
 	file, err := s.fileDAO.GetByID(fileID)
 	if err != nil || file == nil {
 		return nil, fmt.Errorf("Document not found!")
@@ -1036,9 +1040,6 @@ type StorageAddress struct {
 // GetStorageAddress gets storage address for a file (fallback for when direct blob is empty)
 // Matches Python's File2DocumentService.get_storage_address function
 func (s *FileService) GetStorageAddress(fileID string) (*StorageAddress, error) {
-	if err := dao.GuardSkillFile(fileID); err != nil {
-		return nil, err
-	}
 	// Get file2document mapping
 	f2d, err := s.file2DocumentDAO.GetByFileID(fileID)
 	if err != nil || len(f2d) == 0 {
@@ -1084,4 +1085,29 @@ func (s *FileService) GetStorageAddress(fileID string) (*StorageAddress, error) 
 		Bucket: doc.KbID,
 		Name:   *doc.Location,
 	}, nil
+}
+
+// DownloadAgentFile downloads an agent-generated file directly from MinIO without querying the database.
+func (s *FileService) DownloadAgentFile(tenantID, location string) ([]byte, error) {
+	if strings.TrimSpace(tenantID) == "" || location == "" || strings.HasPrefix(location, "/") || strings.ContainsAny(location, "\\\x00") {
+		return nil, fmt.Errorf("invalid file location")
+	}
+	for _, component := range strings.Split(location, "/") {
+		if component == "" || component == "." || component == ".." {
+			return nil, fmt.Errorf("invalid file location")
+		}
+	}
+	storageImpl := storage.GetStorageFactory().GetStorage()
+	if storageImpl == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
+
+	bucketName := fmt.Sprintf("%s-downloads", tenantID)
+
+	blob, err := storageImpl.Get(bucketName, location)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file from storage: %w", err)
+	}
+
+	return blob, nil
 }

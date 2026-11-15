@@ -1,18 +1,35 @@
 package service
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"math"
+	"multirag/internal/dao"
+	"multirag/internal/engine"
+	"multirag/internal/engine/types"
+	"multirag/internal/entity"
+	"multirag/internal/testsupport/scratch"
 	"reflect"
 	"testing"
 )
 
+type canonicalMetadataEngine struct {
+	engine.DocEngine
+	response *types.SearchMetadataResult
+	failure  error
+	request  *types.SearchMetadataRequest
+	calls    int
+}
+
+func (f *canonicalMetadataEngine) SearchMetadata(ctx context.Context, request *types.SearchMetadataRequest) (*types.SearchMetadataResult, error) {
+	f.calls++
+	f.request = request
+	return f.response, f.failure
+}
+
 func TestMetadataDirectoryExactScalarAndEncodedNumbers(t *testing.T) {
-	for _, value := range []interface{}{int64(9007199254740993), uint64(9007199254740993), json.Number("9007199254740993")} {
-		if text, ok := metadataValueText(value); !ok || text != "9007199254740993" {
-			t.Fatalf("integer precision lost: %T %q", value, text)
-		}
-	}
 	raw := `{"large":9007199254740993,"boolean":false,"zero":0,"empty":""}`
 	packed := make([]byte, 4)
 	binary.LittleEndian.PutUint32(packed, uint32(len(raw)))
@@ -20,47 +37,70 @@ func TestMetadataDirectoryExactScalarAndEncodedNumbers(t *testing.T) {
 	for _, value := range []interface{}{raw, []byte(raw), packed} {
 		fields, err := ExtractMetaFields(map[string]interface{}{"meta_fields": value})
 		if err != nil || fields["large"] != json.Number("9007199254740993") || fields["boolean"] != false || fields["empty"] != "" || fields["zero"] != json.Number("0") {
-			t.Fatalf("encoded metadata precision/scalars lost: %T %#v %v", value, fields, err)
-		}
-		strict, err := decodeDocumentMetadata(value)
-		if err != nil || !reflect.DeepEqual(strict, fields) {
-			t.Fatalf("reference and directory decoders disagree: %T %#v %v", value, strict, err)
+			t.Fatalf("scalar decode %T %#v %v", value, fields, err)
 		}
 	}
 }
-
 func TestMetadataReferencePublicEmptySelectionNeedsNoDependencies(t *testing.T) {
-	svc := &MetadataService{}
-	chunks := []map[string]interface{}{{"doc_id": "doc", "kb_id": "kb", "document_metadata": map[string]interface{}{"stale": true}}}
-	got, err := svc.EnrichChunksWithDocMetadata(t.Context(), chunks, "actor", []string{})
-	if err != nil || got[0]["document_metadata"] != nil || chunks[0]["document_metadata"] == nil {
-		t.Fatal("empty selection required dependencies or mutated input", got, err)
+	s := &MetadataService{}
+	got, err := s.GetFlattedMetaByKBs([]string{})
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatal(got, err)
 	}
-	if got, err := svc.EnrichChunksWithDocMetadata(t.Context(), nil, "actor", nil); err != nil || got != nil {
-		t.Fatal("empty chunks required dependencies", got, err)
-	}
+	s.EnrichChunksWithDocMetadata(nil, "owner", nil)
 }
-
 func TestMetadataReferenceCopyPreservesNullValues(t *testing.T) {
 	values := map[string]interface{}{"list": []interface{}(nil), "object": map[string]interface{}(nil), "empty": []interface{}{}}
 	chunks := []map[string]interface{}{{"kb_id": "kb", "doc_id": "doc"}}
-	got := AttachDocMetaToChunks(chunks, DocMetaMap{"kb": {"doc": values}}, nil)
-	raw, err := json.Marshal(got[0]["document_metadata"])
+	AttachDocMetaToChunks(chunks, DocMetaMap{"doc": values}, nil)
+	raw, err := json.Marshal(chunks[0]["document_metadata"])
 	if err != nil || string(raw) != `{"empty":[],"list":null,"object":null}` {
-		t.Fatal("copy changed null or empty values", string(raw), err)
+		t.Fatal(string(raw), err)
 	}
 }
-
 func TestMetadataDatasetFlattenAcceptsExactNumbers(t *testing.T) {
-	for _, value := range []interface{}{json.Number("9007199254740993"), int64(9007199254740993), []interface{}{json.Number("0"), false, nil}, []string{"a", "b"}} {
-		if values, err := flattenedMetadataValues(value); err != nil || len(values) == 0 {
-			t.Fatal("valid typed scalar or array rejected", value, values, err)
+	f := scratch.New(t)
+	old := dao.DB
+	dao.DB = f.DB
+	t.Cleanup(func() { dao.DB = old })
+	if err := f.DB.AutoMigrate(&entity.Knowledgebase{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DB.Create(&entity.Knowledgebase{ID: "kb", TenantID: "owner", Name: "Metadata", CreatedBy: "owner", EmbdID: "m", Status: func() *string { value := "1"; return &value }()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	index := &canonicalMetadataEngine{response: &types.SearchMetadataResult{MetadataRecords: []map[string]interface{}{{"id": "doc", "kb_id": "kb", "meta_fields": map[string]interface{}{"large": json.Number("9007199254740993"), "zero": 0, "flag": false, "empty": "", "list": []interface{}{json.Number("0"), false, nil}}}}}}
+	s := &MetadataService{docEngine: index}
+	got, err := s.GetFlattedMetaByKBs([]string{"kb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{"large": "9007199254740993", "zero": "0", "flag": "false", "empty": ""} {
+		if !reflect.DeepEqual(got[key][value], []string{"doc"}) {
+			t.Fatal("scalar lost", key, got)
 		}
 	}
-	if values, err := flattenedMetadataValues(json.Number("9007199254740993")); err != nil || !reflect.DeepEqual(values, []string{"9007199254740993"}) {
-		t.Fatal("large integer was rounded", values, err)
+	if index.request.TenantID != "owner" || !reflect.DeepEqual(index.request.Filter["kb_id"], []string{"kb"}) || index.request.Limit != 10000 {
+		t.Fatal("canonical metadata tenant/dataset query changed", index.request)
 	}
-	if _, err := flattenedMetadataValues(json.Number("NaN")); err == nil {
-		t.Fatal("invalid numeric metadata accepted")
+	for _, rows := range [][]map[string]interface{}{
+		{{"id": "doc", "kb_id": "foreign", "meta_fields": map[string]interface{}{}}},
+		{{"id": "doc", "kb_id": "kb", "meta_fields": "{bad"}},
+		{{"id": "doc", "kb_id": "kb", "meta_fields": map[string]interface{}{"bad": math.NaN()}}},
+		{{"id": "doc", "kb_id": "kb"}, {"id": "doc", "kb_id": "kb"}},
+	} {
+		index.response = &types.SearchMetadataResult{MetadataRecords: rows}
+		if values, err := s.GetFlattedMetaByKBs([]string{"kb"}); err == nil || values != nil {
+			t.Fatal("invalid metadata became empty/partial success", values, err)
+		}
+	}
+	index.response = nil
+	if got, err := s.GetFlattedMetaByKBs([]string{"kb"}); err == nil || got != nil {
+		t.Fatal("nil metadata response acknowledged")
+	}
+	failure := errors.New("controlled engine failure")
+	index.failure = failure
+	if got, err := s.GetFlattedMetaByKBs([]string{"kb"}); !errors.Is(err, failure) || got != nil {
+		t.Fatal("engine error lost", got, err)
 	}
 }

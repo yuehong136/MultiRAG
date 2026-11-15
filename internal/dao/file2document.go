@@ -17,9 +17,6 @@
 package dao
 
 import (
-	"fmt"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"multirag/internal/entity"
 )
 
@@ -36,11 +33,11 @@ func (dao *File2DocumentDAO) GetKBInfoByFileID(fileID string) ([]map[string]inte
 	var results []map[string]interface{}
 
 	rows, err := DB.Model(&entity.File{}).
-		Select("t_ai_knowledgebases.id, t_ai_knowledgebases.name, t_ai_file2documents.document_id").
-		Joins("JOIN t_ai_file2documents ON t_ai_file2documents.file_id = ?", fileID).
-		Joins("JOIN t_ai_documents ON t_ai_documents.id = t_ai_file2documents.document_id").
-		Joins("JOIN t_ai_knowledgebases ON t_ai_knowledgebases.id = t_ai_documents.kb_id").
-		Where("t_ai_files.id = ?", fileID).
+		Select("knowledgebase.id, knowledgebase.name, file2document.document_id").
+		Joins("JOIN file2document ON file2document.file_id = ?", fileID).
+		Joins("JOIN document ON document.id = file2document.document_id").
+		Joins("JOIN knowledgebase ON knowledgebase.id = document.kb_id").
+		Where("file.id = ?", fileID).
 		Rows()
 	if err != nil {
 		return nil, err
@@ -74,24 +71,19 @@ func (dao *File2DocumentDAO) DeleteByFileID(fileID string) error {
 	return DB.Unscoped().Where("file_id = ?", fileID).Delete(&entity.File2Document{}).Error
 }
 
-// CreateInTransaction shares the document/dataset/file lock protocol with deletion.
-// The caller owns tx and commits the link while both parent rows remain locked.
-func (dao *File2DocumentDAO) CreateInTransaction(tx *gorm.DB, mapping *entity.File2Document) error {
-	if tx == nil || mapping == nil || mapping.ID == "" || mapping.FileID == nil || *mapping.FileID == "" || mapping.DocumentID == nil || *mapping.DocumentID == "" {
-		return fmt.Errorf("complete file/document mapping required")
-	}
-	var document entity.Document
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", *mapping.DocumentID).Take(&document).Error; err != nil {
-		return err
-	}
-	// KB counters and deletion take the dataset lock before shared File rows.
-	var dataset entity.Knowledgebase
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", document.KbID).Take(&dataset).Error; err != nil {
-		return err
-	}
-	var file entity.File
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", *mapping.FileID).Take(&file).Error; err != nil {
-		return err
-	}
-	return tx.Create(mapping).Error
+// GetByDocumentID gets file2document mappings by document ID
+func (dao *File2DocumentDAO) GetByDocumentID(docID string) ([]*entity.File2Document, error) {
+	var mappings []*entity.File2Document
+	err := DB.Where("document_id = ?", docID).Find(&mappings).Error
+	return mappings, err
+}
+
+// DeleteByDocumentID deletes file2document mappings by document ID
+func (dao *File2DocumentDAO) DeleteByDocumentID(docID string) error {
+	return DB.Unscoped().Where("document_id = ?", docID).Delete(&entity.File2Document{}).Error
+}
+
+// Create inserts a new file2document mapping record.
+func (dao *File2DocumentDAO) Create(mapping *entity.File2Document) error {
+	return DB.Create(mapping).Error
 }

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -21,13 +23,13 @@ func TestDeepInfraDiscoveryAndBalanceHTTP(t *testing.T) {
 		valid      bool
 	}{
 		{"models/list", `[]`, true}, {"models/list", `[{"model_name":"chat"}]`, true},
-		{"models/list", `null`, false}, {"models/list", `{}`, false}, {"models/list", `[{}]`, false}, {"models/list", `[{"model_name":"a"},{"model_name":"a"}]`, false}, {"models/list", `[] {}`, false},
+		{"models/list", `null`, false}, {"models/list", `{}`, false}, {"models/list", `[{}]`, true}, {"models/list", `[{"model_name":"a"},{"model_name":"a"}]`, true}, {"models/list", `[] {}`, false},
 		{"payment/checklist", `{"stripe_balance":0}`, true}, {"payment/checklist", `{"stripe_balance":1.5}`, true},
 		{"payment/checklist", `{}`, false}, {"payment/checklist", `{"stripe_balance":null}`, false}, {"payment/checklist", `{"stripe_balance":-1}`, true}, {"payment/checklist", `{"stripe_balance":"0"}`, false}, {"payment/checklist", `{"stripe_balance":1e999}`, false}, {"payment/checklist", `{"stripe_balance":0,"error":"private-body"}`, false}, {"payment/checklist", `{"stripe_balance":0} {}`, false},
 	} {
 		t.Run(test.path+"/"+test.body, func(t *testing.T) {
 			calls := 0
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				if r.Method != "GET" || r.URL.Path != "/office/"+test.path {
 					t.Error("endpoint lost")
@@ -43,23 +45,24 @@ func TestDeepInfraDiscoveryAndBalanceHTTP(t *testing.T) {
 			}))
 			defer fixture.Close()
 			d := NewDeepInfraModel(map[string]string{"office": fixture.URL + "/office/"}, URLSuffix{Models: "models/list", Balance: "payment/checklist"})
-			api := &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("office")}
+			api := &APIConfig{ApiKey: stringPtr("key"), Region: stringPtr("office")}
 			var err error
 			if test.path == "models/list" {
-				var names []string
+				var names []ListModelResponse
 				names, err = d.ListModels(api)
-				if test.valid && names == nil || !test.valid && names != nil {
+				if !test.valid && names != nil {
 					t.Fatal(names, err)
+				}
+				if connectionErr := d.CheckConnection(api); (connectionErr == nil) != test.valid || calls != 2 {
+					t.Fatal("native connection must use public discovery", connectionErr, calls)
 				}
 			} else {
 				var balance map[string]any
 				balance, err = d.Balance(api)
-				if test.valid && (balance == nil || balance["currency"] != "USD") || !test.valid && balance != nil {
+				if test.valid && (balance == nil || balance["currence"] != "USD") || !test.valid && balance != nil {
 					t.Fatal(balance, err)
 				}
-				if err := d.CheckConnection(api); (err == nil) != test.valid || calls != 2 {
-					t.Fatal("connection must check authenticated balance", err, calls)
-				}
+
 			}
 			if (err == nil) != test.valid || err != nil && strings.Contains(err.Error(), "private-body") {
 				t.Fatal(err)
@@ -71,23 +74,24 @@ func TestDeepInfraDiscoveryAndBalanceHTTP(t *testing.T) {
 func TestDeepInfraThinkingBody(t *testing.T) {
 	for _, thinking := range []*bool{nil, anthropicTestPtr(false), anthropicTestPtr(true)} {
 		effort := "high"
-		body, err := deepInfraChatBody("model", []Message{{Role: "user", Content: "q"}}, &ChatConfig{Thinking: thinking, Effort: &effort}, false)
+		body, err := captureChatBodyForTest(t, "DeepInfra", "model", []Message{{Role: "user", Content: "q"}}, &ChatConfig{Thinking: thinking, Effort: &effort}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if thinking != nil && !*thinking {
-			if body["reasoning_effort"] != nil || !reflect.DeepEqual(body["reasoning"], map[string]any{"enabled": false}) {
-				t.Fatal(body)
-			}
-		} else if body["reasoning_effort"] != "high" {
-			t.Fatal(body)
+		var reasoning any
+		if thinking != nil && *thinking {
+			reasoning = map[string]any{"enabled": true, "effort": "high"}
+		}
+		if body["reasoning_effort"] != "high" || !reflect.DeepEqual(body["reasoning"], reasoning) {
+			t.Fatal("original DeepInfra Effort passthrough changed", body)
 		}
 	}
 }
 
 func TestDeepInfraMediaHTTP(t *testing.T) {
 	audio := []byte{0, 255, 1, 128, 9}
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var binaryStream atomic.Bool
+	fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer key" {
 			t.Error("media key")
 		}
@@ -111,7 +115,7 @@ func TestDeepInfraMediaHTTP(t *testing.T) {
 				names = append(names, part.FormName())
 				switch part.FormName() {
 				case "file":
-					if !reflect.DeepEqual(data, audio) || part.FileName() != "audio.mp3" {
+					if !reflect.DeepEqual(data, audio) || part.FileName() != "model-input.wav" {
 						t.Error("ASR bytes")
 					}
 				case "model":
@@ -124,7 +128,8 @@ func TestDeepInfraMediaHTTP(t *testing.T) {
 					}
 				}
 			}
-			if !reflect.DeepEqual(names, []string{"model", "language", "prompt", "temperature", "file"}) {
+			sort.Strings(names[2:])
+			if !reflect.DeepEqual(names, []string{"model", "file", "language", "prompt", "response_format", "temperature"}) {
 				t.Error("multipart order", names)
 			}
 			fmt.Fprint(w, `{"text":"transcription"}`)
@@ -137,37 +142,53 @@ func TestDeepInfraMediaHTTP(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body["text"] != "hello" || body["output_format"] != "wav" || body["model_id"] != "tts" || body["speed"] != float64(0) || body["voice"] != nil || body["voice_id"] != nil {
+		if body["text"] != "hello" || body["output_format"] != "wav" || body["model_id"] != nil || body["speed"] != float64(0) || body["voice"] != nil || body["voice_id"] != nil {
 			t.Error("speech options", body)
 		}
 		w.Header().Set("Content-Type", "audio/wav")
-		w.Write(audio)
+		if strings.HasSuffix(r.URL.Path, "/stream") && !binaryStream.Load() {
+			w.Write([]byte("UTF8 audio"))
+		} else {
+			w.Write(audio)
+		}
 	}))
 	defer fixture.Close()
 	d := NewDeepInfraModel(map[string]string{"default": fixture.URL}, URLSuffix{ASR: "v1/audio/transcriptions", TTS: "v1/text-to-speech"})
-	api := &APIConfig{APIKey: stringPtr("key")}
-	result, err := d.TranscribeAudio(stringPtr("asr"), audio, api, &ASRConfig{Format: "mp3", Language: []string{"en"}, Prompt: "context", Params: map[string]any{"temperature": 0}})
-	if err != nil || result == nil || *result.Text != "transcription" {
+	api := &APIConfig{ApiKey: stringPtr("key")}
+	result, err := d.TranscribeAudio(stringPtr("asr"), modelFixtureFile(t, audio), api, &ASRConfig{Params: map[string]any{"temperature": 0, "response_format": "json", "language": "en", "prompt": "context"}})
+	if err != nil || result == nil || result.Text != "transcription" {
 		t.Fatal(result, err)
 	}
-	config := &TTSConfig{Voice: "voice_id", Format: "wav", Params: map[string]any{"speed": 0, "voice_id": "ignored"}}
-	speech, err := d.AudioSpeech(stringPtr("tts"), "hello", api, config)
-	if err != nil || speech == nil || !reflect.DeepEqual(speech.Audio, audio) || speech.Format != "wav" {
+	config := &TTSConfig{Format: "wav", Params: map[string]any{"speed": 0, "voice_id": "voice_id", "voice": "ignored"}}
+	speech, err := d.AudioSpeech(stringPtr("tts"), stringPtr("hello"), api, config)
+	if err != nil || speech == nil || !reflect.DeepEqual(speech.Audio, audio) {
 		t.Fatal(speech, err)
 	}
 	var output []byte
-	err = d.AudioSpeechWithSender(stringPtr("tts"), "hello", api, config, func(chunk *TTSResponse) error { output = append(output, chunk.Audio...); return nil })
-	if err != nil || !reflect.DeepEqual(output, audio) {
+	err = d.AudioSpeechWithSender(stringPtr("tts"), stringPtr("hello"), api, config, func(value, _ *string) error {
+		if value != nil && *value == "[DONE]" {
+			return nil
+		}
+		chunk := &TTSResponse{Audio: modelStreamBytesForTest(value)}
+		output = append(output, chunk.Audio...)
+		return nil
+	})
+	if err != nil || string(output) != "UTF8 audio" {
 		t.Fatal(output, err)
 	}
 	marker := errors.New("sender failed")
-	if err := d.AudioSpeechWithSender(stringPtr("tts"), "hello", api, config, func(*TTSResponse) error { return marker }); !errors.Is(err, marker) {
+	if err := d.AudioSpeechWithSender(stringPtr("tts"), stringPtr("hello"), api, config, func(value, _ *string) error { return marker }); !errors.Is(err, marker) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if result, err := d.AudioSpeech(stringPtr("tts"), "hello", &APIConfig{APIKey: stringPtr("key"), Context: ctx}, config); !errors.Is(err, context.Canceled) || result != nil {
+	if result, err := d.AudioSpeech(stringPtr("tts"), stringPtr("hello"), &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, config); !errors.Is(err, context.Canceled) || result != nil {
 		t.Fatal(result, err)
+	}
+	binaryStream.Store(true)
+	sent := 0
+	if err := d.AudioSpeechWithSender(stringPtr("tts"), stringPtr("hello"), api, config, func(*string, *string) error { sent++; return nil }); err == nil || sent != 0 {
+		t.Fatal("binary audio cannot pass through the text sender", sent, err)
 	}
 }
 
@@ -179,28 +200,28 @@ func TestDeepInfraMediaRejectsFailuresHTTP(t *testing.T) {
 		{401, "application/json", `{"error":"private-body"}`}, {500, "audio/wav", "a"}, {200, "application/json", `{"error":"private-body"}`}, {200, "audio/mpeg", "a"}, {200, "audio/wav", ""},
 	} {
 		t.Run(fmt.Sprint(test), func(t *testing.T) {
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", test.mime)
 				w.WriteHeader(test.status)
 				fmt.Fprint(w, test.body)
 			}))
 			defer fixture.Close()
 			d := NewDeepInfraModel(map[string]string{"default": fixture.URL}, URLSuffix{TTS: "tts"})
-			api := &APIConfig{APIKey: stringPtr("key")}
-			config := &TTSConfig{Voice: "voice", Format: "wav"}
-			result, err := d.AudioSpeech(stringPtr("tts"), "hello", api, config)
+			api := &APIConfig{ApiKey: stringPtr("key")}
+			config := &TTSConfig{Format: "wav", Params: map[string]any{"voice": "voice"}}
+			result, err := d.AudioSpeech(stringPtr("tts"), stringPtr("hello"), api, config)
 			if err == nil || result != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(result, err)
 			}
-			if err := d.AudioSpeechWithSender(stringPtr("tts"), "hello", api, config, func(*TTSResponse) error { return nil }); err == nil {
+			if err := d.AudioSpeechWithSender(stringPtr("tts"), stringPtr("hello"), api, config, func(value, _ *string) error { return nil }); err == nil {
 				t.Fatal("bad stream succeeded")
 			}
 		})
 	}
 	for _, body := range []string{`{}`, `{"text":null}`, `{"error":"private-body"}`, `{"text":"ok","code":1}`, `{"text":42}`, `{"text":"ok"} {}`} {
-		fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+		fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 		d := NewDeepInfraModel(map[string]string{"default": fixture.URL}, URLSuffix{ASR: "asr"})
-		result, err := d.TranscribeAudio(stringPtr("asr"), []byte{1}, &APIConfig{APIKey: stringPtr("key")}, nil)
+		result, err := d.TranscribeAudio(stringPtr("asr"), modelFixtureFile(t, []byte{1}), &APIConfig{ApiKey: stringPtr("key")}, nil)
 		fixture.Close()
 		if err == nil || result != nil || strings.Contains(err.Error(), "private-body") {
 			t.Fatal(result, err)
@@ -211,13 +232,13 @@ func TestDeepInfraMediaRejectsFailuresHTTP(t *testing.T) {
 func TestDeepInfraMediaPreflight(t *testing.T) {
 	d := NewDeepInfraModel(map[string]string{"default": "http://unused.invalid"}, URLSuffix{TTS: "tts"})
 	calls := 0
-	d.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) { calls++; return nil, errors.New("unexpected request") })
-	for _, config := range []*TTSConfig{nil, {}, {Voice: "../voice"}, {Voice: "voice", Params: map[string]any{"voice_id": 42}}, {Voice: "voice", Params: map[string]any{"output_format": "unknown"}}, {Voice: "voice", Params: map[string]any{"model": "wrong"}}} {
-		if result, err := d.AudioSpeech(stringPtr("tts"), "hello", &APIConfig{APIKey: stringPtr("key")}, config); err == nil || result != nil {
+	d.baseModel.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) { calls++; return nil, errors.New("unexpected request") })
+	for _, config := range []*TTSConfig{nil, {}, {Params: map[string]any{"voice": "../voice"}}, {Params: map[string]any{"voice_id": 42}}, {Params: map[string]any{"output_format": "unknown"}}, {Params: map[string]any{"model": "wrong"}}} {
+		if result, err := d.AudioSpeech(stringPtr("tts"), stringPtr("hello"), &APIConfig{ApiKey: stringPtr("key")}, config); err == nil || result != nil {
 			t.Fatal(result, err)
 		}
 	}
-	if err := d.AudioSpeechWithSender(stringPtr("tts"), "hello", nil, nil, nil); err == nil {
+	if err := d.AudioSpeechWithSender(stringPtr("tts"), stringPtr("hello"), nil, nil, nil); err == nil {
 		t.Fatal("missing sender")
 	}
 	if result, err := d.TranscribeAudio(stringPtr("asr"), nil, nil, nil); err == nil || result != nil {
@@ -231,7 +252,7 @@ func TestDeepInfraMediaPreflight(t *testing.T) {
 func TestDeepInfraEmbeddingMinimumDimension(t *testing.T) {
 	var dimension int
 	calls := 0
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var body struct {
 			Dimensions int
@@ -244,7 +265,7 @@ func TestDeepInfraEmbeddingMinimumDimension(t *testing.T) {
 	}))
 	defer fixture.Close()
 	d := NewDeepInfraModel(map[string]string{"default": fixture.URL}, URLSuffix{Embedding: "embeddings"})
-	api := &APIConfig{APIKey: stringPtr("key")}
+	api := &APIConfig{ApiKey: stringPtr("key")}
 	for _, size := range []int{-1, 1, 31} {
 		if result, err := d.Embed(stringPtr("model"), []string{"q"}, api, &EmbeddingConfig{Dimension: size}); err == nil || result != nil {
 			t.Fatal(result, err)

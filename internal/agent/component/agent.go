@@ -20,8 +20,8 @@ import (
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 
-	"github.com/cloudwego/eino/components/model"
 	agenttool "multirag/internal/agent/tool"
+	"multirag/internal/entity/models"
 )
 
 // AgentComponent is a multi-turn ReAct agent.
@@ -65,10 +65,11 @@ func runEinoReActAgent(ctx context.Context, p AgentParam) (*schema.Message, erro
 	if err != nil {
 		return nil, fmt.Errorf("build tools: %w", err)
 	}
-	chatModel, err := buildAgentChatModel(ctx, p)
+	chatModel, err := buildAgentChatModel(p)
 	if err != nil {
 		return nil, fmt.Errorf("build model: %w", err)
 	}
+	chatModel.Inner().APIConfig.Context = ctx
 
 	agent, err := react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: chatModel,
@@ -110,9 +111,6 @@ func (c *AgentComponent) Name() string { return "Agent" }
 // the output map.
 func (c *AgentComponent) Invoke(ctx context.Context, inputs map[string]any) (map[string]any, error) {
 	p := mergeAgentParam(c.param, inputs)
-	if p.Driver != "" || p.APIKey != "" || p.BaseURL != "" {
-		return nil, fmt.Errorf("DSL provider credentials and endpoints are not accepted")
-	}
 	if p.ModelID == "" {
 		return nil, &ParamError{Field: "model_id", Reason: "required"}
 	}
@@ -126,24 +124,12 @@ func (c *AgentComponent) Invoke(ctx context.Context, inputs map[string]any) (map
 		p.UserPrompt = p.SystemPrompt
 	}
 
-	if p.MaxRounds <= 0 || p.MaxRounds > 100 {
-		return nil, &ParamError{Field: "max_rounds", Reason: "must be between 1 and 100"}
-	}
-	var err error
-	p.SystemPrompt, err = resolvePrompt(ctx, p.SystemPrompt)
-	if err != nil {
-		return nil, fmt.Errorf("Agent system prompt: %w", err)
-	}
-	p.UserPrompt, err = resolvePrompt(ctx, p.UserPrompt)
-	if err != nil {
-		return nil, fmt.Errorf("Agent user prompt: %w", err)
-	}
 	msg, err := agentRunner(ctx, p)
 	if err != nil {
 		return nil, fmt.Errorf("component: Agent.Invoke: %w", err)
 	}
 	if msg == nil {
-		return nil, fmt.Errorf("component: Agent: model returned no response")
+		return nil, fmt.Errorf("component: Agent.Invoke: model returned no message")
 	}
 	return map[string]any{
 		"content":    msg.Content,
@@ -193,11 +179,32 @@ func (c *AgentComponent) Outputs() map[string]string {
 
 // buildAgentChatModel constructs an EinoChatModel from AgentParam by
 // resolving the driver through the RAGFlow provider manager.
-func buildAgentChatModel(ctx context.Context, p AgentParam) (model.ToolCallingChatModel, error) {
-	if p.Driver != "" || p.APIKey != "" || p.BaseURL != "" {
-		return nil, fmt.Errorf("DSL provider credentials and endpoints are not accepted")
+func buildAgentChatModel(p AgentParam) (*models.EinoChatModel, error) {
+	driver := p.Driver
+	if driver == "" || driver == "dummy" {
+		return nil, fmt.Errorf("Agent: provider driver is required: %w", ErrNotImplemented)
 	}
-	return resolveChatModel(ctx, p.ModelID)
+	var baseURL map[string]string
+	if p.BaseURL != "" {
+		baseURL = map[string]string{"default": p.BaseURL}
+	}
+	// urlSuffix: see chatURLSuffixFor in llm.go for the rationale.
+	// The factory's NewModelDriver stores URLSuffix verbatim; the
+	// driver then appends URLSuffix.Chat to baseURL to build the
+	// chat-completions endpoint, so an empty suffix leaves the URL
+	// pointing at the v1 root (404). Seed the right suffix per
+	// driver so the agent's ReAct loop hits a working endpoint.
+	d, err := models.NewModelFactory().CreateModelDriver(driver, baseURL, chatURLSuffixFor(driver))
+	if err != nil {
+		return nil, fmt.Errorf("resolve driver %q: %w", driver, err)
+	}
+	if d == nil {
+		return nil, fmt.Errorf("no driver for %q", driver)
+	}
+	apiKey := p.APIKey
+	cfg := &models.APIConfig{ApiKey: &apiKey}
+	cm := models.NewChatModel(d, &p.ModelID, cfg)
+	return models.NewEinoChatModel(cm, nil), nil
 }
 
 // extractToolCalls converts eino ToolCalls from a message into the

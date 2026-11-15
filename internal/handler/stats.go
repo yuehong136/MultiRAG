@@ -1,54 +1,69 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package handler
 
 import (
-	"github.com/gin-gonic/gin"
-	"multirag/internal/common"
+	"errors"
+	"net/http"
 	"time"
+
+	"multirag/internal/common"
+	"multirag/internal/service"
+
+	"github.com/gin-gonic/gin"
 )
 
-func parseStatsDate(value string, end bool) (time.Time, error) {
-	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
-		if parsed, err := time.Parse(layout, value); err == nil {
-			if layout == "2006-01-02" && end {
-				parsed = parsed.AddDate(0, 0, 1)
-			}
-			return parsed, nil
-		}
-	}
-	_, err := time.Parse(time.RFC3339, value)
-	return time.Time{}, err
-}
+// GetStats returns API conversation statistics for the current user's tenant.
 func (h *SystemHandler) GetStats(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
 		return
 	}
-	for _, key := range []string{"from_date", "to_date", "canvas_id"} {
-		if values, ok := c.Request.URL.Query()[key]; ok && (len(values) != 1 || values[0] == "") {
-			jsonError(c, common.CodeArgumentError, "Invalid stats query.")
-			return
+
+	now := time.Now()
+	fromDate := c.DefaultQuery("from_date", now.AddDate(0, 0, -7).Format("2006-01-02 00:00:00"))
+	toDate := c.DefaultQuery("to_date", now.Format("2006-01-02 15:04:05"))
+	if len(toDate) == 10 {
+		toDate += " 23:59:59"
+	}
+
+	var source *string
+	if _, ok := c.GetQuery("canvas_id"); ok {
+		agentSource := "agent"
+		source = &agentSource
+	}
+
+	stats, err := h.systemService.GetStats(user.ID, fromDate, toDate, source)
+	if err != nil {
+		code := common.CodeExceptionError
+		if errors.Is(err, service.ErrTenantNotFound) {
+			code = common.CodeDataError
 		}
-	}
-	now := time.Now().UTC()
-	from, err := parseStatsDate(c.DefaultQuery("from_date", now.AddDate(0, 0, -7).Format("2006-01-02")), false)
-	if err != nil {
-		jsonError(c, common.CodeArgumentError, "Invalid from_date.")
+		c.JSON(http.StatusOK, gin.H{
+			"code":    code,
+			"message": err.Error(),
+		})
 		return
 	}
-	to, err := parseStatsDate(c.DefaultQuery("to_date", now.Format(time.RFC3339)), true)
-	if err != nil {
-		jsonError(c, common.CodeArgumentError, "Invalid to_date.")
-		return
-	}
-	var canvas *string
-	if value, ok := c.GetQuery("canvas_id"); ok {
-		canvas = &value
-	}
-	result, code, err := h.systemService.GetStats(c.Request.Context(), user.ID, from, to, canvas)
-	if err != nil {
-		jsonError(c, code, err.Error())
-		return
-	}
-	jsonResponse(c, code, result, "success")
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"message": "success",
+		"data":    stats,
+	})
 }

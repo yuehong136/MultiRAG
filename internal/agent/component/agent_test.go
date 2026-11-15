@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -400,16 +401,14 @@ func TestAgent_ReActExhaustsSteps(t *testing.T) {
 }
 
 func TestAgent_UnavailableToolFailsBeforeModel(t *testing.T) {
+	previous := http.DefaultTransport
+	calls := 0
+	http.DefaultTransport = componentRoundTripper(func(*http.Request) (*http.Response, error) { calls++; return nil, fmt.Errorf("unexpected model call") })
+	t.Cleanup(func() { http.DefaultTransport = previous })
 	for _, name := range []string{"akshare", "code_exec", "jin10", "retrieval", "search_my_dateset", "wencai"} {
-		calls := 0
-		ctx := WithModelResolver(context.Background(), func(context.Context, string) (model.ToolCallingChatModel, error) {
-			calls++
-			return &fakeToolCallingChatModel{}, nil
-		})
-		node := NewAgentComponent(AgentParam{ModelID: "42", UserPrompt: "hello", Tools: []string{name}})
-		out, err := node.Invoke(ctx, nil)
-		if out != nil || !errors.Is(err, agenttool.ErrToolUnavailable) || calls != 0 {
-			t.Fatalf("%s: out=%v err=%v model calls=%d", name, out, err, calls)
+		out, err := runEinoReActAgent(context.Background(), AgentParam{ModelID: "test", Driver: "openai", APIKey: "test", BaseURL: "https://8.8.8.8", UserPrompt: "hello", Tools: []string{name}})
+		if err == nil || out != nil || calls != 0 {
+			t.Fatalf("%s falsely executed: %v %v calls=%d", name, out, err, calls)
 		}
 	}
 }

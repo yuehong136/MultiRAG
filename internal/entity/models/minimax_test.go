@@ -1,6 +1,7 @@
 package models
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,7 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"testing"
@@ -23,11 +24,11 @@ func TestMinimaxChatRequestModesAndConfiguration(t *testing.T) {
 		thinking := thinkingConfig.value
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("thinking=%s/stream=%v", thinkingConfig.name, stream), func(t *testing.T) {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method != http.MethodPost || r.URL.Path != "/api/custom/chat" || r.Header.Get("Authorization") != "Bearer key" || r.Header.Get("Content-Type") != "application/json" {
 						t.Errorf("incorrect request: %s %s", r.Method, r.URL.Path)
 					}
-					accept := "application/json"
+					accept := ""
 					if stream {
 						accept = "text/event-stream"
 					}
@@ -68,12 +69,12 @@ func TestMinimaxChatRequestModesAndConfiguration(t *testing.T) {
 					t.Fatalf("driver = %v, %v", driver, err)
 				}
 				key, name, message, region := " key ", "minimax-m2.7", "question", "fixture"
-				apiConfig := &APIConfig{APIKey: &key, Region: &region}
-				config := &ChatConfig{Thinking: thinking, Stream: minimaxPtr(!stream), MaxTokens: minimaxPtr(123), Temperature: minimaxPtr(0.5), TopP: minimaxPtr(0.8), DoSample: minimaxPtr(false), Stop: &[]string{"stop"}}
+				apiConfig := &APIConfig{ApiKey: &key, Region: &region}
+				config := &ChatConfig{Thinking: thinking, Stream: minimaxPtr(stream), MaxTokens: minimaxPtr(123), Temperature: minimaxPtr(0.5), TopP: minimaxPtr(0.8), DoSample: minimaxPtr(false), Stop: &[]string{"stop"}}
 				if stream {
 					var frames []string
 					err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, apiConfig, config, minimaxFrameCollector(&frames))
-					if err != nil || !reflect.DeepEqual(frames, []string{"reason:reason", "answer", "[DONE]"}) {
+					if err != nil || !reflect.DeepEqual(frames, []string{"answer", "reason:reason", "[DONE]"}) {
 						t.Fatalf("frames = %v, %v", frames, err)
 					}
 				} else {
@@ -82,7 +83,11 @@ func TestMinimaxChatRequestModesAndConfiguration(t *testing.T) {
 						t.Fatal(err)
 					}
 					assertStringPointer(t, response.Answer, stringPtr("answer"))
-					assertStringPointer(t, response.ReasoningContent, stringPtr("reason"))
+					wantReason := ""
+					if thinking != nil && *thinking {
+						wantReason = "reason"
+					}
+					assertStringPointer(t, response.ReasonContent, &wantReason)
 				}
 			})
 		}
@@ -104,7 +109,7 @@ func minimaxFrameCollector(frames *[]string) func(*string, *string) error {
 }
 
 func TestMinimaxHistoryChat(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Messages []Message
 			Stream   bool
@@ -121,9 +126,9 @@ func TestMinimaxHistoryChat(t *testing.T) {
 	defer server.Close()
 	driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name := "key", "minimax-m2.7"
-	model := NewChatModel(driver, &name, &APIConfig{APIKey: &key})
+	model := NewChatModel(driver, &name, &APIConfig{ApiKey: &key})
 	history := []map[string]string{{"role": "user", "content": "first"}, {"role": "assistant", "content": "previous answer"}, {"role": "user", "content": "follow up"}}
-	answer, err := model.Chat("instruction", history, nil)
+	answer, err := chatAnswerForTest(model, messagesForTest("instruction", history), nil)
 	if err != nil || answer != "answer" {
 		t.Fatalf("answer = %q, %v", answer, err)
 	}
@@ -150,14 +155,14 @@ func TestMinimaxChatResponses(t *testing.T) {
 		{"invalid content", `{"choices":[{"message":{"content":42}}]}`, 200, true, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(test.status)
 				fmt.Fprint(w, test.body)
 			}))
 			defer server.Close()
 			driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "minimax-m2.7", "question"
-			response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: minimaxPtr(true)})
+			response, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, &ChatConfig{Thinking: minimaxPtr(true)})
 			if test.wantErr {
 				if err == nil || response != nil || strings.Contains(err.Error(), "secret-key-and-prompt") {
 					t.Fatalf("response = %#v, %v", response, err)
@@ -168,7 +173,11 @@ func TestMinimaxChatResponses(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertStringPointer(t, response.Answer, stringPtr("answer"))
-			assertStringPointer(t, response.ReasoningContent, test.reasoning)
+			wantReason := ""
+			if test.reasoning != nil {
+				wantReason = *test.reasoning
+			}
+			assertStringPointer(t, response.ReasonContent, &wantReason)
 		})
 	}
 }
@@ -180,7 +189,7 @@ func TestMinimaxStreamContracts(t *testing.T) {
 		wantFrames []string
 		wantErr    bool
 	}{
-		{"combined delta", ": heartbeat\n\ndata:\n\ndata: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\",\"content\":\"answer\"}}]}\n\ndata: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n", []string{"reason:reason", "answer", "[DONE]"}, false},
+		{"combined delta", ": heartbeat\n\ndata:\n\ndata: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\",\"content\":\"answer\"}}]}\n\ndata: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n", []string{"answer", "reason:reason", "[DONE]"}, false},
 		{"finish then done", answerEvent + "data: [DONE]\n\ndata: [DONE]\n\n", []string{"answer", "[DONE]"}, false},
 		{"empty stream", "data: [DONE]\n\n", nil, true},
 		{"reasoning only", "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\",\"content\":null}}]}\n\ndata: [DONE]\n\n", []string{"reason:reason"}, true},
@@ -191,12 +200,12 @@ func TestMinimaxStreamContracts(t *testing.T) {
 		{"business error after answer", answerEvent + "data: {\"error\":{\"message\":\"secret-key-and-prompt\"}}\n\ndata: [DONE]\n\n", []string{"answer"}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
 			defer server.Close()
 			driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "minimax-m2.7", "question"
 			var frames []string
-			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, minimaxFrameCollector(&frames))
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil, minimaxFrameCollector(&frames))
 			if (err != nil) != test.wantErr || !reflect.DeepEqual(frames, test.wantFrames) || (err != nil && strings.Contains(err.Error(), "secret-key-and-prompt")) {
 				t.Fatalf("frames = %v, error = %v", frames, err)
 			}
@@ -209,14 +218,14 @@ func TestMinimaxStreamContracts(t *testing.T) {
 
 func TestMinimaxLargeStreamDelta(t *testing.T) {
 	answer := strings.Repeat("a", 100000)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", answer)
 	}))
 	defer server.Close()
 	driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "minimax-m2.7", "question"
 	var frames []string
-	err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, minimaxFrameCollector(&frames))
+	err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil, minimaxFrameCollector(&frames))
 	if err != nil || !reflect.DeepEqual(frames, []string{answer, "[DONE]"}) {
 		t.Fatalf("large delta: frames=%d, error=%v", len(frames), err)
 	}
@@ -225,21 +234,21 @@ func TestMinimaxLargeStreamDelta(t *testing.T) {
 func TestMinimaxSenderErrors(t *testing.T) {
 	for _, failAt := range []int{1, 2, 3} {
 		t.Run(fmt.Sprint(failAt), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\",\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n")
 			}))
 			defer server.Close()
 			driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "minimax-m2.7", "question"
 			failure, calls := errors.New("sender failed"), 0
-			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error {
+			err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil, func(*string, *string) error {
 				calls++
 				if calls == failAt {
 					return failure
 				}
 				return nil
 			})
-			if err != failure || calls != failAt {
+			if !errors.Is(err, failure) || calls != failAt {
 				t.Fatalf("sender error = %v, calls = %d", err, calls)
 			}
 		})
@@ -251,7 +260,7 @@ func TestMinimaxCancellationReachesTransport(t *testing.T) {
 		t.Run(fmt.Sprint(stream), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			started, canceled := make(chan struct{}), make(chan struct{})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if _, err := io.Copy(io.Discard, r.Body); err != nil {
 					t.Error(err)
 				}
@@ -269,7 +278,7 @@ func TestMinimaxCancellationReachesTransport(t *testing.T) {
 			defer cancel()
 			driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "minimax-m2.7", "question"
-			apiConfig := &APIConfig{APIKey: &key, Context: ctx}
+			apiConfig := &APIConfig{ApiKey: &key, Context: ctx}
 			result := make(chan error, 1)
 			var frames []string
 			delivered := make(chan struct{}, 1)
@@ -321,36 +330,36 @@ func TestMinimaxCancellationReachesTransport(t *testing.T) {
 func TestMinimaxChatValidation(t *testing.T) {
 	driver := NewMinimaxModel(map[string]string{"default": "http://127.0.0.1:1"}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "minimax-m2.7", "question"
-	for _, config := range []*APIConfig{nil, {}, {APIKey: minimaxPtr("")}, {APIKey: minimaxPtr(" ")}, {APIKey: &key, Region: minimaxPtr("unknown")}} {
+	for _, config := range []*APIConfig{nil, {}, {ApiKey: minimaxPtr("")}, {ApiKey: minimaxPtr(" ")}, {ApiKey: &key, Region: minimaxPtr("unknown")}} {
 		if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, config, nil); err == nil {
 			t.Fatal("invalid API config accepted")
 		}
 	}
 	for _, modelName := range []string{"", " "} {
-		if _, err := driver.ChatWithMessages(modelName, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil); err == nil {
+		if _, err := driver.ChatWithMessages(modelName, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil); err == nil {
 			t.Fatal("invalid model name accepted")
 		}
 	}
-	if err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil, nil); err == nil {
+	if err := driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil, nil); err == nil {
 		t.Fatal("nil sender accepted")
 	}
 	for _, messages := range [][]Message{nil, {{Content: "no role"}}} {
-		if _, err := driver.ChatWithMessages(name, messages, &APIConfig{APIKey: &key}, nil); err == nil {
+		if _, err := driver.ChatWithMessages(name, messages, &APIConfig{ApiKey: &key}, nil); err == nil {
 			t.Fatal("invalid history accepted")
 		}
 	}
-	driver.URLSuffix.Chat = ""
-	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, nil); err == nil {
+	driver.baseModel.URLSuffix.Chat = ""
+	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, nil); err == nil {
 		t.Fatal("missing chat endpoint accepted")
 	}
-	driver.URLSuffix.Chat = "chat"
-	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key}, &ChatConfig{Temperature: minimaxPtr(math.NaN())}); err == nil {
+	driver.baseModel.URLSuffix.Chat = "chat"
+	if _, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key}, &ChatConfig{Temperature: minimaxPtr(math.NaN())}); err == nil {
 		t.Fatal("invalid JSON number accepted")
 	}
 }
 
 func TestMinimaxHistoryStream(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Messages []Message
 			Stream   bool
@@ -367,10 +376,10 @@ func TestMinimaxHistoryStream(t *testing.T) {
 	defer server.Close()
 	driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	key, name := "key", "minimax-m2.7"
-	model := NewChatModel(driver, &name, &APIConfig{APIKey: &key})
+	model := NewChatModel(driver, &name, &APIConfig{ApiKey: &key})
 	history := []map[string]string{{"role": "user", "content": "first"}, {"role": "assistant", "content": "previous answer"}, {"role": "user", "content": "follow up"}}
 	var frames []string
-	err := model.ChatStreamlyWithSender(chatHistory("instruction", history), nil, minimaxFrameCollector(&frames))
+	err := model.ModelDriver.ChatStreamlyWithSender(*model.ModelName, messagesForTest("instruction", history), model.APIConfig, nil, minimaxFrameCollector(&frames))
 	if err != nil || !reflect.DeepEqual(frames, []string{"answer", "[DONE]"}) {
 		t.Fatalf("frames = %v, %v", frames, err)
 	}
@@ -379,7 +388,7 @@ func TestMinimaxHistoryStream(t *testing.T) {
 func TestMinimaxListModels(t *testing.T) {
 	for _, body := range []string{`{"data":[{"id":"minimax-m2.7"}]}`, `{"data":[]}`, `{"data":[{}]}`, `{"base_resp":{"status_code":1002}}`, `{"data":null}`, `{"data":[{"id":1}]}`} {
 		t.Run(body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				data, _ := io.ReadAll(r.Body)
 				if r.Method != "GET" || r.URL.Path != "/v1/models" || len(data) != 0 || r.Header.Get("Authorization") != "Bearer key" {
 					t.Errorf("invalid list request")
@@ -388,13 +397,71 @@ func TestMinimaxListModels(t *testing.T) {
 			}))
 			defer server.Close()
 			driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Models: "v1/models"})
-			names, err := driver.ListModels(&APIConfig{APIKey: minimaxPtr("key")})
-			valid := body == `{"data":[{"id":"minimax-m2.7"}]}` || body == `{"data":[]}`
+			names, err := driver.ListModels(&APIConfig{ApiKey: minimaxPtr("key")})
+			valid := body == `{"data":[{"id":"minimax-m2.7"}]}`
 			if (err == nil) != valid {
 				t.Fatalf("names = %v, err = %v", names, err)
 			}
-			if valid && strings.Contains(body, "minimax-m2.7") && !reflect.DeepEqual(names, []string{"minimax-m2.7"}) {
+			if valid && strings.Contains(body, "minimax-m2.7") && !reflect.DeepEqual(modelNamesForTest(names), []string{"minimax-m2.7"}) {
 				t.Fatal(names)
+			}
+		})
+	}
+}
+
+func TestMinimaxSpeechTargetValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"binary-sync", `{"base_resp":{"status_code":0},"data":{"status":2,"audio":"00ff018009"}}`, true},
+		{"missing-business", `{"data":{"status":2,"audio":"61"}}`, false},
+		{"missing-terminal", `{"base_resp":{"status_code":0},"data":{"audio":"61"}}`, false},
+		{"non-terminal", `{"base_resp":{"status_code":0},"data":{"status":1,"audio":"61"}}`, false},
+		{"empty", `{"base_resp":{"status_code":0},"data":{"status":2,"audio":""}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, tc.body) }))
+			d := NewMinimaxModel(map[string]string{"default": srv.URL}, URLSuffix{TTS: "speech"})
+			name, text, key := "model", "hello", "key"
+			result, err := d.AudioSpeech(&name, &text, &APIConfig{ApiKey: &key}, nil)
+			if tc.want {
+				if err != nil || !bytes.Equal(result.Audio, []byte{0, 255, 1, 128, 9}) {
+					t.Fatal("binary sync changed", err)
+				}
+			} else if err == nil || result != nil {
+				t.Fatal("malformed speech accepted")
+			}
+		})
+	}
+	good := "data: {\"base_resp\":{\"status_code\":0},\"data\":{\"status\":1,\"audio\":\"6162\"}}\n\n"
+	final := "data: {\"base_resp\":{\"status_code\":0},\"data\":{\"status\":2,\"audio\":\"6162\"}}\n\n"
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"valid", good + final, true}, {"unterminated", good, false}, {"empty", "", false}, {"no-business", "data: {\"data\":{\"status\":2,\"audio\":\"61\"}}\n\n", false}, {"invalid-hex", strings.Replace(final, "6162", "odd", 1), false}, {"binary-text-unrepresentable", strings.Replace(final, "6162", "00ff", 1), false}, {"after-terminal", good + final + good, false}, {"inconsistent-final", good + strings.Replace(final, "6162", "6163", 1), false},
+	} {
+		t.Run("stream/"+tc.name, func(t *testing.T) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, tc.body) }))
+			d := NewMinimaxModel(map[string]string{"default": srv.URL}, URLSuffix{TTS: "speech"})
+			name, text, key := "model", "hello", "key"
+			var audio strings.Builder
+			done := 0
+			err := d.AudioSpeechWithSender(&name, &text, &APIConfig{ApiKey: &key}, nil, func(v, _ *string) error {
+				if *v == "[DONE]" {
+					done++
+				} else {
+					audio.WriteString(*v)
+				}
+				return nil
+			})
+			if tc.want {
+				if err != nil || done != 1 || audio.String() != "ab" {
+					t.Fatal("valid native stream lost", err, done)
+				}
+			} else if err == nil || done != 0 {
+				t.Fatal("false speech terminal", err, done)
 			}
 		})
 	}

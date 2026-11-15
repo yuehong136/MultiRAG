@@ -9,12 +9,12 @@ import (
 
 func TestDocumentMetadataStrictDecoding(t *testing.T) {
 	for _, value := range []any{nil, map[string]any{}, "{}", "null", []byte{}, []byte("{}"), []byte("null")} {
-		if result, err := decodeDocumentMetadata(value); err != nil || len(result) != 0 {
+		if result, err := ExtractMetaFields(map[string]interface{}{"meta_fields": value}); err != nil || len(result) != 0 {
 			t.Fatal("valid empty rejected", value, result, err)
 		}
 	}
 	for _, value := range []any{"{bad", "", `[]`, `"text"`, "1", "false", 123, []any{}, []byte("{bad"), []byte{1, 0, 0}, []byte{8, 0, 0, 0, '{', '}'}} {
-		if _, err := decodeDocumentMetadata(value); err == nil {
+		if _, err := ExtractMetaFields(map[string]interface{}{"meta_fields": value}); err == nil {
 			t.Fatal("bad metadata accepted", value)
 		}
 	}
@@ -24,12 +24,12 @@ func TestDocumentMetadataStrictDecoding(t *testing.T) {
 		return append(b, []byte(value)...)
 	}
 	valid := append(prefix(`{"tag":["a"],"score":0}`), prefix(`{"tag":["b"],"score":1}`)...)
-	result, err := decodeDocumentMetadata(valid)
+	result, err := ExtractMetaFields(map[string]interface{}{"meta_fields": valid})
 	if err != nil || !reflect.DeepEqual(result["tag"], []any{"a", "b"}) || !reflect.DeepEqual(result["score"], []any{json.Number("0"), json.Number("1")}) {
 		t.Fatal("length-prefixed merge/zero contract lost", result, err)
 	}
 	for _, suffix := range [][]byte{{1}, prefix(`{bad}`), prefix(`[]`)} {
-		if _, err := decodeDocumentMetadata(append(append([]byte{}, valid...), suffix...)); err == nil {
+		if _, err := ExtractMetaFields(map[string]interface{}{"meta_fields": append(append([]byte{}, valid...), suffix...)}); err == nil {
 			t.Fatal("partial malformed suffix accepted")
 		}
 	}

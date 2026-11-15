@@ -1,499 +1,480 @@
 package handler_test
 
 import (
-	"bytes"
-	"context"
-	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net"
+	"io"
+	"multirag/internal/cli"
+	"multirag/internal/dao"
+	"multirag/internal/entity/models"
+	"multirag/internal/testsupport"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
-	"multirag/internal/common"
-	"multirag/internal/dao"
-	"multirag/internal/entity"
-	"multirag/internal/entity/models"
-	"multirag/internal/handler"
-	"multirag/internal/router"
-	"multirag/internal/server"
-	"multirag/internal/server/local"
-	"multirag/internal/service"
-	"multirag/internal/testsupport"
-	"multirag/internal/utility"
 )
 
-type discoveryCountingFactory struct{ calls atomic.Int32 }
-
-func (f *discoveryCountingFactory) CreateModelDriver(name string, urls map[string]string, suffix models.URLSuffix) (models.ModelDriver, error) {
-	f.calls.Add(1)
-	return models.NewModelFactory().CreateModelDriver(name, urls, suffix)
-}
-
-func discoveryMetadataServer(t *testing.T, j *testsupport.CaseJournal, label string, h http.Handler) *httptest.Server {
-	t.Helper()
-	var listener net.Listener
-	for range 20 {
-		address := fmt.Sprintf("127.0.0.1:%d", 21000+time.Now().UnixNano()%29000)
-		j.Event("reserve-listener", map[string]any{"label": label, "address": address})
-		if conn, err := net.DialTimeout("tcp", address, 50*time.Millisecond); err == nil {
-			conn.Close()
-			continue
-		}
-		var err error
-		listener, err = net.Listen("tcp", address)
-		if err == nil {
-			break
-		}
-	}
-	if listener == nil {
-		t.Fatal("no free registered listener")
-	}
-	address := listener.Addr().String()
-	srv := &httptest.Server{Listener: listener, Config: &http.Server{Handler: h}}
-	srv.Start()
-	t.Cleanup(func() {
-		srv.CloseClientConnections()
-		srv.Close()
-		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
-		if conn != nil {
-			conn.Close()
-		}
-		j.Event("cleanup-listener", map[string]any{"label": label, "address": address, "absent": err != nil})
-		if err == nil {
-			t.Error("listener remains", address)
-		}
-	})
-	return srv
-}
-
-// Real JWT router, SQL ownership/instance binding, provider drivers and optional
-// CLI process; external provider inventory is controlled and never paid.
 func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
-	path := os.Getenv("MULTIRAG_DISCOVERY_CONFIG")
-	if path == "" {
-		if os.Getenv("REQUIRE_SERVICES") == "1" {
-			t.Fatal("owned discovery PostgreSQL config required")
-		}
-		t.Skip("requires owned discovery PostgreSQL config")
-	}
-	j := testsupport.NewCase(t)
-	var cfg struct {
-		AdminDSN   string `json:"admin_dsn"`
-		PGEndpoint string `json:"pg_endpoint"`
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(raw, &cfg) != nil {
-		t.Fatal("private discovery config unavailable")
-	}
-	parsed, err := url.Parse(cfg.AdminDSN)
-	if err != nil || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || cfg.PGEndpoint != parsed.Host {
-		t.Fatal("explicit local TCP database required")
-	}
-	admin, err := sql.Open("pgx", cfg.AdminDSN)
-	if err != nil {
-		t.Fatal("admin open")
-	}
-	t.Cleanup(func() { admin.Close() })
-	name := "multirag_after298_m_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
-	j.Event("reserve-database", map[string]any{"database": name, "endpoint": cfg.PGEndpoint, "config": path})
-	var dbIdentity string
-	if err = admin.QueryRow("SELECT version() || ' at ' || inet_server_addr()::text || ':' || inet_server_port()::text").Scan(&dbIdentity); err != nil {
-		t.Fatal("database identity readback")
-	}
-	j.Event("borrowed-postgres-identity", map[string]any{"identity": dbIdentity})
-	var present bool
-	if err = admin.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", name).Scan(&present); err != nil || present {
-		t.Fatal("database precondition")
-	}
-	if _, err = admin.Exec(`CREATE DATABASE "` + name + `"`); err != nil {
-		t.Fatal("create owned database", err)
-	}
-	t.Cleanup(func() {
-		_, dropErr := admin.Exec(`DROP DATABASE "` + name + `" WITH (FORCE)`)
-		readErr := admin.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", name).Scan(&present)
-		j.Event("cleanup-database", map[string]any{"database": name, "absent": !present, "drop_ok": dropErr == nil, "read_ok": readErr == nil})
-		if dropErr != nil || readErr != nil || present {
-			t.Error("owned database cleanup failed")
-		}
-	})
-	parsed.Path = "/" + name
-	db, err := gorm.Open(postgres.Open(parsed.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal("owned database connect")
-	}
-	pool, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { pool.Close() })
-	read, err := sql.Open("pgx", parsed.String())
-	if err != nil {
-		t.Fatal("readback open")
-	}
-	t.Cleanup(func() { read.Close() })
-	previous := dao.DB
-	dao.DB = db
-	t.Cleanup(func() { dao.DB = previous })
-	if err = db.AutoMigrate(&entity.User{}, &entity.UserTenant{}, &entity.TenantModelProvider{}, &entity.TenantModelInstance{}, &entity.TenantModel{}); err != nil {
-		t.Fatal(err)
-	}
-	if err = common.Init("error"); err != nil {
-		t.Fatal(err)
-	}
-	if err = server.InitVariables(statusSigningStore{secret: strings.Repeat("owned-discovery-", 4)}); err != nil {
-		t.Fatal(err)
-	}
-	local.InitAdminStatus(0, "owned metadata discovery acceptance")
-	active := "1"
-	tokens := map[string]string{}
-	for _, id := range []string{"owner", "foreign", "member"} {
-		email := id + "@discovery.invalid"
-		if err = db.Create(&entity.User{ID: id, Email: email, Nickname: id, Status: &active}).Error; err != nil {
-			t.Fatal(err)
-		}
-		role := "owner"
-		if id == "member" {
-			role = "normal"
-		}
-		if err = db.Create(&entity.UserTenant{ID: id, UserID: id, TenantID: id + "-tenant", Role: role, InvitedBy: id, Status: &active}).Error; err != nil {
-			t.Fatal(err)
-		}
-		token, err := utility.SignUserJWT(email, server.GetSecretKey())
-		if err != nil {
-			t.Fatal(err)
-		}
-		tokens[id] = token
-	}
-	calls := atomic.Int32{}
-	embedCalls := atomic.Int32{}
-	embedFailure := atomic.Bool{}
-	started := make(chan struct{}, 2)
-	cancelled := make(chan struct{}, 2)
-	upstream := discoveryMetadataServer(t, j, "provider", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f := newCanonicalProviderFixture(t)
+	var calls atomic.Int64
+	var mode atomic.Int32
+	key := "private-discovery-key"
+	supplier := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-		expectedKey := ""
-		if len(parts) == 3 && parts[0] == "openai" {
-			expectedKey = "Bearer " + parts[1] + "-key"
+		if r.Method != "GET" || r.ContentLength > 0 || r.Header.Get("Authorization") != "Bearer "+key || !strings.HasSuffix(r.URL.Path, "models") {
+			t.Error("native discovery credential/method/path changed")
 		}
-		if len(parts) == 3 && parts[2] == "embeddings" && r.Method == http.MethodPost {
-			call := embedCalls.Add(1)
-			var input struct {
-				Model      string
-				Input      []string
-				Dimensions int
-			}
-			if json.NewDecoder(r.Body).Decode(&input) != nil || input.Model != "namespace/raw" || r.Header.Get("Authorization") != "Bearer one-key" {
-				t.Error("embedding identity or credentials")
-				w.WriteHeader(400)
-				return
-			}
-			if embedFailure.Load() && call%2 == 0 {
-				w.WriteHeader(503)
-				fmt.Fprint(w, "private-provider-error")
-				return
-			}
-			dimension := input.Dimensions
-			if dimension == 0 {
-				dimension = 128
-			}
-			data := make([]models.EmbeddingData, len(input.Input))
-			for i := range data {
-				data[i] = models.EmbeddingData{Index: len(data) - 1 - i, Embedding: make([]float64, dimension)}
-			}
-			json.NewEncoder(w).Encode(map[string]any{"data": data})
-			return
-		}
-		if len(parts) != 3 || parts[2] != "models" || r.Method != http.MethodGet || r.Header.Get("Authorization") != expectedKey {
-			t.Error("wrong instance URL/method/key")
-			w.WriteHeader(400)
-			return
-		}
-		switch parts[1] {
-		case "one", "two":
-			fmt.Fprint(w, `{"data":[{"id":"namespace/raw","owned_by":"vendor"},{"id":"unknown"},{"id":"zero"}]}`)
-		case "bad":
-			fmt.Fprint(w, `{"data":[{"id":"valid"},{"id":17}]}`)
-		case "business":
-			fmt.Fprint(w, `{"error":{"message":"private-provider-error"},"data":[{"id":"valid"}]}`)
-		case "empty":
-			fmt.Fprint(w, `{"data":[]}`)
-		case "null":
+		switch mode.Load() {
+		case 1:
 			fmt.Fprint(w, `{"data":null}`)
-		case "slow":
-			started <- struct{}{}
-			<-r.Context().Done()
-			cancelled <- struct{}{}
+		case 2:
+			fmt.Fprint(w, `{"error":{"message":"private-discovery-body"}}`)
+		case 3:
+			w.WriteHeader(503)
+			fmt.Fprint(w, "private-discovery-body")
 		default:
-			t.Error("unexpected inventory path")
-			w.WriteHeader(404)
+			fmt.Fprint(w, `{"data":[{"id":"remote-unique"}]}`)
 		}
 	}))
-	pm, err := models.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
-	if err != nil {
-		t.Fatal(err)
+	f.enroll(t, "OpenAI", "one", key, supplier.URL, "declared-custom", "chat")
+	before := f.snapshot(t)
+	result := f.requireSuccess(t, "owner", "GET", "/api/v1/providers/OpenAI/instances/one/models?supported=true", nil)
+	encoded, _ := json.Marshal(result["data"])
+	if !strings.Contains(string(encoded), "remote-unique") {
+		t.Fatal("actual remote discovery identity missing")
 	}
-	catalogPath := filepath.Join(t.TempDir(), "catalog.json")
-	j.Event("reserve-catalog", map[string]any{"path": catalogPath})
-	if err = os.WriteFile(catalogPath, []byte(`[{"name":"canonical","alias":["namespace/raw"],"max_tokens":8192,"max_dimension":128,"dimensions":[64,128],"model_types":["embedding","chat"],"thinking":{"default_value":false,"clear_thinking":false}},{"name":"zero","max_tokens":0,"max_dimension":0,"dimensions":[],"model_types":[]}]`), 0600); err != nil {
-		t.Fatal(err)
+	f.requireSuccess(t, "owner", "GET", "/api/v1/providers/OpenAI/instances/one/connection", nil)
+	if calls.Load() != 2 || f.snapshot(t) != before {
+		t.Fatal("discovery promoted or wrote SQL")
 	}
-	if err = pm.LoadAllModels(catalogPath); err != nil {
-		t.Fatal(err)
-	}
-	for _, providerName := range []string{"Gitee", "OpenAI"} {
-		provider := pm.FindProvider(providerName)
-		provider.URL = map[string]string{"default": upstream.URL + "/" + strings.ToLower(providerName) + "/one", "other": upstream.URL + "/" + strings.ToLower(providerName) + "/two"}
-		provider.URLSuffix.Models = "models"
-		provider.URLSuffix.Embedding = "embeddings"
-		provider.Models = append(provider.Models, &models.Model{Name: "namespace/raw", ModelTypes: []string{"embedding"}, ModelTypeMap: map[string]bool{"embedding": true}})
-		providerID := strings.ToLower(providerName)
-		if err = db.Create(&entity.TenantModelProvider{ID: providerID, ProviderName: providerName, TenantID: "owner-tenant"}).Error; err != nil {
-			t.Fatal(err)
-		}
-		for _, instance := range []string{"one", "two", "bad", "business", "empty", "null", "slow", "region", "disabled", "keyless"} {
-			base := upstream.URL + "/" + strings.ToLower(providerName) + "/" + instance
-			region := "default"
-			key := instance + "-key"
-			status := "active"
-			if instance == "two" {
-				base = ""
-				region = "other"
-			}
-			if instance == "region" {
-				base = ""
-				region = "unknown"
-			}
-			if instance == "disabled" {
-				status = "disabled"
-			}
-			if instance == "keyless" {
-				key = ""
-			}
-			extra, _ := json.Marshal(map[string]string{"base_url": base, "region": region})
-			if err = db.Create(&entity.TenantModelInstance{ID: providerID + "-" + instance, InstanceName: instance, ProviderID: providerID, APIKey: key, Extra: string(extra), Status: status}).Error; err != nil {
-				t.Fatal(err)
-			}
+	for _, modeValue := range []int32{1, 2, 3} {
+		mode.Store(modeValue)
+		_, failed, raw := f.request(t, "owner", "GET", "/api/v1/providers/OpenAI/instances/one/models?supported=true", nil)
+		if providerEnvelopeError(failed) == nil || strings.Contains(raw, "private-discovery-body") {
+			t.Fatal("bad inventory accepted or leaked")
 		}
 	}
-	factory := &discoveryCountingFactory{}
-	svc := service.NewModelProviderServiceWithCatalog(pm, factory)
-	gin.SetMode(gin.ReleaseMode)
-	app := gin.New()
-	app.Use(gin.Recovery())
-	routes := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, nil, handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, svc), nil)
-	routes.Setup(app)
-	api := discoveryMetadataServer(t, j, "application", app)
-	snapshot := func() string {
-		t.Helper()
-		value := ""
-		for _, table := range []string{"t_ai_users", "t_ai_user_tenants", "tenant_model_provider", "tenant_model_instance", "tenant_model"} {
-			var hash string
-			if err := read.QueryRow("SELECT md5(COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id)::text,'')) FROM " + table + " t").Scan(&hash); err != nil {
-				t.Fatal(err)
-			}
-			value += hash
-		}
-		return value
-	}
-	before := snapshot()
-	endpoint := func(provider, instance string) string {
-		return "/api/v1/providers/" + provider + "/instances/" + instance + "/models?supported=true"
-	}
-	request := func(provider, instance, identity string) (int, []byte) {
-		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, api.URL+endpoint(provider, instance), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if identity != "" {
-			req.Header.Set("Authorization", "Bearer "+tokens[identity])
-		}
-		response, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer response.Body.Close()
-		var output bytes.Buffer
-		output.ReadFrom(response.Body)
-		if snapshot() != before {
-			t.Fatal("discovery mutated SQL")
-		}
-		return response.StatusCode, output.Bytes()
-	}
-	for _, provider := range []string{"Gitee", "OpenAI"} {
-		for _, instance := range []string{"one", "two"} {
-			status, body := request(provider, instance, "owner")
-			var response struct {
-				Code int                     `json:"code"`
-				Data []models.SupportedModel `json:"data"`
-			}
-			if status != 200 || json.Unmarshal(body, &response) != nil || response.Code != 0 || len(response.Data) != 3 {
-				t.Fatalf("inventory status/code/cardinality: %d %s", status, body)
-			}
-			rows := response.Data
-			if rows[0].Name != "namespace/raw" || rows[1].Name != "unknown" || rows[2].Name != "zero" || rows[0].MaxTokens == nil || *rows[0].MaxTokens != 8192 || rows[0].MaxDimension == nil || *rows[0].MaxDimension != 128 || rows[0].Thinking == nil || rows[0].Thinking.DefaultValue || rows[0].ModelTypes == nil || len(*rows[0].ModelTypes) != 2 || rows[1].MaxTokens != nil || rows[1].ModelTypes != nil || rows[2].MaxTokens == nil || *rows[2].MaxTokens != 0 || rows[2].ModelTypes == nil || len(*rows[2].ModelTypes) != 0 {
-				t.Fatalf("typed metadata: %s", body)
-			}
-			if bytes.Contains(body, []byte("model_name")) || bytes.Contains(body, []byte("vendor")) || !bytes.Contains(body, []byte(`{"name":"unknown"}`)) {
-				t.Fatalf("legacy/remote ID/unknown fields: %s", body)
-			}
-		}
-		for _, instance := range []string{"bad", "business", "null"} {
-			_, body := request(provider, instance, "owner")
-			var result map[string]any
-			if json.Unmarshal(body, &result) != nil || result["code"] == float64(0) || result["data"] != nil || bytes.Contains(body, []byte("private-provider-error")) {
-				t.Fatalf("strict failure/no partial result: %s", body)
-			}
-		}
-		_, body := request(provider, "empty", "owner")
-		if !bytes.Contains(body, []byte(`"data":[]`)) {
-			t.Fatalf("empty inventory: %s", body)
+	count := calls.Load()
+	for _, who := range []string{"", "foreign", "inactive"} {
+		_, failed, raw := f.request(t, who, "GET", "/api/v1/providers/OpenAI/instances/one/models?supported=true", nil)
+		if providerEnvelopeError(failed) == nil || strings.Contains(raw, key) {
+			t.Fatal("foreign discovery accepted or leaked")
 		}
 	}
-	for _, test := range []struct{ instance, user string }{{"one", ""}, {"one", "foreign"}, {"one", "member"}, {"missing", "owner"}, {"region", "owner"}, {"disabled", "owner"}, {"keyless", "owner"}} {
-		remoteBefore, constructBefore := calls.Load(), factory.calls.Load()
-		status, body := request("Gitee", test.instance, test.user)
-		var result map[string]any
-		_ = json.Unmarshal(body, &result)
-		if result["code"] == float64(0) || calls.Load() != remoteBefore || factory.calls.Load() != constructBefore || test.user == "" && status != http.StatusUnauthorized {
-			t.Fatalf("denial reached provider: %d %s", status, body)
+	if calls.Load() != count || f.snapshot(t) != before {
+		t.Fatal("denied discovery side effects")
+	}
+	own := f.requireSuccess(t, "owner", "GET", "/api/v1/providers/OpenAI/instances/one", nil)["data"].(map[string]any)
+	if own["api_key"] != key || own["instance_name"] != "one" || own["base_url"] != supplier.URL || own["region"] != "default" {
+		t.Fatal("canonical instance fields lost")
+	}
+	for _, who := range []string{"foreign", "inactive"} {
+		_, failed, raw := f.request(t, who, "GET", "/api/v1/providers/OpenAI/instances/one", nil)
+		if providerEnvelopeError(failed) == nil || strings.Contains(raw, key) {
+			t.Fatal("instance secret crossed tenant")
 		}
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
-	rows, err := svc.ListSupportedModelsWithContext(ctx, "Gitee", "slow", "owner")
-	cancel()
-	if !errors.Is(err, context.DeadlineExceeded) || rows != nil {
-		t.Fatalf("timeout partial result: %v %v", rows, err)
-	}
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("timeout did not start")
-	}
-	select {
-	case <-cancelled:
-	case <-time.After(time.Second):
-		t.Fatal("timeout not propagated upstream")
-	}
-	ctx, cancel = context.WithCancel(t.Context())
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, api.URL+endpoint("Gitee", "slow"), nil)
-	req.Header.Set("Authorization", "Bearer "+tokens["owner"])
-	done := make(chan error, 1)
-	go func() {
-		resp, err := http.DefaultClient.Do(req)
-		if resp != nil {
-			resp.Body.Close()
-		}
-		done <- err
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("HTTP cancel did not start")
-	}
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatal("HTTP cancel result", err)
-	}
-	select {
-	case <-cancelled:
-	case <-time.After(time.Second):
-		t.Fatal("HTTP cancel not propagated upstream")
-	}
-	if got, err := svc.ListSupportedModelsWithContext(ctx, "Gitee", "one", "owner"); !errors.Is(err, context.Canceled) || got != nil {
-		t.Fatal("pre-cancel result", got, err)
-	}
-	if snapshot() != before {
-		t.Fatal("cancel/timeout mutated SQL")
-	}
-	// The real JWT route binds SQL ownership before catalog preflight. Rejected
-	// dimensions and upstream failures leave every inventory/binding row intact.
-	for _, dimension := range []int{0, 64, 65, 256, -1} {
-		payload, _ := json.Marshal(map[string]any{"provider_name": "Gitee", "instance_name": "one", "model_name": "namespace/raw", "texts": []string{"a", "b"}, "dimension": dimension})
-		req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, api.URL+"/api/v1/embeddings", bytes.NewReader(payload))
-		req.Header.Set("Authorization", "Bearer "+tokens["owner"])
-		req.Header.Set("Content-Type", "application/json")
-		beforeCalls := embedCalls.Load()
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var output struct {
-			Code common.ErrorCode
-			Data []models.EmbeddingData
-		}
-		err = json.NewDecoder(resp.Body).Decode(&output)
-		resp.Body.Close()
-		valid := dimension == 0 || dimension == 64
-		if err != nil || resp.StatusCode != 200 || valid && (output.Code != common.CodeSuccess || len(output.Data) != 2 || output.Data[0].Index != 0) || !valid && (output.Code != common.CodeBadRequest || output.Data != nil || embedCalls.Load() != beforeCalls) {
-			t.Fatalf("dimension=%d HTTP=%d result=%#v error=%v", dimension, resp.StatusCode, output, err)
+	// Catalog metadata is global, non-secret, and comes directly from the frozen model config.
+	catalog := dao.GetModelProviderManager().FindProvider("OpenAI")
+	name := catalog.Models[0].Name
+	for _, who := range []string{"owner", "foreign"} {
+		r := f.requireSuccess(t, who, "GET", "/api/v1/providers/OpenAI/models/"+name, nil)
+		b, _ := json.Marshal(r)
+		if strings.Contains(string(b), key) || strings.Contains(string(b), supplier.URL) {
+			t.Fatal("static model metadata contains tenant credentials")
 		}
 	}
-	bound, err := svc.GetEmbeddingModel("owner-tenant", "namespace/raw@one@Gitee")
-	if err != nil {
-		t.Fatal(err)
+	f.requireSuccess(t, "owner", "GET", "/api/v1/providers/?available=true", nil)
+	if f.snapshot(t) != before || calls.Load() != count {
+		t.Fatal("metadata read mutated SQL or called supplier")
 	}
-	bound.EmbeddingConfig = &models.EmbeddingConfig{Dimension: 65}
-	beforeEmbed := embedCalls.Load()
-	if result, err := bound.Embed([]string{"q"}); err == nil || result != nil || embedCalls.Load() != beforeEmbed {
-		t.Fatal("bound consumer bypassed dimension preflight", err)
-	}
-	bound.EmbeddingConfig.Dimension = 64
-	embedCalls.Store(0)
-	embedFailure.Store(true)
-	if result, err := bound.Embed(make([]string, 33)); err == nil || result != nil || embedCalls.Load() != 2 {
-		t.Fatal("partial embedding failure succeeded", err)
-	}
-	embedFailure.Store(false)
-	if snapshot() != before {
-		t.Fatal("embedding preflight/success/failure mutated SQL")
-	}
-	j.Event("embedding-dimension-consumers", map[string]any{"JWTHTTP": true, "boundModel": true, "validDimensions": []int{0, 64}, "rejectedBeforeHTTP": []int{-1, 65, 256}, "secondBatchFailureNoPartial": true, "SQLUnchanged": snapshot() == before})
-	if binary := os.Getenv("MULTIRAG_DISCOVERY_CLI"); binary != "" {
-		content, err := os.ReadFile(binary)
-		if err != nil {
-			t.Fatal(err)
-		}
-		u, _ := url.Parse(api.URL)
-		command := []string{"-h", u.Host, "-t", tokens["owner"], "-o", "json", `LIST SUPPORTED MODELS FROM "Gitee" "one";`}
-		j.Event("reserve-cli-process", map[string]any{"binary": binary, "sha256": fmt.Sprintf("%x", sha256.Sum256(content)), "syntax": command[len(command)-1]})
-		cmd := exec.CommandContext(t.Context(), binary, command...)
-		cmd.Dir = t.TempDir()
-		output, err := cmd.CombinedOutput()
-		if err != nil || !bytes.Contains(output, []byte(`"name": "namespace/raw"`)) || !bytes.Contains(output, []byte(`"max_tokens": 0`)) || bytes.Contains(output, []byte("model_name")) {
-			t.Fatalf("CLI discovery: %v %s", err, output)
-		}
-		j.Event("cli-process-exit", map[string]any{"pid": cmd.Process.Pid, "exit": cmd.ProcessState.ExitCode(), "typedMetadata": true})
-		for _, dimension := range []int{64, 65} {
-			syntax := fmt.Sprintf(`EMBED TEXT "a" "b" WITH "namespace/raw@one@Gitee" DIMENSION %d;`, dimension)
-			j.Event("reserve-cli-process", map[string]any{"binary": binary, "syntax": syntax})
-			cmd := exec.CommandContext(t.Context(), binary, "-h", u.Host, "-t", tokens["owner"], "-o", "json", syntax)
-			cmd.Dir = t.TempDir()
-			beforeCalls := embedCalls.Load()
-			output, err := cmd.CombinedOutput()
-			if dimension == 64 && (err != nil || !bytes.Contains(output, []byte(`"dimension": 64`))) || dimension == 65 && (err == nil || embedCalls.Load() != beforeCalls) {
-				t.Fatalf("CLI dimension %d: %v %s", dimension, err, output)
-			}
-			j.Event("cli-process-exit", map[string]any{"pid": cmd.Process.Pid, "exit": cmd.ProcessState.ExitCode(), "embeddingDimension": dimension})
-		}
+}
 
+func TestCanonicalSupplierDiscoveryHTTPCLIAndSQL(t *testing.T) {
+	f := newCanonicalProviderFixture(t)
+	for _, provider := range []string{"DeepSeek", "HuaweiCloud", "ModelScope", "OrcaRouter", "Qiniu", "CoHere", "FishAudio", "StepFun", "Upstage", "Baichuan", "LocalAI", "SiliconFlow", "Gitee", "Aliyun", "VolcEngine", "NVIDIA", "HuggingFace", "GPUStack", "Azure-OpenAI", "lmstudio", "Baidu", "n1n", "LongCat", "xAI", "TokenHub"} {
+		t.Run(provider, func(t *testing.T) {
+			for _, instance := range []string{"one", "two"} {
+				t.Run(instance, func(t *testing.T) {
+					var calls atomic.Int64
+					var mode atomic.Int32
+					key := f.Prefix + provider + instance
+					if (provider == "ModelScope" || provider == "LocalAI") && instance == "one" {
+						key = ""
+					}
+					name := "remote-" + provider + "-" + instance
+					config := dao.GetModelProviderManager().FindProvider(provider)
+					if config == nil {
+						t.Fatal("provider absent", provider)
+					}
+					supplier := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls.Add(1)
+						auth := "Bearer " + key
+						if key == "" {
+							auth = ""
+						}
+						if provider == "CoHere" {
+							auth = "bearer " + key
+						}
+						if provider == "Gitee" && r.URL.Path != "/"+strings.Trim(config.URLSuffix.Status, "/") {
+							auth = ""
+						}
+						if r.Method != "GET" || provider != "Azure-OpenAI" && r.Header.Get("Authorization") != auth {
+							t.Error("native discovery auth/method changed")
+						}
+						if provider == "Azure-OpenAI" && (r.Header.Get("api-key") != key || r.URL.Query().Get("api-version") == "") {
+							t.Error("native Azure discovery auth/version lost")
+						}
+						if provider == "DeepSeek" || provider == "Gitee" && r.URL.Path == "/"+strings.Trim(config.URLSuffix.Status, "/") {
+							body, _ := io.ReadAll(r.Body)
+							if string(body) != "{}" {
+								t.Error("frozen DeepSeek GET body changed")
+							}
+						} else if r.ContentLength > 0 {
+							t.Error("native discovery gained body")
+						}
+						if provider == "Gitee" && r.URL.Path == "/"+strings.Trim(config.URLSuffix.Status, "/") {
+							fmt.Fprint(w, `{}`)
+							return
+						}
+						if mode.Load() == 1 {
+							fmt.Fprint(w, `{}`)
+							return
+						}
+						if mode.Load() == 2 {
+							w.WriteHeader(503)
+							fmt.Fprint(w, "private-discovery-body")
+							return
+						}
+						if provider == "FishAudio" && strings.HasSuffix(r.URL.Path, "wallet/self/api-credit") {
+							fmt.Fprint(w, `{"credit":0}`)
+							return
+						}
+						if provider == "VolcEngine" && r.URL.Path == "/"+config.URLSuffix.Files {
+							fmt.Fprint(w, `{}`)
+							return
+						}
+						if !strings.HasSuffix(r.URL.Path, config.URLSuffix.Models) {
+							t.Error("native discovery suffix changed", r.URL.Path)
+						}
+						switch provider {
+						case "CoHere":
+							fmt.Fprintf(w, `{"models":[{"name":%q}]}`, name)
+						case "FishAudio":
+							fmt.Fprintf(w, `{"items":[{"_id":"voice-id","title":%q}]}`, name)
+						default:
+							fmt.Fprintf(w, `{"data":[{"id":%q}]}`, name)
+						}
+					}))
+					id := f.enroll(t, provider, "catalog-"+instance, key, supplier.URL, "declared-custom", "chat")
+					before := f.snapshot(t)
+					catalogBefore, _ := json.Marshal(config.Models)
+					path := "/api/v1/providers/" + provider + "/instances/catalog-" + instance
+					unsupported := provider == "Baichuan"
+					for _, route := range []string{path + "/models?supported=true", path + "/connection"} {
+						unsupportedOperation := unsupported || provider == "Qiniu" && strings.HasSuffix(route, "/connection")
+						count := calls.Load()
+						_, result, raw := f.request(t, "owner", "GET", route, nil)
+						if unsupportedOperation {
+							if providerEnvelopeError(result) == nil || calls.Load() != count {
+								t.Fatal("unsupported catalog contacted supplier or succeeded")
+							}
+						} else if providerEnvelopeError(result) != nil || strings.Contains(route, "models?") && !strings.Contains(raw, name) {
+							t.Fatal("native discovery/connection result missing", result["message"])
+						}
+					}
+					for _, syntax := range []string{fmt.Sprintf("LIST SUPPORTED MODELS FROM '%s' 'catalog-%s';", provider, instance), fmt.Sprintf("CHECK INSTANCE 'catalog-%s' FROM '%s';", instance, provider)} {
+						cmd, err := cli.NewParser(syntax).Parse(cli.APIMode)
+						if err != nil {
+							t.Fatal(err)
+						}
+						count := calls.Load()
+						result, err := f.cli(t, "owner").ExecuteCommand(cmd)
+						if unsupported || provider == "Qiniu" && strings.HasPrefix(syntax, "CHECK") {
+							if err == nil || calls.Load() != count {
+								t.Fatal("unsupported CLI catalog fabricated success")
+							}
+						} else if err != nil {
+							t.Fatal("actual discovery CLI", err)
+						} else if strings.HasPrefix(syntax, "LIST") {
+							raw, _ := json.Marshal(result)
+							if !strings.Contains(string(raw), name) {
+								t.Fatal("CLI inventory lost actual identity")
+							}
+						}
+					}
+					if provider == "FishAudio" {
+						result := f.requireSuccess(t, "owner", "GET", path+"/balance", nil)
+						if result["data"].(map[string]any)["credit"] != float64(0) {
+							t.Fatal("legal zero credit lost")
+						}
+						cmd, err := cli.NewParser(fmt.Sprintf("SHOW BALANCE FROM '%s' 'catalog-%s';", provider, instance)).Parse(cli.APIMode)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, err = f.cli(t, "owner").ExecuteCommand(cmd); err != nil {
+							t.Fatal(err)
+						}
+						count := calls.Load()
+						_, failed, _ := f.request(t, "owner", "POST", "/api/v1/chat/completions", map[string]any{"model_id": id, "messages": []any{map[string]any{"role": "user", "content": "q"}}})
+						if providerEnvelopeError(failed) == nil || calls.Load() != count {
+							t.Fatal("FishAudio unsupported chat called supplier")
+						}
+					}
+					if f.snapshot(t) != before {
+						t.Fatal("discovery promoted inventory or mutated SQL")
+					}
+					count := calls.Load()
+					for _, who := range []string{"", "foreign", "inactive", "revoked", "invited", "member", "disabledtenant"} {
+						for _, suffix := range []string{"/models?supported=true", "/connection", "/balance"} {
+							_, failed, raw := f.request(t, who, "GET", path+suffix, nil)
+							if providerEnvelopeError(failed) == nil || key != "" && strings.Contains(raw, key) {
+								t.Fatal("denied discovery or secret disclosure", who)
+							}
+						}
+						cmd, err := cli.NewParser(fmt.Sprintf("LIST SUPPORTED MODELS FROM '%s' 'catalog-%s';", provider, instance)).Parse(cli.APIMode)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, err = f.cli(t, who).ExecuteCommand(cmd); err == nil {
+							t.Fatal("denied CLI inventory succeeded", who)
+						}
+					}
+					if calls.Load() != count || f.snapshot(t) != before {
+						t.Fatal("denied discovery changed SQL or contacted supplier")
+					}
+					if !unsupported {
+						for _, value := range []int32{1, 2} {
+							mode.Store(value)
+							_, failed, raw := f.request(t, "owner", "GET", path+"/models?supported=true", nil)
+							if providerEnvelopeError(failed) == nil || strings.Contains(raw, "private-discovery-body") {
+								t.Fatal("missing or failed native inventory accepted/leaked")
+							}
+						}
+					}
+					catalogAfter, _ := json.Marshal(config.Models)
+					if string(catalogBefore) != string(catalogAfter) {
+						t.Fatal("native inventory mutated shared catalog metadata")
+					}
+					if f.snapshot(t) != before {
+						t.Fatal("failed discovery wrote SQL")
+					}
+				})
+			}
+		})
 	}
-	j.Event("discovery-contract", map[string]any{"providers": 2, "knownUnknownZero": true, "strictFailures": true, "SQLUnchanged": snapshot() == before, "snapshotBefore": before, "snapshotAfter": snapshot(), "cancelTimeout": true, "cli": os.Getenv("MULTIRAG_DISCOVERY_CLI") != ""})
+}
+
+func TestRoot55ProviderBalancesHTTPCLIAndSQL(t *testing.T) {
+	f := newCanonicalProviderFixture(t)
+	for _, provider := range []string{"SiliconFlow", "DeepSeek", "Gitee"} {
+		t.Run(provider, func(t *testing.T) {
+			for _, instance := range []string{"one", "two"} {
+				t.Run(instance, func(t *testing.T) {
+					var calls atomic.Int64
+					var mode atomic.Int32
+					config := dao.GetModelProviderManager().FindProvider(provider)
+					if config == nil {
+						t.Fatal("provider absent")
+					}
+					key := f.Prefix + provider + instance
+					supplier := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls.Add(1)
+						if r.Method != "GET" || r.Header.Get("Authorization") != "Bearer "+key || !strings.HasSuffix(r.URL.Path, config.URLSuffix.Balance) {
+							t.Error("native stored balance key/endpoint lost")
+						}
+						if mode.Load() == 2 {
+							fmt.Fprint(w, `{}`)
+							return
+						}
+						if mode.Load() == 3 {
+							w.WriteHeader(503)
+							fmt.Fprint(w, "private-balance-body")
+							return
+						}
+						amount := "0"
+						if mode.Load() == 1 {
+							amount = "-0.25"
+						}
+						switch provider {
+						case "DeepSeek":
+							fmt.Fprintf(w, `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":%q,"granted_balance":"0","topped_up_balance":"0"}]}`, amount)
+						case "SiliconFlow":
+							fmt.Fprintf(w, `{"code":0,"status":true,"data":{"balance":%q,"totalBalance":%q}}`, amount, amount)
+						case "Gitee":
+							fmt.Fprintf(w, `{"balance":%s}`, amount)
+						}
+					}))
+					f.enroll(t, provider, "balance-"+instance, key, supplier.URL, "declared-custom", "chat")
+					var storedKey, extra string
+					if err := f.Read.QueryRow("SELECT i.api_key,i.extra FROM tenant_model_instance i JOIN tenant_model_provider p ON p.id=i.provider_id WHERE p.tenant_id=? AND p.provider_name=? AND i.instance_name=?", "owner-tenant", provider, "balance-"+instance).Scan(&storedKey, &extra); err != nil {
+						t.Fatal(err)
+					}
+					var saved map[string]string
+					if json.Unmarshal([]byte(extra), &saved) != nil || storedKey != key || saved["base_url"] != supplier.URL || saved["region"] != "default" {
+						t.Fatal("committed balance instance key/endpoint/region lost")
+					}
+					before := f.snapshot(t)
+					path := "/api/v1/providers/" + provider + "/instances/balance-" + instance + "/balance"
+					for _, m := range []int32{0, 1} {
+						mode.Store(m)
+						data := f.requireSuccess(t, "owner", "GET", path, nil)["data"].(map[string]any)
+						want := float64(0)
+						if m == 1 {
+							want = -0.25
+						}
+						if data["balance"] != want || data["currency"] != "CNY" {
+							t.Fatal("legal zero/debt balance lost")
+						}
+						cmd, err := cli.NewParser(fmt.Sprintf("SHOW BALANCE FROM '%s' 'balance-%s';", provider, instance)).Parse(cli.APIMode)
+						if err != nil {
+							t.Fatal(err)
+						}
+						result, err := f.cli(t, "owner").ExecuteCommand(cmd)
+						if err != nil {
+							t.Fatal(err)
+						}
+						raw, _ := json.Marshal(result)
+						if !strings.Contains(string(raw), "CNY") {
+							t.Fatal("CLI balance lost native result")
+						}
+					}
+					count := calls.Load()
+					for _, who := range []string{"", "foreign", "inactive", "revoked", "invited", "member", "disabledtenant"} {
+						_, failed, raw := f.request(t, who, "GET", path, nil)
+						if providerEnvelopeError(failed) == nil || strings.Contains(raw, key) {
+							t.Fatal("denied balance succeeded/leaked")
+						}
+					}
+					if calls.Load() != count || f.snapshot(t) != before {
+						t.Fatal("denied balance side effects")
+					}
+					for _, m := range []int32{2, 3} {
+						mode.Store(m)
+						_, failed, raw := f.request(t, "owner", "GET", path, nil)
+						if providerEnvelopeError(failed) == nil || strings.Contains(raw, "private-balance-body") {
+							t.Fatal("missing/failed native balance accepted/leaked")
+						}
+					}
+					if f.snapshot(t) != before {
+						t.Fatal("balance read modified SQL")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRoot55DiscoveryMetadataProjectionHTTPCLIAndSQL(t *testing.T) {
+	f := newCanonicalProviderFixture(t)
+	for _, provider := range []string{"SiliconFlow", "Gitee", "DeepSeek"} {
+		t.Run(provider, func(t *testing.T) {
+			config := dao.GetModelProviderManager().FindProvider(provider)
+			if config == nil || len(config.Models) == 0 {
+				t.Fatal("frozen metadata absent")
+			}
+			known := ""
+			var expected *models.Model
+			for _, definition := range config.Models {
+				if metadata := models.GetProviderManager().GetModelByNameOrAlias(definition.Name); metadata != nil {
+					known = definition.Name
+					expected = metadata
+					if metadata.MaxDimension != nil {
+						break
+					}
+				}
+			}
+			if expected == nil {
+				t.Fatal("known provider metadata missing")
+			}
+			var calls atomic.Int64
+			var mode atomic.Int32
+			key := f.Prefix + provider + "metadata"
+			supplier := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				auth := "Bearer " + key
+				if provider == "Gitee" {
+					auth = ""
+				}
+				if r.Method != "GET" || r.Header.Get("Authorization") != auth || !strings.HasSuffix(r.URL.Path, "models") {
+					t.Error("native metadata discovery identity lost")
+				}
+				if mode.Load() == 1 {
+					fmt.Fprint(w, `{"data":[]}`)
+					return
+				}
+				if mode.Load() == 2 {
+					fmt.Fprint(w, `{"data":[{"id":false}]}`)
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"id": known, "owned_by": "fixture"}, map[string]any{"id": "remote-unknown"}, map[string]any{"id": "remote-unknown"}}})
+			}))
+			f.enroll(t, provider, "metadata", key, supplier.URL, "declared-model", "chat")
+			before := f.snapshot(t)
+			catalogBefore, _ := json.Marshal(config.Models)
+			path := "/api/v1/providers/" + provider + "/instances/metadata/models?supported=true"
+			result := f.requireSuccess(t, "owner", "GET", path, nil)
+			rows := result["data"].([]any)
+			if len(rows) != 3 || rows[0].(map[string]any)["name"] != known+"@fixture" || rows[1].(map[string]any)["name"] != "remote-unknown" || rows[2].(map[string]any)["name"] != "remote-unknown" {
+				t.Fatal("ordered native raw/duplicate IDs lost")
+			}
+			metadata := rows[0].(map[string]any)
+			wantRaw, _ := json.Marshal(map[string]any{"max_dimension": expected.MaxDimension, "dimensions": expected.Dimensions, "max_tokens": expected.MaxTokens, "model_types": expected.ModelTypes, "thinking": expected.Thinking})
+			var want map[string]any
+			json.Unmarshal(wantRaw, &want)
+			for field, value := range want {
+				a, _ := json.Marshal(metadata[field])
+				b, _ := json.Marshal(value)
+				if string(a) != string(b) {
+					t.Fatal("metadata field lost across actual HTTP", field)
+				}
+			}
+			unknown := rows[1].(map[string]any)
+			if unknown["model_types"] != nil || unknown["max_tokens"] != nil {
+				t.Fatal("unknown inventory acquired invented catalog metadata")
+			}
+			cmd, err := cli.NewParser(fmt.Sprintf("LIST SUPPORTED MODELS FROM '%s' 'metadata';", provider)).Parse(cli.APIMode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := f.cli(t, "owner").ExecuteCommand(cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(response)
+			var cliResult map[string]any
+			json.Unmarshal(raw, &cliResult)
+			if !reflect.DeepEqual(cliResult["data"], result["data"]) {
+				t.Fatal("real CLI changed metadata/order/IDs")
+			}
+			for _, who := range []string{"", "foreign", "inactive"} {
+				count := calls.Load()
+				_, failed, _ := f.request(t, who, "GET", path, nil)
+				if providerEnvelopeError(failed) == nil || calls.Load() != count {
+					t.Fatal("foreign metadata reached supplier")
+				}
+			}
+			mode.Store(1)
+			empty := f.requireSuccess(t, "owner", "GET", path, nil)
+			if empty["data"] != nil {
+				t.Fatal("frozen ParseListModel empty result changed")
+			}
+			if _, err = f.cli(t, "owner").ExecuteCommand(cmd); err != nil {
+				t.Fatal("valid empty native inventory rejected", err)
+			}
+			mode.Store(2)
+			_, failed, _ := f.request(t, "owner", "GET", path, nil)
+			if providerEnvelopeError(failed) == nil {
+				t.Fatal("malformed inventory returned partial HTTP success")
+			}
+			if _, err = f.cli(t, "owner").ExecuteCommand(cmd); err == nil {
+				t.Fatal("malformed inventory returned partial CLI success")
+			}
+			catalogAfter, _ := json.Marshal(config.Models)
+			if string(catalogBefore) != string(catalogAfter) || f.snapshot(t) != before {
+				t.Fatal("discovery changed shared catalog/SQL")
+			}
+		})
+	}
 }

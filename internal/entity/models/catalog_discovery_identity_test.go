@@ -14,7 +14,7 @@ import (
 // their configured wire formats while catalog enrichment remains in the service.
 func TestCatalogDiscoveryProviderIDsHTTP(t *testing.T) {
 	providers := []string{
-		"302.AI", "Aliyun", "Astraflow", "Avian", "Azure-OpenAI", "Baidu", "Cohere", "CometAPI", "DeepInfra", "DeepSeek", "Gitee", "Google", "GPUStack", "Groq", "HuaweiCloud", "HuggingFace", "Hunyuan", "JieKouAI", "Jina", "LM-Studio", "LocalAI", "LongCat", "Minimax", "Mistral", "ModelScope", "Moonshot", "n1n", "Novita", "NVIDIA", "OpenAI", "OpenRouter", "OrcaRouter", "Perplexity", "PPIO", "Qiniu", "Replicate", "SiliconFlow", "StepFun", "TogetherAI", "TokenHub", "TokenPony", "Upstage", "vllm", "VolcEngine", "xAI", "Xinference", "XunFei", "ZHIPU-AI",
+		"302.AI", "Aliyun", "Astraflow", "Avian", "Azure-OpenAI", "Baidu", "Cohere", "CometAPI", "DeepInfra", "DeepSeek", "Gitee", "Google", "GPUStack", "Groq", "HuaweiCloud", "HuggingFace", "Hunyuan", "JieKouAI", "Jina", "lmstudio", "LocalAI", "LongCat", "Minimax", "Mistral", "ModelScope", "Moonshot", "n1n", "Novita", "NVIDIA", "OpenAI", "OpenRouter", "OrcaRouter", "Perplexity", "PPIO", "Qiniu", "Replicate", "SiliconFlow", "StepFun", "TogetherAI", "TokenHub", "TokenPony", "Upstage", "vllm", "VolcEngine", "xAI", "Xinference", "XunFei", "ZHIPU-AI",
 	}
 	for _, provider := range providers {
 		t.Run(provider, func(t *testing.T) {
@@ -31,13 +31,13 @@ func TestCatalogDiscoveryProviderIDsHTTP(t *testing.T) {
 				switch provider {
 				case "Avian", "TogetherAI":
 					payload = items
-				case "Aliyun", "Cohere", "DeepInfra", "Google", "Replicate":
+				case "Cohere", "DeepInfra", "Google", "Replicate", "Jina":
 					native := make([]map[string]string, 0, len(items))
 					for i, item := range items {
 						name := item["id"]
 						switch provider {
-						case "Aliyun":
-							native = append(native, map[string]string{"model_name": name})
+						case "Jina":
+							native = append(native, map[string]string{"name": name})
 						case "Cohere":
 							native = append(native, map[string]string{"name": name})
 						case "DeepInfra":
@@ -51,8 +51,8 @@ func TestCatalogDiscoveryProviderIDsHTTP(t *testing.T) {
 						}
 					}
 					switch provider {
-					case "Aliyun":
-						payload = map[string]any{"output": map[string]any{"models": native}}
+					case "Jina":
+						payload = map[string]any{"data": native}
 					case "Cohere", "Google":
 						payload = map[string]any{"models": native}
 					case "DeepInfra":
@@ -60,13 +60,27 @@ func TestCatalogDiscoveryProviderIDsHTTP(t *testing.T) {
 					case "Replicate":
 						payload = map[string]any{"results": native}
 					}
-				case "SiliconFlow":
-					for i := range want {
-						want[i] += "@owner"
-					}
-				case "XunFei":
-					want = []string{"spark-x"}
 				}
+				if !empty {
+					switch provider {
+					case "Jina", "Replicate":
+					case "Google":
+						want = []string{"display label@Google", "display label@Google"}
+					case "Cohere":
+						for i := range want {
+							want[i] += "@cohere"
+						}
+					case "DeepInfra":
+						for i := range want {
+							want[i] += "@deepinfra"
+						}
+					default:
+						for i := range want {
+							want[i] += "@owner"
+						}
+					}
+				}
+
 				var calls atomic.Int32
 				server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					calls.Add(1)
@@ -81,18 +95,22 @@ func TestCatalogDiscoveryProviderIDsHTTP(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				api := &APIConfig{APIKey: stringPtr("fixture")}
+				api := &APIConfig{ApiKey: stringPtr("fixture")}
 				got, err := driver.ListModels(api)
-				if err != nil || !reflect.DeepEqual(got, want) {
+				if empty && (provider == "302.AI" || provider == "HuaweiCloud" || provider == "Minimax" || provider == "Moonshot") {
+					if err == nil || got != nil {
+						t.Fatal("canonical empty inventory rejection changed", got, err)
+					}
+				} else if err != nil || empty && len(got) != 0 || !empty && !reflect.DeepEqual(modelNamesForTest(got), want) {
 					t.Fatalf("provider=%s empty=%v: got %#v, %v; want %#v", provider, empty, got, err, want)
 				}
 				beforeCancel := calls.Load()
 				ctx, cancel := context.WithCancel(t.Context())
 				cancel()
-				if names, err := driver.ListModels(&APIConfig{APIKey: api.APIKey, Context: ctx}); !errors.Is(err, context.Canceled) || names != nil || calls.Load() != beforeCancel {
+				if names, err := driver.ListModels(&APIConfig{ApiKey: api.ApiKey, Context: ctx}); !errors.Is(err, context.Canceled) || names != nil || calls.Load() != beforeCancel {
 					t.Fatal("cancelled discovery published inventory or reached HTTP", names, err)
 				}
-				if provider == "XunFei" && beforeCancel != 0 || provider != "XunFei" && beforeCancel != 1 {
+				if beforeCancel != 1 {
 					t.Fatal("discovery made unexpected provider calls", beforeCancel)
 				}
 				providerResourceRecord(t, map[string]any{"action": "catalog-provider-identity", "provider": provider, "empty": empty, "names": got, "cancelBeforeHTTP": true, "providerCalls": beforeCancel})

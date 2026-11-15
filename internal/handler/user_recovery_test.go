@@ -17,7 +17,7 @@ func TestRecoveryHandlerRejectsMalformedInput(t *testing.T) {
 	for _, test := range []struct {
 		path, body string
 		method     func(*gin.Context)
-	}{{"/captcha?email=a&email=b", "", h.ForgotCaptcha}, {"/captcha?email=%xx", "", h.ForgotCaptcha}, {"/otp", `{"email":1}`, h.ForgotSendOTP}, {"/verify", `{"email":`, h.ForgotVerifyOTP}, {"/reset", `[]`, h.ForgotResetPassword}} {
+	}{{"/captcha?email=invalid", "", h.ForgotCaptcha}, {"/captcha?email=%xx", "", h.ForgotCaptcha}, {"/otp", `{"email":1}`, h.ForgotSendOTP}, {"/verify", `{"email":`, h.ForgotVerifyOTP}, {"/reset", `[]`, h.ForgotResetPassword}} {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequest("POST", test.path, strings.NewReader(test.body))

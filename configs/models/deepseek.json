@@ -1,6 +1,5 @@
 {
   "name": "DeepSeek",
-  "tags": "LLM",
   "url": {
     "default": "https://api.deepseek.com"
   },

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -54,7 +54,7 @@ func TestBaiduThinkingHTTP(t *testing.T) {
 		{"deepseek-v4-pro", "max", nil, nil, nil, nil},
 	} {
 		t.Run(test.name+"/"+test.effort+fmt.Sprint(test.want), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
@@ -70,14 +70,18 @@ func TestBaiduThinkingHTTP(t *testing.T) {
 			}))
 			defer server.Close()
 			driver := NewBaiduModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
-			api := &APIConfig{APIKey: stringPtr("fixture")}
+			api := &APIConfig{ApiKey: stringPtr("fixture")}
 			config := &ChatConfig{Thinking: test.thinking}
 			if test.effort != "" {
 				config.Effort = &test.effort
 			}
 			messages := []Message{{Role: "user", Content: "q"}}
 			response, err := driver.ChatWithMessages(test.name, messages, api, config)
-			if err != nil || response == nil || response.ReasoningContent == nil || *response.ReasoningContent != "reason" {
+			wantReason := ""
+			if test.thinking != nil && *test.thinking {
+				wantReason = "reason"
+			}
+			if err != nil || response == nil || response.ReasonContent == nil || *response.ReasonContent != wantReason {
 				t.Fatal(response, err)
 			}
 			if err := driver.ChatStreamlyWithSender(test.name, messages, api, config, func(*string, *string) error { return nil }); err != nil {
@@ -89,7 +93,7 @@ func TestBaiduThinkingHTTP(t *testing.T) {
 
 func TestBaiduDiscoveryAndUnsupportedHTTP(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.Method != http.MethodGet || r.URL.Path != "/v2/models" || r.Header.Get("Authorization") != "Bearer fixture" || r.ContentLength > 0 {
 			t.Error("Baidu discovery request", r.Method, r.URL.Path)
@@ -97,10 +101,10 @@ func TestBaiduDiscoveryAndUnsupportedHTTP(t *testing.T) {
 		fmt.Fprint(w, `{"data":[{"id":"ernie-5.0"}]}`)
 	}))
 	defer server.Close()
-	driver := NewBaiduModel(map[string]string{"default": server.URL + "/v2/"}, URLSuffix{Models: "/models"})
-	api := &APIConfig{APIKey: stringPtr("fixture")}
+	driver := NewBaiduModel(map[string]string{"default": server.URL + "/v2"}, URLSuffix{Models: "models"})
+	api := &APIConfig{ApiKey: stringPtr("fixture")}
 	names, err := driver.ListModels(api)
-	if err != nil || !reflect.DeepEqual(names, []string{"ernie-5.0"}) {
+	if err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{"ernie-5.0"}) {
 		t.Fatal(names, err)
 	}
 	if err := driver.CheckConnection(api); err != nil || calls.Load() != 2 {
@@ -122,13 +126,18 @@ func TestBaiduRerankTopNHTTP(t *testing.T) {
 				top = 2
 			}
 			var calls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				var body map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				want := map[string]any{"model": "qwen3-reranker-4b", "query": "q", "documents": []any{"zero", "one", "two"}, "top_n": float64(top)}
+				want := map[string]any{"model": "qwen3-reranker-4b", "query": "q", "documents": []any{"zero", "one", "two"}, "top_n": float64(func() int {
+					if calls.Load() == 1 && config != nil && config.TopN > 0 {
+						return config.TopN
+					}
+					return top
+				}())}
 				if !reflect.DeepEqual(body, want) || r.URL.Path != "/office/v2/rerank" || r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer fixture" {
 					t.Error("Baidu rerank request", body, r.URL.Path)
 				}
@@ -139,17 +148,17 @@ func TestBaiduRerankTopNHTTP(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{"results": results})
 			}))
 			defer server.Close()
-			urls := map[string]string{"default": "http://catalog.invalid", "office": server.URL + "/office/v2/"}
-			driver := NewBaiduModel(urls, URLSuffix{Rerank: "/rerank"})
+			urls := map[string]string{"default": "http://catalog.invalid", "office": server.URL + "/office/v2"}
+			driver := NewBaiduModel(urls, URLSuffix{Rerank: "rerank"})
 			urls["office"] = "http://mutated.invalid"
-			api := &APIConfig{APIKey: stringPtr("fixture"), Region: stringPtr("office")}
+			api := &APIConfig{ApiKey: stringPtr("fixture"), Region: stringPtr("office")}
 			name := "qwen3-reranker-4b"
 			result, err := driver.Rerank(&name, "q", []string{"zero", "one", "two"}, api, config)
-			if err != nil || result == nil || len(result.Data) != top || result.Data[0].Index != 0 || result.Data[top-1].RelevanceScore != 0 || calls.Load() != 1 || api.Context != nil {
+			if err != nil || result == nil || len(result.Data) != top || result.Data[0].Index != 2 || result.Data[0].RelevanceScore != 0 || calls.Load() != 1 || api.Context != nil {
 				t.Fatal(result, err, calls.Load())
 			}
 			if top == 3 {
-				scores, err := NewRerankModel(driver, &name, api).Rerank("q", []string{"zero", "one", "two"})
+				scores, err := rerankScoresForTest(NewRerankModel(driver, &name, api), "q", []string{"zero", "one", "two"}, api, &RerankConfig{})
 				if err != nil || !reflect.DeepEqual(scores, []float64{0.9, 0.2, 0}) {
 					t.Fatal("retrieval index mapping", scores, err)
 				}
@@ -174,10 +183,10 @@ func TestBaiduRerankRejectsInvalidHTTP(t *testing.T) {
 		`{"results":[{"index":0,"relevance_score":0},{"index":1,"relevance_score":0.1}]} {}`,
 	} {
 		t.Run(body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
 			driver := NewBaiduModel(map[string]string{"default": server.URL}, URLSuffix{Rerank: "rerank"})
-			result, err := driver.Rerank(stringPtr("reranker"), "q", []string{"a", "b"}, &APIConfig{APIKey: stringPtr("fixture")}, nil)
+			result, err := driver.Rerank(stringPtr("reranker"), "q", []string{"a", "b"}, &APIConfig{ApiKey: stringPtr("fixture")}, nil)
 			if err == nil || result != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(result, err)
 			}
@@ -187,7 +196,7 @@ func TestBaiduRerankRejectsInvalidHTTP(t *testing.T) {
 
 func TestBaiduRerankPreflightAndCancellationHTTP(t *testing.T) {
 	started := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
 		r.Body.Close()
 		close(started)
@@ -195,8 +204,8 @@ func TestBaiduRerankPreflightAndCancellationHTTP(t *testing.T) {
 	}))
 	defer server.Close()
 	driver := NewBaiduModel(map[string]string{"default": server.URL}, URLSuffix{Rerank: "rerank"})
-	name, api := stringPtr("reranker"), &APIConfig{APIKey: stringPtr("fixture")}
-	if result, err := driver.Rerank(nil, "", nil, nil, nil); err != nil || result == nil || result.Data == nil || len(result.Data) != 0 {
+	name, api := stringPtr("reranker"), &APIConfig{ApiKey: stringPtr("fixture")}
+	if result, err := driver.Rerank(nil, "", nil, api, nil); err != nil || result == nil || len(result.Data) != 0 {
 		t.Fatal(result, err)
 	}
 	if _, err := driver.Rerank(name, "q", []string{"a"}, api, &RerankConfig{TopN: -1}); err == nil {

@@ -19,13 +19,12 @@ package service
 import (
 	"errors"
 	"fmt"
+	"multirag/internal/common"
+	"multirag/internal/entity"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/google/uuid"
-
 	"multirag/internal/dao"
-	"multirag/internal/entity"
 )
 
 // ChatService chat service
@@ -49,7 +48,8 @@ func NewChatService() *ChatService {
 // ChatWithKBNames chat with knowledge base names
 type ChatWithKBNames struct {
 	*entity.Chat
-	KBNames []string `json:"kb_names"`
+	KBNames    []string `json:"kb_names"`
+	DatasetIDs []string `json:"dataset_ids"`
 }
 
 // ListChatsResponse list chats response
@@ -98,10 +98,11 @@ func (s *ChatService) ListChats(userID, status, keywords string, page, pageSize 
 	// Enrich with knowledge base names
 	chatsWithKBNames := make([]*ChatWithKBNames, 0, len(chats))
 	for _, chat := range chats {
-		kbNames := s.getKBNames(chat.KBIDs)
+		kbNames, datasetIDs := s.getDatasetNamesAndIDs(chat.KBIDs)
 		chatsWithKBNames = append(chatsWithKBNames, &ChatWithKBNames{
-			Chat:    chat,
-			KBNames: kbNames,
+			Chat:       chat,
+			KBNames:    kbNames,
+			DatasetIDs: datasetIDs,
 		})
 	}
 
@@ -110,9 +111,78 @@ func (s *ChatService) ListChats(userID, status, keywords string, page, pageSize 
 	}, nil
 }
 
-// getKBNames gets knowledge base names by IDs
-func (s *ChatService) getKBNames(kbIDs entity.JSONSlice) []string {
-	var names []string
+// ListChatsNextRequest list chats next request
+type ListChatsNextRequest struct {
+	OwnerIDs []string `json:"owner_ids,omitempty"`
+}
+
+// ListChatsNextResponse list chats next response
+type ListChatsNextResponse struct {
+	Chats []*ChatWithKBNames `json:"dialogs"`
+	Total int64              `json:"total"`
+}
+
+// ListChatsNext list chats with advanced filtering (equivalent to list_dialogs_next)
+func (s *ChatService) ListChatsNext(userID string, keywords string, page, pageSize int, orderby string, desc bool, ownerIDs []string) (*ListChatsNextResponse, error) {
+	var chats []*entity.Chat
+	var total int64
+	var err error
+
+	if len(ownerIDs) == 0 {
+		// Get tenant IDs by user ID (joined tenants)
+		tenantIDs, err := s.userTenantDAO.GetTenantIDsByUserID(userID)
+		if err != nil {
+			return nil, err
+		}
+
+		// Use database pagination
+		chats, total, err = s.chatDAO.ListByTenantIDs(tenantIDs, userID, page, pageSize, orderby, desc, keywords)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Filter by owner IDs, manual pagination
+		chats, total, err = s.chatDAO.ListByOwnerIDs(ownerIDs, userID, orderby, desc, keywords)
+		if err != nil {
+			return nil, err
+		}
+
+		// Manual pagination
+		if page > 0 && pageSize > 0 {
+			start := (page - 1) * pageSize
+			end := start + pageSize
+			if start < int(total) {
+				if end > int(total) {
+					end = int(total)
+				}
+				chats = chats[start:end]
+			} else {
+				chats = []*entity.Chat{}
+			}
+		}
+	}
+
+	// Enrich with knowledge base names
+	chatsWithKBNames := make([]*ChatWithKBNames, 0, len(chats))
+	for _, chat := range chats {
+		kbNames, datasetIDs := s.getDatasetNamesAndIDs(chat.KBIDs)
+		chatsWithKBNames = append(chatsWithKBNames, &ChatWithKBNames{
+			Chat:       chat,
+			KBNames:    kbNames,
+			DatasetIDs: datasetIDs,
+		})
+	}
+
+	return &ListChatsNextResponse{
+		Chats: chatsWithKBNames,
+		Total: total,
+	}, nil
+}
+
+// getDatasetNamesAndIDs gets knowledge base names by IDs
+func (s *ChatService) getDatasetNamesAndIDs(kbIDs entity.JSONSlice) ([]string, []string) {
+	var names = make([]string, 0, 0)
+	var ids = make([]string, 0, 0)
 	for _, kbID := range kbIDs {
 		kbIDStr, ok := kbID.(string)
 		if !ok {
@@ -125,9 +195,10 @@ func (s *ChatService) getKBNames(kbIDs entity.JSONSlice) []string {
 		// Only include valid KBs
 		if kb.Status != nil && *kb.Status == "1" {
 			names = append(names, kb.Name)
+			ids = append(ids, kbIDStr)
 		}
 	}
-	return names
+	return names, ids
 }
 
 // ParameterConfig parameter configuration in prompt_config
@@ -374,11 +445,7 @@ func (s *ChatService) SetDialog(userID string, req *SetDialogRequest) (*SetDialo
 
 	if isCreate {
 		// Generate UUID for new chat
-		newID := uuid.New().String()
-		newID = strings.ReplaceAll(newID, "-", "")
-		if len(newID) > 32 {
-			newID = newID[:32]
-		}
+		newID := common.GenerateUUID()
 
 		// Set default language
 		language := "English"
@@ -409,7 +476,7 @@ func (s *ChatService) SetDialog(userID string, req *SetDialogRequest) (*SetDialo
 		}
 
 		// Get KB names
-		kbNames := s.getKBNames(chat.KBIDs)
+		kbNames, _ := s.getDatasetNamesAndIDs(chat.KBIDs)
 
 		return &SetDialogResponse{
 			Chat:    chat,
@@ -444,7 +511,7 @@ func (s *ChatService) SetDialog(userID string, req *SetDialogRequest) (*SetDialo
 	}
 
 	// Get KB names
-	kbNames := s.getKBNames(chat.KBIDs)
+	kbNames, _ := s.getDatasetNamesAndIDs(chat.KBIDs)
 
 	return &SetDialogResponse{
 		Chat:    chat,
@@ -567,7 +634,7 @@ type GetChatResponse struct {
 // GetChat gets chat detail by ID with permission check
 func (s *ChatService) GetChat(userID string, chatID string) (*GetChatResponse, error) {
 	// Step 1: Get user tenants (same as Python UserTenantService.query(user_id=current_user.id))
-	tenants, err := s.userTenantDAO.GetActiveByUserID(userID)
+	tenants, err := s.userTenantDAO.GetByUserID(userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user tenants: %w", err)
 	}
@@ -598,10 +665,9 @@ func (s *ChatService) GetChat(userID string, chatID string) (*GetChatResponse, e
 
 	// Step 4: Build response with kb_names (same as Python _build_chat_response)
 	// Resolve kb_ids to kb_names
-	kbNames := s.getKBNames(chat.KBIDs)
+	kbNames, datasetIDs := s.getDatasetNamesAndIDs(chat.KBIDs)
 
 	// Build dataset_ids from kb_ids (same as Python _resolve_kb_names returns ids)
-	var datasetIDs []string
 	for _, kbID := range chat.KBIDs {
 		datasetID, ok := kbID.(string)
 		if !ok {

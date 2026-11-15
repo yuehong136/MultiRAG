@@ -19,7 +19,7 @@ func TestDatasetSearchRESTContract(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			var searches atomic.Int32
 			server := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("Authorization") != "Bearer owned-session" {
+				if r.Header.Get("Authorization") != "owned-session" {
 					t.Error("missing Bearer session")
 				}
 				switch r.URL.Path {
@@ -48,10 +48,10 @@ func TestDatasetSearchRESTContract(t *testing.T) {
 			defer server.Close()
 			address, _ := url.Parse(server.URL)
 			port, _ := strconv.Atoi(address.Port())
-			client := NewMultiRAGClient("user")
-			client.HTTPClient.Host = address.Hostname()
-			client.HTTPClient.Port = port
-			client.HTTPClient.LoginToken = "owned-session"
+			client := newConsumerCLI("user")
+			consumerHTTP(client).Host = address.Hostname()
+			consumerHTTP(client).Port = port
+			consumerHTTP(client).LoginToken = consumerTokenPtr("owned-session")
 			cmd := NewCommand("search_on_datasets")
 			cmd.Params["datasets"] = "a,b"
 			cmd.Params["question"] = "question"
@@ -61,9 +61,8 @@ func TestDatasetSearchRESTContract(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				rows := result.(*CommonResponse).Data
-				if len(rows) != 1 || rows[0]["id"] != "chunk" || rows[0]["content"] != "answer" {
-					t.Fatal(rows)
+				if result != nil {
+					t.Fatal("direct-print search returned a facade", result)
 				}
 			case "native":
 				cmd.Params["iterations"] = 3
@@ -71,14 +70,9 @@ func TestDatasetSearchRESTContract(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				raw := result.(*BenchmarkRawResponse)
-				if len(raw.ResponseList) != 3 {
+				raw := result.(*BenchmarkResponse)
+				if raw.SuccessCount != 3 || raw.FailureCount != 0 {
 					t.Fatal(raw)
-				}
-				for _, resp := range raw.ResponseList {
-					if !isSuccess(resp, cmd.Type) {
-						t.Fatal("benchmark rejected successful response")
-					}
 				}
 			case "concurrent":
 				benchmark := NewCommand("benchmark")
@@ -110,9 +104,9 @@ func TestDatasetSearchRejectsBusinessFailure(t *testing.T) {
 			defer server.Close()
 			address, _ := url.Parse(server.URL)
 			port, _ := strconv.Atoi(address.Port())
-			client := NewMultiRAGClient("user")
-			client.HTTPClient.Host = address.Hostname()
-			client.HTTPClient.Port = port
+			client := newConsumerCLI("user")
+			consumerHTTP(client).Host = address.Hostname()
+			consumerHTTP(client).Port = port
 			cmd := NewCommand("search_on_datasets")
 			cmd.Params["datasets"] = "a"
 			cmd.Params["question"] = "question"
@@ -124,10 +118,8 @@ func TestDatasetSearchRejectsBusinessFailure(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, resp := range result.(*BenchmarkRawResponse).ResponseList {
-				if isSuccess(resp, cmd.Type) {
-					t.Fatal("benchmark counted failed response as success")
-				}
+			if result.(*BenchmarkResponse).SuccessCount != 0 || result.(*BenchmarkResponse).FailureCount != 2 {
+				t.Fatal("benchmark counted failed response as success")
 			}
 		})
 	}
@@ -152,9 +144,9 @@ func TestDatasetSearchSingleIterationBenchmark(t *testing.T) {
 			defer server.Close()
 			address, _ := url.Parse(server.URL)
 			port, _ := strconv.Atoi(address.Port())
-			client := NewMultiRAGClient("user")
-			client.HTTPClient.Host = address.Hostname()
-			client.HTTPClient.Port = port
+			client := newConsumerCLI("user")
+			consumerHTTP(client).Host = address.Hostname()
+			consumerHTTP(client).Port = port
 			nested := NewCommand("search_on_datasets")
 			nested.Params["datasets"] = "a"
 			nested.Params["question"] = "question"
@@ -169,16 +161,22 @@ func TestDatasetSearchSingleIterationBenchmark(t *testing.T) {
 			old := os.Stdout
 			os.Stdout = writer
 			defer func() { os.Stdout = old }()
-			_, runErr := client.RunBenchmark(benchmark)
+			result, runErr := client.RunBenchmark(benchmark)
 			writer.Close()
 			os.Stdout = old
 			output, readErr := io.ReadAll(reader)
 			reader.Close()
-			if runErr != nil || readErr != nil {
-				t.Fatal(runErr, readErr)
+			_ = output
+			if readErr != nil {
+				t.Fatal(readErr)
 			}
-			if !strings.Contains(string(output), test.want) {
-				t.Fatalf("incorrect single-iteration accounting: %s", output)
+			stats, ok := result.(*BenchmarkResponse)
+			if !ok || stats.SuccessCount+stats.FailureCount != 1 {
+				t.Fatal("single iteration accounting", result, runErr)
+			}
+			failed := strings.Contains(test.want, "SUCCESS: 0")
+			if (runErr != nil) != failed || stats.SuccessCount != map[bool]int{true: 0, false: 1}[failed] {
+				t.Fatal("single iteration false success", stats, runErr)
 			}
 		})
 	}

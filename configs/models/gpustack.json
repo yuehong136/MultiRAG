@@ -5,6 +5,5 @@
     "models": "v1/models",
     "embedding": "v1-openai/embeddings"
   },
-  "class": "local",
-  "models": []
+  "class": "local"
 }

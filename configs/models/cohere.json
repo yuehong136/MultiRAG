@@ -6,8 +6,8 @@
   "url_suffix": {
     "chat": "v2/chat",
     "models": "v1/models",
-    "rerank": "v2/rerank",
     "embedding": "v2/embed",
+    "rerank": "v2/rerank",
     "asr": "audio/transcriptions"
   },
   "class": "cohere",
@@ -142,7 +142,7 @@
       "name": "cohere-transcribe-03-2026",
       "max_tokens": 8192,
       "model_types": [
-        "speech2text"
+        "asr"
       ]
     }
   ]

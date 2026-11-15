@@ -53,7 +53,7 @@ func NewSearchHandler(searchService *service.SearchService, userService *service
 // @Param desc query bool false "descending order (default: true)"
 // @Param request body service.ListSearchAppsRequest true "filter options including owner_ids"
 // @Success 200 {object} service.ListSearchAppsResponse
-// @Router /api/v1/searches [get]
+// @Router /api/v1/searches [post]
 func (h *SearchHandler) ListSearches(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {

@@ -30,11 +30,11 @@ func TestParseFileURLAliasDoesNotReadOrFetchFile(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	host, port, _ := net.SplitHostPort(u.Host)
 	number, _ := strconv.Atoi(port)
-	client := NewMultiRAGClient("user")
-	client.HTTPClient.Host = host
-	client.HTTPClient.Port = number
-	client.HTTPClient.LoginToken = "controlled"
-	cmd, err := NewParser("PARSE WITH 'pipeline@one@MinerU' FILE 'https://files.invalid/no-such-document.pdf';").Parse(false)
+	client := newConsumerCLI("user")
+	consumerHTTP(client).Host = host
+	consumerHTTP(client).Port = number
+	consumerHTTP(client).LoginToken = consumerTokenPtr("controlled")
+	cmd, err := NewParser("PARSE WITH 'pipeline@one@MinerU' FILE 'https://files.invalid/no-such-document.pdf';").Parse(APIMode)
 	if err != nil {
 		t.Fatal(err)
 	}

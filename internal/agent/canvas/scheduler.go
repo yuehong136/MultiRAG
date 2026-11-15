@@ -1,10 +1,12 @@
-// Package canvas builds deterministic DAGs and bounded explicit Loop nodes.
+// Package canvas builds eino workflows from the frozen Canvas DSL.
+// Real registered components execute within state pre/post handlers.
+// Explicit Loop macros have a dedicated sub-workflow; unsupported cycles,
+// conditional routing, sentinels and missing factories fail explicitly.
 package canvas
 
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"multirag/internal/agent/runtime"
@@ -13,28 +15,99 @@ import (
 	"github.com/cloudwego/eino/compose"
 )
 
+// placeholderLambda rejects the former no-factory echo path.
+func placeholderLambda(_ context.Context, _ map[string]any) (map[string]any, error) {
+	return nil, fmt.Errorf("canvas: component factory is not configured: %w", runtime.ErrNotImplemented)
+}
+
+// isLegacyNoOp reports whether name is in legacyNoOpNames (defined
+// in canvas.go). The set names the DSL v1 sentinel components that
+// the Go port accepts but does not implement — e.g. "ExitLoop".
+// Encountering one routes the node to a no-op echo body so the
+// workflow still compiles. Phase 2 P0 will also gate the
+// component-allowlist on this same name set so adding a new legacy
+// name to canvas.go is the single source of truth.
+//
+// The lookup is case-insensitive: legacyNoOpNames stores keys
+// lowercase, but the DSL preserves user case (see canvas.go:92
+// "matches agent/component/<name>.py's class name
+// (case-insensitive)"). All callers go through this predicate so
+// the case-normalization is in exactly one place.
+//
+// Note: the canvas package cannot import internal/agent/component
+// (foundation layer must not depend on its callers), so the
+// component-name check is intentionally NOT performed here. The
+// unknown-component error path is exercised by the explicit
+// TestBuildWorkflow_UnknownComponentErrors test using a name that
+// is neither in the legacy set nor any of the known DSL primitives
+// (Begin / Message / LLM / Categorize / Invoke / etc. are
+// implicitly accepted by the placeholder phase). This mirrors the
+// Phase 1 contract documented in scheduler.go's package comment.
 func isLegacyNoOp(name string) bool {
 	return legacyNoOpNames[strings.ToLower(name)]
 }
 
+// isKnownPrimitive reports whether name is a real component the Go
+// port can route to a body. In Phase 1 the allowlist is explicit
+// (mirror of the names referenced in the test fixtures) so that an
+// unknown component name surfaces a clear error from BuildWorkflow
+// instead of silently producing a no-op node. In Phase 2 P0 this
+// becomes a registry lookup against the component package.
+//
+// We keep the signature and call shape stable so swapping the body
+// to a registry check is a one-line change. The Phase 1 set
+// matches the names already used by existing fixtures and is
+// over-approximated to land any in-flight component port; tighten
+// it back to the registry-derived set when Phase 2 P0 lands.
+func isKnownPrimitive(name string) bool {
+	if name == "" {
+		return false
+	}
+	// Legacy names ARE known — they route to a dedicated no-op echo
+	// body installed by Pass 1 below. The "known" predicate is the
+	// union of the legacy set and the real-component allowlist.
+	if isLegacyNoOp(name) {
+		return true
+	}
+	switch strings.ToLower(name) {
+	case "begin", "message", "llm", "categorize", "switch",
+		"agent", "invoke", "dataoperations", "listoperations",
+		"stringtransform", "variableaggregator", "variableassigner",
+		"loop": // Loop is a macro in BuildWorkflow; the pre-pass absorbs it.
+		return true
+	}
+	return false
+}
+
+// statePre is the StatePreHandler wired onto every node. It injects the
+// current per-cpn Outputs into the input map under the "state" key so the
+// lambda body can read its inputs without re-fetching from ctx. We don't
+// mutate the user's input map — we shallow-copy.
+//
+// The context-attached *CanvasState is the canonical store for
+// components (Begin / Message / LLM all read it via
+// runtime.GetStateFromContext). When the caller attached one to the
+// context (orchestrator path or test setup), we sync the eino
+// per-run state's outputs into it so downstream nodes see the
+// upstream outputs. The eino state is still useful as a fallback
+// when no context state is attached.
 func statePre(ctx context.Context, in map[string]any, state *CanvasState) (map[string]any, error) {
 	if in == nil {
 		in = map[string]any{}
 	}
+	// Sync the eino state → context state when both exist so
+	// downstream components reading via GetStateFromContext see
+	// the upstream outputs the state post handler already wrote.
 	if state != nil {
 		if ctxState, _, _ := runtime.GetStateFromContext[*runtime.CanvasState](ctx); ctxState != nil && ctxState != state {
-			if err := ctxState.RestoreCheckpoint(state); err != nil {
-				return nil, fmt.Errorf("canvas: restore checkpoint state: %w", err)
-			}
-			if err := state.RestoreFrom(ctxState); err != nil {
-				return nil, err
+			for cpnID, bucket := range state.Outputs {
+				for k, v := range bucket {
+					ctxState.SetVar(cpnID, k, v)
+				}
 			}
 		}
 	}
-	snapshot := map[string]map[string]any{}
-	if state != nil {
-		snapshot = state.Snapshot()
-	}
+	snapshot := state.Snapshot()
 	out := make(map[string]any, len(in)+1)
 	for k, v := range in {
 		out[k] = v
@@ -43,6 +116,22 @@ func statePre(ctx context.Context, in map[string]any, state *CanvasState) (map[s
 	return out, nil
 }
 
+// statePost is the StatePostHandler — it flattens the lambda's output
+// keys into the per-cpn Outputs bucket keyed by the cpn_id passed
+// through the input map ("cpn_id" key, injected by BuildWorkflow's
+// per-node wrapper).
+//
+// Storage convention: each top-level key in the component's output
+// map lands as Outputs[cpnID][key]. v1 templates reference these as
+// {{cpnID@key}} (e.g. {{generate:0@content}}). Nesting the entire
+// payload under Outputs[cpnID]["result"] would force every template
+// to use {{cpnID@result.content}} which the v1 DSL never writes.
+//
+// The write is mirrored into the context-attached *CanvasState when
+// one is present, so downstream components that read state via
+// runtime.GetStateFromContext (Begin / Message / LLM) see the
+// upstream output. The eino per-run state stays the source of truth
+// for the snapshot exposed via statePre.
 func statePost(ctx context.Context, out map[string]any, state *CanvasState) (map[string]any, error) {
 	cpnID, _ := out["__cpn_id__"].(string)
 	if cpnID == "" {
@@ -60,14 +149,23 @@ func statePost(ctx context.Context, out map[string]any, state *CanvasState) (map
 			ctxState.SetVar(cpnID, k, v)
 		}
 	}
-	if state != nil && ctxState != nil && state != ctxState {
-		if err := state.RestoreFrom(ctxState); err != nil {
-			return nil, err
-		}
-	}
 	return out, nil
 }
 
+// BuildWorkflow assembles a *compose.Workflow from a Canvas DSL.
+//
+// Topology rules (per plan §1.1, §2.4):
+//
+//   - For every cpn_id in c.Components: add a Lambda node.
+//   - For every (cpn_id, upstream) edge: cpn.AddInput(upstream).
+//   - For components with no upstream (Begin nodes): wire an empty input
+//     from compose.START so eino knows they are start candidates.
+//   - For components with no downstream (terminals): wire them to the
+//     implicit END via wf.End().AddInput(cpnID, ...).
+//
+// State pre/post handlers are added to every node as NODE options
+// (GraphAddNodeOpt). The handlers carry the per-run *CanvasState which eino
+// extracts from context for us (via WithGenLocalState — wired in compile.go).
 func BuildWorkflow(ctx context.Context, c *Canvas) (*compose.Workflow[map[string]any, map[string]any], error) {
 	if c == nil {
 		return nil, fmt.Errorf("canvas: nil canvas")
@@ -76,25 +174,68 @@ func BuildWorkflow(ctx context.Context, c *Canvas) (*compose.Workflow[map[string
 		return nil, fmt.Errorf("canvas: no components")
 	}
 
-	validated, err := validateCanvasAdjacency(c)
-	if err != nil {
-		return nil, err
-	}
-	// Every consumer below, including cycle and Loop expansion, uses the
-	// same reciprocal graph. A missing side of an edge is not shorthand.
-	c = validated
+	// Validate names and the complete adjacency before constructing components.
 	for id, comp := range c.Components {
-		// Their next-node selection is not consumed by this workflow yet.
-		// Even a single child could execute when no branch was selected.
-		if strings.EqualFold(comp.Obj.ComponentName, "Switch") || strings.EqualFold(comp.Obj.ComponentName, "Categorize") {
-			return nil, fmt.Errorf("canvas: conditional routing at %q: %w", id, runtime.ErrNotImplemented)
+		name := comp.Obj.ComponentName
+		if name == "" || strings.TrimSpace(name) != name {
+			return nil, fmt.Errorf("canvas: component %q has invalid component_name %q", id, name)
+		}
+		for _, edge := range []struct {
+			name string
+			ids  []string
+		}{{"upstream", comp.Upstream}, {"downstream", comp.Downstream}} {
+			seen := map[string]bool{}
+			for _, peerID := range edge.ids {
+				if peerID == id {
+					return nil, fmt.Errorf("canvas: %q self-edge", id)
+				}
+				if seen[peerID] {
+					return nil, fmt.Errorf("canvas: %q duplicate %s %q", id, edge.name, peerID)
+				}
+				seen[peerID] = true
+				if _, exists := c.Components[peerID]; !exists {
+					return nil, fmt.Errorf("canvas: %q unknown %s %q", id, edge.name, peerID)
+				}
+			}
+		}
+	}
+	for id, comp := range c.Components {
+		for _, edge := range []struct {
+			name     string
+			ids      []string
+			upstream bool
+		}{{"upstream", comp.Upstream, true}, {"downstream", comp.Downstream, false}} {
+			for _, peerID := range edge.ids {
+				peer := c.Components[peerID]
+				reverse := peer.Upstream
+				if edge.upstream {
+					reverse = peer.Downstream
+				}
+				found := false
+				for _, other := range reverse {
+					if other == id {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return nil, fmt.Errorf("canvas: %q %s %q is not reciprocal", id, edge.name, peerID)
+				}
+			}
 		}
 	}
 
-	genState := func(ctx context.Context) *CanvasState {
-		if state, _, _ := runtime.GetStateFromContext[*runtime.CanvasState](ctx); state != nil {
-			return state
+	for id, comp := range c.Components {
+		switch strings.ToLower(comp.Obj.ComponentName) {
+		case "switch", "categorize":
+			return nil, fmt.Errorf("canvas: component %q conditional routing: %w", id, runtime.ErrNotImplemented)
 		}
+	}
+
+	// GenLocalState seeds each run with a fresh *CanvasState. eino calls
+	// this once per run and threads the result through StatePre/Post
+	// handlers via context.
+	genState := func(_ context.Context) *CanvasState {
 		return NewCanvasState("", "")
 	}
 
@@ -102,10 +243,17 @@ func BuildWorkflow(ctx context.Context, c *Canvas) (*compose.Workflow[map[string
 		compose.WithGenLocalState(genState),
 	)
 
+	// Generic cycles have no iterative driver in this target. Explicit Loop
+	// macros below have real iteration semantics and remain supported.
 	if hasCycle(c) {
-		return nil, fmt.Errorf("canvas: cyclic DSL is not supported; use an explicit Loop or UserFillUp node")
+		return nil, fmt.Errorf("canvas: cyclic execution: %w", runtime.ErrNotImplemented)
 	}
 
+	// Pre-pass: Loop macro expansion. For each Loop cpn, build a
+	// sub-workflow from its downstream descendants and install a
+	// workflowx.AddLoopNode in the outer graph in place of the Loop
+	// subtree. The sub-graph members are tracked in `loopMembers` so
+	// the main pass skips them.
 	loopMembers := make(map[string]bool)
 	loopNodes := make(map[string]*compose.WorkflowNode)
 	for cpnID, comp := range c.Components {
@@ -132,6 +280,20 @@ func BuildWorkflow(ctx context.Context, c *Canvas) (*compose.Workflow[map[string
 		}
 	}
 
+	// Pass 1: register every node and remember its upstream list so we can
+	// wire edges in a second pass (Compose disallows AddInput before the
+	// upstream exists). Skip Loop cpns and their sub-graph members —
+	// they live in `loopNodes` and inside the sub-workflow respectively.
+	//
+	// Component-routing rules per cpn (centralised in buildNodeBody):
+	//
+	//   1. component_name is in legacyNoOpNames (e.g. "ExitLoop") →
+	//      dedicated no-op echo lambda with __legacy_noop__ tag.
+	//   2. runtime.DefaultFactory() registered → factory-built real
+	//      component invoked per iteration.
+	//   3. no factory registered → placeholder body (canvas-only test
+	//      fallback; production wiring always registers a factory via
+	//      component.init()).
 	type pendingEdge struct {
 		cpn string
 		up  string
@@ -139,6 +301,9 @@ func BuildWorkflow(ctx context.Context, c *Canvas) (*compose.Workflow[map[string
 	pending := make([]pendingEdge, 0, 4*len(c.Components))
 	nodes := make(map[string]*compose.WorkflowNode, len(c.Components))
 	for cpnID := range c.Components {
+		// Loop cpns are already registered as workflowx nodes in
+		// loopNodes (pre-pass). We still need to record their
+		// upstream edges so Pass 2 can wire `upstream → loop`.
 		if _, isLoop := loopNodes[cpnID]; isLoop {
 			for _, up := range c.Components[cpnID].Upstream {
 				pending = append(pending, pendingEdge{cpn: cpnID, up: up})
@@ -168,6 +333,24 @@ func BuildWorkflow(ctx context.Context, c *Canvas) (*compose.Workflow[map[string
 		}
 	}
 
+	// Pass 2: wire edges. Skip self-edges and edges to unknown upstreams —
+	// those would be a DSL bug; BuildWorkflow returns an error so the
+	// orchestrator can surface a clear failure (better than a silent
+	// non-trigger).
+	//
+	// Multi-upstream handling: eino's Workflow only allows ONE actual data
+	// input per node (subsequent AddInput without FieldMapping triggers
+	// "entire output has already been mapped"). For diamond / merge
+	// topologies, the first upstream carries data; the rest register as
+	// exec-only dependencies via AddDependency so the node waits for
+	// them but doesn't try to consume a second data source. Phase 2 P0
+	// component bodies will switch to explicit FieldMapping when they
+	// need to merge multi-source inputs.
+	//
+	// An upstream may be a regular node OR a Loop node (registered in
+	// the pre-pass). Both are valid edge sources. Symmetrically, the
+	// downstream may itself be a Loop node — in that case we resolve
+	// the *compose.WorkflowNode via loopNodes rather than nodes.
 	resolveNode := func(id string) *compose.WorkflowNode {
 		if n, ok := nodes[id]; ok {
 			return n
@@ -197,8 +380,30 @@ func BuildWorkflow(ctx context.Context, c *Canvas) (*compose.Workflow[map[string
 		}
 	}
 
+	// Pass 3: wire start nodes (no upstream) from compose.START, and wire
+	// terminal nodes (no downstream) to compose.END via wf.End(). eino
+	// tracks start/end membership by these explicit wirings — without
+	// them, Compile() returns "start node not set" / "end node not set".
+	//
+	// Multi-terminal case: when two or more components have empty
+	// Downstream, eino's END node complains "entire output has already
+	// been mapped for node: end" unless each terminal is wired with a
+	// distinct compose.ToField(cpnID) mapping. We always include the
+	// FieldMapping argument (per terminal) so the count of inputs
+	// matters only to eino's bookkeeping, not to our wire code.
+	//
+	// A "start" node with no upstream gets an empty input from START so
+	// eino registers it as a workflow entry point. FieldMapping is nil
+	// because Phase 1 placeholder lambdas just echo whatever they receive.
+	//
+	// Loop nodes are wired here too: a Loop is START if it has no
+	// upstream; it is END if it has no downstream in the outer graph
+	// (a downstream that's also a sub-graph member doesn't count — that
+	// node is part of the loop's body, not the outer graph's edge).
 	for cpnID, comp := range c.Components {
 		if node, isLoop := loopNodes[cpnID]; isLoop {
+			// Loops with no upstream are START nodes. Loops WITH
+			// upstream had their AddInput wired in Pass 2 already.
 			if len(comp.Upstream) == 0 && !first[cpnID] {
 				node.AddInput(compose.START)
 			}
@@ -229,6 +434,9 @@ func BuildWorkflow(ctx context.Context, c *Canvas) (*compose.Workflow[map[string
 	return wf, nil
 }
 
+// snapshotOutputs is retained as a thin wrapper around state.Snapshot()
+// for any leftover callers in test/bench files. New code should call
+// state.Snapshot() directly.
 func snapshotOutputs(src map[string]map[string]any) map[string]map[string]any {
 	out := make(map[string]map[string]any, len(src))
 	for k, v := range src {
@@ -239,81 +447,4 @@ func snapshotOutputs(src map[string]map[string]any) map[string]map[string]any {
 		out[k] = cp
 	}
 	return out
-}
-
-// validateCanvasAdjacency rejects contradictory edge declarations before any
-// component factory can allocate resources. Upstream order selects the primary
-// data input; Downstream is derived from those validated edges so graph wiring,
-// terminal detection, branch checks, and Loop membership share one topology.
-func validateCanvasAdjacency(c *Canvas) (*Canvas, error) {
-	ids := make([]string, 0, len(c.Components))
-	for id := range c.Components {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	upstreamSets := make(map[string]map[string]bool, len(ids))
-	downstreamSets := make(map[string]map[string]bool, len(ids))
-	for _, id := range ids {
-		comp := c.Components[id]
-		// The registry trims names. Reject that implicit alias at the Canvas
-		// boundary so guards, native dispatch and factories see the same name.
-		if comp.Obj.ComponentName == "" || comp.Obj.ComponentName != strings.TrimSpace(comp.Obj.ComponentName) {
-			return nil, fmt.Errorf("canvas: component %q has empty component_name or surrounding whitespace", id)
-		}
-		upstreamSets[id] = make(map[string]bool, len(comp.Upstream))
-		downstreamSets[id] = make(map[string]bool, len(comp.Downstream))
-		for _, up := range comp.Upstream {
-			if up == id {
-				return nil, fmt.Errorf("canvas: self-edge on %q", id)
-			}
-			if _, ok := c.Components[up]; !ok {
-				return nil, fmt.Errorf("canvas: component %q has unknown upstream %q", id, up)
-			}
-			if upstreamSets[id][up] {
-				return nil, fmt.Errorf("canvas: duplicate upstream edge %q -> %q", up, id)
-			}
-			upstreamSets[id][up] = true
-		}
-		for _, down := range comp.Downstream {
-			if down == id {
-				return nil, fmt.Errorf("canvas: self-edge on %q", id)
-			}
-			if _, ok := c.Components[down]; !ok {
-				return nil, fmt.Errorf("canvas: component %q has unknown downstream %q", id, down)
-			}
-			if downstreamSets[id][down] {
-				return nil, fmt.Errorf("canvas: duplicate downstream edge %q -> %q", id, down)
-			}
-			downstreamSets[id][down] = true
-		}
-	}
-	for _, id := range ids {
-		comp := c.Components[id]
-		for _, up := range comp.Upstream {
-			if !downstreamSets[up][id] {
-				return nil, fmt.Errorf("canvas: edge %q -> %q is not reciprocal (missing downstream)", up, id)
-			}
-		}
-		for _, down := range comp.Downstream {
-			if !upstreamSets[down][id] {
-				return nil, fmt.Errorf("canvas: edge %q -> %q is not reciprocal (missing upstream)", id, down)
-			}
-		}
-	}
-	validated := *c
-	validated.Components = make(map[string]CanvasComponent, len(ids))
-	for _, id := range ids {
-		comp := c.Components[id]
-		comp.Upstream = append([]string(nil), comp.Upstream...)
-		comp.Downstream = nil
-		validated.Components[id] = comp
-	}
-	for _, id := range ids {
-		for _, up := range validated.Components[id].Upstream {
-			parent := validated.Components[up]
-			parent.Downstream = append(parent.Downstream, id)
-			validated.Components[up] = parent
-		}
-	}
-	return &validated, nil
 }

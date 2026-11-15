@@ -23,28 +23,19 @@ import (
 
 // GetLocalIP returns the first non-loopback local IP address of the host
 func GetLocalIP() (string, error) {
-	addrs, err := net.InterfaceAddrs()
+	addresses, err := net.InterfaceAddrs()
 	if err != nil {
 		return "", err
 	}
 
-	for _, addr := range addrs {
+	for _, addr := range addresses {
 		// Check the address type and skip loopback addresses
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String(), nil
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ipNet.IP.To4() != nil {
+				return ipNet.IP.String(), nil
 			}
 		}
 	}
 
-	return "", errors.New("no non-loopback IPv4 address")
-}
-
-// GetLocalIPWithFallback returns the local IP address with a fallback value
-func GetLocalIPWithFallback(fallback string) string {
-	ip, err := GetLocalIP()
-	if err != nil {
-		return fallback
-	}
-	return ip
+	return "", errors.New("no ip address")
 }

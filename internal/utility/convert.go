@@ -25,6 +25,14 @@ import (
 	"time"
 )
 
+// JSONFloat64 is a float64 that always marshals with decimal point
+type JSONFloat64 float64
+
+func (f JSONFloat64) MarshalJSON() ([]byte, error) {
+	// Always output with decimal point (e.g., 0.0 instead of 0)
+	return []byte(fmt.Sprintf("%.1f", float64(f))), nil
+}
+
 // GetProjectBaseDirectory returns the current working directory.
 // If an error occurs while getting the current directory, it returns ".".
 //
@@ -34,7 +42,7 @@ import (
 // Example:
 //
 //	baseDir := utility.GetProjectBaseDirectory()
-//	configPath := filepath.Join(baseDir, "conf", "config.json")
+//	configPath := filepath.Join(baseDir, "configs", "config.json")
 func GetProjectBaseDirectory() string {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -91,15 +99,7 @@ func FormatTime(t time.Time) string {
 	return t.Format("2006-01-02 15:04:05")
 }
 
-// JSONFloat64 always marshals with a decimal point (e.g. 0.0 instead of 0).
-type JSONFloat64 float64
-
-// MarshalJSON implements json.Marshaler.
-func (f JSONFloat64) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("%.1f", float64(f))), nil
-}
-
-// FormatTimeToString formats a *time.Time with the given layout, or returns nil.
+// FormatTimeToString converts time.Time to string in specified format
 func FormatTimeToString(t *time.Time, format string) interface{} {
 	if t == nil {
 		return nil
@@ -107,12 +107,12 @@ func FormatTimeToString(t *time.Time, format string) interface{} {
 	return t.Format(format)
 }
 
-// ConvertHexToPositionIntArray converts an underscore-separated hex string into
-// a [][]int grouped by 5 elements (used for chunk position_int).
+// ConvertHexToPositionIntArray converts hex string to position int array (grouped by 5)
 func ConvertHexToPositionIntArray(hexStr string) interface{} {
 	if hexStr == "" {
 		return nil
 	}
+
 	parts := strings.Split(hexStr, "_")
 	var intVals []int
 	for _, part := range parts {
@@ -125,9 +125,11 @@ func ConvertHexToPositionIntArray(hexStr string) interface{} {
 		}
 		intVals = append(intVals, int(val))
 	}
+
 	if len(intVals) == 0 {
 		return nil
 	}
+
 	// Group by 5 elements
 	var result [][]int
 	for i := 0; i < len(intVals); i += 5 {
@@ -137,97 +139,8 @@ func ConvertHexToPositionIntArray(hexStr string) interface{} {
 		}
 		result = append(result, intVals[i:end])
 	}
+
 	return result
-}
-
-// ConvertHexToIntArray converts an underscore-separated hex string into an []int.
-func ConvertHexToIntArray(hexStr string) interface{} {
-	if hexStr == "" {
-		return nil
-	}
-	parts := strings.Split(hexStr, "_")
-	var result []int
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		val, err := strconv.ParseInt(part, 16, 64)
-		if err != nil {
-			continue
-		}
-		result = append(result, int(val))
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	return result
-}
-
-// IsEmpty reports whether v is nil, an empty slice or an empty string.
-func IsEmpty(v interface{}) bool {
-	if v == nil {
-		return true
-	}
-	if arr, ok := v.([]interface{}); ok {
-		return len(arr) == 0
-	}
-	if arr, ok := v.([]string); ok {
-		return len(arr) == 0
-	}
-	if arr, ok := v.([]int); ok {
-		return len(arr) == 0
-	}
-	if strVal, ok := v.(string); ok && strVal == "" {
-		return true
-	}
-	return false
-}
-
-// IsNumericValue reports whether v is a numeric value or a numeric string.
-func IsNumericValue(v interface{}) bool {
-	if v == nil {
-		return false
-	}
-	switch value := v.(type) {
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
-		return true
-	case string:
-		_, err := strconv.ParseFloat(value, 64)
-		return err == nil
-	default:
-		return false
-	}
-}
-
-// SetFieldArray sets result[destKey] to v, or an empty slice when v is empty.
-func SetFieldArray(result map[string]interface{}, destKey string, v interface{}) {
-	if IsEmpty(v) {
-		result[destKey] = []interface{}{}
-	} else {
-		result[destKey] = v
-	}
-}
-
-// ToFloat64 best-effort converts a value to float64.
-func ToFloat64(val interface{}) (float64, bool) {
-	switch v := val.(type) {
-	case float64:
-		return v, true
-	case float32:
-		return float64(v), true
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case string:
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			return 0, false
-		}
-		return f, true
-	default:
-		return 0, false
-	}
 }
 
 // ConvertPositionIntArrayToHex converts position_int list (2D) to hex string
@@ -250,6 +163,31 @@ func ConvertPositionIntArrayToHex(list []interface{}) string {
 	return strings.Join(hexParts, "_")
 }
 
+// ConvertHexToIntArray converts hex string to int array (split by "_")
+func ConvertHexToIntArray(hexStr string) interface{} {
+	if hexStr == "" {
+		return nil
+	}
+
+	parts := strings.Split(hexStr, "_")
+	var result []int
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		val, err := strconv.ParseInt(part, 16, 64)
+		if err != nil {
+			continue
+		}
+		result = append(result, int(val))
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
 // ConvertIntArrayToHex converts int array to hex string
 // e.g. [1, 2] -> "00000001_00000002"
 func ConvertIntArrayToHex(list []interface{}) string {
@@ -264,6 +202,80 @@ func ConvertIntArrayToHex(list []interface{}) string {
 		}
 	}
 	return strings.Join(hexParts, "_")
+}
+
+// IsEmpty checks if value is empty (nil, empty array, or empty string)
+func IsEmpty(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	if arr, ok := v.([]interface{}); ok {
+		return len(arr) == 0
+	}
+	if arr, ok := v.([]string); ok {
+		return len(arr) == 0
+	}
+	if arr, ok := v.([]int); ok {
+		return len(arr) == 0
+	}
+	if strVal, ok := v.(string); ok && strVal == "" {
+		return true
+	}
+	return false
+}
+
+// IsNumericValue checks if a value is numeric (int, uint, float, or numeric string)
+func IsNumericValue(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	switch val := v.(type) {
+	case int, int8, int16, int32, int64:
+		return true
+	case uint, uint8, uint16, uint32, uint64:
+		return true
+	case float32, float64:
+		return true
+	case string:
+		_, err := strconv.ParseFloat(val, 64)
+		return err == nil
+	default:
+		return false
+	}
+}
+
+// SetFieldArray copies value to dest key, or sets empty array if value is empty
+func SetFieldArray(result map[string]interface{}, destKey string, v interface{}) {
+	if IsEmpty(v) {
+		result[destKey] = []interface{}{}
+	} else {
+		result[destKey] = v
+	}
+}
+
+// ToFloat64 converts various types to float64
+func ToFloat64(val interface{}) (float64, bool) {
+	switch v := val.(type) {
+	case json.Number:
+		f, err := v.Float64()
+		return f, err == nil
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case string:
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
 }
 
 // ConvertToStringSlice converts an interface{} to []string
@@ -334,11 +346,11 @@ func ConvertMapToJSONString(v interface{}) interface{} {
 	return v
 }
 
-// FloatToString formats a float like Python's str(), retaining a decimal point for integers.
-func FloatToString(value float64) string {
-	result := strconv.FormatFloat(value, 'f', -1, 64)
-	if !strings.Contains(result, ".") && !strings.Contains(result, "e") {
-		result += ".0"
+// FloatToString formats a float like Python's str() - adds ".0" if needed
+func FloatToString(f float64) string {
+	s := strconv.FormatFloat(f, 'f', -1, 64)
+	if !strings.Contains(s, ".") && !strings.Contains(s, "e") {
+		s = s + ".0"
 	}
-	return result
+	return s
 }

@@ -17,12 +17,14 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
-	"strings"
+	"os"
 
 	"github.com/gin-gonic/gin"
 
 	"multirag/internal/common"
+	"multirag/internal/engine"
 	"multirag/internal/service"
 )
 
@@ -30,17 +32,18 @@ import (
 type TenantHandler struct {
 	tenantService *service.TenantService
 	userService   *service.UserService
+	kbService     *service.KnowledgebaseService
 }
 
 // NewTenantHandler create tenant handler
-func NewTenantHandler(tenantService *service.TenantService, userService *service.UserService) *TenantHandler {
+func NewTenantHandler(tenantService *service.TenantService, userService *service.UserService, kbService *service.KnowledgebaseService) *TenantHandler {
 	return &TenantHandler{
 		tenantService: tenantService,
 		userService:   userService,
+		kbService:     kbService,
 	}
 }
 
-// GetModels lists the current tenant's default models.
 func (h *TenantHandler) GetModels(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
@@ -48,7 +51,7 @@ func (h *TenantHandler) GetModels(c *gin.Context) {
 		return
 	}
 
-	defaultModels, err := h.tenantService.ListTenantDefaultModelsWithContext(c.Request.Context(), user.ID)
+	defaultModels, err := h.tenantService.ListTenantDefaultModels(user.ID)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeExceptionError,
@@ -57,34 +60,48 @@ func (h *TenantHandler) GetModels(c *gin.Context) {
 		})
 		return
 	}
+
+	// Always return success with an array. The previous contract returned
+	// code=102 "No default models" for an empty list, which (a) tripped the
+	// global error toast in web/src/utils/next-request.ts:141 and (b) was
+	// inconsistent with the Python counterpart in
+	// api/apps/restful_apis/models_api.py:30 which returns
+	// get_result(data=[]) on the no-rows path. Frontend hooks (e.g.
+	// useFetchAllAddedModels) coerce `null` to `[]` already, so `[]` is
+	// strictly safer.
 	if defaultModels == nil {
 		defaultModels = []service.ModelItem{}
 	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"code":    common.CodeSuccess,
 		"message": "success",
-		"data":    gin.H{"models": defaultModels},
+		"data":    defaultModels,
 	})
 }
 
-// SetModelRequest is the payload used to select a tenant default model.
 type SetModelRequest struct {
-	ModelID       *int64 `json:"model_id"`
 	ModelProvider string `json:"model_provider"`
 	ModelInstance string `json:"model_instance"`
 	ModelName     string `json:"model_name"`
 	ModelType     string `json:"model_type" binding:"required"`
 }
 
-// SetModels updates one of the current tenant's default models.
 func (h *TenantHandler) SetModels(c *gin.Context) {
+	h.setDefaultModels(c, false)
+}
+
+func (h *TenantHandler) SetDefaultModels(c *gin.Context) {
+	h.setDefaultModels(c, true)
+}
+
+func (h *TenantHandler) setDefaultModels(c *gin.Context, wrapModels bool) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
 		return
 	}
 
+	// Parse request body (same as Python get_request_json())
 	var req SetModelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -95,22 +112,22 @@ func (h *TenantHandler) SetModels(c *gin.Context) {
 		return
 	}
 
-	var err error
-	if req.ModelID != nil {
-		if e := validateModelSelection(req.ModelID, req.ModelProvider, req.ModelInstance, req.ModelName); e != nil {
-			jsonError(c, common.CodeBadRequest, e.Error())
-			return
-		}
-		err = h.tenantService.SetTenantDefaultModelByID(c.Request.Context(), user.ID, req.ModelType, *req.ModelID)
-	} else {
-		if strings.TrimSpace(req.ModelProvider) == "" || strings.TrimSpace(req.ModelInstance) == "" || strings.TrimSpace(req.ModelName) == "" {
-			jsonError(c, common.CodeBadRequest, "model selection required")
-			return
-		}
-		err = h.tenantService.SetTenantDefaultModels(user.ID, req.ModelProvider, req.ModelInstance, req.ModelName, req.ModelType)
-	}
+	err := h.tenantService.SetTenantDefaultModels(user.ID, req.ModelProvider, req.ModelInstance, req.ModelName, req.ModelType)
 	if err != nil {
-		jsonError(c, common.CodeDataError, "default model unavailable")
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeExceptionError,
+			"message": err.Error(),
+			"data":    false,
+		})
+		return
+	}
+
+	if wrapModels {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeSuccess,
+			"message": "success",
+			"data":    map[string]interface{}{"models": []service.ModelItem{}},
+		})
 		return
 	}
 
@@ -118,6 +135,42 @@ func (h *TenantHandler) SetModels(c *gin.Context) {
 		"code":    common.CodeSuccess,
 		"message": "success",
 		"data":    nil,
+	})
+}
+
+// GetDefaultModels returns the tenant's default model selections. The
+// response wraps the model list under `data.models` to mirror the
+// Python `list_tenant_default_models` contract (api/apps/restful_apis/
+// models_api.py:84). The frontend hook `useFetchDefaultModels`
+// (web/src/hooks/use-llm-request.tsx:423) reads `data.data.models`.
+func (h *TenantHandler) GetDefaultModels(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	defaultModels, err := h.tenantService.ListTenantDefaultModels(user.ID)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeExceptionError,
+			"message": err.Error(),
+			"data":    false,
+		})
+		return
+	}
+
+	// Empty selection is a normal state for a freshly created tenant, not a
+	// data error. Match Python's `list_tenant_default_models` (which returns
+	// get_result(data=[])) and the frontend's expectation that `data.data.models`
+	// is always an array.
+	if defaultModels == nil {
+		defaultModels = []service.ModelItem{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"message": "success",
+		"data":    map[string]interface{}{"models": defaultModels},
 	})
 }
 
@@ -196,9 +249,9 @@ func (h *TenantHandler) TenantList(c *gin.Context) {
 	})
 }
 
-// CreateMetadataStore handles the create doc meta table request
-// @Summary Create Doc Meta Table
-// @Description Create the document metadata table for a tenant
+// CreateMetadataStore handles the create metadata store request
+// @Summary Create Metadata Store
+// @Description Create the metadata store for a tenant
 // @Tags tenants
 // @Accept json
 // @Produce json
@@ -215,7 +268,7 @@ func (h *TenantHandler) CreateMetadataStore(c *gin.Context) {
 	// Use user.ID as tenant ID (user IS the tenant in user mode)
 	tenantID := user.ID
 
-	code, err := h.tenantService.CreateMetadataStore(c.Request.Context(), tenantID)
+	code, err := h.tenantService.CreateMetadataStore(tenantID)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return
@@ -228,9 +281,9 @@ func (h *TenantHandler) CreateMetadataStore(c *gin.Context) {
 	})
 }
 
-// DeleteMetadataStore handles the delete doc meta table request
-// @Summary Delete Metadata In Doc Engine
-// @Description Delete the document metadata table for a tenant
+// DeleteMetadataStore handles the delete metadata store request
+// @Summary Delete Metadata Store
+// @Description Delete the metadata store for a tenant
 // @Tags tenants
 // @Accept json
 // @Produce json
@@ -247,7 +300,7 @@ func (h *TenantHandler) DeleteMetadataStore(c *gin.Context) {
 	// Use user.ID as tenant ID (user IS the tenant in user mode)
 	tenantID := user.ID
 
-	code, err := h.tenantService.DeleteMetadataStore(c.Request.Context(), tenantID)
+	code, err := h.tenantService.DeleteMetadataStore(tenantID)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return
@@ -260,12 +313,206 @@ func (h *TenantHandler) DeleteMetadataStore(c *gin.Context) {
 	})
 }
 
-// InsertMetadataFromFileRequest represents the request for inserting metadata from a file
+// CreateChunkTableRequest represents the request for creating a chunk table
+type CreateChunkTableRequest struct {
+	KBID       string `json:"kb_id" binding:"required"`
+	VectorSize int    `json:"vector_size" binding:"required"`
+}
+
+// CreateChunkStore handles the create chunk store request
+// @Summary Create Chunk Store
+// @Description Create the chunk store for a knowledge base
+// @Tags tenants
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body CreateChunkTableRequest true "create chunk store request"
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/tenant/chunk_store [post]
+func (h *TenantHandler) CreateChunkStore(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var req CreateChunkTableRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeDataError, err.Error())
+		return
+	}
+
+	// Check authorization - user must have access to this kb
+	if !h.kbService.Accessible(req.KBID, user.ID) {
+		jsonError(c, common.CodeAuthenticationError, "No authorization.")
+		return
+	}
+
+	serviceReq := &service.CreateDatasetTableRequest{
+		KBID:       req.KBID,
+		VectorSize: req.VectorSize,
+	}
+	result, code, err := h.tenantService.CreateChunkStore(serviceReq)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"message": "success",
+		"data":    result,
+	})
+}
+
+// DeleteChunkTableRequest represents the request for deleting a chunk table
+type DeleteChunkTableRequest struct {
+	KBID string `json:"kb_id" binding:"required"`
+}
+
+// DeleteChunkStore handles the delete chunk store request
+// @Summary Delete Chunk Store
+// @Description Delete the chunk store for a knowledge base
+// @Tags tenants
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body DeleteChunkTableRequest true "delete chunk store request"
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/tenant/chunk_store [delete]
+func (h *TenantHandler) DeleteChunkStore(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var req DeleteChunkTableRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeDataError, err.Error())
+		return
+	}
+
+	// Check authorization
+	if !h.kbService.Accessible(req.KBID, user.ID) {
+		jsonError(c, common.CodeAuthenticationError, "No authorization.")
+		return
+	}
+
+	code, err := h.tenantService.DeleteChunkStore(req.KBID)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"message": "success",
+		"data":    nil,
+	})
+}
+
+// InsertChunksFromFileRequest request for inserting chunks from file
+type InsertChunksFromFileRequest struct {
+	FilePath string `json:"file_path" binding:"required"`
+}
+
+// @Summary Insert chunks into dataset from JSON file
+// @Description Internal: Insert chunks into dataset table from a JSON file
+// @Tags tenants
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body InsertChunksFromFileRequest true "insert chunks request"
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/tenant/insert_chunks_from_file [post]
+func (h *TenantHandler) InsertChunksFromFile(c *gin.Context) {
+	_, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var req InsertChunksFromFileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	if req.FilePath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "file_path is required",
+		})
+		return
+	}
+
+	// Read the JSON file
+	data, err := os.ReadFile(req.FilePath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "failed to read file: " + err.Error(),
+		})
+		return
+	}
+
+	// Parse JSON - format: {"index_name"/"table_name": ..., "knowledgebase_id": ..., "chunks": [...]}
+	var debugFormat struct {
+		IndexName       string `json:"index_name"`
+		TableName       string `json:"table_name"`
+		KnowledgebaseID string `json:"knowledgebase_id"`
+		Chunks          []map[string]interface{} `json:"chunks"`
+	}
+
+	if err := json.Unmarshal(data, &debugFormat); err != nil || debugFormat.Chunks == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "invalid JSON format: expected {\"index_name\"/\"table_name\": ..., \"knowledgebase_id\": ..., \"chunks\": [...]}",
+		})
+		return
+	}
+
+	if len(debugFormat.Chunks) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "no chunks found in file",
+		})
+		return
+	}
+
+	// Support both index_name (ES) and table_name (Infinity) in JSON
+	indexName := debugFormat.IndexName
+	if indexName == "" {
+		indexName = debugFormat.TableName
+	}
+
+	// Get the document engine and insert
+	docEngine := engine.Get()
+	result, err := docEngine.InsertChunks(c.Request.Context(), debugFormat.Chunks, indexName, debugFormat.KnowledgebaseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to insert into dataset: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"data":    result,
+		"message": "success",
+	})
+}
+
+// InsertMetadataFromFileRequest request for inserting metadata from file
 type InsertMetadataFromFileRequest struct {
 	FilePath string `json:"file_path" binding:"required"`
 }
 
-// InsertMetadataFromFile handles inserting document metadata from a JSON file
 // @Summary Insert document metadata from JSON file
 // @Description Internal: Insert metadata into tenant's metadata table from a JSON file
 // @Tags tenants
@@ -284,20 +531,71 @@ func (h *TenantHandler) InsertMetadataFromFile(c *gin.Context) {
 
 	var req InsertMetadataFromFileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		jsonError(c, common.CodeDataError, err.Error())
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	if req.FilePath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "file_path is required",
+		})
+		return
+	}
+
+	// Read the JSON file
+	data, err := os.ReadFile(req.FilePath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "failed to read file: " + err.Error(),
+		})
+		return
+	}
+
+	// Parse JSON - format: {"chunks": [...]}
+	var inputFormat struct {
+		Chunks []map[string]interface{} `json:"chunks"`
+	}
+
+	if err := json.Unmarshal(data, &inputFormat); err != nil || inputFormat.Chunks == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "invalid JSON format: expected {\"chunks\": [...]}",
+		})
+		return
+	}
+
+	if len(inputFormat.Chunks) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "no chunks found in file",
+		})
 		return
 	}
 
 	// Use user.ID as tenant ID (user IS the tenant in user mode)
 	tenantID := user.ID
 
-	result, code, err := h.tenantService.InsertMetadataFromFile(c.Request.Context(), tenantID, req.FilePath)
+	// Get the document engine and insert
+	docEngine := engine.Get()
+	result, err := docEngine.InsertMetadata(c.Request.Context(), inputFormat.Chunks, tenantID)
 	if err != nil {
-		jsonError(c, code, err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to insert metadata: " + err.Error(),
+		})
 		return
 	}
 
-	jsonResponse(c, common.CodeSuccess, result, "success")
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"data":    result,
+		"message": "success",
+	})
 }
 
 // ListTenantMembers lists all non-owner members of a tenant.
@@ -319,7 +617,7 @@ func (h *TenantHandler) ListTenantMembers(c *gin.Context) {
 		return
 	}
 
-	members, code, err := h.tenantService.ListMembers(c.Request.Context(), user.ID, tenantID)
+	members, code, err := h.tenantService.ListMembers(user.ID, tenantID)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": code, "data": nil, "message": err.Error()})
 		return
@@ -349,12 +647,12 @@ func (h *TenantHandler) AddTenantMember(c *gin.Context) {
 	}
 
 	var req service.AddMemberRequest
-	if err := bindObjectJSON(c, &req); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "invalid request body: " + err.Error()})
 		return
 	}
 
-	resp, code, err := h.tenantService.AddMember(c.Request.Context(), user.ID, tenantID, &req)
+	resp, code, err := h.tenantService.AddMember(user.ID, tenantID, &req)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": code, "data": nil, "message": err.Error()})
 		return
@@ -386,12 +684,12 @@ func (h *TenantHandler) RemoveTenantMember(c *gin.Context) {
 	var body struct {
 		UserID string `json:"user_id"`
 	}
-	if err := bindObjectJSON(c, &body); err != nil || body.UserID == "" {
+	if err := c.ShouldBindJSON(&body); err != nil || body.UserID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "user_id is required"})
 		return
 	}
 
-	code, err := h.tenantService.RemoveMember(c.Request.Context(), user.ID, tenantID, body.UserID)
+	code, err := h.tenantService.RemoveMember(user.ID, tenantID, body.UserID)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": code, "data": nil, "message": err.Error()})
 		return
@@ -418,7 +716,7 @@ func (h *TenantHandler) AcceptTenantInvite(c *gin.Context) {
 		return
 	}
 
-	code, err := h.tenantService.AcceptInvite(c.Request.Context(), user.ID, tenantID)
+	code, err := h.tenantService.AcceptInvite(user.ID, tenantID)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": code, "data": nil, "message": err.Error()})
 		return

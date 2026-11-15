@@ -22,36 +22,36 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/engine/types"
 	"multirag/internal/entity"
+	"multirag/internal/entity/models"
+	"multirag/internal/tokenizer"
 	"multirag/internal/utility"
 	"strings"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 )
 
 // SkillSearchService handles business logic for skill search operations
 type SkillSearchService struct {
 	configDAO     *dao.SkillSearchConfigDAO
-	modelProvider *SkillModelProvider
+	modelProvider *ModelProviderService
 }
 
 // NewSkillSearchService creates a new SkillSearchService instance
 func NewSkillSearchService() *SkillSearchService {
 	return &SkillSearchService{
 		configDAO:     dao.NewSkillSearchConfigDAO(),
-		modelProvider: NewSkillModelProvider(),
+		modelProvider: NewModelProviderService(),
 	}
 }
 
 // SetModelProvider sets the model provider for embedding generation
-func (s *SkillSearchService) SetModelProvider(provider *SkillModelProvider) {
+func (s *SkillSearchService) SetModelProvider(provider *ModelProviderService) {
 	s.modelProvider = provider
 }
 
@@ -72,9 +72,6 @@ func (s *SkillSearchService) GetConfig(tenantID, spaceID, embdID string) (map[st
 		// Prioritize configs with non-empty embd_id (user-saved configs)
 		config, err = s.configDAO.GetLatestByTenantID(tenantID, spaceID)
 		if err != nil {
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, common.CodeOperatingError, err
-			}
 			// No config found, return default config
 			config = &entity.SkillSearchConfig{
 				TenantID:               tenantID,
@@ -120,12 +117,6 @@ type UpdateConfigRequest struct {
 // UpdateConfig updates the search configuration for a tenant
 func (s *SkillSearchService) UpdateConfig(req *UpdateConfigRequest) (map[string]interface{}, common.ErrorCode, error) {
 	req.SpaceID = normalizeSpaceID(req.SpaceID)
-	if req.FieldConfig == (entity.FieldConfig{}) {
-		req.FieldConfig = entity.DefaultFieldConfig()
-	}
-	if _, err := s.modelProvider.GetEmbeddingModel(req.TenantID, req.EmbdID); err != nil {
-		return nil, common.CodeDataError, err
-	}
 	// Validate vector_similarity_weight
 	if req.VectorSimilarityWeight < 0 || req.VectorSimilarityWeight > 1 {
 		return nil, common.CodeDataError, errors.New("vector_similarity_weight must be between 0 and 1")
@@ -137,22 +128,14 @@ func (s *SkillSearchService) UpdateConfig(req *UpdateConfigRequest) (map[string]
 	}
 
 	// Validate top_k
-	if req.TopK <= 0 || req.TopK > 100 {
+	if req.TopK <= 0 {
 		return nil, common.CodeDataError, errors.New("top_k must be positive")
 	}
 
-	for _, field := range []entity.FieldWeight{req.FieldConfig.Name, req.FieldConfig.Tags, req.FieldConfig.Description, req.FieldConfig.Content} {
-		if math.IsNaN(field.Weight) || math.IsInf(field.Weight, 0) || field.Weight < 0 || field.Weight > 10 {
-			return nil, common.CodeDataError, fmt.Errorf("invalid field weight")
-		}
-	}
 	// Get or create config for this tenant+space (regardless of embd_id)
 	// Each tenant+space should have only ONE config, switching embd_id updates the existing config
 	config, err := s.configDAO.GetLatestByTenantID(req.TenantID, req.SpaceID)
 	if err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, common.CodeOperatingError, err
-		}
 		// No config exists, create a new one
 		config, err = s.configDAO.CreateWithTenantSpace(req.TenantID, req.SpaceID, req.EmbdID)
 		if err != nil {
@@ -231,7 +214,7 @@ type SearchResponse struct {
 }
 
 // Search performs skill search with the configured strategy
-func (s *SkillSearchService) Search(ctx context.Context, req *SearchRequest, docEngine engine.SkillDocEngine) (*SearchResponse, common.ErrorCode, error) {
+func (s *SkillSearchService) Search(ctx context.Context, req *SearchRequest, docEngine engine.DocEngine) (*SearchResponse, common.ErrorCode, error) {
 	req.SpaceID = normalizeSpaceID(req.SpaceID)
 	if req.Page <= 0 {
 		req.Page = 1
@@ -240,14 +223,11 @@ func (s *SkillSearchService) Search(ctx context.Context, req *SearchRequest, doc
 		req.PageSize = 10
 	}
 
-	if req.PageSize > 100 || req.Page > 100000000 {
-		return nil, common.CodeDataError, fmt.Errorf("invalid pagination")
-	}
 	// Check if index exists before searching
 	indexName := getSkillIndexName(req.TenantID, req.SpaceID)
 	common.Debug("Searching skills", zap.String("indexName", indexName), zap.String("query", req.Query))
 
-	indexExists, err := docEngine.TableExists(ctx, indexName)
+	indexExists, err := docEngine.ChunkStoreExists(ctx, indexName, "skill")
 	if err != nil {
 		common.Error("Failed to check index existence", err)
 		return nil, common.CodeOperatingError, fmt.Errorf("failed to check index existence: %w", err)
@@ -265,21 +245,10 @@ func (s *SkillSearchService) Search(ctx context.Context, req *SearchRequest, doc
 		}, common.CodeSuccess, nil
 	}
 
-	if req.Query == "" {
-		result, err := docEngine.Search(ctx, &types.SearchRequest{IndexNames: []string{indexName}, Offset: (req.Page - 1) * req.PageSize, Limit: req.PageSize, OrderBy: buildOrderByExpr(req.SortBy, req.SortOrder, true)})
-		if err != nil {
-			return nil, common.CodeOperatingError, err
-		}
-		return &SearchResponse{Skills: s.convertChunksToResults(result.Chunks, 0), Total: result.Total, Query: "", SearchType: "keyword"}, common.CodeSuccess, nil
-	}
-
 	// Get config for search strategy
 	// Use GetLatestByTenantID to prioritize configs with non-empty embd_id
 	config, err := s.configDAO.GetLatestByTenantID(req.TenantID, req.SpaceID)
 	if err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, common.CodeOperatingError, err
-		}
 		// Use default config if not found
 		config = &entity.SkillSearchConfig{
 			SpaceID:                req.SpaceID,
@@ -317,6 +286,11 @@ func (s *SkillSearchService) Search(ctx context.Context, req *SearchRequest, doc
 		// Pure vector search (skip if query is empty)
 		searchType = "vector"
 		results, err = s.vectorSearch(ctx, docEngine, indexName, req.Query, config, req.TenantID)
+		if err != nil {
+			common.Warn("Vector search failed, falling back to keyword search", zap.Error(err))
+			searchType = "keyword"
+			results, err = s.keywordSearch(ctx, docEngine, indexName, req.Query, config, config.SimilarityThreshold, req.SortBy, req.SortOrder)
+		}
 	default:
 		// Hybrid search (fallback to keyword if query is empty)
 		if req.Query == "" {
@@ -353,9 +327,16 @@ func (s *SkillSearchService) Search(ctx context.Context, req *SearchRequest, doc
 }
 
 // keywordSearch performs pure keyword search using BM25
-func (s *SkillSearchService) keywordSearch(ctx context.Context, docEngine engine.SkillDocEngine, indexName, query string, config *entity.SkillSearchConfig, threshold float64, sortBy, sortOrder string) ([]entity.SkillSearchResult, error) {
+func (s *SkillSearchService) keywordSearch(ctx context.Context, docEngine engine.DocEngine, indexName, query string, config *entity.SkillSearchConfig, threshold float64, sortBy, sortOrder string) ([]entity.SkillSearchResult, error) {
 	// Build order_by for sorting
 	orderBy := buildOrderByExpr(sortBy, sortOrder, query == "")
+	if isElasticsearch(docEngine) && query != "" {
+		tokens, err := tokenizer.Tokenize(query)
+		if err != nil {
+			return nil, fmt.Errorf("failed to tokenize skill query: %w", err)
+		}
+		query = tokens
+	}
 
 	// Build MatchTextExpr for unified engine interface
 	// Note: MatchingText must be plain text, NOT ES query_string syntax.
@@ -397,7 +378,7 @@ func (s *SkillSearchService) keywordSearch(ctx context.Context, docEngine engine
 }
 
 // vectorSearch performs pure vector search
-func (s *SkillSearchService) vectorSearch(ctx context.Context, docEngine engine.SkillDocEngine, indexName, query string, config *entity.SkillSearchConfig, tenantID string) ([]entity.SkillSearchResult, error) {
+func (s *SkillSearchService) vectorSearch(ctx context.Context, docEngine engine.DocEngine, indexName, query string, config *entity.SkillSearchConfig, tenantID string) ([]entity.SkillSearchResult, error) {
 	// Get embedding for query
 	vector, err := s.getEmbedding(ctx, query, config.EmbdID, tenantID)
 	if err != nil {
@@ -409,18 +390,6 @@ func (s *SkillSearchService) vectorSearch(ctx context.Context, docEngine engine.
 	common.Debug("Vector search: successfully got embedding",
 		zap.String("embdID", config.EmbdID),
 		zap.Int("dimension", len(vector)))
-
-	// Analyze query for potential keyword filtering
-	matchExpr := &types.MatchTextExpr{
-		MatchingText: query,
-		Fields: []string{
-			"name^10",
-			"tags^5",
-			"description^3",
-			"content^1",
-		},
-		TopN: int(config.TopK),
-	}
 
 	// Build MatchDenseExpr for vector search
 	vectorColumnName := fmt.Sprintf("q_%d_vec", len(vector))
@@ -440,7 +409,7 @@ func (s *SkillSearchService) vectorSearch(ctx context.Context, docEngine engine.
 		IndexNames: []string{indexName},
 		Offset:     0,
 		Limit:      100,
-		MatchExprs: []interface{}{matchExpr, matchDense},
+		MatchExprs: []interface{}{matchDense},
 	}
 
 	searchResult, err := docEngine.Search(ctx, searchReq)
@@ -456,14 +425,30 @@ func (s *SkillSearchService) vectorSearch(ctx context.Context, docEngine engine.
 		zap.Int("totalChunks", len(searchResult.Chunks)),
 		zap.Int("filteredResults", len(results)))
 
+	// If no results, return error to trigger fallback
+	if len(results) == 0 {
+		common.Info("Vector search: no results found, will fallback to keyword search",
+			zap.String("indexName", indexName),
+			zap.String("query", query))
+		return nil, fmt.Errorf("vector search returned no results")
+	}
+
 	return results, nil
 }
 
 // hybridSearch performs hybrid search combining BM25 and vector search
-func (s *SkillSearchService) hybridSearch(ctx context.Context, docEngine engine.SkillDocEngine, indexName, query string, config *entity.SkillSearchConfig, tenantID string) ([]entity.SkillSearchResult, error) {
+func (s *SkillSearchService) hybridSearch(ctx context.Context, docEngine engine.DocEngine, indexName, query string, config *entity.SkillSearchConfig, tenantID string) ([]entity.SkillSearchResult, error) {
 	// Analyze query first: tokenize and extract keywords
+	matchText := query
+	if isElasticsearch(docEngine) {
+		tokens, err := tokenizer.Tokenize(query)
+		if err != nil {
+			return nil, fmt.Errorf("failed to tokenize skill query: %w", err)
+		}
+		matchText = tokens
+	}
 	matchExpr := &types.MatchTextExpr{
-		MatchingText: query,
+		MatchingText: matchText,
 		Fields: []string{
 			"name^10",
 			"tags^5",
@@ -480,7 +465,7 @@ func (s *SkillSearchService) hybridSearch(ctx context.Context, docEngine engine.
 			zap.String("embdID", config.EmbdID),
 			zap.Error(err))
 		// Fallback to keyword search with analyzed query
-		return nil, err
+		return s.executeKeywordSearch(ctx, docEngine, indexName, query, matchExpr, config)
 	}
 	common.Debug("Hybrid search: successfully got embedding",
 		zap.String("embdID", config.EmbdID),
@@ -522,7 +507,7 @@ func (s *SkillSearchService) hybridSearch(ctx context.Context, docEngine engine.
 		common.Warn("Hybrid search: search execution failed, falling back to keyword search",
 			zap.String("indexName", indexName),
 			zap.Error(err))
-		return nil, err
+		return s.executeKeywordSearch(ctx, docEngine, indexName, query, matchExpr, config)
 	}
 
 	results := s.convertChunksToResults(searchResult.Chunks, config.SimilarityThreshold)
@@ -530,11 +515,19 @@ func (s *SkillSearchService) hybridSearch(ctx context.Context, docEngine engine.
 		zap.Int("totalChunks", len(searchResult.Chunks)),
 		zap.Int("filteredResults", len(results)))
 
+	// If no results, fallback to keyword search
+	if len(results) == 0 {
+		common.Info("Hybrid search: no results found, falling back to keyword search",
+			zap.String("indexName", indexName),
+			zap.String("query", query))
+		return s.executeKeywordSearch(ctx, docEngine, indexName, query, matchExpr, config)
+	}
+
 	return results, nil
 }
 
 // executeKeywordSearch executes a keyword search (used for fallback)
-func (s *SkillSearchService) executeKeywordSearch(ctx context.Context, docEngine engine.SkillDocEngine, indexName, query string, matchExpr *types.MatchTextExpr, config *entity.SkillSearchConfig) ([]entity.SkillSearchResult, error) {
+func (s *SkillSearchService) executeKeywordSearch(ctx context.Context, docEngine engine.DocEngine, indexName, query string, matchExpr *types.MatchTextExpr, config *entity.SkillSearchConfig) ([]entity.SkillSearchResult, error) {
 	common.Debug("Executing fallback keyword search",
 		zap.String("indexName", indexName),
 		zap.String("query", query))
@@ -565,7 +558,6 @@ func (s *SkillSearchService) executeKeywordSearch(ctx context.Context, docEngine
 func (s *SkillSearchService) convertChunksToResults(chunks []map[string]interface{}, threshold float64) []entity.SkillSearchResult {
 	// Use a map to deduplicate by skill name, keeping the highest scored version
 	skillMap := make(map[string]entity.SkillSearchResult)
-	keys := []string{}
 
 	for _, chunk := range chunks {
 		// Get score
@@ -623,9 +615,9 @@ func (s *SkillSearchService) convertChunksToResults(chunks []map[string]interfac
 		}
 
 		// Use skill name as the deduplication key (skillID may contain version suffix)
-		skillKey := skillID
+		skillKey := name
 		if skillKey == "" {
-			skillKey = name
+			skillKey = skillID
 		}
 
 		// Extract create_time
@@ -653,18 +645,15 @@ func (s *SkillSearchService) convertChunksToResults(chunks []map[string]interfac
 		}
 
 		// Keep only the highest scored result for each skill
-		if _, exists := skillMap[skillKey]; !exists {
-			keys = append(keys, skillKey)
-		}
 		if existing, ok := skillMap[skillKey]; !ok || score > existing.Score {
 			skillMap[skillKey] = result
 		}
 	}
 
 	// Convert map to slice
-	results := make([]entity.SkillSearchResult, 0, len(keys))
-	for _, key := range keys {
-		results = append(results, skillMap[key])
+	var results []entity.SkillSearchResult
+	for _, result := range skillMap {
+		results = append(results, result)
 	}
 
 	// Sort by score descending
@@ -675,6 +664,9 @@ func (s *SkillSearchService) convertChunksToResults(chunks []map[string]interfac
 
 // getEmbedding generates embedding for text using the specified model
 func (s *SkillSearchService) getEmbedding(ctx context.Context, text, embdID, tenantID string) ([]float64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s.modelProvider == nil {
 		return nil, fmt.Errorf("model provider not set")
 	}
@@ -695,15 +687,21 @@ func (s *SkillSearchService) getEmbedding(ctx context.Context, text, embdID, ten
 	}
 	truncatedText := truncate(text, maxLen-10)
 
-	vectors, err := embeddingModel.Embed(ctx, []string{truncatedText}, true)
+	var response []models.EmbeddingData
+	apiConfig := &models.APIConfig{Context: ctx}
+	if embeddingModel.APIConfig != nil {
+		*apiConfig = *embeddingModel.APIConfig
+		apiConfig.Context = ctx
+	}
+	response, err = embeddingModel.ModelDriver.Embed(embeddingModel.ModelName, []string{truncatedText}, apiConfig, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode query: %w", err)
 	}
-	if len(vectors) == 0 {
+	if len(response) == 0 {
 		return nil, fmt.Errorf("embedding returned empty result")
 	}
 
-	return vectors[0].Embedding, nil
+	return response[0].Embedding, nil
 }
 
 // Helper functions

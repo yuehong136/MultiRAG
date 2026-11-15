@@ -29,5 +29,5 @@ type UserTenant struct {
 
 // TableName specify table name
 func (UserTenant) TableName() string {
-	return "t_ai_user_tenants"
+	return "user_tenant"
 }

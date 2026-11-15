@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -16,20 +16,18 @@ import (
 )
 
 func TestNVIDIAEmbeddingParametersAndRegionsHTTP(t *testing.T) {
-	for _, config := range []*EmbeddingConfig{nil, {}, {Query: true, Dimension: 2}} {
+	for _, config := range []*EmbeddingConfig{nil, {}, {Dimension: 2}} {
 		for _, region := range []*string{nil, stringPtr(""), stringPtr("office"), stringPtr("unknown")} {
 			t.Run(fmt.Sprint(config, region), func(t *testing.T) {
 				var calls atomic.Int32
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					calls.Add(1)
 					var body map[string]any
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 						t.Error(err)
 					}
 					inputType := "query"
-					if config != nil && !config.Query {
-						inputType = "passage"
-					}
+
 					path := "/default/v1/embeddings"
 					if region != nil && *region == "office" {
 						path = "/office/v1/embeddings"
@@ -51,11 +49,17 @@ func TestNVIDIAEmbeddingParametersAndRegionsHTTP(t *testing.T) {
 				}))
 				defer server.Close()
 				urls := map[string]string{"default": server.URL + "/default/v1/", "office": server.URL + "/office/v1/"}
-				driver := NewNVIDIAModel(urls, URLSuffix{Embedding: "embeddings"})
+				driver := NewNvidiaModel(urls, URLSuffix{Embedding: "embeddings"})
 				urls["default"], urls["office"] = "http://mutated.invalid", "http://mutated.invalid"
-				api := &APIConfig{APIKey: stringPtr(" fixture "), Region: region}
+				api := &APIConfig{ApiKey: stringPtr("fixture"), Region: region}
 				vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"first", "second"}, api, config))
-				if err != nil || !reflect.DeepEqual(vectors, [][]float64{{0, 1}, {1, 0}}) || calls.Load() != 1 || api.Context != nil || api.Region != region || *api.APIKey != " fixture " {
+				if region != nil && *region == "unknown" {
+					if err == nil || vectors != nil || calls.Load() != 0 {
+						t.Fatal("unknown region reached provider")
+					}
+					return
+				}
+				if err != nil || !reflect.DeepEqual(vectors, [][]float64{{0, 1}, {1, 0}}) || calls.Load() != 1 || api.Context != nil || api.Region != region || *api.ApiKey != "fixture" {
 					t.Fatal(vectors, err, calls.Load())
 				}
 			})
@@ -83,10 +87,10 @@ func TestNVIDIAEmbeddingRejectsMalformedHTTP(t *testing.T) {
 		`{"data":[{"index":0,"embedding":[0]},{"index":1,"embedding":[0]}]} {}`,
 	} {
 		t.Run(body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
-			driver := NewNVIDIAModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-			vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a", "b"}, &APIConfig{APIKey: stringPtr("fixture")}, nil))
+			driver := NewNvidiaModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
+			vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a", "b"}, &APIConfig{ApiKey: stringPtr("fixture")}, nil))
 			if err == nil || vectors != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(vectors, err)
 			}
@@ -95,26 +99,26 @@ func TestNVIDIAEmbeddingRejectsMalformedHTTP(t *testing.T) {
 }
 
 func TestNVIDIAEmbeddingPreflightAndDeadline(t *testing.T) {
-	driver := NewNVIDIAModel(map[string]string{"default": "http://fixture.invalid"}, URLSuffix{Embedding: "embeddings"})
+	driver := NewNvidiaModel(map[string]string{"default": "http://fixture.invalid"}, URLSuffix{Embedding: "embeddings"})
 	var calls int
-	driver.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) {
+	driver.baseModel.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
 		deadline, ok := r.Context().Deadline()
-		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 30*time.Second {
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > nonStreamCallTimeout {
 			t.Error("embedding request lacks its bounded 30s deadline")
 		}
 		return &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader("private-body")), Header: make(http.Header)}, nil
 	})
-	if vectors, err := embeddingVectorsForTest(driver.Embed(nil, nil, nil, &EmbeddingConfig{Dimension: -1})); err != nil || vectors == nil || len(vectors) != 0 || calls != 0 {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(nil, nil, &APIConfig{ApiKey: stringPtr("fixture")}, nil)); err != nil || vectors == nil || len(vectors) != 0 || calls != 0 {
 		t.Fatal(vectors, err, calls)
 	}
-	api := &APIConfig{APIKey: stringPtr("fixture")}
+	api := &APIConfig{ApiKey: stringPtr("fixture")}
 	for _, name := range []*string{nil, stringPtr(""), stringPtr(" ")} {
 		if vectors, err := embeddingVectorsForTest(driver.Embed(name, []string{"a"}, api, nil)); err == nil || vectors != nil {
 			t.Fatal("invalid name succeeded", vectors, err)
 		}
 	}
-	for _, invalid := range []*APIConfig{nil, {}, {APIKey: stringPtr("")}, {APIKey: stringPtr(" ")}} {
+	for _, invalid := range []*APIConfig{nil, {}, {ApiKey: stringPtr("")}, {ApiKey: stringPtr(" ")}} {
 		if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"a"}, invalid, nil)); err == nil || vectors != nil {
 			t.Fatal("missing key succeeded", vectors, err)
 		}
@@ -122,7 +126,7 @@ func TestNVIDIAEmbeddingPreflightAndDeadline(t *testing.T) {
 	if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"a"}, api, &EmbeddingConfig{Dimension: -1})); err == nil || vectors != nil || calls != 0 {
 		t.Fatal(vectors, err, calls)
 	}
-	for _, missing := range []*NVIDIAModel{NewNVIDIAModel(nil, URLSuffix{Embedding: "embeddings"}), NewNVIDIAModel(driver.BaseURL, URLSuffix{})} {
+	for _, missing := range []*NvidiaModel{NewNvidiaModel(nil, URLSuffix{Embedding: "embeddings"}), NewNvidiaModel(driver.baseModel.BaseURL, URLSuffix{})} {
 		if vectors, err := embeddingVectorsForTest(missing.Embed(stringPtr("embed"), []string{"a"}, api, nil)); err == nil || vectors != nil {
 			t.Fatal("missing endpoint succeeded", vectors, err)
 		}
@@ -134,19 +138,19 @@ func TestNVIDIAEmbeddingPreflightAndDeadline(t *testing.T) {
 
 func TestNVIDIAEmbeddingCancellationHTTP(t *testing.T) {
 	started := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
 		r.Body.Close()
 		close(started)
 		<-r.Context().Done()
 	}))
 	defer server.Close()
-	driver := NewNVIDIAModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
+	driver := NewNvidiaModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture"), Context: ctx}, nil))
+		vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"a"}, &APIConfig{ApiKey: stringPtr("fixture"), Context: ctx}, nil))
 		if vectors != nil {
 			result <- fmt.Errorf("cancelled call returned vectors")
 			return

@@ -1,331 +1,783 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package models
 
 import (
-	"bufio"
 	"bytes"
+	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 )
 
-// MinimaxModel implements Minimax text chat and reasoning streams with request cancellation.
+// MinimaxModel implements ModelDriver for Minimax
 type MinimaxModel struct {
-	BaseURL    map[string]string
-	URLSuffix  URLSuffix
-	httpClient *http.Client
+	baseModel BaseModel
 }
 
+// NewMinimaxModel creates a new Minimax model instance
 func NewMinimaxModel(baseURL map[string]string, urlSuffix URLSuffix) *MinimaxModel {
-	return &MinimaxModel{
-		BaseURL:    baseURL,
-		URLSuffix:  urlSuffix,
-		httpClient: &http.Client{Transport: openAIChatTransport},
+	if baseURL != nil {
+		copied := make(map[string]string, len(baseURL))
+		for region, value := range baseURL {
+			copied[region] = value
+		}
+		baseURL = copied
 	}
+	return &MinimaxModel{
+		baseModel: BaseModel{
+			BaseURL:    baseURL,
+			URLSuffix:  urlSuffix,
+			httpClient: NewDriverHTTPClient(),
+		},
+	}
+}
+
+func (m *MinimaxModel) NewInstance(baseURL map[string]string) ModelDriver {
+	return NewMinimaxModel(baseURL, m.baseModel.URLSuffix)
 }
 
 func (m *MinimaxModel) Name() string {
 	return "minimax"
 }
 
-func (m *MinimaxModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
-	return m.chat(modelName, messages, apiConfig, modelConfig)
+func validateMinimaxModelName(modelName string) (string, error) {
+	if strings.TrimSpace(modelName) == "" {
+		return "", fmt.Errorf("model name is required")
+	}
+	return strings.TrimSpace(modelName), nil
 }
 
-func minimaxChatBody(modelName string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
-	modelName = strings.TrimSpace(modelName)
-	if modelName == "" {
-		return nil, fmt.Errorf("minimax: model name is required")
+// ChatWithMessages sends multiple messages with roles and returns response
+func (m *MinimaxModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	if chatModelConfig != nil && chatModelConfig.Stream != nil && *chatModelConfig.Stream {
+		return nil, fmt.Errorf("stream must be false in ChatWithMessages")
 	}
-	if err := ValidateMessages(messages); err != nil {
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return nil, err
 	}
-	apiMessages := messages
+	apiKey := strings.TrimSpace(*apiConfig.ApiKey)
+	modelName, err := validateMinimaxModelName(modelName)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(modelName) == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("messages is empty")
+	}
 
-	// The entry point determines the response protocol, regardless of config.Stream.
-	body := map[string]interface{}{"model": modelName, "messages": apiMessages, "stream": stream, "temperature": 1}
-	if config == nil {
-		return body, nil
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
 	}
-	if config.MaxTokens != nil {
-		body["max_tokens"] = *config.MaxTokens
-	}
-	if config.Temperature != nil {
-		body["temperature"] = *config.Temperature
-	}
-	if config.TopP != nil {
-		body["top_p"] = *config.TopP
-	}
-	if config.DoSample != nil {
-		body["do_sample"] = *config.DoSample
-	}
-	if config.Stop != nil {
-		body["stop"] = *config.Stop
-	}
-	if config.Thinking != nil {
-		mode := "disabled"
-		if *config.Thinking {
-			mode = "adaptive"
-			body["reasoning_split"] = true
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(resolvedBaseURL, "/"), strings.TrimLeft(m.baseModel.URLSuffix.Chat, "/"))
+
+	// Convert messages to API format
+	apiMessages := make([]map[string]interface{}, len(messages))
+	for i, msg := range messages {
+		apiMessages[i] = map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
 		}
-		body["thinking"] = map[string]string{"type": mode}
 	}
-	return body, nil
-}
 
-func (m *MinimaxModel) requestChat(body map[string]interface{}, config *APIConfig) (*http.Response, error) {
-	if config == nil || config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "" {
-		return nil, fmt.Errorf("minimax: API key is required")
+	// Build request body
+	reqBody := map[string]interface{}{
+		"model":       modelName,
+		"messages":    apiMessages,
+		"stream":      false,
+		"temperature": 1,
 	}
-	if m.URLSuffix.Chat == "" {
-		return nil, fmt.Errorf("minimax: chat endpoint suffix is missing")
+
+	if chatModelConfig != nil {
+		if chatModelConfig.Stop != nil {
+			reqBody["stop"] = *chatModelConfig.Stop
+		}
+		if chatModelConfig.Temperature != nil {
+			reqBody["temperature"] = *chatModelConfig.Temperature
+		}
+
+		if chatModelConfig.MaxTokens != nil {
+			reqBody["max_tokens"] = *chatModelConfig.MaxTokens
+		}
+
+		if chatModelConfig.TopP != nil {
+			reqBody["top_p"] = *chatModelConfig.TopP
+		}
+
+		if chatModelConfig.DoSample != nil {
+			reqBody["do_sample"] = *chatModelConfig.DoSample
+		}
+
+		if chatModelConfig != nil && chatModelConfig.Thinking != nil {
+			if *chatModelConfig.Thinking {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "adaptive",
+				}
+				reqBody["reasoning_split"] = true
+			} else {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "disabled",
+				}
+			}
+		}
 	}
-	baseURL, err := resolveModelBaseURL(m.BaseURL, config.Region)
+
+	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	data, err := json.Marshal(body)
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("minimax: encode request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(requestContext(config), http.MethodPost, joinModelURL(baseURL, m.URLSuffix.Chat), bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("minimax: create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*config.APIKey))
+
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if body["stream"] == true {
-		req.Header.Set("Accept", "text/event-stream")
-	}
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("minimax: send request: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("minimax: request failed (HTTP %d)", resp.StatusCode)
-	}
-	return resp, nil
-}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 
-func (m *MinimaxModel) chat(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
-	apiConfig, cancelCall := modelCallConfig(apiConfig)
-	defer cancelCall()
-	body, err := minimaxChatBody(modelName, messages, config, false)
+	resp, err := m.baseModel.httpClient.Do(req)
 	if err != nil {
-		return nil, err
-	}
-	resp, err := m.requestChat(body, apiConfig)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	var result struct {
-		aliyunChatResponse
-		minimaxStatus
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if err == nil && len(body) > 20*1024*1024 {
+		err = fmt.Errorf("response exceeds limit")
 	}
-	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
-		return nil, fmt.Errorf("minimax: decode response: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-	if err := result.minimaxStatus.err(); err != nil {
-		return nil, err
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
 	}
-	if len(result.Error) != 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("minimax: provider returned an error")
+
+	// Parse response
+	var result map[string]interface{}
+
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope == nil {
+		return nil, fmt.Errorf("invalid provider JSON response")
 	}
-	if len(result.Choices) == 0 || result.Choices[0].Message.Content == nil || *result.Choices[0].Message.Content == "" {
-		return nil, fmt.Errorf("minimax: no text answer")
+	if raw, exists := envelope["error"]; exists && string(raw) != "null" {
+		return nil, fmt.Errorf("provider response error")
 	}
-	message := result.Choices[0].Message
-	// Reasoning is optional, including when the provider enables thinking by default.
-	if message.ReasoningContent != nil {
-		reasoning := strings.TrimPrefix(*message.ReasoningContent, "\n")
-		message.ReasoningContent = &reasoning
+	if raw, exists := envelope["base_resp"]; exists {
+		var status struct {
+			Code int `json:"status_code"`
+		}
+		if json.Unmarshal(raw, &status) != nil || status.Code != 0 {
+			return nil, fmt.Errorf("provider response error")
+		}
 	}
-	return &ChatResponse{Answer: message.Content, ReasoningContent: message.ReasoningContent}, nil
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	choices, ok := result["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return nil, fmt.Errorf("no choices in response")
+	}
+
+	firstChoice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no choices in response")
+	}
+
+	messageMap, ok := firstChoice["message"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no message in response")
+	}
+
+	content, ok := messageMap["content"].(string)
+	if !ok || strings.TrimSpace(content) == "" {
+		return nil, fmt.Errorf("no message in response")
+	}
+
+	var reasonContent string
+	if chatModelConfig != nil && chatModelConfig.Thinking != nil && *chatModelConfig.Thinking {
+		reasonContent, _ = messageMap["reasoning_content"].(string)
+		if reasonContent != "" && reasonContent[0] == '\n' {
+			reasonContent = reasonContent[1:]
+		}
+	}
+
+	chatResponse := &ChatResponse{
+		Answer:        &content,
+		ReasonContent: &reasonContent,
+	}
+
+	return chatResponse, nil
 }
 
+// ChatStreamlyWithSender sends messages and streams response via sender function (best performance, no channel)
 func (m *MinimaxModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
-	apiConfig, cancelCall := modelStreamConfig(apiConfig)
-	defer cancelCall()
 	if sender == nil {
-		return fmt.Errorf("stream sender is required")
+		return fmt.Errorf("sender is required")
 	}
-	body, err := minimaxChatBody(modelName, messages, modelConfig, true)
+	if modelConfig != nil && modelConfig.Stream != nil && !*modelConfig.Stream {
+		return fmt.Errorf("stream must be true in ChatStreamlyWithSender")
+	}
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return err
+	}
+	apiKey := strings.TrimSpace(*apiConfig.ApiKey)
+	modelName, err := validateMinimaxModelName(modelName)
 	if err != nil {
 		return err
 	}
-	resp, err := m.requestChat(body, apiConfig)
+	if len(messages) == 0 {
+		return fmt.Errorf("messages is empty")
+	}
+	if sender == nil {
+		return fmt.Errorf("sender is required")
+	}
+
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	receivedAnswer, finished := false, false
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
-			continue
-		}
-		if data == "[DONE]" {
-			if err := requestContext(apiConfig).Err(); err != nil {
-				return err
-			}
-			if !receivedAnswer {
-				return fmt.Errorf("minimax: stream returned no text answer")
-			}
-			return sender(&data, nil)
-		}
-		var event struct {
-			minimaxStatus
-			Choices []struct {
-				Delta struct {
-					Content          *string `json:"content"`
-					ReasoningContent *string `json:"reasoning_content"`
-				} `json:"delta"`
-				FinishReason *string `json:"finish_reason"`
-			} `json:"choices"`
-			Error json.RawMessage `json:"error"`
-		}
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return fmt.Errorf("minimax: decode stream: %w", err)
-		}
-		if err := event.minimaxStatus.err(); err != nil {
-			return err
-		}
-		if len(event.Error) != 0 && string(event.Error) != "null" {
-			return fmt.Errorf("minimax: provider stream error")
-		}
-		if len(event.Choices) == 0 {
-			continue
-		}
-		if reason := event.Choices[0].FinishReason; reason != nil && *reason != "" {
-			finished = true
-		}
-		delta := event.Choices[0].Delta
-		if delta.ReasoningContent != nil && *delta.ReasoningContent != "" {
-			if err := sender(nil, delta.ReasoningContent); err != nil {
-				return err
-			}
-		}
-		if delta.Content != nil && *delta.Content != "" {
-			if err := sender(delta.Content, nil); err != nil {
-				return err
-			}
-			receivedAnswer = true
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("minimax: read stream: %w", err)
-	}
-	// Native MiniMax may terminate after finish_reason without an OpenAI [DONE].
-	// Wait for EOF so a later provider/transport error still wins over completion.
-	if finished && receivedAnswer {
-		if err := requestContext(apiConfig).Err(); err != nil {
-			return err
-		}
-		done := "[DONE]"
-		return sender(&done, nil)
-	}
-	return io.ErrUnexpectedEOF
-}
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(resolvedBaseURL, "/"), strings.TrimLeft(m.baseModel.URLSuffix.Chat, "/"))
 
-func (m *MinimaxModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
-	return nil, fmt.Errorf("embedding is not implemented for %s", m.Name())
-}
+	// Convert messages to API format
+	apiMessages := make([]map[string]interface{}, len(messages))
+	for i, msg := range messages {
+		apiMessages[i] = map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
+		}
+	}
 
-func (m *MinimaxModel) ListModels(apiConfig *APIConfig) ([]string, error) {
-	apiConfig, cancelCall := modelCallConfig(apiConfig)
-	defer cancelCall()
-	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
-		return nil, fmt.Errorf("minimax: API key is required")
+	// Build request body with streaming enabled
+	reqBody := map[string]interface{}{
+		"model":       modelName,
+		"messages":    apiMessages,
+		"stream":      true,
+		"temperature": 1,
 	}
-	if m.URLSuffix.Models == "" {
-		return nil, fmt.Errorf("minimax: models endpoint suffix is missing")
+
+	if modelConfig != nil {
+		if modelConfig.MaxTokens != nil {
+			reqBody["max_tokens"] = *modelConfig.MaxTokens
+		}
+
+		if modelConfig.Temperature != nil {
+			reqBody["temperature"] = *modelConfig.Temperature
+		}
+
+		if modelConfig.TopP != nil {
+			reqBody["top_p"] = *modelConfig.TopP
+		}
+
+		if modelConfig.DoSample != nil {
+			reqBody["do_sample"] = *modelConfig.DoSample
+		}
+
+		if modelConfig.Stop != nil {
+			reqBody["stop"] = *modelConfig.Stop
+		}
+
+		if modelConfig.Thinking != nil {
+			if *modelConfig.Thinking {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "adaptive",
+				}
+				reqBody["reasoning_split"] = true
+			} else {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "disabled",
+				}
+			}
+		}
 	}
-	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
+
+	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to marshal request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(requestContext(apiConfig), http.MethodGet, joinModelURL(baseURL, m.URLSuffix.Models), http.NoBody)
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), streamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
-	resp, err := m.httpClient.Do(req)
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := m.baseModel.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("minimax: list models failed (HTTP %d)", resp.StatusCode)
+
+		return fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
 	}
-	var result struct {
-		minimaxStatus
-		Error json.RawMessage `json:"error"`
-		Data  *[]struct {
-			ID string `json:"id"`
-		} `json:"data"`
+
+	// SSE parsing: read line by line
+	sawTerminal := false
+	sawAnswer := false
+	done, err := ParseSSEStream[map[string]interface{}](resp.Body, func(event map[string]interface{}) error {
+		if event["error"] != nil {
+			return fmt.Errorf("provider stream error")
+		}
+		choices, ok := event["choices"].([]interface{})
+		if !ok || len(choices) == 0 {
+			if event["usage"] != nil {
+				return nil
+			}
+			return fmt.Errorf("invalid stream choices")
+		}
+
+		firstChoice, ok := choices[0].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid stream choice")
+		}
+
+		delta, ok := firstChoice["delta"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid stream delta")
+		}
+
+		content, ok := delta["content"].(string)
+		if ok && content != "" {
+			sawAnswer = true
+			if err := sender(&content, nil); err != nil {
+				return err
+			}
+		}
+
+		reasoningContent, ok := delta["reasoning_content"].(string)
+		if ok && reasoningContent != "" {
+			if err := sender(nil, &reasoningContent); err != nil {
+				return err
+			}
+		}
+
+		finishReason, ok := firstChoice["finish_reason"].(string)
+		if ok && finishReason != "" {
+			sawTerminal = true
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to scan response body: %w", err)
 	}
-	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
-		return nil, fmt.Errorf("minimax: decode model list: %w", err)
+	if !done && !sawTerminal {
+		return fmt.Errorf("minimax: stream ended before [DONE] or finish_reason: %w", io.ErrUnexpectedEOF)
 	}
-	if err := result.minimaxStatus.err(); err != nil {
+
+	if !sawAnswer {
+		return fmt.Errorf("stream returned no answer")
+	}
+	if err := apiConfig.RequestContext().Err(); err != nil {
+		return err
+	}
+	// Send [DONE] marker for OpenAI compatibility
+	endOfStream := "[DONE]"
+	return sender(&endOfStream, nil)
+}
+
+// Embed embeds a list of texts into embeddings
+func (m *MinimaxModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *MinimaxModel) ListModels(apiConfig *APIConfig) ([]ListModelResponse, error) {
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return nil, err
 	}
-	if len(result.Error) != 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("minimax: provider returned an error")
+	apiKey := strings.TrimSpace(*apiConfig.ApiKey)
+
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
 	}
-	if result.Data == nil {
-		return nil, fmt.Errorf("minimax: missing model list")
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(resolvedBaseURL, "/"), strings.TrimLeft(m.baseModel.URLSuffix.Models, "/"))
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	names := make([]string, 0, len(*result.Data))
-	for _, model := range *result.Data {
-		if strings.TrimSpace(model.ID) == "" {
-			return nil, fmt.Errorf("minimax: missing model ID")
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := m.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if err == nil && len(body) > 20*1024*1024 {
+		err = fmt.Errorf("response exceeds limit")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
+	}
+
+	// Parse response
+
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil || envelope == nil {
+		return nil, fmt.Errorf("invalid models response")
+	}
+	if raw, ok := envelope["error"]; ok && string(raw) != "null" {
+		return nil, fmt.Errorf("provider models error")
+	}
+	var modelRows []map[string]json.RawMessage
+	if json.Unmarshal(envelope["data"], &modelRows) != nil || modelRows == nil {
+		return nil, fmt.Errorf("invalid models data")
+	}
+	for _, row := range modelRows {
+		var id string
+		if json.Unmarshal(row["id"], &id) != nil || strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("invalid model id")
 		}
-		names = append(names, strings.TrimSpace(model.ID))
 	}
-	return names, nil
+	var modelList ModelList
+	if err = json.Unmarshal(body, &modelList); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	if modelList.Models == nil {
+		return nil, fmt.Errorf("invalid models list format")
+	}
+	models := ParseListModel(modelList)
+	if len(models) == 0 {
+		return nil, fmt.Errorf("invalid models list format")
+	}
+	return models, nil
 }
 
 func (m *MinimaxModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("balance query is not implemented for %s", m.Name())
+	return nil, fmt.Errorf("%s, no such method", m.Name())
 }
 
 func (m *MinimaxModel) CheckConnection(apiConfig *APIConfig) error {
-	names, err := m.ListModels(apiConfig)
+	_, err := m.ListModels(apiConfig)
+	return err
+}
+
+// Rerank calculates similarity scores between query and documents
+func (m *MinimaxModel) Rerank(modelName *string, query string, documents []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return nil, fmt.Errorf("%s, Rerank not implemented", m.Name())
+}
+
+// TranscribeAudio transcribe audio
+func (m *MinimaxModel) TranscribeAudio(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig) (*ASRResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
+}
+
+func (m *MinimaxModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", m.Name())
+}
+
+// AudioSpeech convert text to audio
+func (m *MinimaxModel) AudioSpeech(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig) (*TTSResponse, error) {
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+	if audioContent == nil || *audioContent == "" {
+		return nil, fmt.Errorf("text content is empty")
+	}
+
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(resolvedBaseURL, "/"), strings.TrimLeft(m.baseModel.URLSuffix.TTS, "/"))
+
+	reqBody := map[string]interface{}{
+		"model": modelName,
+		"text":  audioContent,
+	}
+	if ttsConfig != nil && ttsConfig.Params != nil {
+		for key, value := range ttsConfig.Params {
+			reqBody[key] = value
+		}
+	}
+	if ttsConfig != nil && ttsConfig.Format != "" {
+		reqBody["audio_setting"] = map[string]interface{}{
+			"format": ttsConfig.Format,
+		}
+	}
+	reqBody["stream"] = false
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), longOpCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", strings.TrimSpace(*apiConfig.ApiKey)))
+
+	resp, err := m.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if err == nil && len(body) > 20*1024*1024 {
+		err = fmt.Errorf("response exceeds limit")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		BaseResp struct {
+			StatusCode int    `json:"status_code"`
+			StatusMsg  string `json:"status_msg"`
+		} `json:"base_resp"`
+		Data struct {
+			Audio  string `json:"audio"` // HEX
+			Status *int   `json:"status"`
+		} `json:"data"`
+	}
+
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope == nil {
+		return nil, fmt.Errorf("invalid provider JSON response")
+	}
+	if raw, exists := envelope["error"]; exists && string(raw) != "null" {
+		return nil, fmt.Errorf("provider response error")
+	}
+	var status struct {
+		Code *int `json:"status_code"`
+	}
+	if json.Unmarshal(envelope["base_resp"], &status) != nil || status.Code == nil || *status.Code != 0 {
+		return nil, fmt.Errorf("provider response business success is required")
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if result.BaseResp.StatusCode != 0 {
+		return nil, fmt.Errorf("MiniMax TTS returned error: %d - %s", result.BaseResp.StatusCode, result.BaseResp.StatusMsg)
+	}
+
+	if result.Data.Status == nil || *result.Data.Status != 2 {
+		return nil, fmt.Errorf("incomplete speech response")
+	}
+	// format HEX
+	audioBytes, err := hex.DecodeString(result.Data.Audio)
+	if err != nil || len(audioBytes) == 0 {
+		return nil, fmt.Errorf("invalid speech audio")
+	}
+
+	return &TTSResponse{
+		Audio: audioBytes,
+	}, nil
+}
+
+func (m *MinimaxModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	if sender == nil {
+		return fmt.Errorf("sender is required")
+	}
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return fmt.Errorf("model name is required")
+	}
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return err
+	}
+	if audioContent == nil || *audioContent == "" {
+		return fmt.Errorf("text content is empty")
+	}
+
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
 		return err
 	}
-	if len(names) == 0 {
-		return fmt.Errorf("minimax: empty model list")
+	baseURL := strings.TrimSuffix(resolvedBaseURL, "/")
+	if baseURL == "" {
+		baseURL = strings.TrimSuffix(resolvedBaseURL, "/")
 	}
-	return nil
-}
-
-func (m *MinimaxModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
-	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
-}
-
-// MiniMax reports API failures inside successful HTTP responses as well.
-// Preserve the numeric code without exposing provider messages or request data.
-type minimaxStatus struct {
-	BaseResponse *struct {
-		StatusCode int `json:"status_code"`
-	} `json:"base_resp"`
-}
-
-func (s minimaxStatus) err() error {
-	if s.BaseResponse != nil && s.BaseResponse.StatusCode != 0 {
-		return fmt.Errorf("minimax: provider error (status_code %d)", s.BaseResponse.StatusCode)
+	suffix := strings.TrimPrefix(m.baseModel.URLSuffix.TTS, "/")
+	if suffix == "" {
+		suffix = "v1/t2a_v2"
 	}
-	return nil
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(baseURL, "/"), strings.TrimLeft(suffix, "/"))
+
+	reqBody := map[string]interface{}{
+		"model": modelName,
+		"text":  audioContent,
+	}
+	if ttsConfig != nil && ttsConfig.Params != nil {
+		for key, value := range ttsConfig.Params {
+			reqBody[key] = value
+		}
+	}
+	reqBody["stream"] = false
+
+	if ttsConfig != nil && ttsConfig.Format != "" {
+		reqBody["audio_setting"] = map[string]interface{}{
+			"format": ttsConfig.Format,
+		}
+	}
+
+	reqBody["stream"] = true
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), streamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", strings.TrimSpace(*apiConfig.ApiKey)))
+
+	resp, err := m.baseModel.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+
+		return fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
+	}
+
+	type minimaxTTSEvent struct {
+		Data struct {
+			Audio  *string `json:"audio"`
+			Status *int    `json:"status"`
+		} `json:"data"`
+		BaseResp struct {
+			StatusCode *int `json:"status_code"`
+		} `json:"base_resp"`
+		Error json.RawMessage `json:"error"`
+	}
+	complete := false
+	var delivered []byte
+	if _, err := ParseSSEStream[minimaxTTSEvent](resp.Body, func(event minimaxTTSEvent) error {
+		if err := apiConfig.RequestContext().Err(); err != nil {
+			return err
+		}
+		if complete || event.Data.Audio == nil || event.Data.Status == nil || event.BaseResp.StatusCode == nil || *event.BaseResp.StatusCode != 0 || (len(event.Error) > 0 && string(event.Error) != "null") {
+			return fmt.Errorf("invalid speech stream response")
+		}
+		status := *event.Data.Status
+		if status != 1 && status != 2 {
+			return fmt.Errorf("invalid speech stream status")
+		}
+		audio, err := hex.DecodeString(*event.Data.Audio)
+		if err != nil {
+			return fmt.Errorf("invalid speech HEX")
+		}
+		if !utf8.Valid(audio) {
+			return fmt.Errorf("binary speech cannot be represented by the text stream sender")
+		}
+		if status == 2 {
+			complete = true
+			if len(delivered) > 0 {
+				if !bytes.Equal(delivered, audio) {
+					return fmt.Errorf("inconsistent final speech audio")
+				}
+				return nil
+			}
+		}
+		if len(audio) == 0 {
+			return fmt.Errorf("empty speech stream audio")
+		}
+		if len(delivered)+len(audio) > 20*1024*1024 {
+			return fmt.Errorf("speech stream exceeds 20 MiB")
+		}
+		chunk := string(audio)
+		if err := sender(&chunk, nil); err != nil {
+			return err
+		}
+		delivered = append(delivered, audio...)
+		return apiConfig.RequestContext().Err()
+	}); err != nil {
+		return err
+	}
+	if err := apiConfig.RequestContext().Err(); err != nil {
+		return err
+	}
+	if !complete || len(delivered) == 0 {
+		return fmt.Errorf("incomplete speech stream")
+	}
+	done := "[DONE]"
+	return sender(&done, nil)
+}
+
+// OCRFile OCR file
+func (m *MinimaxModel) OCRFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, ocrConfig *OCRConfig) (*OCRFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
+}
+
+// ParseFile parse file
+func (m *MinimaxModel) ParseFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, parseFileConfig *ParseFileConfig) (*ParseFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
+}
+
+func (m *MinimaxModel) ListTasks(apiConfig *APIConfig) ([]ListTaskStatus, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
+}
+
+func (m *MinimaxModel) ShowTask(taskID string, apiConfig *APIConfig) (*TaskResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
 }

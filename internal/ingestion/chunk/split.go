@@ -29,33 +29,41 @@ type SplitOperator struct {
 }
 
 func NewSplitOperator(config map[string]interface{}) (*SplitOperator, error) {
-	var cfg struct {
-		Strategy string `json:"strategy"`
-		Params   struct {
-			Boundaries     []string `json:"boundaries"`
-			KeepSeparators bool     `json:"keep_separators"`
-		} `json:"params"`
-	}
-	if err := decodeConfig(config, &cfg); err != nil {
-		return nil, err
-	}
-	if cfg.Strategy == "" {
-		cfg.Strategy = "sentence"
-	}
-	switch cfg.Strategy {
-	case "sentence", "char", "paragraph":
-	default:
-		return nil, fmt.Errorf("unsupported split strategy %q", cfg.Strategy)
-	}
-	if len(cfg.Params.Boundaries) == 0 {
-		cfg.Params.Boundaries = []string{"。", "！", "？", "\n"}
-	}
-	for _, b := range cfg.Params.Boundaries {
-		if b == "" {
-			return nil, fmt.Errorf("empty split boundary")
+	op := &SplitOperator{strategy: "sentence", boundaries: []string{"。", "！", "？", "\n"}}
+
+	if v, ok := config["strategy"]; ok {
+		if s, ok := v.(string); ok {
+			if s != "sentence" && s != "char" && s != "paragraph" {
+				return nil, fmt.Errorf("unsupported split strategy %q", s)
+			}
+			op.strategy = s
 		}
 	}
-	return &SplitOperator{cfg.Strategy, cfg.Params.Boundaries, cfg.Params.KeepSeparators}, nil
+
+	if params, ok := config["params"].(map[string]interface{}); ok {
+		if b, ok := params["boundaries"]; ok {
+			if boundStrs, ok := b.([]interface{}); ok {
+				op.boundaries = nil
+				for _, bs := range boundStrs {
+					if s, ok := bs.(string); ok {
+						if s == "" {
+							return nil, fmt.Errorf("empty split boundary")
+						}
+						op.boundaries = append(op.boundaries, s)
+					} else {
+						return nil, fmt.Errorf("split boundary must be a string")
+					}
+				}
+			}
+		}
+		if ks, ok := params["keep_separators"]; ok {
+			if b, ok := ks.(bool); ok {
+				op.keepSeparators = b
+			}
+		}
+	}
+
+	return op, nil
 }
 
 func (o *SplitOperator) Prepare(ctx *ChunkContext) error {
@@ -76,6 +84,11 @@ func (o *SplitOperator) Execute(ctx *ChunkContext) error {
 		ctx.SplitChunks = o.splitSentences(text)
 	}
 
+	for i := range ctx.SplitChunks {
+		ctx.SplitChunks[i].Index = i
+		ctx.SplitChunks[i].Size = utf8.RuneCountInString(ctx.SplitChunks[i].Content)
+	}
+	ctx.ResultChunks = nil
 	return nil
 }
 
@@ -97,6 +110,7 @@ func (o *SplitOperator) String() string {
 
 // splitSentences splits text at multi-rune boundaries, optionally keeping separators.
 func (o *SplitOperator) splitSentences(text string) []ChunkData {
+
 	var chunks []ChunkData
 	var buf strings.Builder
 	i := 0
@@ -154,7 +168,7 @@ func (o *SplitOperator) splitByChar(text string) []ChunkData {
 		chunks = append(chunks, ChunkData{
 			Content:  string(r),
 			Index:    len(chunks),
-			Metadata: map[string]interface{}{"language": DetectLanguage(string(r))},
+			Metadata: map[string]interface{}{"language": DetectLanguage(text)},
 		})
 		text = text[size:]
 	}
@@ -164,14 +178,14 @@ func (o *SplitOperator) splitByChar(text string) []ChunkData {
 func (o *SplitOperator) splitByParagraph(text string) []ChunkData {
 	paragraphs := strings.Split(text, "\n")
 	chunks := make([]ChunkData, 0, len(paragraphs))
-	for _, p := range paragraphs {
+	for i, p := range paragraphs {
 		trimmed := strings.TrimSpace(p)
 		if trimmed == "" {
 			continue
 		}
 		chunks = append(chunks, ChunkData{
 			Content:  trimmed,
-			Index:    len(chunks),
+			Index:    i,
 			Metadata: map[string]interface{}{"language": DetectLanguage(trimmed)},
 		})
 	}

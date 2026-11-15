@@ -1,209 +1,306 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package models
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"maps"
 	"mime/multipart"
 	"net/http"
-	"slices"
+	"sort"
 	"strings"
 )
 
-// MinerULocalModel submits document bytes to a tenant's local MinerU service.
 type MinerULocalModel struct {
-	*DummyModel
-	httpClient *http.Client
+	baseModel BaseModel
 }
 
-func NewMinerULocalModel(urls map[string]string, suffix URLSuffix) *MinerULocalModel {
-	return &MinerULocalModel{NewDummyModel(maps.Clone(urls), suffix), &http.Client{Transport: providerModelTransport}}
-}
-
-func (m *MinerULocalModel) Name() string { return "mineru_local" }
-
-func (m *MinerULocalModel) request(method, suffix string, api *APIConfig, body io.Reader, contentType string, result any) (int, error) {
-	if suffix == "" {
-		return 0, fmt.Errorf("local MinerU endpoint is missing")
-	}
-	base, err := resolveModelBaseURL(m.BaseURL, api.Region)
-	if err != nil {
-		return 0, err
-	}
-	req, err := http.NewRequestWithContext(requestContext(api), method, joinModelURL(base, suffix), body)
-	if err != nil {
-		return 0, fmt.Errorf("invalid local MinerU endpoint")
-	}
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	if api.APIKey != nil && strings.TrimSpace(*api.APIKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*api.APIKey))
-	}
-	client := *m.httpClient
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := client.Do(req)
-	if err != nil {
-		if err := requestContext(api).Err(); err != nil {
-			return 0, err
+func NewMinerLocalUModel(baseURL map[string]string, urlSuffix URLSuffix) *MinerULocalModel {
+	if baseURL != nil {
+		copied := make(map[string]string, len(baseURL))
+		for region, value := range baseURL {
+			copied[region] = value
 		}
-		return 0, fmt.Errorf("local MinerU request failed")
+		baseURL = copied
+	}
+	return &MinerULocalModel{
+		baseModel: BaseModel{
+			BaseURL:          baseURL,
+			URLSuffix:        urlSuffix,
+			AllowEmptyAPIKey: true,
+			httpClient:       NewDriverHTTPClient(),
+		},
+	}
+}
+
+func (m *MinerULocalModel) NewInstance(baseURL map[string]string) ModelDriver {
+	return NewMinerLocalUModel(baseURL, m.baseModel.URLSuffix)
+}
+
+func (m *MinerULocalModel) Name() string {
+	return "mineru"
+}
+
+func (m *MinerULocalModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) Rerank(modelName *string, query string, documents []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) TranscribeAudio(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig) (*ASRResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) AudioSpeech(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig) (*TTSResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) OCRFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, ocrConfig *OCRConfig) (*OCRFileResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) ListModels(apiConfig *APIConfig) ([]ListModelResponse, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) CheckConnection(apiConfig *APIConfig) error {
+	return fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) ParseFile(modelName *string, content []byte, documentURL *string, apiConfig *APIConfig, parseFileConfig *ParseFileConfig) (*ParseFileResponse, error) {
+	if documentURL != nil && strings.TrimSpace(*documentURL) != "" {
+		return nil, fmt.Errorf("local MinerU requires uploaded file content")
+	}
+
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
+	if len(content) == 0 {
+		return nil, fmt.Errorf("local MinerU API requires file content byte array, but content is empty")
+	}
+
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	apiURL := fmt.Sprintf("%s/%s", resolvedBaseURL, m.baseModel.URLSuffix.DocumentParse)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	// Get file
+	part, err := writer.CreateFormFile("files", "upload_document.pdf")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create multipart file field: %w", err)
+	}
+	if _, err = part.Write(content); err != nil {
+		return nil, fmt.Errorf("failed to write file content: %w", err)
+	}
+
+	if modelName != nil && *modelName != "" {
+		_ = writer.WriteField("backend", *modelName)
+	} else {
+		_ = writer.WriteField("backend", "pipeline")
+	}
+
+	if err = writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), longOpCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	if auth := BearerAuth(apiConfig); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
+	resp, err := m.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		return 0, fmt.Errorf("local MinerU request failed (HTTP %d)", resp.StatusCode)
-	}
-	if err := decodeBoundedModelJSON(resp.Body, result); err != nil {
-		return 0, fmt.Errorf("invalid local MinerU response")
-	}
-	return resp.StatusCode, requestContext(api).Err()
-}
 
-type mineruLocalResponse struct {
-	TaskID string `json:"task_id"`
-	Data   *struct {
-		TaskID string `json:"task_id"`
-	} `json:"data"`
-	Status  string                     `json:"status"`
-	Code    json.RawMessage            `json:"code"`
-	Error   json.RawMessage            `json:"error"`
-	Results map[string]json.RawMessage `json:"results"`
-}
-
-func (r *mineruLocalResponse) UnmarshalJSON(raw []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
-		return fmt.Errorf("local MinerU response must be an object")
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	for _, field := range []string{"task_id", "status", "data", "results"} {
-		if value, ok := fields[field]; ok && string(value) == "null" {
-			return fmt.Errorf("local MinerU response contains a null field")
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != 202 {
+		return nil, fmt.Errorf("local MinerU API failed with status %d: %s (URL: %s)", resp.StatusCode, "[redacted]", apiURL)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response JSON: %w, body: %s", err, "[redacted]")
+	}
+	if result == nil || result["error"] != nil || result["results"] != nil {
+		return nil, fmt.Errorf("invalid local MinerU submission response")
+	}
+	if code, exists := result["code"]; exists && code != float64(0) {
+		return nil, fmt.Errorf("local MinerU submission failed")
+	}
+	if status, exists := result["status"]; exists && status != "pending" && status != "running" && status != "processing" && status != "queued" {
+		return nil, fmt.Errorf("invalid local MinerU submission status")
+	}
+	// Get task ID
+	var taskID string
+	if dataMap, ok := result["data"].(map[string]interface{}); ok {
+		if tid, ok := dataMap["task_id"].(string); ok {
+			taskID = tid
 		}
-	}
-	type response mineruLocalResponse
-	return json.Unmarshal(raw, (*response)(r))
-}
-
-func (r *mineruLocalResponse) validate() error {
-	if err := validateModelResponseCode(r.Code); err != nil {
-		return fmt.Errorf("local MinerU provider error")
-	}
-	if len(r.Error) > 0 && string(r.Error) != "null" {
-		return fmt.Errorf("local MinerU provider error")
-	}
-	if r.Data != nil && r.Data.TaskID != "" {
-		if r.TaskID != "" && r.TaskID != r.Data.TaskID {
-			return fmt.Errorf("conflicting local MinerU task IDs")
+		if top, exists := result["task_id"]; exists && top != taskID {
+			return nil, fmt.Errorf("conflicting local MinerU task IDs")
 		}
-		r.TaskID = r.Data.TaskID
+	} else if tid, ok := result["task_id"].(string); ok {
+		taskID = tid
 	}
-	return nil
+
+	if strings.TrimSpace(taskID) == "" || strings.ContainsAny(taskID, "/\\?#% \t\r\n") || taskID == "." || taskID == ".." {
+		return nil, fmt.Errorf("failed to extract task_id from local MinerU response: %s", "[redacted]")
+	}
+
+	return &ParseFileResponse{
+		TaskID: taskID,
+	}, nil
 }
 
-func (m *MinerULocalModel) ParseFile(name *string, content []byte, documentURL string, api *APIConfig) (*ParseTask, error) {
-	if documentURL != "" {
-		return nil, fmt.Errorf("%w: local MinerU requires file bytes", ErrUnsupportedCapability)
-	}
-	if err := ValidateMediaBytes(content); err != nil {
+func (m *MinerULocalModel) ListTasks(apiConfig *APIConfig) ([]ListTaskStatus, error) {
+	return nil, fmt.Errorf("%s no such method", m.Name())
+}
+
+func (m *MinerULocalModel) ShowTask(taskID string, apiConfig *APIConfig) (*TaskResponse, error) {
+	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return nil, err
 	}
-	backend := "pipeline"
-	if name != nil {
-		if strings.TrimSpace(*name) == "" {
-			return nil, fmt.Errorf("local MinerU backend is required")
-		}
-		backend = *name
+
+	if strings.TrimSpace(taskID) == "" || strings.ContainsAny(taskID, "/\\?#% \t\r\n") || taskID == "." || taskID == ".." {
+		return nil, fmt.Errorf("invalid local MinerU task ID")
 	}
-	var body bytes.Buffer
-	w := multipart.NewWriter(&body)
-	part, err := w.CreateFormFile("files", "upload_document.pdf")
+
+	resolvedBaseURL, err := m.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := part.Write(content); err != nil {
-		return nil, err
-	}
-	if err := w.WriteField("backend", backend); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	local, cancel := modelLongOpConfig(api)
+	url := fmt.Sprintf("%s/%s/%s/result", resolvedBaseURL, m.baseModel.URLSuffix.Task, taskID)
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
 	defer cancel()
-	var response mineruLocalResponse
-	if _, err := m.request(http.MethodPost, m.URLSuffix.DocumentParse, local, &body, w.FormDataContentType(), &response); err != nil {
-		return nil, err
-	}
-	if err := response.validate(); err != nil {
-		return nil, err
-	}
-	if response.Status != "" && response.Status != "pending" && response.Status != "queued" {
-		return nil, fmt.Errorf("unexpected local MinerU submission status")
-	}
-	if len(response.Results) != 0 {
-		return nil, fmt.Errorf("unfinished local MinerU task has results")
-	}
-	task := &ParseTask{TaskID: response.TaskID, Status: "pending"}
-	if err := ValidateParseTask(task, true); err != nil {
-		return nil, err
-	}
-	return task, nil
-}
 
-func (m *MinerULocalModel) ListTasks(*APIConfig) ([]ParseTask, error) {
-	return nil, fmt.Errorf("%w: local MinerU task listing", ErrUnsupportedCapability)
-}
-
-func (m *MinerULocalModel) ShowTask(id string, api *APIConfig) (*ParseTask, error) {
-	if err := ValidateTaskID(id); err != nil {
-		return nil, err
-	}
-	if m.URLSuffix.Task == "" {
-		return nil, fmt.Errorf("local MinerU task endpoint is missing")
-	}
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	var response mineruLocalResponse
-	status, err := m.request(http.MethodGet, joinModelURL(m.URLSuffix.Task, id+"/result"), local, nil, "", &response)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create status request: %w", err)
 	}
-	if err := response.validate(); err != nil {
-		return nil, err
-	}
-	if response.TaskID != "" && response.TaskID != id {
-		return nil, fmt.Errorf("local MinerU task ID mismatch")
-	}
-	task := &ParseTask{TaskID: id, Status: response.Status}
-	if task.Status == "" {
-		if status == http.StatusAccepted {
-			task.Status = "pending"
-		} else {
-			task.Status = "success"
-		}
-	}
-	if task.Status == "success" {
-		for index, key := range slices.Sorted(maps.Keys(response.Results)) {
-			var file struct {
-				Markdown *string `json:"md_content"`
-			}
-			if err := json.Unmarshal(response.Results[key], &file); err != nil || file.Markdown == nil {
-				return nil, fmt.Errorf("invalid local MinerU file result")
-			}
-			task.Segments = append(task.Segments, TaskSegment{Index: index + 1, Content: *file.Markdown})
-		}
-	} else if len(response.Results) != 0 {
-		return nil, fmt.Errorf("unfinished local MinerU task has results")
-	}
-	if err := ValidateParseTask(task, true); err != nil {
-		return nil, err
-	}
-	return task, nil
-}
 
-var _ ModelDriver = (*MinerULocalModel)(nil)
-var _ FileParser = (*MinerULocalModel)(nil)
-var _ TaskReader = (*MinerULocalModel)(nil)
+	if auth := BearerAuth(apiConfig); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
+	resp, err := m.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send status request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read status response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != 202 {
+		return nil, fmt.Errorf("MinerU local status API failed with status %d: %s", resp.StatusCode, "[redacted]")
+	}
+
+	// parse JSON
+	var result map[string]interface{}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+	if result == nil || result["error"] != nil {
+		return nil, fmt.Errorf("invalid local MinerU task response")
+	}
+	if id, exists := result["task_id"]; exists && id != taskID {
+		return nil, fmt.Errorf("local MinerU task response ID mismatch")
+	}
+	if code, exists := result["code"]; exists && code != float64(0) {
+		return nil, fmt.Errorf("local MinerU task failed")
+	}
+	if status, exists := result["status"]; exists && status != "done" && status != "completed" && status != "succeeded" {
+		return nil, fmt.Errorf("local MinerU task has no document result")
+	}
+	if resp.StatusCode == http.StatusAccepted {
+		return nil, fmt.Errorf("local MinerU task is pending")
+	}
+
+	// results
+	results, ok := result["results"].(map[string]interface{})
+	if !ok || len(results) == 0 {
+		return nil, fmt.Errorf("missing results field")
+	}
+	// Keep every document; map iteration must not choose a random result.
+	names := make([]string, 0, len(results))
+	for name := range results {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	segments := make([]TaskSegment, 0, len(names))
+	for _, name := range names {
+		fileObj := results[name]
+		fileMap, ok := fileObj.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid local MinerU document result")
+		}
+		md, ok := fileMap["md_content"].(string)
+		if !ok || strings.TrimSpace(md) == "" {
+			return nil, fmt.Errorf("md_content not found")
+		}
+		segments = append(segments, TaskSegment{Index: len(segments) + 1, Content: md})
+	}
+	return &TaskResponse{Segments: segments}, nil
+}

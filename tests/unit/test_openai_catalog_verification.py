@@ -1,8 +1,6 @@
 """Production catalog, probe selection and credential-safe provider failures."""
 
-import json
 from contextlib import asynccontextmanager
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -20,7 +18,7 @@ from common import settings
 from common.app_config import get_factory_llm_infos
 
 
-def test_openai_catalog_matches_go_and_excludes_retired_or_incompatible_models(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_python_openai_catalog_excludes_retired_or_incompatible_models(monkeypatch: pytest.MonkeyPatch) -> None:
     factory = next(item for item in get_factory_llm_infos() if item["name"] == "OpenAI")
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [factory])
     models = {model.model_name: model for model in model_provider_service.catalog("OpenAI")}
@@ -33,13 +31,6 @@ def test_openai_catalog_matches_go_and_excludes_retired_or_incompatible_models(m
     assert all(not model.is_tools for name, model in models.items() if name.startswith("gpt-6"))
     assert models["gpt-transcribe"].model_types == ["speech2text"]
     assert models["gpt-transcribe"].max_tokens == models["whisper-1"].max_tokens == 0
-    go = json.loads((Path(__file__).resolve().parents[2] / "configs/models/openai.json").read_text())
-    assert len(go["models"]) == len(models)
-    types = {"asr": "speech2text", "vision": "image2text"}
-    for model in go["models"]:
-        declaration = models[model["name"]]
-        assert model["max_tokens"] == declaration.max_tokens
-        assert [types.get(kind, kind) for kind in model["model_types"]] == declaration.model_types
 
 
 @pytest.mark.parametrize(

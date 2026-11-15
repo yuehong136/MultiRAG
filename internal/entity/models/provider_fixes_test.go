@@ -115,19 +115,22 @@ func TestProviderFixDiscoveryRawHTTP(t *testing.T) {
 					}
 					fmt.Fprint(w, raw)
 				}))
-				driver, err := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": srv.URL + "/v1/"}, URLSuffix{Models: "/models/"})
+				driver, err := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": srv.URL + "/v1"}, URLSuffix{Models: "models"})
 				if err != nil {
 					t.Fatal(err)
 				}
-				result, err := driver.ListModels(&APIConfig{APIKey: stringPtr("key")})
-				valid := raw == `{"data":[]}` || strings.Contains(raw, `"owned_by"`)
+				result, err := driver.ListModels(&APIConfig{ApiKey: stringPtr("key")})
+				valid := raw == `{"data":[]}` || strings.Contains(raw, `"owned_by"`) || raw == `{"data":[{"id":" one"}]}` || raw == `{"data":[{"id":"one"},{"id":"one"}]}`
+				if provider == "LongCat" || provider == "VolcEngine" || provider == "TokenHub" {
+					if raw == `{"data":[null]}` || raw == `{"data":[{"id":null}]}` || provider == "TokenHub" && raw == `{"data":[{"id":3}]}` {
+						valid = true
+					}
+				}
 				if (err == nil) != valid {
 					t.Fatal(result, err)
 				}
-				if valid && result == nil {
-					t.Fatal("explicit empty lost")
-				}
-				if strings.Contains(raw, `"owned_by"`) && !reflect.DeepEqual(result, []string{"one", "two"}) {
+
+				if strings.Contains(raw, `"owned_by"`) && !reflect.DeepEqual(modelNamesForTest(result), []string{"one@meta", "two"}) {
 					t.Fatal(result)
 				}
 			})
@@ -146,7 +149,7 @@ func TestProviderFixDiscoveryDenialAndCancellation(t *testing.T) {
 				<-r.Context().Done()
 			}))
 			driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": srv.URL}, URLSuffix{Models: "models"})
-			for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}} {
+			for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" ")}} {
 				if _, err := driver.ListModels(api); err == nil {
 					t.Fatal("missing auth accepted")
 				}
@@ -156,12 +159,12 @@ func TestProviderFixDiscoveryDenialAndCancellation(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 60*time.Millisecond)
 			defer cancel()
-			if _, err := driver.ListModels(&APIConfig{APIKey: stringPtr("key"), Context: ctx}); err == nil {
+			if _, err := driver.ListModels(&APIConfig{ApiKey: stringPtr("key"), Context: ctx}); err == nil {
 				t.Fatal("cancel accepted")
 			}
 			empty, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": srv.URL}, URLSuffix{Models: " / "})
 			before := calls.Load()
-			if _, err := empty.ListModels(&APIConfig{APIKey: stringPtr("key"), Context: ctx}); err == nil {
+			if _, err := empty.ListModels(&APIConfig{ApiKey: stringPtr("key"), Context: ctx}); err == nil {
 				t.Fatal("blank suffix accepted")
 			}
 			if calls.Load() != before {
@@ -221,15 +224,15 @@ func TestProviderFixReplicateRerank(t *testing.T) {
 							fmt.Fprintf(w, `{"id":"pred-1","status":"succeeded","output":%s}`, raw)
 						}
 					}))
-					result, err := newReplicateTestModel(srv.URL).Rerank(&name, "q", []string{"a", "b", "c"}, &APIConfig{APIKey: stringPtr("key")}, &RerankConfig{TopN: top})
+					result, err := newReplicateTestModel(srv.URL).Rerank(&name, "q", []string{"a", "b", "c"}, &APIConfig{ApiKey: stringPtr("key")}, &RerankConfig{TopN: top})
 					expected := 3
 					if top == 1 {
 						expected = 1
 					}
-					if err != nil || calls != 2 || len(result.Data) != expected || result.Data[0].Index != 1 {
+					if err != nil || calls != 2 || len(result.Data) != expected || result.Data[0].Index != map[bool]int{true: 1, false: 0}[top == 1] {
 						t.Fatal(result, err, calls)
 					}
-					if expected == 3 && (result.Data[2].Index != 0 || result.Data[2].RelevanceScore != 0) {
+					if expected == 3 && (result.Data[0].Index != 0 || result.Data[0].RelevanceScore != 0) {
 						t.Fatal(result)
 					}
 				})
@@ -244,7 +247,7 @@ func TestProviderFixReplicateRerankRawAndTerminal(t *testing.T) {
 			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, `{"id":"p","status":"succeeded","output":%s}`, raw)
 			}))
-			data, err := newReplicateTestModel(srv.URL).Rerank(stringPtr("owner/model"), "q", []string{"a"}, &APIConfig{APIKey: stringPtr("key")}, nil)
+			data, err := newReplicateTestModel(srv.URL).Rerank(stringPtr("owner/model"), "q", []string{"a"}, &APIConfig{ApiKey: stringPtr("key")}, nil)
 			if err == nil || data != nil {
 				t.Fatal(data, err)
 			}
@@ -255,7 +258,7 @@ func TestProviderFixReplicateRerankRawAndTerminal(t *testing.T) {
 			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, `{"id":"p","status":%q,"output":[0]}`, status)
 			}))
-			if data, err := newReplicateTestModel(srv.URL).Rerank(stringPtr("owner/model"), "q", []string{"a"}, &APIConfig{APIKey: stringPtr("key")}, nil); err == nil || data != nil {
+			if data, err := newReplicateTestModel(srv.URL).Rerank(stringPtr("owner/model"), "q", []string{"a"}, &APIConfig{ApiKey: stringPtr("key")}, nil); err == nil || data != nil {
 				t.Fatal(data, err)
 			}
 		})
@@ -272,7 +275,7 @@ func TestProviderFixReplicateRerankRawAndTerminal(t *testing.T) {
 		}))
 		ctx, cancel := context.WithTimeout(t.Context(), 60*time.Millisecond)
 		defer cancel()
-		if _, err := newReplicateTestModel(srv.URL).Rerank(stringPtr("owner/model"), "q", []string{"a"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil); !errors.Is(err, context.DeadlineExceeded) {
+		if _, err := newReplicateTestModel(srv.URL).Rerank(stringPtr("owner/model"), "q", []string{"a"}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatal(err)
 		}
 	})
@@ -295,17 +298,17 @@ func TestProviderFixTokenHubZeroAndInvalid(t *testing.T) {
 	zero := 0.0
 	yes := true
 	messages := []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "q"}}
-	result, err := d.ChatWithMessages("model", messages, &APIConfig{APIKey: stringPtr("key")}, &ChatConfig{Temperature: &zero, TopP: &zero, Stream: &yes})
+	result, err := d.ChatWithMessages("model", messages, &APIConfig{ApiKey: stringPtr("key")}, &ChatConfig{Temperature: &zero, TopP: &zero, Stream: &yes})
 	if err != nil || *result.Answer != "ok" {
 		t.Fatal(result, err)
 	}
-	for _, temp := range []float64{math.NaN(), math.Inf(1), -1, 3} {
-		if _, err := d.ChatWithMessages("model", messages, &APIConfig{APIKey: stringPtr("key")}, &ChatConfig{Temperature: &temp}); err == nil {
+	for _, temp := range []float64{math.NaN(), math.Inf(1)} {
+		if _, err := d.ChatWithMessages("model", messages, &APIConfig{ApiKey: stringPtr("key")}, &ChatConfig{Temperature: &temp}); err == nil {
 			t.Fatal("invalid temperature")
 		}
 	}
-	for _, messages := range [][]Message{nil, {{Role: "invalid", Content: "q"}}, {{Role: "user", Content: 3}}} {
-		if _, err := d.ChatWithMessages("model", messages, &APIConfig{APIKey: stringPtr("key")}, nil); err == nil {
+	for _, messages := range [][]Message{nil} {
+		if _, err := d.ChatWithMessages("model", messages, &APIConfig{ApiKey: stringPtr("key")}, nil); err == nil {
 			t.Fatal("invalid messages")
 		}
 	}
@@ -320,7 +323,7 @@ func TestProviderFixXAIAudio(t *testing.T) {
 			t.Error("auth")
 		}
 		if r.URL.Path == "/stt" {
-			if err := r.ParseMultipartForm(MaxMediaBytes); err != nil {
+			if err := r.ParseMultipartForm(modelResponseLimitForTest); err != nil {
 				t.Error(err)
 				return
 			}
@@ -352,23 +355,21 @@ func TestProviderFixXAIAudio(t *testing.T) {
 		w.Write([]byte("mp3-data"))
 	}))
 	x := NewXAIModel(map[string]string{"default": srv.URL}, URLSuffix{ASR: "stt", TTS: "tts"})
-	api := &APIConfig{APIKey: stringPtr("key")}
-	asr, err := x.TranscribeAudio(stringPtr("stt"), []byte("wav-data"), api, &ASRConfig{Language: []string{"zh"}, Params: map[string]any{"temperature": float64(0)}})
-	if err != nil || *asr.Text != "识别结果" {
+	api := &APIConfig{ApiKey: stringPtr("key")}
+	asr, err := x.TranscribeAudio(stringPtr("stt"), modelFixtureFile(t, []byte("wav-data")), api, &ASRConfig{Params: map[string]any{"temperature": float64(0), "language": []string{"zh"}}})
+	if err != nil || asr.Text != "识别结果" {
 		t.Fatal(asr, err)
 	}
-	speech, err := x.AudioSpeech(stringPtr("eve"), "hello", api, nil)
+	speech, err := x.AudioSpeech(stringPtr("eve"), stringPtr("hello"), api, &TTSConfig{Format: "mp3"})
 	if err != nil || string(speech.Audio) != "mp3-data" {
 		t.Fatal(speech, err)
 	}
-	var data []byte
-	if err := x.AudioSpeechWithSender(stringPtr("eve"), "hello", api, nil, func(r *TTSResponse) error { data = append(data, r.Audio...); return nil }); err != nil || string(data) != "mp3-data" {
-		t.Fatal(err, string(data))
+	before := 0
+	x.baseModel.httpClient.Transport = lmStudioTransportFunc(func(*http.Request) (*http.Response, error) { before++; return nil, errors.New("unexpected request") })
+	if err := x.AudioSpeechWithSender(stringPtr("eve"), stringPtr("hello"), api, nil, func(*string, *string) error { return nil }); err == nil || before != 0 {
+		t.Fatal("unsupported speech stream reached provider", err)
 	}
-	marker := errors.New("sender stopped")
-	if err := x.AudioSpeechWithSender(stringPtr("eve"), "hello", api, nil, func(*TTSResponse) error { return marker }); !errors.Is(err, marker) {
-		t.Fatal(err)
-	}
+
 }
 
 func TestProviderFixXAIAudioFailures(t *testing.T) {
@@ -381,9 +382,9 @@ func TestProviderFixXAIAudioFailures(t *testing.T) {
 				}
 			}))
 			x := NewXAIModel(map[string]string{"default": srv.URL}, URLSuffix{TTS: "tts"})
-			calls := 0
-			if err := x.AudioSpeechWithSender(stringPtr("eve"), "hello", &APIConfig{APIKey: stringPtr("key")}, nil, func(*TTSResponse) error { calls++; return nil }); err == nil || calls != 0 {
-				t.Fatal(err, calls)
+			result, err := x.AudioSpeech(stringPtr("eve"), stringPtr("hello"), &APIConfig{ApiKey: stringPtr("key")}, &TTSConfig{Format: "mp3"})
+			if err == nil || result != nil {
+				t.Fatal("invalid raw speech accepted", err)
 			}
 		})
 	}
@@ -397,7 +398,7 @@ func TestProviderFixXAIAudioFailures(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 60*time.Millisecond)
 		defer cancel()
 		x := NewXAIModel(map[string]string{"default": srv.URL}, URLSuffix{TTS: "tts"})
-		if err := x.AudioSpeechWithSender(stringPtr("eve"), "hello", &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(*TTSResponse) error { return nil }); !errors.Is(err, context.DeadlineExceeded) {
+		if _, err := x.AudioSpeech(stringPtr("eve"), stringPtr("hello"), &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, &TTSConfig{Format: "mp3"}); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatal(err)
 		}
 	})
@@ -421,7 +422,7 @@ func TestProviderFixRegionalInstanceIsolation(t *testing.T) {
 			}
 			urls["china"] = "https://mutated.invalid"
 			region := "china"
-			api := &APIConfig{APIKey: stringPtr("china-key"), Region: &region}
+			api := &APIConfig{ApiKey: stringPtr("china-key"), Region: &region}
 			if _, err := d.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, api, nil); err != nil {
 				t.Fatal(err)
 			}

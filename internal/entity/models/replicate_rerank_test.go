@@ -34,17 +34,17 @@ func TestReplicateExplicitRerankFactoryAndPreflight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := driver.Rerank(&name, "q", []string{"d"}, &APIConfig{APIKey: stringPtr("key")}, nil)
+	result, err := driver.Rerank(&name, "q", []string{"d"}, &APIConfig{ApiKey: stringPtr("key")}, nil)
 	if err != nil || result == nil || len(result.Data) != 1 || result.Data[0].Index != 0 || result.Data[0].RelevanceScore != 0 || calls.Load() != 1 {
 		t.Fatal("explicit rerank driver lost", result, err, calls.Load())
 	}
-	for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr("")}, {APIKey: stringPtr(" ")}} {
+	for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr("")}, {ApiKey: stringPtr(" ")}} {
 		if result, err := driver.Rerank(&name, "q", []string{"d"}, api, nil); err == nil || result != nil {
 			t.Fatal("missing credentials accepted", result, err)
 		}
 	}
 	for _, invalid := range []*string{nil, stringPtr(""), stringPtr("owner/model:bad"), stringPtr(strings.Repeat("a", 63))} {
-		if result, err := driver.Rerank(invalid, "q", []string{"d"}, &APIConfig{APIKey: stringPtr("key")}, nil); err == nil || result != nil {
+		if result, err := driver.Rerank(invalid, "q", []string{"d"}, &APIConfig{ApiKey: stringPtr("key")}, nil); err == nil || result != nil {
 			t.Fatal("invalid model accepted", result, err)
 		}
 	}
@@ -52,7 +52,7 @@ func TestReplicateExplicitRerankFactoryAndPreflight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := missingEndpoint.Rerank(&name, "q", []string{"d"}, &APIConfig{APIKey: stringPtr("key")}, nil); err == nil || result != nil {
+	if result, err := missingEndpoint.Rerank(&name, "q", []string{"d"}, &APIConfig{ApiKey: stringPtr("key")}, nil); err == nil || result != nil {
 		t.Fatal("missing prediction endpoint accepted", result, err)
 	}
 	if calls.Load() != 1 {

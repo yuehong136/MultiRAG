@@ -190,7 +190,9 @@ static int parse(config_desc *config, const char *filename, const char *home_pat
     char buff[BUFFER_SIZE];
 
     while (fgets(buff, BUFFER_SIZE, fp) != NULL) {
-        /* A partial property (including a comment) must not be accepted. */
+        /* Detect line truncation: if buffer is full and last char is not newline,
+         * the line was longer than BUFFER_SIZE-1 bytes. Drain the remainder and
+         * treat this as a parse error to avoid processing partial config lines. */
         size_t buff_len = strlen(buff);
         if (buff_len == BUFFER_SIZE - 1 && buff[buff_len - 1] != '\n') {
             int c;

@@ -19,7 +19,6 @@ package dao
 import (
 	"multirag/internal/entity"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -34,10 +33,6 @@ func NewSkillSpaceDAO() *SkillSpaceDAO {
 
 // Create creates a new skills space
 func (dao *SkillSpaceDAO) Create(space *entity.SkillSpace) error {
-	now := time.Now()
-	timestamp := now.UnixMilli()
-	space.CreateTime = &timestamp
-	space.UpdateTime = &now
 	return DB.Create(space).Error
 }
 
@@ -105,7 +100,6 @@ func (dao *SkillSpaceDAO) Update(space *entity.SkillSpace) error {
 
 // UpdateByID updates skills space by ID
 func (dao *SkillSpaceDAO) UpdateByID(id string, updates map[string]interface{}) error {
-	updates["update_time"] = time.Now()
 	return DB.Model(&entity.SkillSpace{}).Where("id = ?", id).Updates(updates).Error
 }
 

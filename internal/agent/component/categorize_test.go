@@ -33,8 +33,8 @@ func TestCategorize_ChosenCategory(t *testing.T) {
 	if scores["sales"] != 0 || scores["billing"] != 0 {
 		t.Errorf("non-chosen categories should score 0; got %v", scores)
 	}
-	if _, present := out["_next"]; present {
-		t.Fatal("classifier must not advertise fake routing")
+	if reserved, ok := out["_next"].([]string); !ok || len(reserved) != 0 {
+		t.Fatal("reserved routing metadata must remain empty", out)
 	}
 }
 

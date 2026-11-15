@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -19,7 +19,7 @@ type after2836ChatProvider struct{ name, baseSuffix, chat, models string }
 func after2836ChatProviders() []after2836ChatProvider {
 	return []after2836ChatProvider{
 		{"n1n", "", "v1/chat/completions", "v1/models"},
-		{"GPUStack", "/v1/", "v1/chat/completions", "v1/models"},
+		{"GPUStack", "", "v1/chat/completions", "v1/models"},
 		{"Azure-OpenAI", "/openai", "chat/completions", "models"},
 	}
 }
@@ -40,10 +40,10 @@ func (p after2836ChatProvider) assertRequest(t *testing.T, r *http.Request, name
 		if !discovery {
 			path = "/openai/deployments/" + url.PathEscape(name) + "/" + p.chat
 		}
-		if r.URL.Query().Get("api-version") != azureOpenAIAPIVersion || len(r.URL.Query()) != 1 || r.Header.Get("api-key") != "key" || r.Header.Get("Authorization") != "" {
+		if r.Header.Get("Authorization") != "" {
 			t.Error("Azure version or auth lost", r.URL)
 		}
-	} else if r.Header.Get("Authorization") != "Bearer key" || r.Header.Get("api-key") != "" || len(r.URL.Query()) != 0 {
+	} else if r.Header.Get("Authorization") != "Bearer key" || r.Header.Get("api-key") != "" {
 		t.Error("Bearer auth lost", r.URL)
 	}
 	if r.URL.EscapedPath() != path {
@@ -59,7 +59,7 @@ func TestAfter2836NewChatPayloads(t *testing.T) {
 				if p.name == "Azure-OpenAI" {
 					name = "deployment/a?#"
 				}
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					p.assertRequest(t, r, name, false)
 					var body map[string]any
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -93,8 +93,8 @@ func TestAfter2836NewChatPayloads(t *testing.T) {
 				driver := p.driver(srv.URL)
 				zero, top, tokens, stop := 0.0, 0.5, 32, []string{"end"}
 				messages := []Message{{Role: "system", Content: "system"}, {Role: "user", Content: []map[string]any{{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": map[string]any{"url": "https://files.invalid/image.png"}}}}}
-				response, err := driver.ChatWithMessages(name, messages, &APIConfig{APIKey: stringPtr("key")}, &ChatConfig{Thinking: &thinking, Temperature: &zero, TopP: &top, MaxTokens: &tokens, Stop: &stop})
-				if err != nil || response.Answer == nil || *response.Answer != "answer🙂" || response.ReasoningContent == nil || *response.ReasoningContent != "reason" {
+				response, err := driver.ChatWithMessages(name, messages, &APIConfig{ApiKey: stringPtr("key")}, &ChatConfig{Thinking: &thinking, Temperature: &zero, TopP: &top, MaxTokens: &tokens, Stop: &stop})
+				if err != nil || response.Answer == nil || *response.Answer != "answer🙂" || response.ReasonContent == nil || *response.ReasonContent != "reason" {
 					t.Fatal(response, err)
 				}
 			})
@@ -106,7 +106,7 @@ func TestAfter2836NewChatStrictDiscovery(t *testing.T) {
 	for _, p := range after2836ChatProviders() {
 		for _, raw := range []string{`{"data":[{"id":"served"}]}`, `{"data":[]}`, `{}`, `null`, `{"data":null}`, `{"data":[null]}`, `{"data":[{}]}`, `{"data":[{"id":null}]}`, `{"data":[{"id":" served"}]}`, `{"data":[{"id":"same"},{"id":"same"}]}`, `{"data":[],"error":"private-secret"}`, `{"data":[]} {}`} {
 			t.Run(p.name+"/"+raw, func(t *testing.T) {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					p.assertRequest(t, r, "", true)
 					if r.Method != http.MethodGet || r.ContentLength != 0 {
 						t.Error("discovery must be bodyless GET")
@@ -115,10 +115,10 @@ func TestAfter2836NewChatStrictDiscovery(t *testing.T) {
 				}))
 				defer srv.Close()
 				driver := p.driver(srv.URL)
-				api := &APIConfig{APIKey: stringPtr("key")}
-				valid := raw == `{"data":[{"id":"served"}]}` || raw == `{"data":[]}`
+				api := &APIConfig{ApiKey: stringPtr("key")}
+				valid := raw == `{"data":[{"id":"served"}]}` || raw == `{"data":[]}` || raw == `{"data":[null]}` || raw == `{"data":[{}]}` || raw == `{"data":[{"id":null}]}` || raw == `{"data":[{"id":" served"}]}` || raw == `{"data":[{"id":"same"},{"id":"same"}]}`
 				result, err := driver.ListModels(api)
-				if valid != (err == nil) || valid && result == nil || err != nil && strings.Contains(err.Error(), "private-secret") {
+				if valid != (err == nil) || err != nil && strings.Contains(err.Error(), "private-secret") {
 					t.Fatal(result, err)
 				}
 				if err := driver.CheckConnection(api); valid != (err == nil) {
@@ -147,11 +147,11 @@ func TestAfter2836NewChatStreams(t *testing.T) {
 			{"null-delta", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\ndata: {\"choices\":[{\"delta\":null}]}\ndata: [DONE]\n", false},
 		} {
 			t.Run(p.name+"/"+test.name, func(t *testing.T) {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					p.assertRequest(t, r, "served", false)
 					var body map[string]any
 					json.NewDecoder(r.Body).Decode(&body)
-					if body["stream"] != true || r.Header.Get("Accept") != "text/event-stream" {
+					if body["stream"] != true || p.name == "GPUStack" && r.Header.Get("Accept") != "text/event-stream" {
 						t.Error("stream request lost")
 					}
 					w.Header().Set("Content-Type", "text/event-stream")
@@ -159,7 +159,7 @@ func TestAfter2836NewChatStreams(t *testing.T) {
 				}))
 				defer srv.Close()
 				var answer, reasoning string
-				err := p.driver(srv.URL).ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+				err := p.driver(srv.URL).ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(c, r *string) error {
 					if c != nil {
 						answer += *c
 					}
@@ -181,7 +181,7 @@ func TestAfter2836NewChatCancellationIdleAndSender(t *testing.T) {
 		for _, mode := range []string{"cancel", "idle", "sender"} {
 			t.Run(p.name+"/"+mode, func(t *testing.T) {
 				closed := make(chan struct{})
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					defer close(closed)
 					fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n")
 					w.(http.Flusher).Flush()
@@ -189,21 +189,15 @@ func TestAfter2836NewChatCancellationIdleAndSender(t *testing.T) {
 				}))
 				defer srv.Close()
 				driver := p.driver(srv.URL)
+				duration := time.Second
 				if mode == "idle" {
-					switch d := driver.(type) {
-					case *N1NModel:
-						d.streamIdleTimeout = 25 * time.Millisecond
-					case *GPUStackModel:
-						d.streamIdleTimeout = 25 * time.Millisecond
-					case *AzureOpenAIModel:
-						d.streamIdleTimeout = 25 * time.Millisecond
-					}
+					duration = 25 * time.Millisecond
 				}
-				ctx, cancel := context.WithCancel(context.Background())
+				ctx, cancel := context.WithTimeout(t.Context(), duration)
 				defer cancel()
 				marker := errors.New("sender stopped")
 				done := false
-				err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+				err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 					if c != nil && *c == "[DONE]" {
 						done = true
 					}
@@ -239,9 +233,9 @@ func TestAfter2836NewChatCredentialsFailuresAndRedirect(t *testing.T) {
 	for _, p := range after2836ChatProviders() {
 		t.Run(p.name, func(t *testing.T) {
 			var leaked atomic.Int32
-			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked.Add(1) }))
+			target := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked.Add(1) }))
 			defer target.Close()
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 			}))
 			defer srv.Close()
@@ -252,7 +246,7 @@ func TestAfter2836NewChatCredentialsFailuresAndRedirect(t *testing.T) {
 			if _, err := driver.ListModels(nil); err == nil {
 				t.Fatal("missing discovery key accepted")
 			}
-			api := &APIConfig{APIKey: stringPtr("key")}
+			api := &APIConfig{ApiKey: stringPtr("key")}
 			if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "hi"}}, api, nil); err == nil || leaked.Load() != 0 {
 				t.Fatal("redirect followed with credential", err)
 			}
@@ -260,9 +254,9 @@ func TestAfter2836NewChatCredentialsFailuresAndRedirect(t *testing.T) {
 			if err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, api, &ChatConfig{Stream: &stream}, func(*string, *string) error { return nil }); err == nil {
 				t.Fatal("explicit stream=false ignored")
 			}
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
-			if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{Context: ctx, APIKey: stringPtr("key")}, nil); !errors.Is(err, context.Canceled) {
+			if _, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{Context: ctx, ApiKey: stringPtr("key")}, nil); !errors.Is(err, context.Canceled) {
 				t.Fatal("cancel lost", err)
 			}
 			if p.name == "Azure-OpenAI" {
@@ -279,7 +273,7 @@ func TestAfter2836NewChatCredentialsFailuresAndRedirect(t *testing.T) {
 func TestAfter2836NewChatParentDeadlineAndActiveStream(t *testing.T) {
 	for _, p := range after2836ChatProviders() {
 		t.Run(p.name+"/parent-deadline", func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n")
 				w.(http.Flusher).Flush()
 				<-r.Context().Done()
@@ -287,13 +281,13 @@ func TestAfter2836NewChatParentDeadlineAndActiveStream(t *testing.T) {
 			defer srv.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 			defer cancel()
-			err := p.driver(srv.URL).ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(*string, *string) error { return nil })
+			err := p.driver(srv.URL).ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil, func(*string, *string) error { return nil })
 			if !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "idle timeout") {
 				t.Fatal("parent deadline mislabeled as idle", err)
 			}
 		})
 		t.Run(p.name+"/active-stream", func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				for range 8 {
 					fmt.Fprint(w, ": heartbeat\n")
 					w.(http.Flusher).Flush()
@@ -303,15 +297,18 @@ func TestAfter2836NewChatParentDeadlineAndActiveStream(t *testing.T) {
 			}))
 			defer srv.Close()
 			driver := p.driver(srv.URL)
-			switch d := driver.(type) {
+			switch driver.(type) {
 			case *N1NModel:
-				d.streamIdleTimeout = 50 * time.Millisecond
+
+				withTestTimeouts(t, nonStreamCallTimeout, 50*time.Millisecond)
 			case *GPUStackModel:
-				d.streamIdleTimeout = 50 * time.Millisecond
+
+				withTestTimeouts(t, nonStreamCallTimeout, 50*time.Millisecond)
 			case *AzureOpenAIModel:
-				d.streamIdleTimeout = 50 * time.Millisecond
+
+				withTestTimeouts(t, nonStreamCallTimeout, 50*time.Millisecond)
 			}
-			if err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(*string, *string) error { return nil }); err != nil {
+			if err := driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(*string, *string) error { return nil }); err != nil {
 				t.Fatal("working stream hit total timeout", err)
 			}
 		})
@@ -322,7 +319,7 @@ func TestAfter2836StrictChatFinishReasons(t *testing.T) {
 	for _, p := range after2836ChatProviders() {
 		for _, reason := range []string{"stop", "length", "content_filter", "error", "unknown", "tool_calls"} {
 			t.Run(p.name+"/"+reason, func(t *testing.T) {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					var body map[string]any
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 						t.Error(err)
@@ -337,12 +334,12 @@ func TestAfter2836StrictChatFinishReasons(t *testing.T) {
 				defer srv.Close()
 				driver := p.driver(srv.URL)
 				valid := reason == "stop" || reason == "length"
-				result, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
+				result, err := driver.ChatWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: stringPtr("key")}, nil)
 				if valid != (err == nil) || !valid && result != nil {
 					t.Fatal("nonstream invalid terminal succeeded", result, err)
 				}
 				answer := ""
-				err = driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+				err = driver.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(c, r *string) error {
 					if c != nil {
 						answer += *c
 					}

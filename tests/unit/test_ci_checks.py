@@ -119,25 +119,18 @@ def test_go_reports_reject_unexpected_skips_failures_and_truncation(tmp_path: Pa
     events: list[dict[str, str]] = [
         {"Action": "start", "Package": package},
         {"Action": "pass", "Package": package, "Test": "TestUnit"},
-        {"Action": "skip", "Package": package, "Test": "TestChatSessionLiveHTTPAndSQL"},
-        {"Action": "skip", "Package": package, "Test": "TestModelInferenceLiveHTTPAndSQL"},
-        {"Action": "skip", "Package": package, "Test": "TestDatasetTimeHTTPAndSQL"},
-        {"Action": "skip", "Package": package, "Test": "TestHostedProviderRoutesScratchPostgres"},
+        {"Action": "pass", "Package": package, "Test": "TestChatSessionLiveHTTPAndSQL"},
+        {"Action": "pass", "Package": package, "Test": "TestModelInferenceLiveHTTPAndSQL"},
+        {"Action": "pass", "Package": package, "Test": "TestDatasetTimeHTTPAndSQL"},
+        {"Action": "pass", "Package": package, "Test": "TestHostedProviderRoutesScratchPostgres"},
         {"Action": "start", "Package": "multirag/internal/service"},
-        {"Action": "skip", "Package": "multirag/internal/service", "Test": "TestHostedProviderBindingScratchPostgres"},
+        {"Action": "pass", "Package": "multirag/internal/service", "Test": "TestHostedProviderBindingScratchPostgres"},
         {"Action": "pass", "Package": "multirag/internal/service"},
         {"Action": "pass", "Package": package},
     ]
     path.write_text("\n".join(map(json.dumps, events)))
     result = audit_go(path)
-    assert result["counts"]["pass_test"] == 1
-    assert result["unverified_live_opt_ins"] == [
-        f"{package}::TestChatSessionLiveHTTPAndSQL",
-        f"{package}::TestModelInferenceLiveHTTPAndSQL",
-        f"{package}::TestDatasetTimeHTTPAndSQL",
-        f"{package}::TestHostedProviderRoutesScratchPostgres",
-        "multirag/internal/service::TestHostedProviderBindingScratchPostgres",
-    ]
+    assert result == {"counts": {"pass_test": 6, "pass_package": 2}}
     for bad in [
         [],
         events[:-1],
@@ -157,7 +150,7 @@ def test_go_reports_reject_unexpected_skips_failures_and_truncation(tmp_path: Pa
     "test",
     ["TestDatasetReadHTTPAndSQL", "TestGoogleEmbeddingLiveHTTPAndSQL", "TestMediaHTTPCLIAndSQL", "TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL"],
 )
-def test_owned_handler_opt_ins_remain_unverified_when_skipped(tmp_path: Path, test: str) -> None:
+def test_owned_service_tests_require_actual_execution(tmp_path: Path, test: str) -> None:
     path = tmp_path / "go.jsonl"
     package = "multirag/internal/handler"
     events = [
@@ -167,15 +160,13 @@ def test_owned_handler_opt_ins_remain_unverified_when_skipped(tmp_path: Path, te
         {"Action": "pass", "Package": package},
     ]
     path.write_text("\n".join(map(json.dumps, events)))
-    assert audit_go(path) == {
-        "counts": {"pass_test": 1, "skip_test": 1, "pass_package": 1},
-        "unverified_live_opt_ins": [f"{package}::{test}"],
-    }
+    with pytest.raises(ValueError, match="Unexpected Go skip"):
+        audit_go(path)
     # A successful actual execution is reported as a pass, separately from the
     # ordinary no-service run where the same explicit test was not executed.
     events[2]["Action"] = "pass"
     path.write_text("\n".join(map(json.dumps, events)))
-    assert audit_go(path) == {"counts": {"pass_test": 2, "pass_package": 1}, "unverified_live_opt_ins": []}
+    assert audit_go(path) == {"counts": {"pass_test": 2, "pass_package": 1}}
 
 
 @pytest.mark.parametrize(
@@ -211,7 +202,7 @@ def test_allowed_opt_ins_do_not_hide_failed_or_unfinished_packages(tmp_path: Pat
     events = [
         {"Action": "start", "Package": package},
         {"Action": "pass", "Package": package, "Test": "TestOrdinary"},
-        {"Action": "skip", "Package": package, "Test": "TestMediaHTTPCLIAndSQL"},
+        {"Action": "pass", "Package": package, "Test": "TestMediaHTTPCLIAndSQL"},
         {"Action": "pass", "Package": package},
     ]
     if failure == "failed_opt_in":
@@ -232,15 +223,15 @@ def test_allowed_opt_ins_do_not_hide_failed_or_unfinished_packages(tmp_path: Pat
 @pytest.mark.parametrize(
     "identity",
     [
-        "multirag/internal/skills::TestLegacyEmbeddingScratchPostgres",
-        "multirag/internal/router::TestAfter33GManagementHTTPAndSQL",
-        "multirag/internal/router::TestAfter33GManagementHTTPAndSQL/built_CLI_consumer",
-        "multirag/internal/handler::TestHandlerInternalErrorsSQLHTTP",
-        "multirag/internal/service::TestExpandedCatalogDiscoveryConsumersHTTPAndSQL",
+        "multirag/internal/engine::TestEngineStoresLive",
+        "multirag/internal/handler::TestProviderInstancesLiveHTTPAndSQL",
+        "multirag/internal/cli::TestLocalIngestionCLIExecutesActualContent",
+        "multirag/internal/service::TestCanonicalModelBindingsSQLHTTP",
+        "multirag/internal/service::TestCanonicalASRPayloadBoundarySQLHTTP",
     ],
 )
 def test_ci_go_requires_service_tests(tmp_path: Path, identity: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    from scripts.ci_checks import GO_LIVE_OPT_INS, GO_REQUIRED_TESTS
+    from scripts.ci_checks import GO_REQUIRED_TESTS
 
     path = tmp_path / "go.jsonl"
     events = []
@@ -254,7 +245,6 @@ def test_ci_go_requires_service_tests(tmp_path: Path, identity: str, monkeypatch
     path.write_text("\n".join(map(json.dumps, omitted)))
     with pytest.raises(ValueError, match="Missing required"):
         audit_go(path, require_ci_tests=True)
-    monkeypatch.setitem(GO_LIVE_OPT_INS, package.removeprefix("multirag/internal/"), {test})
     for event in events:
         if event.get("Test") == test:
             event["Action"] = "skip"

@@ -18,6 +18,9 @@ package tool
 
 import (
 	"context"
+	"encoding/binary"
+	"golang.org/x/net/dns/dnsmessage"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -86,7 +89,7 @@ func TestValidateURLForSSRF(t *testing.T) {
 // with a stale allow-list entry.
 func TestResolveAndValidate(t *testing.T) {
 	t.Run("literal_public_ip", func(t *testing.T) {
-		host, ip, err := ResolveAndValidate("https://1.1.1.1/foo")
+		host, ip, err := ResolveAndValidate(context.Background(), "https://1.1.1.1/foo")
 		if err != nil {
 			t.Fatalf("ResolveAndValidate(literal public IP) = %v, want nil", err)
 		}
@@ -99,7 +102,7 @@ func TestResolveAndValidate(t *testing.T) {
 	})
 
 	t.Run("literal_blocked_ip", func(t *testing.T) {
-		host, ip, err := ResolveAndValidate("http://127.0.0.1/")
+		host, ip, err := ResolveAndValidate(context.Background(), "http://127.0.0.1/")
 		if err == nil {
 			t.Fatalf("ResolveAndValidate(loopback) = nil, want error")
 		}
@@ -112,7 +115,7 @@ func TestResolveAndValidate(t *testing.T) {
 	})
 
 	t.Run("literal_blocked_metadata", func(t *testing.T) {
-		_, ip, err := ResolveAndValidate("http://169.254.169.254/latest/meta-data/")
+		_, ip, err := ResolveAndValidate(context.Background(), "http://169.254.169.254/latest/meta-data/")
 		if err == nil {
 			t.Fatalf("ResolveAndValidate(metadata) = nil, want error")
 		}
@@ -122,22 +125,22 @@ func TestResolveAndValidate(t *testing.T) {
 	})
 
 	t.Run("hostname_resolves_to_public", func(t *testing.T) {
-		host, ip, err := resolveAndValidate(context.Background(), "https://example.com/", func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.ParseIP("1.1.1.1")}, nil })
+		withDNSAddresses(t, []net.IP{net.ParseIP("1.1.1.1")})
+		host, ip, err := ResolveAndValidate(context.Background(), "https://example.com/")
 		if err != nil || host != "example.com" || !ip.Equal(net.ParseIP("1.1.1.1")) {
 			t.Fatalf("unexpected resolution: %s %v %v", host, ip, err)
 		}
 	})
 	t.Run("mixed_public_private_dns", func(t *testing.T) {
-		_, ip, err := resolveAndValidate(context.Background(), "https://example.com/", func(context.Context, string, string) ([]net.IP, error) {
-			return []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("127.0.0.1")}, nil
-		})
+		withDNSAddresses(t, []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("127.0.0.1")})
+		_, ip, err := ResolveAndValidate(context.Background(), "https://example.com/")
 		if err == nil || ip != nil {
 			t.Fatal("mixed DNS must be rejected")
 		}
 	})
 
 	t.Run("hostname_blocked_alias", func(t *testing.T) {
-		_, ip, err := ResolveAndValidate("http://localhost/")
+		_, ip, err := ResolveAndValidate(context.Background(), "http://localhost/")
 		if err == nil {
 			t.Fatalf("ResolveAndValidate(localhost) = nil, want error")
 		}
@@ -148,7 +151,7 @@ func TestResolveAndValidate(t *testing.T) {
 
 	t.Run("bad_input_returns_nil_ip", func(t *testing.T) {
 		for _, bad := range []string{"", "file:///etc/passwd", "http:///path", "example.com/no-scheme"} {
-			_, ip, err := ResolveAndValidate(bad)
+			_, ip, err := ResolveAndValidate(context.Background(), bad)
 			if err == nil {
 				t.Errorf("ResolveAndValidate(%q) = nil err, want error", bad)
 			}
@@ -219,4 +222,45 @@ func TestSanitizeURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func withDNSAddresses(t *testing.T, addresses []net.IP) {
+	t.Helper()
+	previous := net.DefaultResolver
+	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			var size [2]byte
+			if _, err := io.ReadFull(server, size[:]); err != nil {
+				return
+			}
+			packet := make([]byte, binary.BigEndian.Uint16(size[:]))
+			if _, err := io.ReadFull(server, packet); err != nil {
+				return
+			}
+			var query dnsmessage.Message
+			if err := query.Unpack(packet); err != nil {
+				return
+			}
+			answer := dnsmessage.Message{Header: dnsmessage.Header{ID: query.ID, Response: true, RecursionAvailable: true}, Questions: query.Questions}
+			for _, question := range query.Questions {
+				for _, ip := range addresses {
+					if question.Type == dnsmessage.TypeA && ip.To4() != nil {
+						var value [4]byte
+						copy(value[:], ip.To4())
+						answer.Answers = append(answer.Answers, dnsmessage.Resource{Header: dnsmessage.ResourceHeader{Name: question.Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}, Body: &dnsmessage.AResource{A: value}})
+					}
+				}
+			}
+			data, err := answer.Pack()
+			if err != nil {
+				return
+			}
+			binary.BigEndian.PutUint16(size[:], uint16(len(data)))
+			_, _ = server.Write(append(size[:], data...))
+		}()
+		return client, nil
+	}}
+	t.Cleanup(func() { net.DefaultResolver = previous })
 }

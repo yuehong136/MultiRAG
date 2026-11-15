@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"strings"
 	"testing"
 )
@@ -16,7 +16,7 @@ func TestBaiduMistralOCRHTTPContract(t *testing.T) {
 	for _, provider := range []string{"Baidu", "Mistral"} {
 		t.Run(provider, func(t *testing.T) {
 			key, name := "controlled-ocr-key", "ocr-model"
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/ocr" || r.Header.Get("Authorization") != "Bearer "+key {
 					t.Error("OCR endpoint/key lost")
 				}
@@ -59,14 +59,14 @@ func TestBaiduMistralOCRHTTPContract(t *testing.T) {
 			} else {
 				driver = NewMistralModel(map[string]string{"default": srv.URL + "/v1"}, URLSuffix{OCR: "ocr"})
 			}
-			api := &APIConfig{APIKey: &key}
+			api := &APIConfig{ApiKey: &key}
 			for _, urlInput := range []bool{false, true} {
-				var result *OCRResponse
+				var result *OCRFileResponse
 				var err error
 				if urlInput {
-					result, err = driver.(OCRURLDriver).OCRURL(&name, "https://files.invalid/doc.PDF?download=1", api, nil)
+					result, err = driver.(ModelDriver).OCRFile(&name, nil, stringPtr("https://files.invalid/doc.PDF?download=1"), api, nil)
 				} else {
-					result, err = driver.(OCRDriver).OCRFile(&name, []byte("%PDF-1.4 document"), api, nil)
+					result, err = driver.(ModelDriver).OCRFile(&name, []byte("%PDF-1.4 document"), nil, api, nil)
 				}
 				if err != nil || *result.Text != "page zero\n\npage one" {
 					t.Fatal("multi-page/order lost", result, err)
@@ -82,7 +82,7 @@ func TestBaiduMistralOCRStrictFailures(t *testing.T) {
 		"Mistral": {`{}`, `{"pages":[]}`, `{"pages":[{"markdown":"one"}]}`, `{"pages":[{"index":0,"markdown":null}]}`, `{"pages":[{"index":0,"markdown":"one"},{"index":0,"markdown":"two"}]}`, `{"pages":[{"index":0,"markdown":""}]}`, `{"error":"private-body"}`},
 	} {
 		for _, raw := range bodies {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
 			var driver ModelDriver
 			if provider == "Baidu" {
 				driver = NewBaiduModel(map[string]string{"default": srv.URL}, URLSuffix{OCR: "ocr"})
@@ -90,12 +90,12 @@ func TestBaiduMistralOCRStrictFailures(t *testing.T) {
 				driver = NewMistralModel(map[string]string{"default": srv.URL}, URLSuffix{OCR: "ocr"})
 			}
 			name, key := "ocr", "controlled-key"
-			if _, err := driver.(OCRDriver).OCRFile(&name, []byte("bytes"), &APIConfig{APIKey: &key}, nil); err == nil || strings.Contains(err.Error(), "private-body") {
+			if _, err := driver.(ModelDriver).OCRFile(&name, []byte("bytes"), nil, &APIConfig{ApiKey: &key}, nil); err == nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal("invalid OCR result accepted/leaked", provider, raw, err)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			if _, err := driver.(OCRDriver).OCRFile(&name, []byte("bytes"), &APIConfig{APIKey: &key, Context: ctx}, nil); err == nil {
+			if _, err := driver.(ModelDriver).OCRFile(&name, []byte("bytes"), nil, &APIConfig{ApiKey: &key, Context: ctx}, nil); err == nil {
 				t.Fatal("OCR cancellation lost")
 			}
 			srv.Close()
@@ -105,7 +105,7 @@ func TestBaiduMistralOCRStrictFailures(t *testing.T) {
 
 func TestCoHereASRHTTPContract(t *testing.T) {
 	name, key := "cohere-transcribe-03-2026", "controlled-key"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+key {
 			t.Error("Cohere ASR credential lost")
 		}
@@ -128,7 +128,7 @@ func TestCoHereASRHTTPContract(t *testing.T) {
 			raw, _ := io.ReadAll(part)
 			if part.FormName() == "file" {
 				fileSeen = true
-				if fields["model"] != name || fields["language"] != "en" || string(raw) != "audio bytes" || part.FileName() != "audio.wav" {
+				if fields["model"] != name || fields["language"] != "en" || string(raw) != "audio bytes" || part.FileName() != "model-input.wav" {
 					t.Error("Cohere ASR file/field order lost")
 				}
 			} else {
@@ -142,7 +142,7 @@ func TestCoHereASRHTTPContract(t *testing.T) {
 	}))
 	defer srv.Close()
 	d := NewCoHereModel(map[string]string{"default": srv.URL}, URLSuffix{ASR: "audio/transcriptions"})
-	if result, err := d.TranscribeAudio(&name, []byte("audio bytes"), &APIConfig{APIKey: &key}, &ASRConfig{Language: []string{"en"}}); err != nil || *result.Text != "transcription" {
+	if result, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("audio bytes")), &APIConfig{ApiKey: &key}, &ASRConfig{Params: map[string]any{"language": "en"}}); err != nil || result.Text != "transcription" {
 		t.Fatal(result, err)
 	}
 }

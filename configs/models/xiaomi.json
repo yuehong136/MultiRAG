@@ -1,12 +1,11 @@
 {
   "name": "Xiaomi",
   "url": {
-    "default": "https://api.xiaomimimo.com"
+    "default": "https://api.xiaomimimo.com/v1"
   },
   "url_suffix": {
-    "chat": "v1/chat/completions"
+    "chat": "chat/completions"
   },
-  "class": "xiaomi",
   "models": [
     {
       "name": "mimo-v2.5-pro",
@@ -31,14 +30,12 @@
     },
     {
       "name": "mimo-v2.5-tts",
-      "max_tokens": 0,
       "model_types": [
         "tts"
       ]
     },
     {
       "name": "mimo-v2-tts",
-      "max_tokens": 0,
       "model_types": [
         "tts"
       ]

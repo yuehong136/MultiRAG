@@ -1,252 +1,147 @@
 package handler
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
-	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
-	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
+	"multirag/internal/entity/models"
 	"multirag/internal/server"
 	"multirag/internal/server/local"
+	"multirag/internal/service"
+	"multirag/internal/service/nlp"
 	"multirag/internal/testsupport"
+	"multirag/internal/testsupport/scratch"
 	"multirag/internal/utility"
-	"multirag/tests/support"
 )
 
-func TestDifyRejectsMalformedCredentialHeaders(t *testing.T) {
-	for _, headers := range [][]string{nil, {""}, {"token"}, {"Bearer "}, {"Bearer  token"}, {"Bearer token "}, {"Bearer a,b"}, {"Bearer a", "Bearer b"}, {"Basic token"}} {
-		if _, _, err := resolveDifyCredential(context.Background(), headers, "owned-test-key"); err == nil {
-			t.Fatal("invalid header accepted")
-		}
-	}
-}
-
-type difyAuthSigningStore struct{}
-
-func (difyAuthSigningStore) Get(string) (string, error) {
-	return "owned-dify-signing-key-32-bytes-minimum", nil
-}
-func (difyAuthSigningStore) Set(string, string, time.Duration) bool   { return true }
-func (difyAuthSigningStore) SetNX(string, string, time.Duration) bool { return true }
-
-// This test uses real JWT/API middleware and a real TCP SQL schema. Metadata
-// returns an authoritative empty match, making every denial's forbidden model,
-// children and retrieval IO observable without a provider dependency.
+// Exercise the frozen original AuthMiddleware, six-argument Dify handler and
+// actual SQL accessibility. Metadata/model/retrieval are controlled boundaries.
 func TestDifyCredentialSQLAndScope(t *testing.T) {
-	dsn := os.Getenv("MULTIRAG_DIFY_POSTGRES_DSN")
-	if dsn == "" {
-		if os.Getenv("REQUIRE_SERVICES") == "1" {
-			t.Fatal("owned MULTIRAG_DIFY_POSTGRES_DSN required")
-		}
-		t.Skip("requires an owned Dify scratch database")
-	}
-	parsed, err := url.Parse(dsn)
-	if err != nil || parsed.Hostname() == "" || parsed.Port() == "" || !strings.HasPrefix(strings.TrimPrefix(parsed.Path, "/"), "multirag_afteraab_") {
-		t.Fatal("owned afteraab database at an explicit TCP endpoint required")
-	}
-	journal := testsupport.NewCase(t)
-	t.Setenv("DISABLE_SDK", "")
-	schema := "dify_auth_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	journal.Event("reserve-sql-schema", map[string]any{"endpoint": parsed.Host, "database": strings.TrimPrefix(parsed.Path, "/"), "schema": schema, "tables": []string{"t_ai_users", "t_ai_tenants", "t_ai_user_tenants", "t_ai_api_tokens", "t_ai_knowledgebases"}})
-	admin, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal("open owned SQL endpoint")
-	}
-	t.Cleanup(func() { admin.Close() })
-	var absent bool
-	if err := admin.QueryRowContext(t.Context(), "SELECT NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname=$1)", schema).Scan(&absent); err != nil || !absent {
-		t.Fatal("schema precondition failed")
-	}
-	var pool, reader *sql.DB
-	t.Cleanup(func() {
-		if pool != nil {
-			pool.Close()
-		}
-		if reader != nil {
-			reader.Close()
-		}
-		if _, err := admin.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE"); err != nil {
-			t.Error("drop owned schema failed")
-			return
-		}
-		var exists bool
-		if err := admin.QueryRow("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname=$1)", schema).Scan(&exists); err != nil || exists {
-			t.Error("schema cleanup readback failed")
-			return
-		}
-		journal.Event("sql-schema-cleaned", map[string]any{"schema": schema, "independent_readback": true})
-	})
-	if _, err := admin.ExecContext(t.Context(), "CREATE SCHEMA "+schema); err != nil {
-		t.Fatal("create owned schema")
-	}
-	query := parsed.Query()
-	query.Set("search_path", schema)
-	parsed.RawQuery = query.Encode()
-	db, err := gorm.Open(postgres.Open(parsed.String()), &gorm.Config{Logger: logger.Discard})
-	if err != nil {
-		t.Fatal("connect owned schema")
-	}
-	pool, err = db.DB()
-	if err != nil {
+	f := scratch.New(t)
+	previous := dao.DB
+	dao.DB = f.DB
+	t.Cleanup(func() { dao.DB = previous })
+	if err := f.DB.AutoMigrate(&entity.User{}, &entity.Tenant{}, &entity.UserTenant{}, &entity.Knowledgebase{}, &entity.APIToken{}); err != nil {
 		t.Fatal(err)
 	}
-	reader, err = sql.Open("pgx", parsed.String())
-	if err != nil {
+	secret := f.Prefix + "dify-auth"
+	cfg := server.GetConfig()
+	if cfg == nil {
+		path := filepath.Join(t.TempDir(), "dify-service.json")
+		f.Journal.Event("reserve-dify-config", map[string]any{"path": path})
+		raw, _ := json.Marshal(map[string]any{"server": map[string]any{"secret_key": secret}})
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := server.FromConfigFile(path); err != nil {
+			t.Fatal(err)
+		}
+		cfg = server.GetConfig()
+	}
+	priorSecret := cfg.Server.SecretKey
+	cfg.Server.SecretKey = &secret
+	t.Cleanup(func() { cfg.Server.SecretKey = priorSecret })
+	license := local.GetAdminStatus()
+	local.SetAdminStatus(0, "owned Dify fixture")
+	t.Cleanup(func() { local.SetAdminStatus(license.Status, license.Reason) })
+	active := "1"
+	ids := map[string]string{}
+	tokens := map[string]string{}
+	for _, name := range []string{"owner", "member", "invite", "revoked", "foreign", "disabled"} {
+		id := f.Prefix + name
+		ids[name] = id
+		state := "1"
+		if name == "disabled" {
+			state = "0"
+		}
+		access := utility.GenerateToken()
+		if err := f.DB.Create(&entity.User{ID: id, Email: id + "@fixture.invalid", Nickname: name, IsActive: state, Status: &state, AccessToken: &access}).Error; err != nil {
+			t.Fatal(err)
+		}
+		token, err := utility.DumpAccessToken(access, secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens[name] = token
+	}
+	if err := f.DB.Create(&entity.Tenant{ID: ids["owner"], Status: &active}).Error; err != nil {
 		t.Fatal(err)
 	}
-	previousDB := dao.DB
-	dao.DB = db
-	t.Cleanup(func() { dao.DB = previousDB })
-	if err := db.AutoMigrate(&entity.User{}, &entity.Tenant{}, &entity.UserTenant{}, &entity.APIToken{}, &entity.Knowledgebase{}); err != nil {
-		t.Fatal("migrate auth fixtures")
-	}
-	active, inactive := "1", "0"
-	for _, id := range []string{"owner", "other", "disabled"} {
-		user := entity.User{ID: id, Email: id + "@dify.invalid", Nickname: id, Status: &active}
-		if err := db.Create(&user).Error; err != nil {
-			t.Fatal("create fixture user")
-		}
-	}
-	if err := db.Model(&entity.User{}).Where("id=?", "disabled").Update("is_active", false).Error; err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{"owner", "foreign", "alias", "off", "offshared", "offmember", "invaliduser"} {
-		status := &active
-		if id == "off" || id == "offshared" {
-			status = &inactive
-		}
-		if err := db.Create(&entity.Tenant{ID: id, Status: status}).Error; err != nil {
-			t.Fatal("create fixture tenant")
-		}
-		user := "owner"
-		if id == "foreign" || id == "offshared" {
-			user = "other"
-		}
-		if id == "invaliduser" {
-			user = "disabled"
-		}
-		membershipStatus := &active
-		if id == "offmember" {
-			membershipStatus = &inactive
-		}
-		if err := db.Create(&entity.UserTenant{ID: id, UserID: user, TenantID: id, Role: "owner", Status: membershipStatus}).Error; err != nil {
-			t.Fatal("create owner membership")
-		}
-		kbStatus := status
-		if id == "offshared" {
-			kbStatus = &active
-		}
-		if err := db.Create(&entity.Knowledgebase{ID: id + "-kb", TenantID: id, Name: id, CreatedBy: user, Permission: "team", Status: kbStatus, ParserConfig: entity.JSONMap{}}).Error; err != nil {
-			t.Fatal("create fixture dataset")
-		}
-		if err := db.Create(&entity.APIToken{TenantID: id, Token: "key-" + id}).Error; err != nil {
-			t.Fatal("create fixture API key")
-		}
-	}
-	if err := db.Create(&entity.UserTenant{ID: "shared", UserID: "owner", TenantID: "foreign", Role: "normal", Status: &active}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&entity.UserTenant{ID: "offshared-member", UserID: "owner", TenantID: "offshared", Role: "normal", Status: &active}).Error; err != nil {
-		t.Fatal(err)
-	}
-	beta := "public-beta-key"
-	for _, token := range []entity.APIToken{{TenantID: "owner", Token: "duplicate"}, {TenantID: "foreign", Token: "duplicate"}, {TenantID: "owner", Token: "ordinary-key", Beta: &beta}} {
-		if err := db.Create(&token).Error; err != nil {
+	for _, m := range []struct{ name, role, status string }{{"owner", "owner", "1"}, {"member", "normal", "1"}, {"invite", "invite", "1"}, {"revoked", "normal", "0"}} {
+		status := m.status
+		if err := f.DB.Create(&entity.UserTenant{ID: utility.GenerateToken(), UserID: ids[m.name], TenantID: ids["owner"], Role: m.role, Status: &status}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	snapshot := func() string {
-		t.Helper()
-		var result strings.Builder
-		for _, table := range []string{"t_ai_users", "t_ai_tenants", "t_ai_user_tenants", "t_ai_api_tokens", "t_ai_knowledgebases"} {
-			var value string
-			if err := reader.QueryRow("SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text,'[]') FROM " + table + " t").Scan(&value); err != nil {
-				t.Fatal("independent SQL snapshot")
-			}
-			result.WriteString(value)
+	kb := f.Prefix + "kb"
+	if err := f.DB.Create(&entity.Knowledgebase{ID: kb, TenantID: ids["owner"], CreatedBy: ids["owner"], Name: kb, EmbdID: "selected", Permission: "team", Status: &active, ParserConfig: entity.JSONMap{}}).Error; err != nil {
+		t.Fatal(err)
+	}
+	modelCalls, retrievalCalls := 0, 0
+	model := &mockModelService{getEmbeddingFn: func(tenant, model string) (*models.EmbeddingModel, error) {
+		modelCalls++
+		if tenant != ids["owner"] || model != "selected" {
+			return nil, fmt.Errorf("lost selected binding")
 		}
-		return fmt.Sprintf("%x", sha256.Sum256([]byte(result.String())))
-	}
-	before := snapshot()
-	if err := server.InitVariables(difyAuthSigningStore{}); err != nil {
-		t.Fatal(err)
-	}
-	priorLicense := local.GetAdminStatus()
-	local.SetAdminStatus(0, "owned Dify acceptance")
-	t.Cleanup(func() { local.SetAdminStatus(priorLicense.Status, priorLicense.Reason) })
-	jwtToken, err := utility.SignUserJWT("owner@dify.invalid", server.GetSecretKey())
-	if err != nil {
-		t.Fatal(err)
-	}
-	wrongJWT, err := utility.SignUserJWT("owner@dify.invalid", "wrong-owned-signing-key")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := &difyTestDependencies{metadata: common.MetaData{}}
-	h := NewDifyRetrievalHandler(DifyRetrievalDependencies{Datasets: dao.NewKnowledgebaseDAO(), Metadata: d})
-	gin.SetMode(gin.ReleaseMode)
+		return &models.EmbeddingModel{}, nil
+	}}
+	retrieval := &mockRetrievalService{retrievalFn: func(_ context.Context, req *nlp.RetrievalRequest) (*nlp.RetrievalResult, error) {
+		retrievalCalls++
+		if len(req.DocIDs) != 1 || req.DocIDs[0] != service.NoMatchDocIDSentinel || len(req.KbIDs) != 1 || req.KbIDs[0] != kb || len(req.TenantIDs) != 1 || req.TenantIDs[0] != ids["owner"] {
+			return nil, fmt.Errorf("metadata no-match broadened or scope lost: %+v", req)
+		}
+		return &nlp.RetrievalResult{}, nil
+	}}
+	h := NewDifyRetrievalHandler(dao.NewKnowledgebaseDAO(), model, &mockMetadataService{}, retrieval, &mockDocDAO{}, &mockDocEngine{})
 	app := gin.New()
-	app.POST("/retrieval", NewAuthHandler().DifyAuthMiddleware(), h.Retrieval)
-	api := support.RegisteredHTTPServer(t, app)
-	client := &http.Client{Timeout: 5 * time.Second}
-	for _, test := range []struct {
-		name, token, kb string
-		status          int
-	}{
-		{"owner API", "key-owner", "owner-kb", 200},
-		{"alias original tenant", "key-alias", "alias-kb", 200},
-		{"JWT shared KB", jwtToken, "foreign-kb", 200},
-		{"JWT inactive foreign tenant active KB", jwtToken, "offshared-kb", 403},
-		{"API shared KB denied", "key-owner", "foreign-kb", 403},
-		{"same owner foreign token tenant", "key-owner", "alias-kb", 403},
-		{"duplicate token", "duplicate", "owner-kb", 403},
-		{"beta key", beta, "owner-kb", 403},
-		{"inactive tenant", "key-off", "off-kb", 403},
-		{"inactive membership", "key-offmember", "offmember-kb", 403},
-		{"inactive user", "key-invaliduser", "invaliduser-kb", 403},
-		{"wrong JWT", wrongJWT, "owner-kb", 403},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			d.calls = nil
-			request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, api.URL+"/retrieval", strings.NewReader(`{"knowledge_id":"`+test.kb+`","query":"question","use_kg":true,"metadata_condition":{"conditions":[{"name":"x","comparison_operator":"=","value":1}]}}`))
-			if err != nil {
-				t.Fatal(err)
+	app.Use(NewAuthHandler().AuthMiddleware())
+	app.POST("/retrieval", h.Retrieval)
+	api := testsupport.NewHTTP(t, app)
+	body := []byte(fmt.Sprintf(`{"knowledge_id":%q,"query":"q","metadata_condition":{"conditions":[{"name":"category","comparison_operator":"is","value":"missing"}]}}`, kb))
+	for _, actor := range []string{"", "owner", "member", "invite", "revoked", "foreign", "disabled", "invalid"} {
+		beforeModel, beforeRetrieval := modelCalls, retrievalCalls
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, api.URL+"/retrieval", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		token := tokens[actor]
+		if actor == "invalid" {
+			token = "Bearer invalid"
+		}
+		if token != "" {
+			req.Header.Set("Authorization", token)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actor == "owner" || actor == "member" {
+			if response.StatusCode != 200 || modelCalls != beforeModel+1 || retrievalCalls != beforeRetrieval+1 {
+				t.Fatal("authorized Dify", actor, response.StatusCode, string(raw))
 			}
-			request.Header.Set("Authorization", "Bearer "+test.token)
-			response, err := client.Do(request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			body, err := io.ReadAll(response.Body)
-			response.Body.Close()
-			if err != nil || response.StatusCode != test.status {
-				t.Fatal(response.StatusCode, string(body), err)
-			}
-			if test.status != 200 && len(d.calls) != 0 {
-				t.Fatal("denial touched downstream resources", d.calls)
-			}
-			if test.status == 200 && (len(d.calls) != 1 || d.calls[0] != "filter" || string(body) != `{"records":[]}`) {
-				t.Fatal("no-match touched forbidden resources", string(body), d.calls)
-			}
-		})
+		} else if response.StatusCode != http.StatusUnauthorized || modelCalls != beforeModel || retrievalCalls != beforeRetrieval {
+			t.Fatal("denied Dify touched provider/retrieval", actor, response.StatusCode, string(raw))
+		}
 	}
-	if after := snapshot(); after != before {
-		t.Fatal("HTTP authentication/retrieval changed SQL state")
+	var count int
+	if err := f.Read.QueryRow("SELECT count(*) FROM knowledgebase WHERE id=? AND tenant_id=?", kb, ids["owner"]).Scan(&count); err != nil || count != 1 {
+		t.Fatal("independent SQL scope readback", count, err)
 	}
-	journal.Event("dify-auth-readback", map[string]any{"endpoint": parsed.Host, "schema": schema, "snapshot_sha256": before, "original_token_tenant_preserved": true, "shared_JWT_allowed": true, "denial_downstream_calls": 0, "sql_unchanged": true})
+	f.Journal.Event("canonical-dify-scope-readback", map[string]any{"original_auth": true, "foreign_invite_revoked_disabled_zero_provider_retrieval": true, "empty_metadata_keeps_no_match_sentinel": true, "controlled_model_retrieval": true})
 }

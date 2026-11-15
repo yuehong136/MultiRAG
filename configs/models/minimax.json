@@ -1,6 +1,5 @@
 {
   "name": "MiniMax",
-  "tags": "LLM",
   "url": {
     "default": "https://api.minimaxi.com/",
     "global": "https://api.minimax.io/"
@@ -25,7 +24,7 @@
       }
     },
     {
-      "name": "MiniMax-M2.7",
+      "name": "minimax-m2.7",
       "max_tokens": 204800,
       "model_types": [
         "chat"
@@ -36,7 +35,7 @@
       }
     },
     {
-      "name": "MiniMax-M2.7-highspeed",
+      "name": "minimax-m2.7-highspeed",
       "max_tokens": 204800,
       "model_types": [
         "chat"
@@ -47,7 +46,7 @@
       }
     },
     {
-      "name": "MiniMax-M2.5",
+      "name": "minimax-m2.5",
       "max_tokens": 204800,
       "model_types": [
         "chat"
@@ -58,7 +57,7 @@
       }
     },
     {
-      "name": "MiniMax-M2.5-highspeed",
+      "name": "minimax-m2.5-highspeed",
       "max_tokens": 204800,
       "model_types": [
         "chat"
@@ -69,7 +68,7 @@
       }
     },
     {
-      "name": "MiniMax-M2.1",
+      "name": "minimax-m2.1",
       "max_tokens": 204800,
       "model_types": [
         "chat"
@@ -80,7 +79,7 @@
       }
     },
     {
-      "name": "MiniMax-M2.1-highspeed",
+      "name": "minimax-m2.1-highspeed",
       "max_tokens": 204800,
       "model_types": [
         "chat"
@@ -91,7 +90,7 @@
       }
     },
     {
-      "name": "MiniMax-M2",
+      "name": "minimax-m2",
       "max_tokens": 204800,
       "model_types": [
         "chat"

@@ -19,15 +19,15 @@ package infinity
 import (
 	"context"
 	"fmt"
+	"multirag/internal/common"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
-	infinity "github.com/infiniflow/infinity-go-sdk"
-
-	"multirag/internal/common"
 	"multirag/internal/server"
+
+	infinity "github.com/infiniflow/infinity-go-sdk"
 )
 
 // infinityClient Infinity SDK client wrapper
@@ -69,10 +69,12 @@ func NewInfinityClient(cfg *server.InfinityConfig) (*infinityClient, error) {
 		return nil, fmt.Errorf("Failed to connect to Infinity after 120s: %w", err)
 	}
 
-	return &infinityClient{
+	client := &infinityClient{
 		conn:   conn,
 		dbName: cfg.DBName,
-	}, nil
+	}
+
+	return client, nil
 }
 
 // WaitForHealthy blocks until Infinity is healthy or timeout
@@ -128,9 +130,15 @@ type infinityEngine struct {
 
 // NewEngine creates an Infinity engine
 func NewEngine(cfg interface{}) (*infinityEngine, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("infinity config is nil, please check your configuration file for 'doc_engine.infinity' settings")
+	}
 	infConfig, ok := cfg.(*server.InfinityConfig)
 	if !ok {
 		return nil, fmt.Errorf("invalid infinity config type, expected *config.InfinityConfig")
+	}
+	if infConfig == nil {
+		return nil, fmt.Errorf("infinity config is nil, please check your configuration file for 'doc_engine.infinity' settings")
 	}
 
 	client, err := NewInfinityClient(infConfig)
@@ -167,8 +175,8 @@ func NewEngine(cfg interface{}) (*infinityEngine, error) {
 	return engine, nil
 }
 
-// Type returns the engine type
-func (e *infinityEngine) Type() string {
+// GetType returns the engine type
+func (e *infinityEngine) GetType() string {
 	return "infinity"
 }
 

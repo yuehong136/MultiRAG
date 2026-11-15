@@ -1,44 +1,40 @@
-# Go document stores
+# Go document engines
 
-The Go server is a parallel implementation; Python remains the production backend.
-`DocEngine` in [engine.go](engine.go) defines the active storage contract.
+Python remains the production backend. Go uses the original `DocEngine` contract in
+[engine.go](engine.go), with Elasticsearch and Infinity implementations in their
+corresponding directories. No Milvus implementation or management-reader adapter
+is retained outside the frozen target.
 
-Elasticsearch uses one `multirag_<tenant>` chunk index and a separate
-`multirag_doc_meta_<tenant>` metadata index. Chunk writes always add the explicit
-KB scope. `DropChunkStore` removes only that KB's rows from the shared index.
-Mappings are applied when a store is created, without constructor-time cluster
-index templates. Store creation adds a missing vector dimension to an existing
-chunk index; metadata creation is idempotent. All query writes validate backend
-counts, conflicts, failures and refresh completion.
+ES stores chunks in a shared `multirag_<tenant>` index and metadata in
+`multirag_doc_meta_<tenant>`. Chunk writes bind the explicit dataset; typed ID
+conditions are retained, invalid predicates fail before I/O, and query-write
+conflicts, partial failures and timeouts are errors. Physical chunk IDs include
+the dataset to avoid cross-KB collisions. `DropChunkStore` deletes only the given
+KB rows in a shared tenant index. The original dedicated Skills index uses
+dataset `skill`; its drop validates the index name and requires acknowledged
+physical deletion. Chunk-store creation installs the actual requested vector
+dimension, including a new dimension added to an existing tenant index.
+Single updates wait for refresh. Metadata uses the original query-based
+merge/delete route, preserving literal JSON term identities. Removing the final
+metadata key deletes its row. These multi-request metadata operations do not
+promise atomicity against concurrent writers.
 
-Metadata insertion replaces a row; `UpdateMetadata` merges keys. Existing Python
-physical ES IDs are preserved and duplicate logical identities fail. Metadata
-key deletion takes distinct non-empty literal keys and rejects an empty selection.
-Absent keys are a no-op; removing the final key deletes the row. ES performs the
-key change and final-row deletion in one script with conflict retries. Callers
-must authorize document/KB/tenant identities in SQL first. Disabled chunk reads
-are available only through the explicit management reader interface.
+`GetChunk` is the frozen scoped direct read; retrieval availability is selected
+by the caller's Search filter. There is no additional management-read interface.
+Search keeps the original ordered text/dense/fusion route and field/sort shapes.
+Explicit empty dataset scope returns no rows. Backend failures are errors;
+metadata JSON retains integer precision. Highlight output escapes source HTML
+and retains only the highlighting `<em>` markup.
 
-Infinity uses the pinned Go SDK with per-dataset tables. Metadata JSON columns
-are decoded by row with validated length prefixes. Key deletion rejects duplicate
-or malformed rows before mutation and checks request cancellation between SDK
-calls. The SDK does not provide per-call context cancellation or an atomic JSON
-key-update primitive; this read/modify/write operation does not promise isolation
-from concurrent metadata writers. Its default non-JSON metadata update path
-retains the existing merge contract.
+Infinity uses the pinned SDK and per-dataset tables. Original filter builders
+handle quoted IDs without silently changing their values. Packed metadata JSON
+is validated and aligned by the existing metadata functions. The SDK lacks
+per-call context cancellation; cancellation before a call is checked, but an
+in-flight SDK operation is not claimed to be interruptible. No pooled-client or
+new query architecture is introduced. Metadata read/modify/write is not atomic.
 
-Generic Milvus chunk/metadata writes, including metadata key deletion, return an
-explicit unsupported error. Skills have their own implemented storage contract.
-No empty mock result establishes generic backend support.
-
-ES result helpers return logical chunk IDs, stored field mappings, deterministic
-field/tag counts and escaped keyword highlights. They preserve indexed keyword
-arrays and caller inputs. An explicitly empty KB scope produces no search results;
-malformed filter selections fail before I/O. Retrieval availability filtering is
-separate from authenticated management reads.
-
-See [CLI commands](../cli/README.md#dataset-chunks-and-metadata) for the protected
-management routes and grammar. Tests include controlled backend failure/identity
-cases and opt-in real PostgreSQL, ES and Infinity HTTP/CLI consumers. Live tests
-require owned namespaces and `REQUIRE_SERVICES=1`; protocol tests do not establish
-production or hosted-provider availability.
+Redis initialization can retry after failure and close; Health uses a bounded
+read-only PING. NATS uses configured address/subject, validates task frames and
+closes its connection during engine shutdown. Real ES/Infinity/Redis/NATS tests
+use isolated resources with independent cleanup checks. See the
+[development guide](../../docs/development.md#go-并行实现的本地验证).

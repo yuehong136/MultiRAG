@@ -1,99 +1,79 @@
 # Go 结构与合同收敛
 
-本专项的基线是 `1f154bea3e60b378caecb3b2fdf9e1e672ca7f3d`，冻结对齐目标是
-`fcebcebe1e0e798b42c18e5593747cd20eb4c757`。生产后端仍使用
-Python；Go 尚未部署，本次收敛不保留旧 Go API、别名、包装器或旧数据布局的兼容承诺。
-不切换生产队列，不迁移 Python 数据，不 push 或部署。
+冻结目标为 `fcebcebe1e0e798b42c18e5593747cd20eb4c757`，专项起始版本为
+`1f154bea3e60b378caecb3b2fdf9e1e672ca7f3d`。函数职责、文件、目录、依赖、配置、
+默认值和删除项一起收敛。Go 尚未部署，本次删除旧 Go 门面和别名，并迁移源码消费者。
+生产后端继续使用 Python；本专项不切换生产队列或共享数据。
 
-## 实施准则
+## 当前实现
 
-函数、文件、目录、模块、依赖、配置默认值和删除项都属于对齐范围。保持直接可查的路径和
-符号对应关系，不为局部实现自行拆文件、细化函数或发明替代抽象。项目名和 import 的机械映射
-单列说明。必要缺陷修复在原位置完成；提前采用后续改进必须有明确提交依据，记录范围和原因。
+| 范围 | 当前合同与入口 |
+| --- | --- |
+| 配置与数据库 | 配置统一使用本仓 `configs/`：Go 模型在 `configs/models/` 与 `configs/all_models.json`，公共映射复用已有文件；仅 Go 的服务配置和私钥放在 `configs/go/`。Go 使用 MySQL，Python 配置与数据保持现有合同；删除旧 Go PostgreSQL 路径及私有实例绑定包装。 |
+| 模型 | 原 provider 文件、构造器和 `ModelDriver` 统一使用 messages、typed inventory 与原媒体接口；service、handler、CLI 直接调用对应原函数。旧单消息/channel 入口、numeric TenantLLM 绑定、配置投影和自适应 URL 别名已移除。 |
+| Agent | 使用原 canvas、组件、版本和 session 路径；CRUD、DSL 和执行入口分开验证。未实现的执行组件明确返回错误，不以日志、占位答案或空结果表示成功。 |
+| 检索与存储 | 使用原 Elasticsearch、Infinity、NATS、Redis 和对象存储接口；dataset/tenant 范围进入实际查询和写入。保留原过滤、结果解析和存储生命周期路线。 |
+| 解析与 ingestion | Office 使用 native binding；单独的 `cmd/ingestor.go` 消费 NATS。operator 按声明顺序执行，重复 stage 保留。未实现的文档处理明确写入失败状态，提交失败不 ACK。PDF 能力仍按原入口明确报未实现。 |
+| API、admin、CLI | 路由按原注册函数装配，使用原 MySQL schema、鉴权和请求结构；CLI 使用 `internal/cli/` 及其 `filesystem/`，分别构建四个 main。原目标仍存在的 `/v1` 路由属于当前合同。 |
+| 构建与 CI | 默认准备对应源码的 native 库、Office oxide、词典与锁定模块；服务测试不接受 opt-in skip。CI 要求实际 SQL/NATS/ES/Infinity/Redis/MinIO、HTTP、CLI 和 native 用例通过。 |
 
-“已评估”“部分实现”“结构不同”“目标自身未完成”和“已验证对齐”分别记录。
-文本相同、路径覆盖、旧批次完成记录、已有本地测试通过，都不能代替合同和运行验证。
-本地测试随合同迁移：删除只服务于已退役兼容入口的测试，保留实质失败、授权、并发和副作用
-断言，并迁到对应文件。不能通过放宽断言或删除有效回归换取通过。
+项目名映射为 `ragflow/` → `multirag/`、小写项目/命令前缀和 CLI 文件名。
+`RAGFlowClient` 等原类型与函数名保留。除测试登记设施外，生产 Go 文件可按原路径直接定位。
+具体问题修复和提前采用的后续改进分别记在[例外记录](go-alignment-exceptions.md)。
 
-## 依赖与完成条件
+## 本仓配置路径与依赖版本
 
-| 事项 | 当前事实与收敛动作 | 依赖 / 调用方 | 必须取得的证据 | 状态 |
-| --- | --- | --- | --- | --- |
-| GOA-00 全树和历史审计 | 建立逐路径、逐提交及全部删除足迹账本；逐模块比较活动合同与原结构 | 全部 Go、native、构建、配置、文档和跨仓调用 | 语义处置、删除去向、例外来源；计数只用于查漏 | 结构盘点完成，语义审计进行中 |
-| GOA-01 启动、配置与 SQL | 将 Go 配置和数据库初始化收敛到独立 MySQL 环境；去掉 PostgreSQL 分支；迁移 DAO、schema 与状态字段 | `internal/server`、`internal/dao`、`internal/entity`、各 cmd；Python 配置/数据库只读查界 | scratch MySQL 建表、事务提交与失败读回；确认不读取生产 Python 配置 | 待实施 |
-| GOA-02 模型 | 模型定义回归对应目录；typed `ListModels` 和公共转换下沉到 driver；统一 messages 流接口；实例构造、媒体接口、provider 身份及配置一致；删除旧包装/投影 | 全部 provider、service、handler、agent 和 CLI；不得用旧测试阻挡签名迁移 | 受控 provider、元数据/索引向量、取消和错误；真实 HTTP/CLI 与 SQL 读回 | 部分实现：messages 与定义目录已收敛，其余未完成 |
-| GOA-03 解析和 native | 默认 Office native，补齐对应文件和 PDF；移除内置解析替代路线；native 构建和字典与实际平台一致 | C++ binding、tokenizer、parser、deepdoc、CLI | 各真实格式、失败/空内容边界、native 编译链接、真实 CLI | 待实施 |
-| GOA-04 ingestion / 队列 | 补齐 ingestion task/tasklet 与日志、控制面 API、NATS、独立 worker；DSL 去掉本地额外 stage 限制；逐项标记执行器占位 | GOA-01、GOA-03；engine、DAO、admin、router、CLI、worker | 真 NATS 传输、ACK/NAK、故障重投、取消/停止/删除、独立 SQL 读回；模拟执行不能报成功 | 部分实现：ChunkPlan 合同已调整；worker/队列未完成 |
-| GOA-05 Agent | 文件/函数和 DSL 结构收敛；补 session 创建；恢复 create/publish/run 参数与默认值；占位组件与真实 CRUD 分开处理 | GOA-01、GOA-02；canvas、组件、runtime、handler/router、SQL 与对象存储 | Create→publish→run/version→session HTTP/SQL；故障副作用、取消和 DSL 合法例 | 待实施 |
-| GOA-06 检索与存储 | engine 接口、实现文件、过滤/排序和存储生命周期收敛；删除没有目标合同依据的分支；必要缺陷修复逐项保留在原位置 | GOA-01、GOA-02；service/handler/CLI | 隔离索引/SQL/对象存储的实际读写、删除失败与重试、租户隔离 | 待实施 |
-| GOA-07 API / CLI / admin | 按对应文件合并本地拆分；同步路由、请求、响应、命令语法、heartbeat、OAuth、skill 和消息合同；删除旧 facade/fallback | GOA-01—06；真实消费者逐项迁移 | 注册路由鉴权、真实 CLI/HTTP、admin/worker 联动及失败读回 | 待实施 |
-| GOA-08 构建、CI 和文档 | 更新独立入口、默认 native 准备和专项登记；删除过期能力说明、失效测试名及旧结构指引 | GOA-01—07；build、CI、开发文档与程序映射 | 锁定组合 build/vet、全部独立 main、race/native/SQL/NATS/HTTP/CLI；本地 CI 配置不称远程运行 | 待实施 |
+按用户本次指令，冻结上游 `conf/` 只作仓路径映射，不保留第二个顶层配置目录。
+原 Go 专用 `models/` 和 `all_models.json` 继续位于本仓已有 `configs/` 路径；公共 JSON
+复用当前文件并保留其原字节，其中 Go 原 `mapping.json` 对应已有 `configs/es_mapping.json`。
+未被 Go 读取的 `llm_factories.json`、`system_settings.json`、`os_mapping.json` 不再复制副本。
+Go 与 Python 的服务配置结构不同，前者单独放在 `configs/go/service_conf.yaml`，
+Go RSA 默认路径随其放在 `configs/go/`，不覆盖 Python 的服务配置，也不增加旧路径 fallback。
+所有 Go 读取位置、CLI、测试夹具和对应目录测试直接迁移，原函数和文件保持对应。
 
-同一组签名变更与全部源码调用方一起迁移，不能留下永久适配层。先取得定向回归，再锁定组合
-集中验收，不为每个中间 commit 重复全套。缺服务是未完成验收，不能转换成 skip。
+Go 模块版本保持冻结目标。相对主仓合并前版本有 23 项下降：22 项精确采用冻结 `go.mod`；
+`x/image v0.25.0` 来自冻结 `go.sum` 和 Excelize 的传递依赖，仅额外显式补入间接 require。
+`go.sum` 与冻结目标逐字节相同。全部降级、升级及原生工具链关系见
+[依赖版本对照](go-dependencies.md)。
 
-## 本地证据与当前限制
+## 验证与边界
 
-本地审计和完整对照账本保存在
-`/Users/xldu/.local/state/multirag/validation/20261109-go-full-alignment/`，不入库第三方逐行分析：
-`reservation.json`、`initial-status.bin`、`initial.diff`、`path-ledger.json`、
-`alignment-ledger.md`、`commit-ledger.json`、`upstream-deletions.txt`、
-`local-only-deletion-plan.txt` 和冻结目标的 `target/`。
+专项在独立 worktree 执行；主仓的其他提交与未提交改动持续保留。本地完整证据根为
+`/Users/xldu/.local/state/multirag/validation/20261109-go-full-alignment/`。
+该目录保存冻结归档、逐路径/符号/历史删除账本、旧测试源与逐项处置、输入哈希、
+原始退出、测试事件、首败和独立资源清理读回。逐路径或 AST 计数用于查漏，不能替代语义验收。
 
-首版盘点包括 1,518 个路径记录、387 个 first-parent Go/构建相关历史提交足迹。
-139 个目标路径在简单路径映射后缺失，677 个本地路径无同路径目标；其中包含拆分、搬迁和
-测试差异，不能直接称为 139 个缺失能力或 677 个应无条件删除的文件。
-208 项只完成机械文本一致性检查；494 项仍存在文本或结构差异。当前没有全树运行对齐结论。
+已取得的定向证据包括真实 native 重建与 ASan/UBSan、词典/NLP/KG、六种 Office 的真实 CLI、
+四个 main 的冷启动和停止、真实 NATS/SQL 失败重投，以及引擎、鉴权、文件快照、模型和消费者
+的 SQL/HTTP/race 回归。有效业务断言迁入原函数消费者；仅依赖已退役门面、旧 schema 或旧协议
+的断言单独记为退休，不用它们阻止结构收敛。
 
-AST 审计另保存 `ast-inventory.json` 和 `symbol-ledger.json`，逐项记录类型、签名、位置、
-函数体摘要和直接调用表达式。相同符号有 321 项位于不同文件；这用于发现结构搬迁，
-不是已完成语义审计的证明。方法继承、重命名、参数名和 import alias 都需人工解释。
+本地 Go 收敛与适用验收于 2026-11-15 完成，交付在独立分支
+`codex/go-full-alignment`。425 个原生产 Go 文件均可直接对应；CLI 文件名按项目名映射。
+原 6,418 个函数/类型符号无缺失、无挪动。新增四个测试登记文件不进入生产依赖图；
+新增生产符号和必要签名差异逐项列入例外，不以 AST 数量替代业务验收。
 
-当前首处实现为 `internal/ingestion/chunk_engine.go`：公开 `ChunkPlan.Operators`，按声明
-顺序保留全部 stage，取消固定数量、顺序、去重和必选 split 的额外限制；空 pipeline 产生
-空 plan。已有 nil-plan 错误、缺失 preprocess 时输入初始化和最终 chunk 索引/Unicode
-size 归一化暂保留为有具体问题依据的修复，仍需在整个 operator 链审计中复核。
-`go test -race -count=1 -json ./internal/ingestion` 通过（11 个 test/subtest 事件、无 skip），
-原始报告和 JUnit 为 `19b40d3a055049c18d12d589d7831014.output` 与
-`chunk-dsl-race.junit.xml`。该证据不覆盖 CLI、native、SQL 或队列。
+| 本地证据 | 结果与原始回执 |
+| --- | --- |
+| 四个 main、生产包 build/vet | `8361b08763694a08a4522939488e3f5d`，raw 0。带 integration 标签的两个受影响包 vet：`9e3780e931704638befd987f2fa5467c`，raw 0。 |
+| 全部 `internal` 默认包 race | `ea7cc49d6fb54a4181a56004ab158382`，raw 0；1,152 项输入和四个候选二进制哈希无漂移。 |
+| 原 integration 标签验收 | `66de7a2f108944cd9a9d38927d98e669`，完整 admin/handler 包 race，raw 0；1,153 项输入无漂移。该标签只增加两个原测试文件，生产依赖源码图比对无差异：`21070be37c2b4e3e8e59fb5ec6013d1d`。 |
+| 最终包级组合与 CI 清单 | 用带标签的 admin/handler 完整结果替换默认组合中的同名两包，其余包复用相同源码、模块和配置的结果；保留两份原始输出与 composition。共 35 个有测试的包、2,278 个顶层测试、7,258 个通过事件，0 失败、0 测试跳过。51 项必需消费者核对 `708de0acddf24ae38c2a0962f28a6b89`，raw 0。结果按包组合，原始输出独立保留。 |
+| 最终二进制冷启动与 CLI | `60a53226bd32499cb6f0f8a330f1564b`，raw 0；真实 admin/API/ingestor、鉴权、SQL 读回、CLI、停止和端口重新绑定。六种 Office 的实际 CLI 在完整 race 中执行。 |
+| native 与构建生命周期复用 | ASan/UBSan `a20b98a27f174911be92c8aa5705c1db`、双进程首退出回收 `fc10d2888a1a49758e3978bde7256fe2` 均 raw 0，输入哈希重新核对一致。NLP 测试有改动，使用本轮实际整包结果，不复用旧测试哈希。 |
+| Python 支撑文件 | CI 策略单测 40 项通过；八个支撑/目录测试文件 Ruff check 与 format check 通过。保留生产目录断言和已独立复现的既有基线失败。 |
+| 清理与读回 | 默认包 1,022 份、integration 包 532 份登记日志全部结束且无失败；保留逐项 SQL/对象/监听器清理证据。六服务及旧登记遗留卷清理后，三个登记组容器、卷和端口独立读回均为空；12 个自有借用链接、28 个临时私密文件已删除，借用模型原文件保留。 |
 
-模型接口第一步已统一为 messages 同步调用和 `ChatStreamlyWithSender`；删除旧单消息、
-channel 入口及三项 service 包装，全部 Go 引用同步迁移。模型包 race 复跑通过，
-`64718f4f6f0f45f596010d611305c1be.output` 有 4,098 个 test/subtest 通过事件，无 skip。
-首跑的测试夹具 nil 指针失败保留于 `64872a27d69d451a92295042d8df108a.output`。
-全包测试编译发现跨包测试 driver 和绑定模型的旧签名，修复后对 service、KG 与 handler
-执行定向 race（`0f818a8659ff4e2ca4b091cf1b4973e9.output`）。该命令运行 generation、
-searchbot 和 pipeline 测试；handler 仅完成编译，不表示 SQL/HTTP live 已验收。
-typed inventory、factory、配置/provider 身份和其余模型结构仍未完成，
-不能将本步记为 GOA-02 全部对齐。
+CI 的 vet/test 现明确启用原 integration 标签。首轮的错误库存断言、OTel 校验/schema
+冲突、冷启动留下的测试任务流，以及 CI 必需项漏纳标签文件的首次失败均保留，随后按根因闭合。
+最终暂存检查删除两个恢复文件中的纯空白；已核对规范 Go 格式及解码 JSON 完全一致，
+单列非行为差异并复用上述行为验收。
+561 个旧测试文件、55 项模型服务断言和 25 项旧 router 测试均有逐项去向；
+退役旧协议的断言与迁移到实际消费者的有效断言分别记录。
 
-随后模型定义迁至 `internal/entity/models/model.go`，删除旧文件；DAO、service、CLI、
-skills 和测试直接引用新位置，没有导出别名。访问内部目录索引的回归移至对应的
-`internal/entity/models/model_test.go`。该步仅恢复定义目录，loader、字段类型和 inventory
-结构仍须继续收敛。模型包 race 在 `1763846df83e40a085a880ad99552481.output` 中通过；
-同次 entity 测试因旧位置访问私有字段编译失败，迁移测试后 entity race
-`452c2c0dd7b3439ca1220211921724c2.output` 与单项 metadata race
-`68aa64ee72c14e46b99f4b416c02708e.output` 均通过。
-
-当前工作组合的 `go build ./internal/...`、`go vet ./internal/...` 及现有三个独立入口构建
-通过，报告为 `7d724a92e0af4caf92603c67a6f33ac8.output`，完整输入摘要为
-`catalog-build-inputs.json`。C++ 源码未变化，借用的同平台 native 库及源码一致性见
-`native-borrow.json`，这不是重建或新 native 能力的验收。设置实际新构建的
-`MULTIRAG_M_CLI` 与 `REQUIRE_SERVICES=1` 执行本地 ingestion 消费者，实际子进程运行
-四个命令，包含重复且超过三个 stage 的 pipeline；
-`b15434e50cb346fd8eaa0b08da862346.output` 通过。该命令的 Office fixture 显式选用当前
-builtin，不能称为目标默认 native 路线已完成。目标 ingestor 入口仍缺失，现有三个入口
-通过不代表全部目标入口通过。
-
-历史删除索引已用 `--no-renames` 补齐旧路径，包含 88 个曾删除/搬迁路径；85 个在目标
-仍不存在，其中 22 个在初始本地树仍有对应路径；本次定义目录归位后剩余 21 个，逐项去向在
-`historical-deletion-disposition.json` 与 `deletion-moves.json`。已有 HTTP fixture 中仍有
-未逐例登记的旧测试资源，当前仅有 runner 进程/临时目录和部分 case 的登记证据，
-不能声明整个专项资源协议通过。最终组合的 SQL/NATS、native、全范围 race 与资源独立清理
-均未完成；task cache 和构建产物保留给后续专项验证，所有已结束 runner 的退出和清理记录保留。
-
-主树 28 项既有 WIP 已留存快照，专项在独立 worktree 实施。所有本专项提交仅暂存已核归属
-路径；串行合并本地 main 前重查主树。测试经 `scripts/run_registered.py`，资源先登记、后创建，
-保留原始退出、首败、JUnit/JSON 及独立清理读回。真实供应商、生产和远程 `ci-required`
-均未运行，不能从受控服务或本地结果推断通过。
+受控供应商 HTTP 验证不代表付费供应商实测；本地通过不代表远程 `ci-required` 或生产通过。
+一次旧 Bedrock 夹具曾越过受控边界并收到真实 AWS 403，按验证协议偏差单列保存，不算供应商验收。
+Python catalog 定向测试的一项 SiliconFlow 缺失模型断言已在未修改基线独立复现，保留该生产断言。
+冻结目标尚未接通的公开 Agent 执行、部分组件及 PDF 等能力按原入口明确失败，
+对应真实能力边界见各模块 README 与例外记录。未 push、部署或切换生产；
+远程 CI 与真实付费供应商验收未执行。主仓其他活动分支及其 WIP 保留。

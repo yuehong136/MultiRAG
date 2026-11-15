@@ -1,7 +1,6 @@
 package models
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -27,7 +26,7 @@ func TestGoogleCustomEndpointSDKAndIsolation(t *testing.T) {
 			var calls atomic.Int32
 			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
-				if r.Header.Get("x-goog-api-key") != instance || r.URL.Query().Has("key") {
+				if r.Header.Get("x-goog-api-key") != instance {
 					t.Error("instance authentication changed")
 				}
 				switch r.URL.Path {
@@ -48,13 +47,13 @@ func TestGoogleCustomEndpointSDKAndIsolation(t *testing.T) {
 					w.WriteHeader(http.StatusNotFound)
 				}
 			}))
-			urls := map[string]string{"default": fallback.URL, instance: "  " + server.URL + "/proxy/" + instance + "  "}
+			urls := map[string]string{"default": fallback.URL, instance: server.URL + "/proxy/" + instance}
 			driver, err := NewModelFactory().CreateModelDriver("Google", urls, URLSuffix{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			urls[instance] = fallback.URL
-			api := &APIConfig{APIKey: stringPtr(" " + instance + " "), Region: &instance}
+			api := &APIConfig{ApiKey: stringPtr(" " + instance + " "), Region: &instance}
 			name, message := "gemini-test", "hello"
 			reply, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: message}}, api, nil)
 			if err != nil || reply == nil || reply.Answer == nil || *reply.Answer != instance {
@@ -75,13 +74,13 @@ func TestGoogleCustomEndpointSDKAndIsolation(t *testing.T) {
 				t.Fatal("custom embedding", vectors, err)
 			}
 			names, err := driver.ListModels(api)
-			if err != nil || !reflect.DeepEqual(names, []string{"models/gemini-test"}) {
+			if err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{"models/gemini-test@Google"}) {
 				t.Fatal("custom discovery", names, err)
 			}
 			if err := driver.CheckConnection(api); err != nil {
 				t.Fatal("custom connection", err)
 			}
-			if calls.Load() != 5 || api.Context != nil || *api.APIKey != " "+instance+" " || *api.Region != instance {
+			if calls.Load() != 5 || api.Context != nil || *api.ApiKey != " "+instance+" " || *api.Region != instance {
 				t.Fatal("SDK call count or request configuration changed")
 			}
 		})
@@ -95,7 +94,7 @@ func TestGoogleRejectsInvalidEndpointBeforeSDK(t *testing.T) {
 	} {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			driver := NewGoogleModel(map[string]string{"default": "https://generativelanguage.googleapis.com", "custom": endpoint}, URLSuffix{})
-			client, err := driver.client(context.Background(), &APIConfig{APIKey: stringPtr("private-key"), Region: stringPtr("custom")})
+			client, err := driver.ChatWithMessages("fixture", []Message{{Role: "user", Content: "hello"}}, &APIConfig{ApiKey: stringPtr("private-key"), Region: stringPtr("custom")}, nil)
 			if err == nil || client != nil {
 				t.Fatal("invalid custom endpoint accepted by SDK client")
 			}

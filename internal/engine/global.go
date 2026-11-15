@@ -17,22 +17,24 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
+	"multirag/internal/common"
+	"multirag/internal/engine/nats"
 	"multirag/internal/server"
 	"sync"
 
-	"go.uber.org/zap"
-
-	"multirag/internal/common"
 	"multirag/internal/engine/elasticsearch"
 	"multirag/internal/engine/infinity"
-	"multirag/internal/engine/milvus"
+
+	"go.uber.org/zap"
 )
 
 var (
-	globalEngine DocEngine
-	engineType   EngineType
-	once         sync.Once
+	globalEngine       DocEngine
+	engineType         EngineType
+	messageQueueEngine MessageQueue
+	once               sync.Once
 )
 
 // Init initializes document engine
@@ -46,8 +48,6 @@ func Init(cfg *server.DocEngineConfig) error {
 			globalEngine, err = elasticsearch.NewEngine(cfg.ES)
 		case EngineInfinity:
 			globalEngine, err = infinity.NewEngine(cfg.Infinity)
-		case EngineMilvus:
-			globalEngine, err = milvus.NewEngine(cfg.Milvus)
 		default:
 			err = fmt.Errorf("unsupported doc engine type: %s", cfg.Type)
 		}
@@ -73,8 +73,31 @@ func Get() DocEngine {
 
 // Close closes document engine
 func Close() error {
+	var queueErr error
+	if messageQueueEngine != nil {
+		queueErr = messageQueueEngine.Close()
+	}
 	if globalEngine != nil {
-		return globalEngine.Close()
+		return errors.Join(queueErr, globalEngine.Close())
+	}
+	return queueErr
+}
+
+func GetMessageQueueEngine() MessageQueue {
+	return messageQueueEngine
+}
+
+func InitMessageQueueEngine(messageQueueType string) error {
+	config := server.GetConfig()
+	switch messageQueueType {
+	case "nats":
+		messageQueueEngine = nats.NewNatsEngine(config.Nats.Host, config.Nats.Port)
+		err := messageQueueEngine.Init()
+		if err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported message queue type: %s", messageQueueType)
 	}
 	return nil
 }

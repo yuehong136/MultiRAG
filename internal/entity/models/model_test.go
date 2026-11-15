@@ -2,7 +2,6 @@ package models
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
 )
 
@@ -18,29 +17,38 @@ func TestSupportedSiliconFlowOwnerSuffixMetadata(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	pm := &ProviderManager{
-		Providers: []Provider{{Name: "SiliconFlow", Models: []*Model{&providerOnly}}, {Name: "other", Models: []*Model{&raw}}},
-		modelIndex: map[string]*Model{
-			"org/raw": &raw, "org/raw@literal": &exact, "org/raw@revision": &versioned,
-		},
+	before := providerManager
+	t.Cleanup(func() { providerManager = before })
+	providerManager = &ProviderManager{Providers: []Provider{{Name: "SiliconFlow", Models: []*Model{&providerOnly}}}, AllModels: []Model{raw, exact, versioned}, Alias2ModelIndex: map[string]int{"org/raw": 0, "org/raw@literal": 1, "org/raw@revision": 2}}
+	list := ModelList{Models: []DSModel{{ID: "org/raw", OwnedBy: "owner"}, {ID: "provider-only", OwnedBy: "owner"}, {ID: "org/raw@literal"}, {ID: "org/raw@revision", OwnedBy: "owner"}, {ID: "unknown", OwnedBy: "owner"}, {ID: "org/raw@"}, {ID: "@owner"}}}
+	rows := ParseListModel(list)
+	want := []string{"org/raw@owner", "provider-only@owner", "org/raw@literal", "org/raw@revision@owner", "unknown@owner", "org/raw@", "@owner"}
+	if len(rows) != len(want) {
+		t.Fatal(rows)
 	}
-	names := []string{"org/raw@owner", "provider-only@owner", "org/raw@literal", "org/raw@revision@owner", "unknown@owner", "org/raw@", "@owner"}
-	before := append([]string{}, names...)
-	rows := pm.DescribeSupportedModels("sILICONfLOW", names)
-	encoded, err := json.Marshal(rows)
-	want := `[{"name":"org/raw@owner","max_tokens":0,"max_dimension":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}},{"name":"provider-only@owner","max_tokens":32,"model_types":["chat"]},{"name":"org/raw@literal","max_tokens":7},{"name":"org/raw@revision@owner","max_tokens":16},{"name":"unknown@owner"},{"name":"org/raw@"},{"name":"@owner"}]`
-	if err != nil || string(encoded) != want || !reflect.DeepEqual(names, before) {
-		t.Fatalf("metadata/identity/order = %s, %v; want %s", encoded, err, want)
+	for i, name := range want {
+		if rows[i].Name != name {
+			t.Fatal("identity/order", rows)
+		}
 	}
-	*rows[0].MaxTokens, *rows[0].MaxDimension = 99, 99
+	if rows[0].MaxTokens == nil || *rows[0].MaxTokens != 0 || rows[0].MaxDimension == nil || *rows[0].MaxDimension != 0 || rows[0].Thinking == nil || rows[0].Thinking.DefaultValue || rows[0].ModelTypes == nil {
+		t.Fatal("explicit zero/false/empty metadata lost", rows[0])
+	}
+	if rows[1].MaxTokens != nil || rows[4].MaxTokens != nil {
+		t.Fatal("provider-only fallback is not part of canonical global catalog", rows)
+	}
+	if *rows[2].MaxTokens != 7 || *rows[3].MaxTokens != 16 {
+		t.Fatal("exact/revision identity lost")
+	}
+	*rows[0].MaxTokens = 99
+	*rows[0].MaxDimension = 99
 	rows[0].Thinking.DefaultValue = true
-	*rows[1].ModelTypes = append(*rows[1].ModelTypes, "changed")
-	again, _ := json.Marshal(pm.DescribeSupportedModels("SiliconFlow", names))
-	if string(again) != want {
-		t.Fatal("owner fallback changed catalog metadata", string(again))
+	rows[0].ModelTypes = append(rows[0].ModelTypes, "changed")
+	again := ParseListModel(list)
+	if *again[0].MaxTokens != 0 || *again[0].MaxDimension != 0 || again[0].Thinking.DefaultValue || len(again[0].ModelTypes) != 0 {
+		t.Fatal("response mutated global catalog")
 	}
-	other := pm.DescribeSupportedModels("other", []string{"org/raw@owner", "provider-only@owner"})
-	if other[0].MaxTokens != nil || other[1].MaxTokens != nil {
-		t.Fatal("owner fallback escaped SiliconFlow")
+	if list.Models[0].ID != "org/raw" || list.Models[0].OwnedBy != "owner" {
+		t.Fatal("input list changed")
 	}
 }

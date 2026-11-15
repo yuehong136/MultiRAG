@@ -19,8 +19,9 @@
 // UserFillUp is the user-interaction / form-filling node. It renders an
 // optional `tips` template (with `{{key}}` placeholders resolved against
 // the form's input map) and passes each form field through to its
-// downstream outputs. File-type inputs are explicitly unavailable until
-// the actual file service is wired. Canvas owns native pause/resume.
+// downstream outputs. File-type inputs (value.type starts with "file")
+// are deferred — Phase 5 will wire FileService.get_files; the P3 port
+// emits a stable "<file:key>" stub so the run keeps flowing.
 //
 // Mirrors agent/component/fillup.py:24-83.
 package component
@@ -39,6 +40,11 @@ const componentNameUserFillUp = "UserFillUp"
 // defaultUserFillUpTips is used when the operator omits the `tips` param.
 // Matches the Python default in fillup.py:28.
 const defaultUserFillUpTips = "Please fill up the form"
+
+// fileStubPrefix is prepended to the form-field key when an input is
+// classified as a file-type input. Phase 5 will replace this with the
+// actual FileService.get_files payload.
+const fileStubPrefix = "<file:"
 
 // tipsPlaceholderPattern matches `{{key}}` placeholders in the tips
 // template. The pattern intentionally only accepts simple identifiers
@@ -124,15 +130,7 @@ func (u *UserFillUpComponent) Invoke(ctx context.Context, inputs map[string]any)
 		return nil, fmt.Errorf("UserFillUp: %w", err)
 	}
 
-	fields, present := formFields(inputs)
-	if !present {
-		return nil, fmt.Errorf("UserFillUp: invoke through canvas interrupt/resume: %w", ErrNotImplemented)
-	}
-	for _, raw := range fields {
-		if field, ok := raw.(map[string]any); ok && isFileType(field) {
-			return nil, fmt.Errorf("UserFillUp file input: %w", ErrNotImplemented)
-		}
-	}
+	fields, _ := formFields(inputs)
 	out := make(map[string]any, len(fields)+1)
 
 	if u.param.EnableTips {
@@ -141,6 +139,9 @@ func (u *UserFillUpComponent) Invoke(ctx context.Context, inputs map[string]any)
 	}
 
 	for k, v := range fields {
+		if field, ok := v.(map[string]any); ok && isFileType(field) {
+			return nil, fmt.Errorf("UserFillUp: file inputs: %w", ErrNotImplemented)
+		}
 		out[k] = resolveFieldValue(k, v)
 	}
 	return out, nil
@@ -195,8 +196,10 @@ func formFields(inputs map[string]any) (map[string]any, bool) {
 }
 
 // renderTips substitutes every {{key}} placeholder in template with
-// the corresponding scalar field value after file inputs were rejected.
-// Non-string values use fmt.Sprintf("%v", ...).
+// the corresponding field's value. File-type fields render as
+// "<file:key>" stubs — FileService integration is Phase 5. Plain
+// string fields use their value verbatim; non-string values are
+// coerced via fmt.Sprintf("%v", ...).
 func renderTips(template string, fields map[string]any) string {
 	if template == "" {
 		return ""
@@ -219,13 +222,17 @@ func renderTips(template string, fields map[string]any) string {
 // that should appear in the component's output map.
 //
 // Rules (mirroring fillup.py:69-79):
+//   - dict with type starting with "file" → "<file:key>" stub
 //   - dict with optional=true and value==nil → nil
 //   - dict with a `value` field → the inner value
 //   - anything else → pass through unchanged
-func resolveFieldValue(_ string, raw any) any {
+func resolveFieldValue(key string, raw any) any {
 	m, ok := raw.(map[string]any)
 	if !ok {
 		return raw
+	}
+	if isFileType(m) {
+		return fileStubPrefix + key + ">"
 	}
 	if opt, _ := m["optional"].(bool); opt {
 		if v, present := m["value"]; !present || v == nil {
@@ -247,9 +254,14 @@ func isFileType(m map[string]any) bool {
 }
 
 // fieldValueToString is the tips-substitution variant of
-// resolveFieldValue: it returns scalar text after file inputs were rejected.
-func fieldValueToString(_ string, raw any) string {
+// resolveFieldValue: it returns a string suitable for direct insertion
+// into the rendered template. File stubs are emitted here too so the
+// tips template can reference a file field without crashing.
+func fieldValueToString(key string, raw any) string {
 	if m, ok := raw.(map[string]any); ok {
+		if isFileType(m) {
+			return fileStubPrefix + key + ">"
+		}
 		if v, present := m["value"]; present {
 			return stringifyField(v)
 		}

@@ -25,11 +25,10 @@ package canvas
 import (
 	"context"
 	"errors"
+	redis2 "multirag/internal/engine/redis"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-
-	redisengine "multirag/internal/engine/redis"
 )
 
 // checkpointKeyPrefix is the Redis key namespace for checkpoint payloads.
@@ -45,13 +44,13 @@ type RedisCheckPointStore struct {
 }
 
 // NewRedisCheckPointStore returns a store wired to the global Redis client
-// from internal/engine/redis. Returns a non-nil store even when Redis is
+// from internal/cache. Returns a non-nil store even when the cache is
 // uninitialized (client is nil); Get/Set/Delete will return an error in that
 // case rather than nil-deref, but the type stays usable for tests that
 // inject their own client via struct-literal construction.
 func NewRedisCheckPointStore(ttl time.Duration) *RedisCheckPointStore {
 	var client *redis.Client
-	if rc := redisengine.Get(); rc != nil {
+	if rc := redis2.Get(); rc != nil {
 		client = rc.GetClient()
 	}
 	return &RedisCheckPointStore{client: client, ttl: ttl}
@@ -90,9 +89,4 @@ func (s *RedisCheckPointStore) Delete(ctx context.Context, id string) error {
 		return errors.New("checkpoint store: redis client not initialized")
 	}
 	return s.client.Del(ctx, checkpointKeyPrefix+id).Err()
-}
-
-// NewRedisCheckPointStoreWithClient uses a caller-owned Redis connection pool.
-func NewRedisCheckPointStoreWithClient(client *redis.Client, ttl time.Duration) *RedisCheckPointStore {
-	return &RedisCheckPointStore{client: client, ttl: ttl}
 }

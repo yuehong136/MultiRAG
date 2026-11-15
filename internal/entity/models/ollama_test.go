@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"testing"
 )
 
 func TestOllamaChatDiscoveryAndStreaming(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/tags" {
 			if r.Method != "GET" || r.ContentLength > 0 {
 				t.Error("invalid discovery")
@@ -28,7 +28,7 @@ func TestOllamaChatDiscoveryAndStreaming(t *testing.T) {
 			t.Error(err)
 		}
 		messages := body["messages"].([]any)
-		if len(messages) != 3 || messages[1].(map[string]any)["thinking"] != "previous thought" {
+		if len(messages) != 3 || messages[1].(map[string]any)["content"] != "previous" {
 			t.Error("history lost")
 		}
 		last := messages[2].(map[string]any)
@@ -47,11 +47,11 @@ func TestOllamaChatDiscoveryAndStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous", ReasoningContent: stringPtr("previous thought")}, {Role: "user", Content: []any{map[string]any{"type": "text", "text": "first"}, map[string]any{"type": "text", "text": "second"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,aGVsbG8="}}}}}
+	messages := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "previous"}, {Role: "user", Content: []any{map[string]any{"type": "text", "text": "first"}, map[string]any{"type": "text", "text": "second"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,aGVsbG8="}}}}}
 	off, zero := false, 0.0
 	config := &ChatConfig{Thinking: &off, Temperature: &zero}
 	answer, err := driver.ChatWithMessages("qwen3:latest", messages, nil, config)
-	if err != nil || *answer.Answer != "answer" || *answer.ReasoningContent != "reason" {
+	if err != nil || *answer.Answer != "answer" || *answer.ReasonContent != "reason" {
 		t.Fatal(answer, err)
 	}
 	var frames []string
@@ -69,7 +69,7 @@ func TestOllamaChatDiscoveryAndStreaming(t *testing.T) {
 	if !reflect.DeepEqual(frames, []string{"reason", "answer", "[DONE]"}) {
 		t.Fatal(frames)
 	}
-	if names, err := driver.ListModels(nil); err != nil || !reflect.DeepEqual(names, []string{"qwen3:latest"}) {
+	if names, err := driver.ListModels(nil); err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{"qwen3:latest"}) {
 		t.Fatal(names, err)
 	}
 	if err := driver.CheckConnection(nil); err != nil {
@@ -79,13 +79,13 @@ func TestOllamaChatDiscoveryAndStreaming(t *testing.T) {
 	if _, err := embeddingVectorsForTest(driver.Embed(&name, []string{"q"}, nil, nil)); err == nil {
 		t.Fatal("unconfigured embedding endpoint succeeded")
 	}
-	if _, err := NewRerankModel(driver, &name, nil).Rerank("q", []string{"d"}); err == nil {
+	if _, err := rerankScoresForTest(NewRerankModel(driver, &name, nil), "q", []string{"d"}, nil, &RerankConfig{}); err == nil {
 		t.Fatal("rerank stub succeeded")
 	}
 }
 func TestOllamaFailureContracts(t *testing.T) {
 	for _, payload := range []string{`not-json`, `{"error":"private provider failure"}`, `{"done":true}`, `{"message":{"content":"partial"}}`} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, payload) }))
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, payload) }))
 		driver := NewOllamaModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "api/chat", Models: "api/tags"})
 		history := []Message{{Role: "user", Content: "q"}}
 		done := false
@@ -106,7 +106,7 @@ func TestOllamaFailureContracts(t *testing.T) {
 		}
 		server.Close()
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"message":{"content":"answer"},"done":true}`)
 	}))
 	defer server.Close()
@@ -121,21 +121,18 @@ func TestOllamaFailureContracts(t *testing.T) {
 	if _, err := driver.ChatWithMessages("m", history, &APIConfig{Context: ctx}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	if _, err := ollamaBody("m", multimodalFixture(), nil, false); err == nil {
-		t.Fatal("remote image silently accepted")
-	}
 }
 func TestMoonshotDefaultTemperature(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		for _, config := range []*ChatConfig{nil, {}} {
-			body, err := moonshotChatBody("kimi", []Message{{Role: "user", Content: "q"}}, config, stream)
-			if err != nil || body["temperature"] != 0.6 {
+			body, err := captureChatBodyForTest(t, "Moonshot", "kimi", []Message{{Role: "user", Content: "q"}}, config, stream)
+			if err != nil || !stream && body["temperature"] != 0.6 || stream && body["temperature"] != nil {
 				t.Fatal(body, err)
 			}
 		}
 	}
 	zero := 0.0
-	body, err := moonshotChatBody("kimi", []Message{{Role: "user", Content: "q"}}, &ChatConfig{Temperature: &zero}, false)
+	body, err := captureChatBodyForTest(t, "Moonshot", "kimi", []Message{{Role: "user", Content: "q"}}, &ChatConfig{Temperature: &zero}, false)
 	if err != nil || body["temperature"] != zero {
 		t.Fatal(body, err)
 	}

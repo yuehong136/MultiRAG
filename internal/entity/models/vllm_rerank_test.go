@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"testing"
@@ -16,8 +16,8 @@ func TestVLLMRerankStrictHTTPContract(t *testing.T) {
 	for _, auth := range []bool{false, true} {
 		for _, config := range []*RerankConfig{nil, {}, {TopN: 1}, {TopN: 99}} {
 			t.Run(fmt.Sprintf("auth=%v/config=%v", auth, config), func(t *testing.T) {
-				top, _ := RerankTopN(2, config)
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				top, _ := expectedRerankTopNForTest(2, config)
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method != "POST" || r.URL.Path != "/v1/rerank" || (r.Header.Get("Authorization") != "") == !auth {
 						t.Error("vLLM path/auth mismatch")
 					}
@@ -35,10 +35,10 @@ func TestVLLMRerankStrictHTTPContract(t *testing.T) {
 					json.NewEncoder(w).Encode(map[string]any{"results": items})
 				}))
 				defer srv.Close()
-				d := NewVLLMModel(map[string]string{"default": srv.URL + "/v1"}, URLSuffix{Rerank: "rerank"})
+				d := NewVllmModel(map[string]string{"default": srv.URL + "/v1"}, URLSuffix{Rerank: "rerank"})
 				api := &APIConfig{}
 				if auth {
-					api.APIKey = &key
+					api.ApiKey = &key
 				}
 				r, err := d.Rerank(&name, "query", []string{"one", "two"}, api, config)
 				if err != nil || len(r.Data) != top || r.Data[0].Index != 1 {
@@ -51,8 +51,8 @@ func TestVLLMRerankStrictHTTPContract(t *testing.T) {
 		}
 	}
 	for _, raw := range []string{`{}`, `{"results":[]}`, `{"results":[{"index":0,"relevance_score":1}]}`, `{"results":[{"index":0,"relevance_score":0},{"index":0,"relevance_score":1}]}`, `{"results":[{"index":-1,"relevance_score":0},{"index":1,"relevance_score":1}]}`, `{"results":[{"index":2,"relevance_score":0},{"index":1,"relevance_score":1}]}`, `{"results":[{"index":0,"relevance_score":null},{"index":1,"relevance_score":1}]}`, `{"results":[{"index":null,"relevance_score":0},{"index":1,"relevance_score":1}]}`, `{"results":[{"index":0},{"index":1,"relevance_score":1}]}`, `{"results":[{"index":0,"relevance_score":NaN}]}`, `{"results":[{"index":0,"relevance_score":1e999}]}`, `{"error":"private-body"}`} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
-		d := NewVLLMModel(map[string]string{"default": srv.URL}, URLSuffix{Rerank: "rerank"})
+		srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
+		d := NewVllmModel(map[string]string{"default": srv.URL}, URLSuffix{Rerank: "rerank"})
 		if _, err := d.Rerank(&name, "q", []string{"a", "b"}, nil, nil); err == nil || strings.Contains(err.Error(), "private-body") {
 			t.Fatal("invalid result accepted/leaked", raw, err)
 		}
@@ -63,13 +63,13 @@ func TestVLLMRerankStrictHTTPContract(t *testing.T) {
 func TestVLLMRerankPreflightAndCancellation(t *testing.T) {
 	name := "reranker"
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.WriteHeader(502)
 		fmt.Fprint(w, "private-body")
 	}))
 	defer srv.Close()
-	d := NewVLLMModel(map[string]string{"default": srv.URL}, URLSuffix{Rerank: "rerank"})
+	d := NewVllmModel(map[string]string{"default": srv.URL}, URLSuffix{Rerank: "rerank"})
 	if r, err := d.Rerank(nil, "q", nil, nil, nil); err != nil || len(r.Data) != 0 {
 		t.Fatal(r, err)
 	}
