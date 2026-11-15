@@ -61,6 +61,23 @@ Go 模块版本保持冻结目标。相对主仓合并前版本有 23 项下降�
 模块版本未另行升降，仍采用[冻结依赖对照](go-dependencies.md)中的版本。
 远程 CI、真实付费供应商和生产部署仍未执行；上述 Go 验收不表示全部 Python 检查通过。
 
+### Python 目录缺项后续修复
+
+2026-11-15 已修复上述 Python 目录失败：在 `configs/llm_factories.json` 的
+`SILICONFLOW` 中补齐 `Pro/deepseek-ai/DeepSeek-V4-Pro` 和同批缺少的
+`Pro/deepseek-ai/DeepSeek-V4-Flash`。两个定义直接取自上游
+`658ff06ca42d242e0c418f2d13105ec88dc4ec89`，仅将 `model_type` 映射为 `mdl_type`；
+Python 保持 1,000,000 token、chat 和工具能力，冻结 Go 定义保持 1,048,576 token。
+这是一处明确的本地目录补齐：上游 `dcf623d6` 后的冻结 Python 目录仅列出不带 `Pro/`
+前缀的两个名称，而冻结 Go 目录仍列出 Pro 名称。现有非 Pro 条目和其他目录数据保持不变。
+
+Kimi-K2.6 保持 `dcf623d6` 已有的 `image2text + chat` 声明，原回归测试改为精确校验
+这两个能力；新增真实 catalog/discovery 路由回归，验证四个 Pro 型号的唯一性、上下文和工具能力。
+相关七个测试文件共 104 项全部通过，0 失败、0 跳过（`ee7cb0e96bc1489d8dc4aade7a64dce3`，raw 0）；
+Ruff check 与 format check 均通过。证据目录为
+`/Users/xldu/.local/state/multirag/validation/20261115-python-siliconflow-pro-catalog-7e01d6a4/`。
+此前 96 通过、1 失败的结果保留为合并时的历史证据，本次相关检查已通过。
+
 ## 源分支历史验收与边界
 
 专项在独立 worktree 执行；主仓的其他提交与未提交改动持续保留。本地完整证据根为
