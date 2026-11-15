@@ -17,8 +17,11 @@
 package entity
 
 import (
+	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
+	"io"
 	"reflect"
 	"time"
 
@@ -37,14 +40,6 @@ type BaseModel struct {
 func autoModelTime() (int64, time.Time) {
 	now := time.Now().Local()
 	return now.UnixMilli(), now.Truncate(time.Second)
-}
-
-// TimeFromTimestamp reads historical epoch seconds and current epoch milliseconds.
-func TimeFromTimestamp(timestamp int64) time.Time {
-	if timestamp >= 1_000_000_000_000 || timestamp <= -1_000_000_000_000 {
-		return time.UnixMilli(timestamp)
-	}
-	return time.Unix(timestamp, 0)
 }
 
 func statementHasTimeField(tx *gorm.DB, fieldNames ...string) bool {
@@ -67,25 +62,31 @@ func statementHasTimeField(tx *gorm.DB, fieldNames ...string) bool {
 				}
 			}
 		}
-	default:
-		// A separate Updates struct supplies explicit non-nil values. Save uses
-		// the model itself and must refresh its previously persisted timestamps.
-		model, destValue := reflect.ValueOf(tx.Statement.Model), reflect.ValueOf(tx.Statement.Dest)
-		sameModel := model.Kind() == reflect.Pointer && destValue.Kind() == reflect.Pointer && model.Pointer() == destValue.Pointer()
-		if !sameModel && tx.Statement.Schema != nil {
-			value := reflect.Indirect(reflect.ValueOf(tx.Statement.Dest))
-			if value.IsValid() && value.Kind() == reflect.Struct && value.Type() == tx.Statement.Schema.ModelType {
-				for _, name := range fieldNames {
-					if field := tx.Statement.Schema.LookUpField(name); field != nil {
-						if _, zero := field.ValueOf(tx.Statement.Context, value); !zero {
-							return true
-						}
-					}
+	}
+
+	// Save selects all loaded fields; its previous timestamps are not explicit updates.
+	for _, selected := range tx.Statement.Selects {
+		if selected == "*" {
+			return false
+		}
+	}
+	destination := reflect.ValueOf(tx.Statement.Dest)
+	for destination.IsValid() && (destination.Kind() == reflect.Ptr || destination.Kind() == reflect.Interface) {
+		if destination.IsNil() {
+			return false
+		}
+		destination = destination.Elem()
+	}
+	if destination.IsValid() && destination.Kind() == reflect.Struct && tx.Statement.Schema != nil {
+		for _, name := range fieldNames {
+			if field := tx.Statement.Schema.LookUpField(name); field != nil {
+				_, zero := field.ValueOf(tx.Statement.Context, destination)
+				if !zero {
+					return true
 				}
 			}
 		}
 	}
-
 	return false
 }
 
@@ -145,6 +146,20 @@ func (m *BaseModel) BeforeUpdate(tx *gorm.DB) error {
 	return nil
 }
 
+func (m *BaseModel) UpdateCreateDateAndTime() error {
+	timestamp, dateTime := autoModelTime()
+	m.CreateTime = &timestamp
+	m.UpdateDate = &dateTime
+	return nil
+}
+
+func (m *BaseModel) UpdateUpdateDateAndTime() error {
+	timestamp, dateTime := autoModelTime()
+	m.UpdateTime = &timestamp
+	m.UpdateDate = &dateTime
+	return nil
+}
+
 // JSONMap is a map type that can store JSON data
 type JSONMap map[string]interface{}
 
@@ -162,11 +177,26 @@ func (j *JSONMap) Scan(value interface{}) error {
 		*j = nil
 		return nil
 	}
-	b, ok := value.([]byte)
-	if !ok {
-		return json.Unmarshal([]byte(value.(string)), j)
+	var data []byte
+	switch v := value.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return fmt.Errorf("invalid JSONMap database value %T", value)
 	}
-	return json.Unmarshal(b, j)
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var next JSONMap
+	if err := decoder.Decode(&next); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(interface{})); err != io.EOF {
+		return fmt.Errorf("invalid trailing JSONMap data")
+	}
+	*j = next
+	return nil
 }
 
 // JSONSlice is a slice type that can store JSON array data
@@ -186,9 +216,24 @@ func (j *JSONSlice) Scan(value interface{}) error {
 		*j = nil
 		return nil
 	}
-	b, ok := value.([]byte)
-	if !ok {
-		return json.Unmarshal([]byte(value.(string)), j)
+	var data []byte
+	switch v := value.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return fmt.Errorf("invalid JSONSlice database value %T", value)
 	}
-	return json.Unmarshal(b, j)
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var next JSONSlice
+	if err := decoder.Decode(&next); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(interface{})); err != io.EOF {
+		return fmt.Errorf("invalid trailing JSONSlice data")
+	}
+	*j = next
+	return nil
 }

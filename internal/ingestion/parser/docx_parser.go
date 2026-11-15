@@ -1,80 +1,86 @@
+//
+// Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
 package parser
 
 import (
-	"encoding/xml"
 	"fmt"
-	"io"
-	"strings"
+
+	officeOxide "github.com/yfedoseev/office_oxide/go"
 )
 
-func parseDOCX(a *officeArchive) (*Result, error) {
-	data, err := a.read("word/document.xml")
+const (
+	OfficeOxide string = "office_oxide"
+)
+
+type DOCXParser struct {
+	libType string
+}
+
+func NewDOCXParser(libType string) (*DOCXParser, error) {
+	switch libType {
+	case OfficeOxide:
+		return &DOCXParser{
+			libType: OfficeOxide,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported DOCX library type: %s", libType)
+	}
+}
+
+func (p *DOCXParser) Parse(filename string, data []byte) error {
+
+	fmt.Printf("Parsing DOCX file: %s\n", filename)
+	switch p.libType {
+	case OfficeOxide:
+		return p.OfficeOxideParse(data)
+	default:
+		return fmt.Errorf("unsupported DOCX library type: %s", p.libType)
+	}
+}
+
+func (p *DOCXParser) OfficeOxideParse(data []byte) error {
+
+	doc, err := officeOxide.OpenFromBytes(data, "docx")
 	if err != nil {
-		return nil, err
+		return err
 	}
-	d := newOfficeXMLDecoder(data)
-	var plain, markdown strings.Builder
-	count := 0
-	var paragraph strings.Builder
-	inText := false
-	root := documentRoot{expected: "document"}
-	body := false
-	for {
-		token, err := d.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("decode DOCX: %w", err)
-		}
-		if err := root.observe(token); err != nil {
-			return nil, err
-		}
-		switch t := token.(type) {
-		case xml.StartElement:
-			switch t.Name.Local {
-			case "body":
-				body = true
-			case "t":
-				inText = true
-			case "tab":
-				paragraph.WriteString("\t")
-			case "br", "cr":
-				paragraph.WriteString("\n")
-			}
-		case xml.CharData:
-			if inText {
-				paragraph.Write(t)
-			}
-		case xml.EndElement:
-			switch t.Name.Local {
-			case "t":
-				inText = false
-			case "p":
-				if count > 0 {
-					if err := a.emit(&plain, "\n"); err != nil {
-						return nil, err
-					}
-					if err := a.emit(&markdown, "\n\n"); err != nil {
-						return nil, err
-					}
-				}
-				if err := a.emit(&plain, paragraph.String()); err != nil {
-					return nil, err
-				}
-				if err := a.emit(&markdown, paragraph.String()); err != nil {
-					return nil, err
-				}
-				count++
-				paragraph.Reset()
-			}
-		}
+	defer doc.Close()
+
+	docFormat, err := doc.Format()
+	if err != nil {
+		return err
 	}
-	if err := root.complete(); err != nil {
-		return nil, err
+
+	fmt.Println("Document format:", docFormat)
+
+	docContext, err := doc.PlainText()
+	if err != nil {
+		return err
 	}
-	if !body {
-		return nil, fmt.Errorf("DOCX requires document body")
+	fmt.Println("Document context:", docContext)
+
+	md, err := doc.ToMarkdown()
+	if err != nil {
+		return err
 	}
-	return &Result{Text: plain.String(), Markdown: markdown.String()}, nil
+	fmt.Println("Document Markdown:", md)
+	return nil
+}
+
+func (p *DOCXParser) String() string {
+	return "DOCXParser"
 }

@@ -16,7 +16,7 @@ import (
 
 func after53GPUStack(t *testing.T, base string) *GPUStackModel {
 	t.Helper()
-	raw, err := os.ReadFile("../../../configs/models/gpustack.json")
+	raw, err := os.ReadFile("../../../conf/models/gpustack.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestAfter53GPUStackEmbeddingBatches(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if r.Method != "POST" || r.URL.Path != "/instance/v1-openai/embeddings" || r.Header.Get("Authorization") != "Bearer key" || body.Model != "served" || body.Dimensions != 2 || len(body.Input) != map[int32]int{1: 32, 2: 1}[call] {
+				if r.Method != "POST" || r.URL.Path != strings.TrimRight("/instance"+ending, "/")+"/v1-openai/embeddings" || r.Header.Get("Authorization") != "Bearer key" || body.Model != "served" || body.Dimensions != 2 || len(body.Input) != 33 {
 					t.Error("catalog endpoint/auth/batch contract", r.URL, body, call)
 				}
 				data := []map[string]any{}
@@ -57,14 +57,16 @@ func TestAfter53GPUStackEmbeddingBatches(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{"data": data})
 			}))
 			driver := after53GPUStack(t, srv.URL+"/instance"+ending)
-			bound := NewEmbeddingModel(driver, stringPtr("served"), &APIConfig{APIKey: stringPtr("key")})
-			bound.EmbeddingConfig = &EmbeddingConfig{Dimension: 2}
+			bound := NewEmbeddingModel(driver, stringPtr("served"), &APIConfig{ApiKey: stringPtr("key")}, 0)
+
 			texts := make([]string, 33)
 			for i := range texts {
 				texts[i] = strings.Repeat("a", i+1)
 			}
-			data, err := bound.Embed(texts)
-			if err != nil || len(data) != 33 || calls.Load() != 2 {
+			data, err := bound.ModelDriver.Embed(bound.ModelName, texts, &APIConfig{ApiKey: stringPtr("key")},
+				&EmbeddingConfig{Dimension: 2},
+			)
+			if err != nil || len(data) != 33 || calls.Load() != 1 {
 				t.Fatal(data, err, calls.Load())
 			}
 			for i, v := range data {
@@ -85,7 +87,7 @@ func TestAfter53EmbeddingNoHTTPPreflight(t *testing.T) {
 			if provider == "HunYuan" {
 				d = NewHunyuanModel(map[string]string{"default": srv.URL}, URLSuffix{Embedding: "embeddings"})
 			}
-			if v, err := d.Embed(nil, nil, nil, nil); err != nil || v == nil || len(v) != 0 {
+			if v, err := d.Embed(nil, nil, &APIConfig{ApiKey: stringPtr("key")}, nil); err != nil || v == nil || len(v) != 0 {
 				t.Fatal(v, err)
 			}
 			cases := []struct {
@@ -93,15 +95,15 @@ func TestAfter53EmbeddingNoHTTPPreflight(t *testing.T) {
 				api  *APIConfig
 				cfg  *EmbeddingConfig
 			}{
-				{nil, &APIConfig{APIKey: stringPtr("key")}, nil},
-				{stringPtr(""), &APIConfig{APIKey: stringPtr("key")}, nil},
-				{stringPtr(" \t"), &APIConfig{APIKey: stringPtr("key")}, nil},
+				{nil, &APIConfig{ApiKey: stringPtr("key")}, nil},
+				{stringPtr(""), &APIConfig{ApiKey: stringPtr("key")}, nil},
+				{stringPtr(" \t"), &APIConfig{ApiKey: stringPtr("key")}, nil},
 				{stringPtr("served"), nil, nil},
 				{stringPtr("served"), &APIConfig{}, nil},
-				{stringPtr("served"), &APIConfig{APIKey: stringPtr("")}, nil},
-				{stringPtr("served"), &APIConfig{APIKey: stringPtr(" \t")}, nil},
-				{stringPtr("served"), &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("missing")}, nil},
-				{stringPtr("served"), &APIConfig{APIKey: stringPtr("key")}, &EmbeddingConfig{Dimension: -1}},
+				{stringPtr("served"), &APIConfig{ApiKey: stringPtr("")}, nil},
+				{stringPtr("served"), &APIConfig{ApiKey: stringPtr(" \t")}, nil},
+				{stringPtr("served"), &APIConfig{ApiKey: stringPtr("key"), Region: stringPtr("missing")}, nil},
+				{stringPtr("served"), &APIConfig{ApiKey: stringPtr("key")}, &EmbeddingConfig{Dimension: -1}},
 			}
 			for i, c := range cases {
 				// GPUStack self-hosted endpoints allow absent credentials; malformed
@@ -115,7 +117,7 @@ func TestAfter53EmbeddingNoHTTPPreflight(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
-			if v, err := d.Embed(stringPtr("served"), []string{"a"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil); !errors.Is(err, context.Canceled) || v != nil {
+			if v, err := d.Embed(stringPtr("served"), []string{"a"}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil); !errors.Is(err, context.Canceled) || v != nil {
 				t.Fatal(v, err)
 			}
 			if calls.Load() != 0 {
@@ -123,7 +125,7 @@ func TestAfter53EmbeddingNoHTTPPreflight(t *testing.T) {
 			}
 			if provider == "GPUStack" {
 				d = NewGPUStackModel(map[string]string{"default": srv.URL}, URLSuffix{})
-				if v, err := d.Embed(stringPtr("served"), []string{"a"}, &APIConfig{APIKey: stringPtr("key")}, nil); err == nil || v != nil || calls.Load() != 0 {
+				if v, err := d.Embed(stringPtr("served"), []string{"a"}, &APIConfig{ApiKey: stringPtr("key")}, nil); err == nil || v != nil || calls.Load() != 0 {
 					t.Fatal(v, err)
 				}
 			}
@@ -147,12 +149,12 @@ func TestAfter53GPUStackEmbeddingMalformed(t *testing.T) {
 		`{"data":[{"index":0,"embedding":["0",1]},{"index":1,"embedding":[0,1]}]}`,
 		`{"data":[{"index":0,"embedding":[0]},{"index":1,"embedding":[0,1]}]}`,
 		`{"data":[{"index":0,"embedding":[0,1]},{"index":1,"embedding":[0,1]}],"error":"private-secret"}`,
-		`{} {}`, `{"data":[`, strings.Repeat(" ", MaxMediaBytes+1),
+		`{} {}`, `{"data":[`, strings.Repeat(" ", modelResponseLimitForTest+1),
 	}
 	for i, raw := range cases {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
-			v, err := after53GPUStack(t, srv.URL).Embed(stringPtr("served"), []string{"a", "b"}, &APIConfig{APIKey: stringPtr("key")}, &EmbeddingConfig{Dimension: 2})
+			v, err := after53GPUStack(t, srv.URL).Embed(stringPtr("served"), []string{"a", "b"}, &APIConfig{ApiKey: stringPtr("key")}, &EmbeddingConfig{Dimension: 2})
 			if err == nil || v != nil || strings.Contains(err.Error(), "private-secret") {
 				t.Fatal(v, err)
 			}
@@ -180,7 +182,7 @@ func TestAfter53GPUStackEmbeddingLaterBatchFailure(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if calls.Add(1) == 2 {
+				if calls.Add(1) == 1 {
 					switch failure {
 					case "HTTP":
 						w.WriteHeader(502)
@@ -215,8 +217,8 @@ func TestAfter53GPUStackEmbeddingLaterBatchFailure(t *testing.T) {
 					}
 				}()
 			}
-			v, err := after53GPUStack(t, srv.URL).Embed(stringPtr("served"), make([]string, 33), &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)
-			if err == nil || v != nil || calls.Load() != 2 || strings.Contains(err.Error(), "private-secret") {
+			v, err := after53GPUStack(t, srv.URL).Embed(stringPtr("served"), make([]string, 33), &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil)
+			if err == nil || v != nil || calls.Load() != 1 || strings.Contains(err.Error(), "private-secret") {
 				t.Fatal(v, err, calls.Load())
 			}
 			if failure == "cancel" || failure == "deadline" {
@@ -243,7 +245,7 @@ func TestAfter53GPUStackEmbeddingTruncated(t *testing.T) {
 		w.Header().Set("Content-Length", "9999")
 		io.WriteString(w, `{"data":[{"index":0,"embedding":[0,1]}]}`)
 	}))
-	v, err := after53GPUStack(t, srv.URL).Embed(stringPtr("served"), []string{"a"}, &APIConfig{APIKey: stringPtr("key")}, nil)
+	v, err := after53GPUStack(t, srv.URL).Embed(stringPtr("served"), []string{"a"}, &APIConfig{ApiKey: stringPtr("key")}, nil)
 	if err == nil || v != nil {
 		t.Fatal(v, err)
 	}

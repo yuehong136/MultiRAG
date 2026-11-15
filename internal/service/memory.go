@@ -17,9 +17,11 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"multirag/internal/common"
+	"multirag/internal/entity"
 	"strconv"
 	"strings"
 	"time"
@@ -27,10 +29,6 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	enginetypes "multirag/internal/engine/types"
-	"multirag/internal/entity"
-
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const (
@@ -73,12 +71,18 @@ const (
 )
 
 // validForgettingPolicies defines which forgetting policies are valid
-var ErrMemoryAccessDenied = errors.New("no authorization to update memory")
-
-var errMemoryModelUnavailable = errors.New("memory models must be active chat and embedding models owned by the tenant")
-
 var validForgettingPolicies = map[ForgettingPolicy]bool{
 	ForgettingPolicyFIFO: true,
+}
+
+// ResourceNotFoundError marks client-visible missing memory/message resources.
+type ResourceNotFoundError struct {
+	Resource string
+	ID       string
+}
+
+func (e *ResourceNotFoundError) Error() string {
+	return fmt.Sprintf("%s '%s' not found.", e.Resource, e.ID)
 }
 
 //
@@ -150,6 +154,11 @@ var OUTPUT_TEMPLATES = map[string]string{
 //
 // Returns:
 //   - string: Complete system prompt with type-specific instructions and output format
+//
+// Example:
+//
+//	AssembleSystemPrompt([]string{"semantic", "episodic"}) returns a prompt with instructions
+//	for both semantic and episodic memory extraction
 func (PromptAssembler) AssembleSystemPrompt(memoryTypes []string) string {
 	typesToExtract := getTypesToExtract(memoryTypes)
 	if len(typesToExtract) == 0 {
@@ -169,6 +178,12 @@ func (PromptAssembler) AssembleSystemPrompt(memoryTypes []string) string {
 }
 
 // getTypesToExtract filters out "raw" type and returns valid memory types
+//
+// Parameters:
+//   - requestedTypes: Array of requested memory type names
+//
+// Returns:
+//   - []string: Filtered array of memory type names (excluding "raw")
 func getTypesToExtract(requestedTypes []string) []string {
 	types := make(map[string]bool)
 	for _, rt := range requestedTypes {
@@ -187,6 +202,12 @@ func getTypesToExtract(requestedTypes []string) []string {
 }
 
 // generateTypeInstructions concatenates type-specific instructions
+//
+// Parameters:
+//   - typesToExtract: Array of memory type names
+//
+// Returns:
+//   - string: Concatenated instructions for all specified types
 func generateTypeInstructions(typesToExtract []string) string {
 	var instructions []string
 	for _, mt := range typesToExtract {
@@ -198,6 +219,12 @@ func generateTypeInstructions(typesToExtract []string) string {
 }
 
 // generateOutputFormat concatenates output format templates
+//
+// Parameters:
+//   - typesToExtract: Array of memory type names
+//
+// Returns:
+//   - string: Concatenated output format templates
 func generateOutputFormat(typesToExtract []string) string {
 	var outputParts []string
 	for _, mt := range typesToExtract {
@@ -211,22 +238,18 @@ func generateOutputFormat(typesToExtract []string) string {
 // MemoryService handles business logic for memory operations
 // It provides methods for creating, updating, deleting, and querying memories
 type MemoryService struct {
-	memoryDAO    *dao.MemoryDAO
-	messageStore enginetypes.MemoryMessageStore
+	memoryDAO *dao.MemoryDAO
+	docEngine engine.DocEngine
 }
 
 // NewMemoryService creates a new MemoryService instance
 //
 // Returns:
 //   - *MemoryService: Initialized service instance with DAO
-func NewMemoryService(stores ...enginetypes.MemoryMessageStore) *MemoryService {
-	store, _ := engine.Get().(enginetypes.MemoryMessageStore)
-	if len(stores) > 0 {
-		store = stores[0]
-	}
+func NewMemoryService() *MemoryService {
 	return &MemoryService{
-		memoryDAO:    dao.NewMemoryDAO(),
-		messageStore: store,
+		memoryDAO: dao.NewMemoryDAO(),
+		docEngine: engine.Get(),
 	}
 }
 
@@ -305,15 +328,29 @@ type ListMemoryResponse struct {
 // Returns:
 //   - *CreateMemoryResponse: The created memory details
 //   - error: Error if validation fails or creation fails
+//
+// Example:
+//
+//	req := &CreateMemoryRequest{Name: "MyMemory", MemoryType: []string{"semantic"}, EmbdID: "embd1", LLMID: "llm1"}
+//	resp, err := service.CreateMemory("tenant123", req)
 func (s *MemoryService) CreateMemory(tenantID string, req *CreateMemoryRequest) (*CreateMemoryResponse, error) {
-	if req == nil {
-		return nil, errors.New("memory creation request is required")
+	// Ensure tenant model IDs are populated for LLM and embedding model parameters
+	// This automatically fills tenant_llm_id and tenant_embd_id based on llm_id and embd_id
+	tenantLLMService := NewTenantLLMService()
+	params := map[string]interface{}{
+		"llm_id":  req.LLMID,
+		"embd_id": req.EmbdID,
 	}
-	if tenantID == "" || tenantID != strings.TrimSpace(tenantID) {
-		return nil, errMemoryModelUnavailable
+	params = tenantLLMService.EnsureTenantModelIDForParams(tenantID, params)
+
+	// Update request with tenant model IDs from the processed params
+	if tenantLLMID, ok := params["tenant_llm_id"].(int64); ok {
+		tenantLLMIDStr := strconv.FormatInt(tenantLLMID, 10)
+		req.TenantLLMID = &tenantLLMIDStr
 	}
-	if dao.DB == nil {
-		return nil, errors.New("memory model storage is unavailable")
+	if tenantEmbdID, ok := params["tenant_embd_id"].(int64); ok {
+		tenantEmbdIDStr := strconv.FormatInt(tenantEmbdID, 10)
+		req.TenantEmbdID = &tenantEmbdIDStr
 	}
 
 	if err := common.ValidateName(req.Name); err != nil {
@@ -367,24 +404,18 @@ func (s *MemoryService) CreateMemory(tenantID string, req *CreateMemoryRequest) 
 		SystemPrompt:     &systemPrompt,
 	}
 
-	// Keep each binding active and owned until the memory INSERT commits. The
-	// generic selector helper uses zero for unresolved models; zero is never a
-	// usable binding for this consumer.
-	if err := dao.DB.Transaction(func(tx *gorm.DB) error {
-		llmID, err := memoryTenantModelID(tx, tenantID, req.LLMID, req.TenantLLMID, entity.ModelTypeChat)
-		if err != nil {
-			return err
+	// Convert tenant model IDs from string to int64 for database
+	if req.TenantEmbdID != nil {
+		if embdID, err := strconv.ParseInt(*req.TenantEmbdID, 10, 64); err == nil {
+			memory.TenantEmbdID = &embdID
 		}
-		embdID, err := memoryTenantModelID(tx, tenantID, req.EmbdID, req.TenantEmbdID, entity.ModelTypeEmbedding)
-		if err != nil {
-			return err
+	}
+	if req.TenantLLMID != nil {
+		if llmID, err := strconv.ParseInt(*req.TenantLLMID, 10, 64); err == nil {
+			memory.TenantLLMID = &llmID
 		}
-		memory.TenantLLMID, memory.TenantEmbdID = &llmID, &embdID
-		return tx.Create(memory).Error
-	}); err != nil {
-		if errors.Is(err, errMemoryModelUnavailable) {
-			return nil, errMemoryModelUnavailable
-		}
+	}
+	if err := s.memoryDAO.Create(memory); err != nil {
 		return nil, errors.New("could not create new memory")
 	}
 
@@ -394,62 +425,6 @@ func (s *MemoryService) CreateMemory(tenantID string, req *CreateMemoryRequest) 
 	}
 
 	return formatRetDataFromMemory(createdMemory), nil
-}
-
-// memoryTenantModelID resolves the legacy numeric model inventory used by
-// memories. New provider-instance selectors are not silently converted to zero.
-func memoryTenantModelID(tx *gorm.DB, tenantID, selector string, explicitID *string, modelType entity.ModelType) (int64, error) {
-	if selector == "" || selector != strings.TrimSpace(selector) || len(selector) > 128 {
-		return 0, errMemoryModelUnavailable
-	}
-	query := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("tenant_id = ? AND status = ? AND mdl_type = ? AND id > 0", tenantID, "1", string(modelType))
-	selectorID, numericSelector := int64(0), true
-	for i, character := range selector {
-		if i == 0 && (character == '+' || character == '-') {
-			continue
-		}
-		if character < '0' || character > '9' {
-			numericSelector = false
-			break
-		}
-	}
-	if numericSelector {
-		var err error
-		selectorID, err = strconv.ParseInt(selector, 10, 64)
-		if err != nil || selectorID <= 0 {
-			return 0, errMemoryModelUnavailable
-		}
-	}
-	if explicitID != nil {
-		if *explicitID == "" || *explicitID != strings.TrimSpace(*explicitID) {
-			return 0, errMemoryModelUnavailable
-		}
-		id, err := strconv.ParseInt(*explicitID, 10, 64)
-		if err != nil || id <= 0 || numericSelector && selectorID != id {
-			return 0, errMemoryModelUnavailable
-		}
-		query = query.Where("id = ?", id)
-	} else if numericSelector {
-		query = query.Where("id = ?", selectorID)
-	}
-	if !numericSelector {
-		name, factory := NewTenantLLMService().SplitModelNameAndFactory(selector)
-		if name == "" {
-			return 0, errMemoryModelUnavailable
-		}
-		query = query.Where("llm_name = ?", name)
-		if factory != "" {
-			query = query.Where("llm_factory = ?", factory)
-		}
-	}
-	var rows []entity.TenantLLM
-	if err := query.Order("id").Limit(2).Find(&rows).Error; err != nil {
-		return 0, err
-	}
-	if len(rows) != 1 || rows[0].ID <= 0 || rows[0].LLMName == nil || strings.TrimSpace(*rows[0].LLMName) == "" {
-		return 0, errMemoryModelUnavailable
-	}
-	return rows[0].ID, nil
 }
 
 // UpdateMemory updates an existing memory with the provided fields
@@ -463,17 +438,12 @@ func memoryTenantModelID(tx *gorm.DB, tenantID, selector string, explicitID *str
 // Returns:
 //   - *CreateMemoryResponse: The updated memory details
 //   - error: Error if validation fails or update fails
+//
+// Example:
+//
+//	req := &UpdateMemoryRequest{Name: ptr("NewName"), MemorySize: ptr(int64(1000000))}
+//	resp, err := service.UpdateMemory("tenant123", "memory456", req)
 func (s *MemoryService) UpdateMemory(tenantID string, memoryID string, req *UpdateMemoryRequest) (*CreateMemoryResponse, error) {
-	currentMemory, err := s.memoryDAO.GetByID(memoryID)
-	if err != nil {
-		return nil, fmt.Errorf("memory '%s' not found", memoryID)
-	}
-	if currentMemory.TenantID != tenantID {
-		return nil, ErrMemoryAccessDenied
-	}
-	if req == nil {
-		return nil, errors.New("memory update is required")
-	}
 	updateDict := make(map[string]interface{})
 
 	if req.Name != nil {
@@ -481,70 +451,48 @@ func (s *MemoryService) UpdateMemory(tenantID string, memoryID string, req *Upda
 		if err := common.ValidateName(memoryName); err != nil {
 			return nil, err
 		}
-		if memoryName != strings.TrimSpace(currentMemory.Name) {
-			var lookupErr error
-			memoryName, err = common.DuplicateName(func(name, tid string) bool {
-				existing, queryErr := s.memoryDAO.GetByNameAndTenant(name, tid)
-				if queryErr != nil {
-					lookupErr = queryErr
-					return false
-				}
-				for _, memory := range existing {
-					if memory.ID != memoryID {
-						return true
-					}
-				}
-				return false
-			}, memoryName, tenantID)
-			if lookupErr != nil {
-				return nil, errors.New("failed to check memory name")
-			}
-			if err != nil {
-				return nil, err
-			}
+		memoryName, err := common.DuplicateName(func(name string, tid string) bool {
+			existing, _ := s.memoryDAO.GetByNameAndTenant(name, tid)
+			return len(existing) > 0
+		}, memoryName, tenantID)
+		if err != nil {
+			return nil, err
 		}
 		updateDict["name"] = memoryName
 	}
 
 	if req.Permissions != nil {
-		perm := TenantPermission(strings.ToLower(strings.TrimSpace(*req.Permissions)))
+		perm := TenantPermission(strings.ToLower(*req.Permissions))
 		if !validPermissions[perm] {
 			return nil, fmt.Errorf("unknown permission '%s'", *req.Permissions)
 		}
-		updateDict["permissions"] = string(perm)
+		updateDict["permissions"] = perm
 	}
 
 	if req.LLMID != nil {
-		updateDict["llm_id"] = strings.TrimSpace(*req.LLMID)
+		updateDict["llm_id"] = *req.LLMID
 	}
 
 	if req.EmbdID != nil {
-		updateDict["embd_id"] = strings.TrimSpace(*req.EmbdID)
+		updateDict["embd_id"] = *req.EmbdID
 	}
 
 	if req.TenantLLMID != nil {
-		llmID, err := strconv.ParseInt(strings.TrimSpace(*req.TenantLLMID), 10, 64)
-		if err != nil {
-			return nil, errors.New("invalid tenant_llm_id")
+		if llmID, err := strconv.ParseInt(*req.TenantLLMID, 10, 64); err == nil {
+			updateDict["tenant_llm_id"] = llmID
 		}
-		updateDict["tenant_llm_id"] = llmID
 	}
 
 	if req.TenantEmbdID != nil {
-		embdID, err := strconv.ParseInt(strings.TrimSpace(*req.TenantEmbdID), 10, 64)
-		if err != nil {
-			return nil, errors.New("invalid tenant_embd_id")
+		if embdID, err := strconv.ParseInt(*req.TenantEmbdID, 10, 64); err == nil {
+			updateDict["tenant_embd_id"] = embdID
 		}
-		updateDict["tenant_embd_id"] = embdID
 	}
 
-	if req.MemoryType != nil {
-		if len(req.MemoryType) == 0 {
-			return nil, errors.New("memory type must not be empty")
-		}
+	if req.MemoryType != nil && len(req.MemoryType) > 0 {
 		memoryTypeSet := make(map[string]bool)
 		for _, mt := range req.MemoryType {
-			lowerMT := strings.ToLower(strings.TrimSpace(mt))
+			lowerMT := strings.ToLower(mt)
 			if _, ok := dao.MemoryTypeMap[lowerMT]; !ok {
 				return nil, fmt.Errorf("memory type '%s' is not supported", mt)
 			}
@@ -570,7 +518,7 @@ func (s *MemoryService) UpdateMemory(tenantID string, memoryID string, req *Upda
 		if !validForgettingPolicies[fp] {
 			return nil, fmt.Errorf("forgetting policy '%s' is not supported", *req.ForgettingPolicy)
 		}
-		updateDict["forgetting_policy"] = string(fp)
+		updateDict["forgetting_policy"] = fp
 	}
 
 	if req.Temperature != nil {
@@ -602,7 +550,115 @@ func (s *MemoryService) UpdateMemory(tenantID string, memoryID string, req *Upda
 		}
 	}
 
-	updateDict = memoryUpdateDiff(currentMemory, updateDict)
+	currentMemory, err := s.memoryDAO.GetByID(memoryID)
+	if err != nil {
+		return nil, fmt.Errorf("memory '%s' not found", memoryID)
+	}
+
+	if currentMemory.TenantID != tenantID {
+		return nil, fmt.Errorf("memory is not accessible")
+	}
+	if len(updateDict) == 0 {
+		return formatRetDataFromMemory(currentMemory), nil
+	}
+
+	currentMemoryTypes := dao.GetMemoryTypeHuman(currentMemory.MemoryType)
+	normalizedCurrentMemoryTypes := normalizeMemoryTypes(currentMemoryTypes)
+
+	filteredUpdateDict := make(map[string]interface{}, len(updateDict))
+	for field, value := range updateDict {
+		switch field {
+		case "name":
+			currentName := strings.TrimSpace(currentMemory.Name)
+			requestName := strings.TrimSpace(fmt.Sprint(value))
+			if currentName != requestName {
+				filteredUpdateDict[field] = value
+			}
+		case "permissions":
+			currentPermissions := strings.ToLower(strings.TrimSpace(currentMemory.Permissions))
+			requestPermissions := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+			if currentPermissions != requestPermissions {
+				filteredUpdateDict[field] = value
+			}
+		case "llm_id":
+			currentLLMID := strings.TrimSpace(currentMemory.LLMID)
+			requestLLMID := strings.TrimSpace(fmt.Sprint(value))
+			if currentLLMID != requestLLMID {
+				filteredUpdateDict[field] = value
+			}
+		case "embd_id":
+			currentEmbdID := strings.TrimSpace(currentMemory.EmbdID)
+			requestEmbdID := strings.TrimSpace(fmt.Sprint(value))
+			if currentEmbdID != requestEmbdID {
+				filteredUpdateDict[field] = value
+			}
+		case "tenant_llm_id":
+			if currentMemory.TenantLLMID == nil || *currentMemory.TenantLLMID != value.(int64) {
+				filteredUpdateDict[field] = value
+			}
+		case "tenant_embd_id":
+			if currentMemory.TenantEmbdID == nil || *currentMemory.TenantEmbdID != value.(int64) {
+				filteredUpdateDict[field] = value
+			}
+		case "memory_type":
+			if types, ok := value.([]string); ok {
+				if !sameStringSet(normalizedCurrentMemoryTypes, normalizeMemoryTypes(types)) {
+					filteredUpdateDict[field] = value
+				}
+			} else {
+				filteredUpdateDict[field] = value
+			}
+		case "memory_size":
+			if currentMemory.MemorySize != value.(int64) {
+				filteredUpdateDict[field] = value
+			}
+		case "forgetting_policy":
+			currentForgettingPolicy := strings.ToUpper(strings.TrimSpace(currentMemory.ForgettingPolicy))
+			requestForgettingPolicy := strings.ToUpper(strings.TrimSpace(fmt.Sprint(value)))
+			if currentForgettingPolicy != requestForgettingPolicy {
+				filteredUpdateDict[field] = value
+			}
+		case "temperature":
+			if currentMemory.Temperature != value.(float64) {
+				filteredUpdateDict[field] = value
+			}
+		case "avatar":
+			currentAvatar := ""
+			if currentMemory.Avatar != nil {
+				currentAvatar = *currentMemory.Avatar
+			}
+			if currentMemory.Avatar == nil || currentAvatar != fmt.Sprint(value) {
+				filteredUpdateDict[field] = value
+			}
+		case "description":
+			currentDescription := ""
+			if currentMemory.Description != nil {
+				currentDescription = *currentMemory.Description
+			}
+			if currentMemory.Description == nil || currentDescription != fmt.Sprint(value) {
+				filteredUpdateDict[field] = value
+			}
+		case "system_prompt":
+			currentSystemPrompt := ""
+			if currentMemory.SystemPrompt != nil {
+				currentSystemPrompt = *currentMemory.SystemPrompt
+			}
+			if currentMemory.SystemPrompt == nil || currentSystemPrompt != fmt.Sprint(value) {
+				filteredUpdateDict[field] = value
+			}
+		case "user_prompt":
+			currentUserPrompt := ""
+			if currentMemory.UserPrompt != nil {
+				currentUserPrompt = *currentMemory.UserPrompt
+			}
+			if currentMemory.UserPrompt == nil || currentUserPrompt != fmt.Sprint(value) {
+				filteredUpdateDict[field] = value
+			}
+		default:
+			filteredUpdateDict[field] = value
+		}
+	}
+	updateDict = filteredUpdateDict
 
 	if len(updateDict) == 0 {
 		return formatRetDataFromMemory(currentMemory), nil
@@ -645,6 +701,45 @@ func (s *MemoryService) UpdateMemory(tenantID string, memoryID string, req *Upda
 	return formatRetDataFromMemory(updatedMemory), nil
 }
 
+func normalizeMemoryTypes(memoryTypes []string) []string {
+	normalized := make([]string, 0, len(memoryTypes))
+	seen := make(map[string]struct{}, len(memoryTypes))
+	for _, mt := range memoryTypes {
+		mt = strings.ToLower(strings.TrimSpace(mt))
+		if mt == "" {
+			continue
+		}
+		if _, exists := seen[mt]; exists {
+			continue
+		}
+		seen[mt] = struct{}{}
+		normalized = append(normalized, mt)
+	}
+	return normalized
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, item := range a {
+		counts[item]++
+	}
+	for _, item := range b {
+		counts[item]--
+		if counts[item] < 0 {
+			return false
+		}
+	}
+	for _, count := range counts {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // DeleteMemory deletes a memory by ID
 // It also deletes associated message indexes before removing the memory record
 //
@@ -653,6 +748,10 @@ func (s *MemoryService) UpdateMemory(tenantID string, memoryID string, req *Upda
 //
 // Returns:
 //   - error: Error if memory not found or deletion fails
+//
+// Example:
+//
+//	err := service.DeleteMemory("memory456")
 func (s *MemoryService) DeleteMemory(memoryID string) error {
 	_, err := s.memoryDAO.GetByID(memoryID)
 	if err != nil {
@@ -674,6 +773,89 @@ func (s *MemoryService) DeleteMemory(memoryID string) error {
 	return nil
 }
 
+// ForgetMessage marks a memory message as forgotten by setting forget_at.
+// This mirrors Python memory_api_service.forget_message and keeps the message
+// record for retention/cleanup policies instead of deleting it immediately.
+func (s *MemoryService) ForgetMessage(ctx context.Context, userID string, memoryID string, messageID int64) error {
+	memory, err := s.requireMemoryAccess(ctx, userID, memoryID)
+	if err != nil {
+		return err
+	}
+
+	if s.docEngine == nil {
+		return errors.New("message store is not initialized")
+	}
+
+	now := time.Now().UTC()
+	forgetTime := now.Format("2006-01-02 15:04:05")
+	messageDocID := fmt.Sprintf("%s_%d", memoryID, messageID)
+	updates := map[string]interface{}{
+		"forget_at":     forgetTime,
+		"forget_at_flt": now.UnixMilli(),
+	}
+	condition := map[string]interface{}{
+		"id": messageDocID,
+	}
+	indexName := fmt.Sprintf("memory_%s", memory.TenantID)
+
+	if err := s.docEngine.UpdateChunks(ctx, condition, updates, indexName, memoryID); err != nil {
+		if isMessageDocumentNotFound(err) {
+			// Match Python delete-by-query behavior: forgetting an already-missing
+			// message document is idempotent and still considered successful.
+			return nil
+		}
+		return fmt.Errorf("failed to forget message '%d' in memory '%s': %w", messageID, memoryID, err)
+	}
+
+	return nil
+}
+
+func isMessageDocumentNotFound(err error) bool {
+	return errors.Is(err, enginetypes.ErrDocumentNotFound)
+}
+
+func (s *MemoryService) requireMemoryAccess(ctx context.Context, userID string, memoryID string) (*entity.Memory, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	memory, err := s.memoryDAO.GetByIDWithContext(ctx, memoryID)
+	if err != nil {
+		if dao.IsNotFoundErr(err) {
+			return nil, &ResourceNotFoundError{Resource: "Memory", ID: memoryID}
+		}
+		return nil, fmt.Errorf("failed to get memory '%s': %w", memoryID, err)
+	}
+	var tenant entity.Tenant
+	if err := dao.DB.WithContext(ctx).Where("id = ? AND status = ?", memory.TenantID, "1").First(&tenant).Error; err != nil {
+		if dao.IsNotFoundErr(err) {
+			return nil, &ResourceNotFoundError{Resource: "Memory", ID: memoryID}
+		}
+		return nil, fmt.Errorf("verify memory tenant: %w", err)
+	}
+	if memory.TenantID == userID {
+		return memory, nil
+	}
+	if memory.Permissions != string(TenantPermissionTeam) {
+		return nil, &ResourceNotFoundError{Resource: "Memory", ID: memoryID}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	userTenantService := NewUserTenantService()
+	userTenants, err := userTenantService.GetUserTenantRelationByUserIDWithContext(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, tenant := range userTenants {
+		if tenant.TenantID == memory.TenantID && (tenant.Role == "owner" || tenant.Role == "admin" || tenant.Role == "normal") {
+			return memory, nil
+		}
+	}
+
+	return nil, &ResourceNotFoundError{Resource: "Memory", ID: memoryID}
+}
+
 // ListMemories retrieves a paginated list of memories with optional filters
 // When tenantIDs is empty, it retrieves all tenants associated with the user
 //
@@ -689,6 +871,10 @@ func (s *MemoryService) DeleteMemory(memoryID string) error {
 // Returns:
 //   - *ListMemoryResponse: Contains memory list and total count
 //   - error: Error if query fails
+//
+// Example:
+//
+//	resp, err := service.ListMemories("user123", []string{}, []string{"semantic"}, "table", "test", 1, 10)
 func (s *MemoryService) ListMemories(userID string, tenantIDs []string, memoryTypes []string, storageType string, keywords string, page int, pageSize int) (*ListMemoryResponse, error) {
 	// If tenantIDs is empty, get all tenants associated with the user
 	if len(tenantIDs) == 0 {
@@ -745,6 +931,10 @@ func (s *MemoryService) ListMemories(userID string, tenantIDs []string, memoryTy
 // Returns:
 //   - *CreateMemoryResponse: The memory configuration details
 //   - error: Error if memory not found
+//
+// Example:
+//
+//	resp, err := service.GetMemoryConfig("memory456")
 func (s *MemoryService) GetMemoryConfig(memoryID string) (*CreateMemoryResponse, error) {
 	memory, err := s.memoryDAO.GetWithOwnerNameByID(memoryID)
 	if err != nil {
@@ -762,9 +952,6 @@ func (s *MemoryService) GetMemoryConfig(memoryID string) (*CreateMemoryResponse,
 // TODO: AddMessage - Implementation pending - depends on embedding engine
 // func (s *MemoryService) AddMessage(memoryIDs []string, messageDict map[string]interface{}) (bool, string, error) { ... }
 
-// TODO: ForgetMessage - Implementation pending - depends on embedding engine
-// func (s *MemoryService) ForgetMessage(memoryID string, messageID int) (bool, error) { ... }
-
 // TODO: UpdateMessageStatus - Implementation pending - depends on embedding engine
 // func (s *MemoryService) UpdateMessageStatus(memoryID string, messageID int, status bool) (bool, error) { ... }
 
@@ -779,6 +966,12 @@ func (s *MemoryService) GetMemoryConfig(memoryID string) (*CreateMemoryResponse,
 
 // isList checks if a value is a list or array type
 // This is a utility function for type validation
+//
+// Parameters:
+//   - v: The value to check
+//
+// Returns:
+//   - bool: true if v is []interface{} or []string, false otherwise
 //
 // Example:
 //
@@ -795,6 +988,16 @@ func isList(v interface{}) bool {
 
 // formatRetDataFromMemory converts a Memory model to CreateMemoryResponse format
 // This is a utility function for formatting memory data for API responses
+//
+// Parameters:
+//   - memory: The Memory model to format
+//
+// Returns:
+//   - *CreateMemoryResponse: Formatted memory response with human-readable types and dates
+//
+// Example:
+//
+//	resp := formatRetDataFromMemory(memoryModel)
 func formatRetDataFromMemory(memory *entity.Memory) *CreateMemoryResponse {
 	memoryTypes := dao.GetMemoryTypeHuman(memory.MemoryType)
 
@@ -821,6 +1024,16 @@ func formatDateToString(t int64) *string {
 
 // formatRetDataFromMemoryListItem converts a MemoryListItem to CreateMemoryResponse
 // This function is used for both list and detail memory responses where owner_name is from JOIN query
+//
+// Parameters:
+//   - memory: MemoryListItem pointer with owner_name from JOIN
+//
+// Returns:
+//   - *CreateMemoryResponse: Formatted response with owner_name populated
+//
+// Example:
+//
+//	resp := formatRetDataFromMemoryListItem(memoryItem)
 func formatRetDataFromMemoryListItem(memory *entity.MemoryListItem) *CreateMemoryResponse {
 	memoryTypes := dao.GetMemoryTypeHuman(memory.MemoryType)
 	resp := &CreateMemoryResponse{

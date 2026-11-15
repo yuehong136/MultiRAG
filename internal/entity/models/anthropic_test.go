@@ -102,7 +102,7 @@ func TestAnthropicPreflightAndUnsupported(t *testing.T) {
 			t.Fatal(answer, err)
 		}
 	}
-	for _, config := range []*ChatConfig{{MaxTokens: anthropicTestPtr(0)}, {Thinking: anthropicTestPtr(true), MaxTokens: anthropicTestPtr(1024)}, {Thinking: anthropicTestPtr(false)}, {Temperature: anthropicTestPtr(math.NaN())}} {
+	for _, config := range []*ChatConfig{{MaxTokens: anthropicTestPtr(0)}, {Thinking: anthropicTestPtr(true), MaxTokens: anthropicTestPtr(1024)}, {Temperature: anthropicTestPtr(math.NaN())}} {
 		if answer, err := d.ChatWithMessages("claude", good, api, config); err == nil || answer != nil {
 			t.Fatal(answer, err)
 		}

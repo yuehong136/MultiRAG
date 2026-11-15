@@ -9,16 +9,14 @@ import (
 )
 
 func TestParseSetDefaultModel(t *testing.T) {
-	cmd, err := NewParser(`SET DEFAULT VLM "zhipu-ai" "ccc" "glm-4.6v-flash";`).Parse(false)
+	cmd, err := NewParser(`SET DEFAULT VISION MODEL "glm-4.6v-flash@ccc@zhipu-ai";`).Parse(APIMode)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
 
 	want := map[string]interface{}{
-		"model_type":     "image2text",
-		"model_provider": "zhipu-ai",
-		"model_instance": "ccc",
-		"model_name":     "glm-4.6v-flash",
+		"model_type":           "vision",
+		"composite_model_name": "glm-4.6v-flash@ccc@zhipu-ai",
 	}
 	if cmd.Type != "set_default_model" {
 		t.Fatalf("command type = %q, want set_default_model", cmd.Type)
@@ -36,7 +34,7 @@ func TestDefaultModelCommandsUseModelsEndpoint(t *testing.T) {
 		body   map[string]interface{}
 	}
 	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/models/default" {
+		if r.URL.Path != map[string]string{http.MethodGet: "/api/v1/models/default", http.MethodPatch: "/api/v1/models"}[r.Method] {
 			t.Errorf("path = %q, want /api/v1/models/default", r.URL.Path)
 		}
 		entry := struct {
@@ -65,11 +63,11 @@ func TestDefaultModelCommandsUseModelsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("strconv.Atoi() error = %v", err)
 	}
-	client := NewMultiRAGClient("user")
-	client.HTTPClient.Host = serverURL.Hostname()
-	client.HTTPClient.Port = port
+	client := newConsumerCLI("user")
+	consumerHTTP(client).Host = serverURL.Hostname()
+	consumerHTTP(client).Port = port
 
-	listCmd, err := NewParser("LIST DEFAULT MODELS;").Parse(false)
+	listCmd, err := NewParser("LIST DEFAULT MODELS;").Parse(APIMode)
 	if err != nil {
 		t.Fatalf("parse list command: %v", err)
 	}
@@ -77,7 +75,7 @@ func TestDefaultModelCommandsUseModelsEndpoint(t *testing.T) {
 		t.Fatalf("execute list command: %v", err)
 	}
 
-	setCmd, err := NewParser(`SET DEFAULT LLM "zhipu-ai" "default" "glm-4.5";`).Parse(false)
+	setCmd, err := NewParser(`SET DEFAULT CHAT MODEL "glm-4.5@default@zhipu-ai";`).Parse(APIMode)
 	if err != nil {
 		t.Fatalf("parse set command: %v", err)
 	}

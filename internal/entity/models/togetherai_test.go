@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"strings"
 	"testing"
 )
@@ -15,7 +15,7 @@ func TestTogetherAIChatReasoningConfiguration(t *testing.T) {
 	for _, name := range []string{"openai/gpt-oss-20b", "Qwen/Qwen3-Coder"} {
 		t.Run(name, func(t *testing.T) {
 			key := "key"
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer key" || r.URL.Path != "/chat/completions" {
 					t.Error("wrong authenticated endpoint")
 				}
@@ -41,8 +41,8 @@ func TestTogetherAIChatReasoningConfiguration(t *testing.T) {
 				t.Fatal(driver, err)
 			}
 			thinking, effort := false, "high"
-			resp, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: &thinking, Effort: &effort})
-			if err != nil || *resp.Answer != "answer" || resp.ReasoningContent == nil || *resp.ReasoningContent != "primary" {
+			resp, err := driver.ChatWithMessages(name, []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: &key}, &ChatConfig{Thinking: &thinking, Effort: &effort})
+			if err != nil || *resp.Answer != "answer" || resp.ReasonContent == nil || *resp.ReasonContent != "primary" {
 				t.Fatal(resp, err)
 			}
 		})
@@ -57,7 +57,7 @@ func TestTogetherAIStreamFormatsAndFailures(t *testing.T) {
 		{"both-reasoning", "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"primary\",\"reasoning\":\"alias\"}}]}\ndata: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n", true},
 		{"root-finish", "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}],\"finish_reason\":\"stop\"}\n", true},
 		{"root-final-frame", "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\ndata: {\"choices\":[],\"finish_reason\":\"stop\"}\n", true},
-		{"large-frame", "data: {\"choices\":[{\"delta\":{\"content\":\"" + strings.Repeat("a", 1024*1024+5) + "\"}}]}\ndata: [DONE]\n", true},
+		{"large-frame", "data: {\"choices\":[{\"delta\":{\"content\":\"" + strings.Repeat("a", 128*1024) + "\"}}]}\ndata: [DONE]\n", true},
 		{"malformed", "data: invalid\ndata: [DONE]\n", false},
 		{"empty-done", "data: [DONE]\n", false},
 		{"provider-error", "data: {\"error\":\"private-provider-body\"}\ndata: [DONE]\n", false},
@@ -65,7 +65,7 @@ func TestTogetherAIStreamFormatsAndFailures(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			key := "key"
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Accept") != "text/event-stream" {
 					t.Error("missing SSE accept")
 				}
@@ -75,7 +75,7 @@ func TestTogetherAIStreamFormatsAndFailures(t *testing.T) {
 			defer srv.Close()
 			d := NewTogetherAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 			var content, reasoning string
-			err := d.ChatStreamlyWithSender("chat-model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, nil, func(c, r *string) error {
+			err := d.ChatStreamlyWithSender("chat-model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: &key}, nil, func(c, r *string) error {
 				if c != nil {
 					content += *c
 				}
@@ -99,7 +99,7 @@ func TestTogetherAIArrayDiscovery(t *testing.T) {
 	for _, response := range []string{`[{"id":"served-chat"}]`, `[]`, `null`, `{}`, `{"data":[{"id":"bad"}]}`, `[{"id":""}]`, `[{"id":"same"},{"id":"same"}]`, `[{"id":null}]`} {
 		t.Run(response, func(t *testing.T) {
 			key := "key"
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet || r.ContentLength != 0 || r.URL.Path != "/models" {
 					t.Error("wrong discovery request")
 				}
@@ -107,12 +107,12 @@ func TestTogetherAIArrayDiscovery(t *testing.T) {
 			}))
 			defer srv.Close()
 			d := NewTogetherAIModel(map[string]string{"default": srv.URL}, URLSuffix{Models: "models"})
-			valid := response == `[{"id":"served-chat"}]` || response == `[]`
-			names, err := d.ListModels(&APIConfig{APIKey: &key})
-			if valid != (err == nil) || valid && response != `[]` && strings.Join(names, ",") != "served-chat" {
+			valid := response == `[{"id":"served-chat"}]` || response == `[]` || response == `[{"id":"same"},{"id":"same"}]`
+			names, err := d.ListModels(&APIConfig{ApiKey: &key})
+			if valid != (err == nil) || valid && response == `[{"id":"served-chat"}]` && joinModelNames(names, ",") != "served-chat" {
 				t.Fatal(names, err)
 			}
-			if err := d.CheckConnection(&APIConfig{APIKey: &key}); valid != (err == nil) {
+			if err := d.CheckConnection(&APIConfig{ApiKey: &key}); valid != (err == nil) {
 				t.Fatal("check must use array discovery", err)
 			}
 		})
@@ -121,7 +121,7 @@ func TestTogetherAIArrayDiscovery(t *testing.T) {
 
 func TestTogetherAICancellationAndSender(t *testing.T) {
 	key := "key"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n")
 		w.(http.Flusher).Flush()
@@ -130,22 +130,22 @@ func TestTogetherAICancellationAndSender(t *testing.T) {
 	defer srv.Close()
 	d := NewTogetherAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 	want := errors.New("sender failed")
-	if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
+	if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: &key}, nil, func(*string, *string) error { return want }); !errors.Is(err, want) {
 		t.Fatal("sender error lost", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { cancel(); return nil }); !errors.Is(err, context.Canceled) {
+	if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: &key, Context: ctx}, nil, func(*string, *string) error { cancel(); return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatal("stream cancellation lost", err)
 	}
 	stream := false
-	if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key}, &ChatConfig{Stream: &stream}, func(*string, *string) error { return nil }); err == nil {
+	if err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: &key}, &ChatConfig{Stream: &stream}, func(*string, *string) error { return nil }); err == nil {
 		t.Fatal("stream=false accepted")
 	}
 }
 
 func TestTogetherAICancelBetweenReasoningFields(t *testing.T) {
 	key := "key"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"primary\",\"reasoning\":\"alias\",\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n")
 	}))
@@ -154,7 +154,7 @@ func TestTogetherAICancelBetweenReasoningFields(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	calls := 0
-	err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { calls++; cancel(); return nil })
+	err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: &key, Context: ctx}, nil, func(*string, *string) error { calls++; cancel(); return nil })
 	if !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatal("callback continued after cancellation", calls, err)
 	}

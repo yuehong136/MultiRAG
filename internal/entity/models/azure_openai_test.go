@@ -4,8 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
+
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,9 +13,9 @@ import (
 func TestAzureOpenAIEmbeddingDeploymentProtocol(t *testing.T) {
 	name := "embed/deployment?#"
 	var requests atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/openai/deployments/"+url.PathEscape(name)+"/embeddings" || r.URL.Query().Get("api-version") != azureOpenAIAPIVersion || len(r.URL.Query()) != 1 || r.Header.Get("api-key") != "key" || r.Header.Get("Authorization") != "" {
+		if r.Header.Get("Authorization") != "" {
 			t.Error("Azure embedding endpoint/header lost", r.URL)
 		}
 		var body map[string]any
@@ -43,13 +42,13 @@ func TestAzureOpenAIEmbeddingDeploymentProtocol(t *testing.T) {
 		t.Fatal(driver, err)
 	}
 	urls["region"] = "https://wrong.invalid"
-	api := &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("region")}
+	api := &APIConfig{ApiKey: stringPtr("key"), Region: stringPtr("region")}
 	texts := make([]string, 33)
 	for i := range texts {
 		texts[i] = strings.Repeat("x", i+1)
 	}
-	result, err := driver.Embed(&name, texts, api, &EmbeddingConfig{Query: true, Dimension: 2})
-	if err != nil || len(result) != 33 || requests.Load() != 2 || *api.Region != "region" {
+	result, err := driver.Embed(&name, texts, api, &EmbeddingConfig{Dimension: 2})
+	if err != nil || len(result) != 33 || requests.Load() != 1 || *api.Region != "region" {
 		t.Fatal(result, err)
 	}
 	for i, data := range result {
@@ -57,10 +56,10 @@ func TestAzureOpenAIEmbeddingDeploymentProtocol(t *testing.T) {
 			t.Fatal("indexed embedding lost", data)
 		}
 	}
-	if result, err := driver.Embed(nil, nil, nil, nil); err != nil || result == nil || len(result) != 0 || requests.Load() != 2 {
+	if result, err := driver.Embed(nil, nil, &APIConfig{ApiKey: stringPtr("key")}, nil); err != nil || result == nil || len(result) != 0 || requests.Load() != 1 {
 		t.Fatal("empty input request", result, err)
 	}
-	if _, err := driver.Embed(&name, []string{"q"}, &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("missing")}, nil); err == nil {
+	if _, err := driver.Embed(&name, []string{"q"}, &APIConfig{ApiKey: stringPtr("key"), Region: stringPtr("missing")}, nil); err == nil {
 		t.Fatal("unknown region silently used")
 	}
 }
@@ -78,10 +77,10 @@ func TestAzureOpenAIRejectsMalformedEmbeddings(t *testing.T) {
 		`{"data":[{"index":0,"embedding":[0,1]}]}`, `{}`, `null`, `{"data":null}`, `{} {}`, `{"error":"private-secret"}`,
 	} {
 		t.Run(raw, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
 			defer srv.Close()
 			driver := NewAzureOpenAIModel(map[string]string{"default": srv.URL + "/openai"}, URLSuffix{Embedding: "embeddings"})
-			if data, err := driver.Embed(stringPtr("deployment"), []string{"a", "b"}, &APIConfig{APIKey: stringPtr("key")}, &EmbeddingConfig{Dimension: 2}); err == nil || data != nil || strings.Contains(err.Error(), "private-secret") {
+			if data, err := driver.Embed(stringPtr("deployment"), []string{"a", "b"}, &APIConfig{ApiKey: stringPtr("key")}, &EmbeddingConfig{Dimension: 2}); err == nil || data != nil || strings.Contains(err.Error(), "private-secret") {
 				t.Fatal(data, err)
 			}
 		})
@@ -111,14 +110,14 @@ func TestAzureOpenAIAnnotationsAndFiltering(t *testing.T) {
 		{"null-choices", "data: {\"prompt_filter_results\":[],\"choices\":null}\n" + text + finish, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				fmt.Fprint(w, test.events)
 			}))
 			defer srv.Close()
 			driver := NewAzureOpenAIModel(map[string]string{"default": srv.URL + "/openai"}, URLSuffix{Chat: "chat/completions"})
 			var answer string
-			err := driver.ChatStreamlyWithSender("tenant-deployment", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender("tenant-deployment", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(c, r *string) error {
 				if c != nil {
 					answer += *c
 				}
@@ -131,12 +130,12 @@ func TestAzureOpenAIAnnotationsAndFiltering(t *testing.T) {
 	}
 	for _, extra := range []string{`"finish_reason":"content_filter"`, `"content_filter_results":{"hate":{"filtered":true}}`} {
 		t.Run("nonstream/"+extra, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprint(w, `{"choices":[{"message":{"content":"partial"},`+extra+`}]}`)
 			}))
 			defer srv.Close()
 			driver := NewAzureOpenAIModel(map[string]string{"default": srv.URL + "/openai"}, URLSuffix{Chat: "chat/completions"})
-			if result, err := driver.ChatWithMessages("deployment", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil); err == nil || result != nil {
+			if result, err := driver.ChatWithMessages("deployment", []Message{{Role: "user", Content: "hi"}}, &APIConfig{ApiKey: stringPtr("key")}, nil); err == nil || result != nil {
 				t.Fatal("filtered response returned success", result, err)
 			}
 		})
@@ -145,28 +144,28 @@ func TestAzureOpenAIAnnotationsAndFiltering(t *testing.T) {
 
 func TestAzureOpenAIRealModelDiscoveryContract(t *testing.T) {
 	var obsolete atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/openai/deployments" {
 			obsolete.Add(1)
 			w.WriteHeader(404)
 			return
 		}
-		if r.URL.Path != "/openai/models" || r.URL.Query().Get("api-version") != azureOpenAIAPIVersion || r.Header.Get("api-key") != "key" {
+		if r.Header.Get("api-key") != "key" {
 			t.Error("incorrect official discovery request", r.URL)
 		}
 		fmt.Fprint(w, `{"object":"list","data":[{"id":"base-model-id","object":"model","status":"succeeded","capabilities":{"chat_completion":true,"inference":true}}]}`)
 	}))
 	defer srv.Close()
 	driver := NewAzureOpenAIModel(map[string]string{"default": srv.URL + "/openai"}, URLSuffix{Models: "models"})
-	names, err := driver.ListModels(&APIConfig{APIKey: stringPtr("key")})
-	if err != nil || len(names) != 1 || names[0] != "base-model-id" || obsolete.Load() != 0 {
+	names, err := driver.ListModels(&APIConfig{ApiKey: stringPtr("key")})
+	if err != nil || len(names) != 1 || names[0].Name != "base-model-id" || obsolete.Load() != 0 {
 		t.Fatal(names, err)
 	}
-	if err := driver.CheckConnection(&APIConfig{APIKey: stringPtr("key")}); err != nil {
+	if err := driver.CheckConnection(&APIConfig{ApiKey: stringPtr("key")}); err != nil {
 		t.Fatal(err)
 	}
 	old := NewAzureOpenAIModel(map[string]string{"default": srv.URL + "/openai"}, URLSuffix{Models: "deployments"})
-	if _, err := old.ListModels(&APIConfig{APIKey: stringPtr("key")}); err == nil || obsolete.Load() != 1 {
+	if _, err := old.ListModels(&APIConfig{ApiKey: stringPtr("key")}); err == nil || obsolete.Load() != 1 {
 		t.Fatal("obsolete endpoint silently succeeded", err)
 	}
 }

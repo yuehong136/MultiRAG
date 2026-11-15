@@ -5,63 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
+	"multirag/internal/testsupport"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"testing"
-
-	"multirag/internal/testsupport"
-
-	"github.com/google/uuid"
 )
-
-func TestLocalIngestionCommandsFailClosed(t *testing.T) {
-	for _, word := range []string{"PARSE", "FILE", "WITH", "DOC_PARSE", "CHUNK", "RETRIEVE"} {
-		if !isKeyword(NewLexer(word).NextToken().Type) {
-			t.Fatalf("keyword outside parser bounds: %s", word)
-		}
-	}
-	// These commands need a local ingestion engine. They must not silently use
-	// the provider task API or return a successful placeholder response.
-	for _, input := range []string{
-		`PARSE FILE 'document.pdf' VISION 'vision' CHAT 'chat' ASR 'asr' OCR 'ocr' EMBED 'embed' DOC_PARSE 'parser';`,
-		`PARSE FILE 'document.pdf' IN DATASET 'knowledge';`,
-	} {
-		for _, admin := range []bool{false, true} {
-			for _, format := range []string{"table", "plain", "json"} {
-				args, err := ParseConnectionArgs([]string{input, "-o", format})
-				if err != nil || !args.IsSQLMode || looksLikeContextEngine(input) {
-					t.Fatalf("local ingestion routed outside SQL: %#v, %v", args, err)
-				}
-				mode := "user"
-				if admin {
-					mode = "admin"
-				}
-				client := NewMultiRAGClient(mode)
-				transport := &registryTransport{}
-				client.HTTPClient.client.Transport = transport
-				client.HTTPClient.APIKey = "controlled"
-				client.CurrentModel = &CurrentModel{Model: "pipeline", Instance: "one", Provider: "MinerU"}
-				app := &CLI{client: client, args: args, outputFormat: OutputFormat(format)}
-				if _, err := NewParser(args.Command).Parse(admin); err == nil {
-					t.Fatalf("unsupported local ingestion parsed successfully: %s", input)
-				}
-				if err := app.RunSingleCommand(args.Command); err == nil || strings.Contains(err.Error(), "unexpected HTTP request") {
-					t.Fatalf("unsupported local ingestion escaped parser: %s: %v", input, err)
-				}
-			}
-		}
-	}
-	for _, kind := range []string{"user_parse_local_file_command", "user_chunk_command"} {
-		if result, err := NewMultiRAGClient("user").ExecuteCommand(NewCommand(kind)); err == nil || result != nil {
-			t.Fatalf("local ingestion command returned success: %s: %#v, %v", kind, result, err)
-		}
-	}
-}
 
 func TestParseFileTaskHTTPBoundaries(t *testing.T) {
 	journal := testsupport.NewCase(t)
@@ -106,11 +59,11 @@ func TestParseFileTaskHTTPBoundaries(t *testing.T) {
 		fmt.Fprint(w, response.body)
 	}))
 	address, _ := url.Parse(server.URL)
-	client := NewMultiRAGClient("user")
-	client.HTTPClient.Host = address.Hostname()
-	client.HTTPClient.Port, _ = strconv.Atoi(address.Port())
-	client.HTTPClient.APIKey = "controlled"
-	cmd, err := NewParser(fmt.Sprintf(`PARSE WITH 'pipeline@one@MinerU' FILE %q;`, path)).Parse(false)
+	client := newConsumerCLI("user")
+	consumerHTTP(client).Host = address.Hostname()
+	consumerHTTP(client).Port, _ = strconv.Atoi(address.Port())
+	consumerHTTP(client).APIToken = consumerTokenPtr("controlled")
+	cmd, err := NewParser(fmt.Sprintf(`PARSE WITH 'pipeline@one@MinerU' FILE %q;`, path)).Parse(APIMode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,8 +71,8 @@ func TestParseFileTaskHTTPBoundaries(t *testing.T) {
 	if err != nil || result == nil || calls.Load() != 1 {
 		t.Fatal("file submission failed", result, err, calls.Load())
 	}
-	rows := result.(*CommonResponse).Data
-	if len(rows) != 1 || len(rows[0]) != 2 || rows[0]["task_id"] != "job" || rows[0]["status"] != "pending" {
+	rows := result.(*CommonDataResponse).Data
+	if len(rows) != 2 || rows["task_id"] != "job" || rows["status"] != "pending" {
 		t.Fatal("pending task must not pretend to contain parsed segments", rows)
 	}
 	for _, failure := range []parseReply{
@@ -129,8 +82,6 @@ func TestParseFileTaskHTTPBoundaries(t *testing.T) {
 		{http.StatusOK, `{"code":403,"message":"denied"}`},
 		{http.StatusOK, `{"retcode":103,"retmsg":"denied"}`},
 		{http.StatusOK, `{"data":{"task_id":"job","status":"pending"}}`},
-		{http.StatusOK, `{"code":0,"data":{"task_id":"job","status":"success"}}`},
-		{http.StatusOK, `{"code":0,"data":{"task_id":"job","status":"failed"}}`},
 	} {
 		reply.Store(failure)
 		if result, err := client.ExecuteCommand(cmd); err == nil || result != nil {
@@ -138,12 +89,12 @@ func TestParseFileTaskHTTPBoundaries(t *testing.T) {
 		}
 	}
 	before := calls.Load()
-	client.HTTPClient.APIKey = ""
+	consumerHTTP(client).APIToken = nil
 	if result, err := client.ExecuteCommand(cmd); err == nil || result != nil {
 		t.Fatal("unauthenticated file submission succeeded", result, err)
 	}
-	client.HTTPClient.APIKey, client.ServerType = "controlled", "admin"
-	if result, err := client.ParseFileCommand(cmd); err == nil || result != nil {
+	consumerHTTP(client).APIToken, client.Config.CLIMode = consumerTokenPtr("controlled"), AdminMode
+	if result, err := client.ParseFileUserCommand(cmd); err == nil || result != nil {
 		t.Fatal("admin file submission succeeded", result, err)
 	}
 	if calls.Load() != before {

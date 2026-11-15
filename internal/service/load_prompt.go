@@ -31,19 +31,39 @@ var (
 	promptsBaseDir string
 )
 
-// thinkBlockRE is used to strip think blocks from LLM responses
+// thinkBlockRE strips think blocks from LLM responses.
+//
+// This mirrors the Python original
+//
+//	re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
+//
+// exactly: `.*` with re.DOTALL is greedy, so the regex consumes
+// everything from the start of the string up to and including the
+// LAST </think> on the input. The Go form uses [\s\S] (Go's
+// newline-aware any-char) and a greedy `*`. A non-greedy `*?` here
+// would diverge for responses containing more than one </think>
+// (e.g. malformed streams that re-emit a partial think block
+// after the real answer), stripping only the first and leaving the
+// rest of the response invisible to the caller.
 var thinkBlockRE = regexp.MustCompile(`^[\s\S]*</think>`)
+
+// jsonFenceRE matches markdown code fences around JSON responses.
+// Mirrors Python's re.sub(r"(`{3}json\n|`{3}\n*$)", ..., flags=re.DOTALL).
+// Note: `\n*` is intentionally narrower than Go's `\s*` — Python only
+// matches newlines, not other whitespace, so a closing fence followed
+// by trailing spaces (e.g. "```   \n") is left intact.
+var jsonFenceRE = regexp.MustCompile("```json\\n|```\\n*$")
 
 func init() {
 	// Strategy 1: Check working directory first (most reliable during development/tests)
 	cwd, err := os.Getwd()
 	if err == nil {
-		// Check if CWD has core/prompts directly
+		// Check if CWD has rag/prompts directly
 		if _, err := os.Stat(filepath.Join(cwd, "core", "prompts")); err == nil {
 			promptsBaseDir = cwd
 			return
 		}
-		// Walk up from CWD looking for core/prompts
+		// Walk up from CWD looking for rag/prompts
 		dir := cwd
 		for dir != "/" && dir != "" {
 			if _, err := os.Stat(filepath.Join(dir, "core", "prompts")); err == nil {
@@ -54,7 +74,7 @@ func init() {
 		}
 	}
 
-	// Strategy 2: Walk up from executable (for production Docker where binary is in /multirag/bin/)
+	// Strategy 2: Walk up from executable (for production Docker where binary is in /ragflow/bin/)
 	exe, err := os.Executable()
 	if err == nil {
 		dir := filepath.Dir(exe)

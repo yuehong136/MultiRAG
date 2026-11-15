@@ -29,14 +29,14 @@ type Task struct {
 	BeginAt         *time.Time `gorm:"column:begin_at;index" json:"begin_at,omitempty"`
 	ProcessDuration float64    `gorm:"column:process_duration;default:0" json:"process_duration"`
 	Progress        float64    `gorm:"column:progress;default:0;index" json:"progress"`
-	ProgressMsg     *string    `gorm:"column:progress_msg;type:text" json:"progress_msg,omitempty"`
+	ProgressMsg     *string    `gorm:"column:progress_msg;type:longtext" json:"progress_msg,omitempty"`
 	RetryCount      int64      `gorm:"column:retry_count;default:0" json:"retry_count"`
-	Digest          *string    `gorm:"column:digest;type:text" json:"digest,omitempty"`
-	ChunkIDs        *string    `gorm:"column:chunk_ids;type:text" json:"chunk_ids,omitempty"`
+	Digest          *string    `gorm:"column:digest;type:longtext" json:"digest,omitempty"`
+	ChunkIDs        *string    `gorm:"column:chunk_ids;type:longtext" json:"chunk_ids,omitempty"`
 	BaseModel
 }
 
 // TableName specify table name
 func (Task) TableName() string {
-	return "t_ai_tasks"
+	return "task"
 }

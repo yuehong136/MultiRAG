@@ -1,5 +1,7 @@
 # Skills 调整计划：Go源码跟进，Python兼容与增强
 
+2026-11-15 Go 更新：Go 已转为[原 Skills 路线](GO_CORE.md)，本页下述 2026-10-04 的 Go 协议、PostgreSQL/Milvus 适配与验收记录为历史，不能作为当前 Go 合同或验收依据。Python 的当前合同独立维护。
+
 2026-10-04。状态：核心、消费者及只读MCP已落地；具体提交、实测与后续范围见[PROGRESS](PROGRESS.md)，不以计划代替交付证据。
 旧实现及其测试证据保留在[PROGRESS](PROGRESS.md)，不作为新方案已完成的证明。
 

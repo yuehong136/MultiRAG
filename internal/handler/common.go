@@ -30,7 +30,7 @@ func GetUser(c *gin.Context) (*entity.User, common.ErrorCode, string) {
 	}
 
 	user, ok := userAny.(*entity.User)
-	if !ok {
+	if !ok || user == nil || user.ID == "" {
 		return nil, common.CodeUnauthorized, "User not found"
 	}
 	return user, common.CodeSuccess, ""

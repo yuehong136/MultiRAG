@@ -35,29 +35,24 @@ import (
 // DefaultConnectTimeout default connection timeout for external services
 const DefaultConnectTimeout = 5 * time.Second
 
-// AuthenticationConfig controls local password login and registration.
-type AuthenticationConfig struct {
-	DisablePasswordLogin    bool     `mapstructure:"disable_password_login"`
-	EnableRegister          bool     `mapstructure:"enable_register"`
-	PasswordRecoveryOrigins []string `mapstructure:"password_recovery_origins"`
-}
-
 // Config application configuration
 type Config struct {
-	SMTP             common.SMTPConfig      `mapstructure:"smtp"`
-	Authentication   AuthenticationConfig   `mapstructure:"authentication"`
 	Server           ServerConfig           `mapstructure:"server"`
+	Authentication   AuthenticationConfig   `mapstructure:"authentication"`
 	Database         DatabaseConfig         `mapstructure:"database"`
 	Redis            RedisConfig            `mapstructure:"redis"`
+	Nats             NatsConfig             `mapstructure:"nats"`
 	Log              LogConfig              `mapstructure:"log"`
 	DocEngine        DocEngineConfig        `mapstructure:"doc_engine"`
 	StorageEngine    StorageConfig          `mapstructure:"storage_engine"`
 	RegisterEnabled  int                    `mapstructure:"register_enabled"`
 	OAuth            map[string]OAuthConfig `mapstructure:"oauth"`
+	SMTP             common.SMTPConfig      `mapstructure:"smtp"`
 	Admin            AdminConfig            `mapstructure:"admin"`
 	UserDefaultLLM   UserDefaultLLMConfig   `mapstructure:"user_default_llm"`
 	DefaultSuperUser DefaultSuperUser       `mapstructure:"default_super_user"`
 	Language         string                 `mapstructure:"language"`
+	TaskExecutor     TaskExecutorConfig     `mapstructure:"task_executor"`
 }
 
 // AdminConfig admin server configuration
@@ -66,10 +61,19 @@ type AdminConfig struct {
 	Port int    `mapstructure:"http_port"`
 }
 
+type AuthenticationConfig struct {
+	DisablePasswordLogin bool `mapstructure:"disable_password_login"`
+	RegisterEnabled      bool `mapstructure:"register_enabled"`
+}
+
 type DefaultSuperUser struct {
 	Email    string `mapstructure:"email"`
 	Password string `mapstructure:"password"`
 	Nickname string `mapstructure:"nickname"`
+}
+
+type TaskExecutorConfig struct {
+	MessageQueueType string `mapstructure:"message_queue_type"`
 }
 
 // UserDefaultLLMConfig user default LLM configuration
@@ -94,8 +98,15 @@ type ModelConfig struct {
 	Factory string `mapstructure:"factory"`
 }
 
-// OAuthConfig OAuth configuration for a channel
+// OAuthConfig OAuth configuration for a channel.
+// Mirrors api/apps/auth/__init__.py's OAUTH_CONFIG entries: a Type that
+// selects the auth client flavor (oauth2 / oidc / github), plus the
+// transport URLs and client credentials. For OIDC the URLs are derived
+// from Issuer via the .well-known/openid-configuration document, so they
+// may be left blank.
 type OAuthConfig struct {
+	DisplayName      string `mapstructure:"display_name"`
+	Icon             string `mapstructure:"icon"`
 	Type             string `mapstructure:"type"`
 	ClientID         string `mapstructure:"client_id"`
 	ClientSecret     string `mapstructure:"client_secret"`
@@ -105,27 +116,24 @@ type OAuthConfig struct {
 	RedirectURI      string `mapstructure:"redirect_uri"`
 	Scope            string `mapstructure:"scope"`
 	Issuer           string `mapstructure:"issuer"`
-	DisplayName      string `mapstructure:"display_name"`
-	Icon             string `mapstructure:"icon"`
 }
 
 // ServerConfig server configuration
 type ServerConfig struct {
-	SecretKey string `mapstructure:"secret_key"`
-	Mode      string `mapstructure:"mode"` // debug, release
-	Port      int    `mapstructure:"port"`
+	Mode      string  `mapstructure:"mode"` // debug, release
+	Port      int     `mapstructure:"port"`
+	SecretKey *string `mapstructure:"secret_key"`
 }
 
 // DatabaseConfig database configuration
 type DatabaseConfig struct {
-	Driver   string `mapstructure:"driver"`
+	Driver   string `mapstructure:"driver"` // mysql
 	Host     string `mapstructure:"host"`
 	Port     int    `mapstructure:"port"`
 	Database string `mapstructure:"database"`
 	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"`
 	Charset  string `mapstructure:"charset"`
-	Schema   string `mapstructure:"schema"`
 }
 
 // LogConfig logging configuration
@@ -139,7 +147,6 @@ type DocEngineConfig struct {
 	Type     EngineType           `mapstructure:"type"`
 	ES       *ElasticsearchConfig `mapstructure:"es"`
 	Infinity *InfinityConfig      `mapstructure:"infinity"`
-	Milvus   *MilvusConfig        `mapstructure:"milvus"`
 }
 
 // EngineType document engine type
@@ -148,7 +155,6 @@ type EngineType string
 const (
 	EngineElasticsearch EngineType = "elasticsearch"
 	EngineInfinity      EngineType = "infinity"
-	EngineMilvus        EngineType = "milvus"
 )
 
 // ElasticsearchConfig Elasticsearch configuration
@@ -165,15 +171,6 @@ type InfinityConfig struct {
 	DBName                 string `mapstructure:"db_name"`
 	MappingFileName        string `mapstructure:"mapping_file_name"`
 	DocMetaMappingFileName string `mapstructure:"doc_meta_mapping_file_name"`
-}
-
-// MilvusConfig Milvus configuration
-type MilvusConfig struct {
-	Hosts    string `mapstructure:"hosts"`
-	Username string `mapstructure:"username"`
-	Password string `mapstructure:"password"`
-	DBName   string `mapstructure:"db_name"`
-	Token    string `mapstructure:"token"`
 }
 
 type StorageType string
@@ -212,7 +209,7 @@ type MinioConfig struct {
 	Password   string `mapstructure:"password"`    // Secret key
 	Secure     bool   `mapstructure:"secure"`      // Use HTTPS
 	Verify     bool   `mapstructure:"verify"`      // Verify SSL certificates
-	Region     string `mapstructure:"region"`      // Region (optional)
+	Region     string `mapstructure:"region"`      // optional
 	Bucket     string `mapstructure:"bucket"`      // Default bucket (optional)
 	PrefixPath string `mapstructure:"prefix_path"` // Path prefix (optional)
 }
@@ -238,10 +235,15 @@ type RedisConfig struct {
 	DB       int    `mapstructure:"db"`
 }
 
+type NatsConfig struct {
+	Host string `mapstructure:"host"`
+	Port int    `mapstructure:"port"`
+}
+
 var (
 	globalConfig *Config
 	globalViper  *viper.Viper
-	zapLogger    = common.Logger
+	zapLogger    *zap.Logger
 	allConfigs   []map[string]interface{}
 )
 
@@ -266,7 +268,7 @@ func Init(configPath string) error {
 		}
 
 		switch k {
-		case "multirag":
+		case "ragflow":
 			configDict["id"] = id
 			configDict["name"] = fmt.Sprintf("multirag_%d", id)
 			configDict["service_type"] = "multirag_server"
@@ -315,28 +317,6 @@ func Init(configPath string) error {
 				"retrieval_type": "infinity",
 				"db_name":        dbName,
 			}
-		case "milvus":
-			// Skip if retrieval_type doesn't match doc_engine
-			if globalConfig.DocEngine.Type != "milvus" {
-				continue
-			}
-			hosts := getString(configDict, "hosts")
-			host, port := parseHostPort(hosts)
-			username := getString(configDict, "username")
-			password := getString(configDict, "password")
-			configDict["id"] = id
-			configDict["name"] = "milvus"
-			configDict["host"] = host
-			configDict["port"] = port
-			configDict["service_type"] = "retrieval"
-			configDict["extra"] = map[string]interface{}{
-				"retrieval_type": "milvus",
-				"username":       username,
-				"password":       password,
-			}
-			delete(configDict, "hosts")
-			delete(configDict, "username")
-			delete(configDict, "password")
 		case "minio":
 			hostPort := getString(configDict, "host")
 			host, port := parseHostPort(hostPort)
@@ -392,25 +372,6 @@ func Init(configPath string) error {
 			delete(configDict, "max_allowed_packet")
 			delete(configDict, "user")
 			delete(configDict, "password")
-		case "postgresql":
-			host := getString(configDict, "host")
-			port := getInt(configDict, "port")
-			user := getString(configDict, "user")
-			password := getString(configDict, "password")
-			configDict["id"] = id
-			configDict["name"] = "postgresql"
-			configDict["host"] = host
-			configDict["port"] = port
-			configDict["service_type"] = "meta_data"
-			configDict["extra"] = map[string]interface{}{
-				"meta_type": "postgresql",
-				"username":  user,
-				"password":  password,
-			}
-			delete(configDict, "stale_timeout")
-			delete(configDict, "max_connections")
-			delete(configDict, "user")
-			delete(configDict, "password")
 		case "task_executor":
 			mqType := getString(configDict, "message_queue_type")
 			configDict["id"] = id
@@ -420,6 +381,13 @@ func Init(configPath string) error {
 				"message_queue_type": mqType,
 			}
 			delete(configDict, "message_queue_type")
+		case "nats":
+			host := getString(configDict, "host")
+			port := getInt(configDict, "port")
+			configDict["id"] = id
+			configDict["name"] = "nats"
+			configDict["host"] = host
+			configDict["port"] = port
 		case "admin":
 			// Skip admin section
 			continue
@@ -436,7 +404,6 @@ func Init(configPath string) error {
 			configDict["port"] = "-"
 		}
 
-		delete(configDict, "secret_key")
 		delete(configDict, "prefix_path")
 		delete(configDict, "username")
 		allConfigs = append(allConfigs, configDict)
@@ -447,6 +414,31 @@ func Init(configPath string) error {
 }
 
 func FromEnvironments() error {
+	// Secret key
+	if envVal := os.Getenv("RAGFLOW_SECRET_KEY"); envVal != "" {
+		globalConfig.Server.SecretKey = &envVal
+	}
+
+	// Load REGISTER_ENABLED from environment variable (default: true)
+	if envVal := os.Getenv("REGISTER_ENABLED"); envVal != "" {
+		str := strings.ToLower(envVal)
+		if str == "true" || str == "1" || str == "yes" {
+			globalConfig.Authentication.RegisterEnabled = true
+		} else {
+			globalConfig.Authentication.RegisterEnabled = false
+		}
+	}
+
+	// Load DISABLE_PASSWORD_LOGIN from environment variable (default: false)
+	if envVal := os.Getenv("DISABLE_PASSWORD_LOGIN"); envVal != "" {
+		str := strings.ToLower(envVal)
+		if str == "true" || str == "1" || str == "yes" {
+			globalConfig.Authentication.DisablePasswordLogin = true
+		} else {
+			globalConfig.Authentication.DisablePasswordLogin = false
+		}
+	}
+
 	// Doc engine
 	docEngine := strings.ToLower(os.Getenv("DOC_ENGINE"))
 	switch docEngine {
@@ -455,12 +447,10 @@ func FromEnvironments() error {
 	case "":
 		// Default
 		if globalConfig.DocEngine.Type == "" {
-			globalConfig.DocEngine.Type = EngineMilvus
+			globalConfig.DocEngine.Type = EngineElasticsearch
 		}
 	case "elasticsearch":
 		globalConfig.DocEngine.Type = EngineElasticsearch
-	case "milvus":
-		globalConfig.DocEngine.Type = EngineMilvus
 	case "opensearch":
 	case "oceanbase":
 		return fmt.Errorf("not implemented: %s", docEngine)
@@ -469,7 +459,7 @@ func FromEnvironments() error {
 	}
 
 	// Default super user email
-	globalConfig.DefaultSuperUser.Email = "admin@multirag.com"
+	globalConfig.DefaultSuperUser.Email = "admin@ragflow.io"
 	superUserEmail := os.Getenv("DEFAULT_SUPERUSER_EMAIL")
 	if superUserEmail != "" {
 		_, err := mail.ParseAddress(superUserEmail)
@@ -496,8 +486,6 @@ func FromEnvironments() error {
 	switch databaseType {
 	case "mysql":
 		globalConfig.Database.Driver = "mysql"
-	case "postgres", "postgresql":
-		globalConfig.Database.Driver = "postgres"
 	case "":
 		// Default
 		if globalConfig.Database.Driver == "" {
@@ -539,7 +527,7 @@ func FromEnvironments() error {
 	}
 
 	minioPort := strings.ToLower(os.Getenv("MINIO_PORT"))
-	println(fmt.Sprintf("MINIO ip and port from env: %s:%s", minioIP, minioPort))
+	// println(fmt.Sprintf("MINIO ip and port from env: %s:%s", minioIP, minioPort))
 	if minioPort != "" {
 		if globalConfig.StorageEngine.Minio == nil {
 			return fmt.Errorf("Minio config not found")
@@ -569,7 +557,6 @@ func FromEnvironments() error {
 
 func FromConfigFile(configPath string) error {
 	v := viper.New()
-	v.SetDefault("authentication.enable_register", true)
 
 	// Set configuration file path
 	if configPath != "" {
@@ -578,13 +565,13 @@ func FromConfigFile(configPath string) error {
 		// Try to load service_conf.yaml from conf directory first
 		v.SetConfigName("service_conf")
 		v.SetConfigType("yaml")
-		v.AddConfigPath("./configs")
+		v.AddConfigPath("./conf")
 		v.AddConfigPath(".")
-		v.AddConfigPath("/etc/multirag/")
+		v.AddConfigPath("/etc/ragflow/")
 	}
 
 	// Read environment variables
-	v.SetEnvPrefix("MultiRAG")
+	v.SetEnvPrefix("RAGFLOW")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
@@ -617,32 +604,20 @@ func FromConfigFile(configPath string) error {
 		globalConfig.Admin.Port += 2
 	}
 
-	globalConfig.RegisterEnabled = 0
-	if globalConfig.Authentication.EnableRegister {
-		globalConfig.RegisterEnabled = 1
-	}
-	if globalConfig.Server.SecretKey == "" {
-		globalConfig.Server.SecretKey = v.GetString("multirag.secret_key")
-	}
-	for _, name := range []string{"MULTIRAG_SECRET_KEY", "MULTIRAG_MULTIRAG__SECRET_KEY"} {
-		if value, ok := os.LookupEnv(name); ok && (len(value) >= 32 || name == "MULTIRAG_MULTIRAG__SECRET_KEY") {
-			globalConfig.Server.SecretKey = value
-		}
-	}
-	for _, name := range []string{"REGISTER_ENABLED", "DISABLE_PASSWORD_LOGIN"} {
-		if value, ok := os.LookupEnv(name); ok {
-			enabled, err := parseAuthSwitch(value)
-			if err != nil {
-				return fmt.Errorf("invalid authentication switch: %s", name)
-			}
-			if name == "REGISTER_ENABLED" {
-				globalConfig.Authentication.EnableRegister = enabled
-				globalConfig.RegisterEnabled = 0
-				if enabled {
-					globalConfig.RegisterEnabled = 1
+	// authentication section
+	if globalConfig != nil {
+		// Try to map from mysql section
+		globalConfig.Authentication.DisablePasswordLogin = false
+		globalConfig.Authentication.RegisterEnabled = true
+		if v.IsSet("authentication") {
+			authenticationConfig := v.Sub("authentication")
+			if authenticationConfig != nil {
+				if authenticationConfig.IsSet("disable_password_login") {
+					globalConfig.Authentication.DisablePasswordLogin = authenticationConfig.GetBool("disable_password_login")
 				}
-			} else {
-				globalConfig.Authentication.DisablePasswordLogin = enabled
+				if authenticationConfig.IsSet("enable_register") {
+					globalConfig.Authentication.RegisterEnabled = authenticationConfig.GetBool("enable_register")
+				}
 			}
 		}
 	}
@@ -664,31 +639,21 @@ func FromConfigFile(configPath string) error {
 		}
 	}
 
-	// PostgreSQL config takes priority over MySQL if present
-	if v.IsSet("postgresql") {
-		pgConfig := v.Sub("postgresql")
-		if pgConfig != nil {
-			globalConfig.Database.Driver = "postgres"
-			globalConfig.Database.Host = pgConfig.GetString("host")
-			globalConfig.Database.Port = pgConfig.GetInt("port")
-			globalConfig.Database.Database = pgConfig.GetString("dbname")
-			globalConfig.Database.Username = pgConfig.GetString("user")
-			globalConfig.Database.Password = pgConfig.GetString("password")
-			globalConfig.Database.Schema = "usr_ai"
-		}
-	}
-
-	// Map multirag section to ServerConfig
+	// Map ragflow section to ServerConfig
 	if globalConfig != nil && globalConfig.Server.Port == 0 {
-		// Try to map from multirag section
-		if v.IsSet("multirag") {
-			multiragConfig := v.Sub("multirag")
-			if multiragConfig != nil {
-				globalConfig.Server.Port = multiragConfig.GetInt("http_port") + 4 // 9384, by default
-				//globalConfig.Server.Port = multiragConfig.GetInt("http_port") // Correct
+		// Try to map from ragflow section
+		if v.IsSet("ragflow") {
+			ragflowConfig := v.Sub("ragflow")
+			if ragflowConfig != nil {
+				globalConfig.Server.Port = ragflowConfig.GetInt("http_port") + 4 // 9384, by default
+				//globalConfig.Server.Port = ragflowConfig.GetInt("http_port") // Correct
 				// If mode is not set, default to debug
 				if globalConfig.Server.Mode == "" {
 					globalConfig.Server.Mode = "release"
+				}
+				secretKey := ragflowConfig.GetString("secret_key")
+				if secretKey != "" {
+					globalConfig.Server.SecretKey = &secretKey
 				}
 			}
 		}
@@ -723,37 +688,26 @@ func FromConfigFile(configPath string) error {
 	}
 
 	// Map doc_engine section to DocEngineConfig
-	if globalConfig != nil && globalConfig.DocEngine.Type == "" {
-		if v.IsSet("doc_engine") {
-			docEngineConfig := v.Sub("doc_engine")
-			if docEngineConfig != nil {
-				globalConfig.DocEngine.Type = EngineType(docEngineConfig.GetString("type"))
-			}
-		}
-		// Load all doc engine configs; Milvus takes priority for type selection
-		if v.IsSet("milvus") {
-			milvusConfig := v.Sub("milvus")
-			if milvusConfig != nil {
-				if globalConfig.DocEngine.Type == "" {
-					globalConfig.DocEngine.Type = EngineMilvus
-				}
-				if globalConfig.DocEngine.Milvus == nil {
-					globalConfig.DocEngine.Milvus = &MilvusConfig{
-						Hosts:    milvusConfig.GetString("hosts"),
-						Username: milvusConfig.GetString("username"),
-						Password: milvusConfig.GetString("password"),
-						DBName:   milvusConfig.GetString("db_name"),
-						Token:    milvusConfig.GetString("token"),
-					}
+	if globalConfig != nil {
+		// First, ensure engine type is set
+		if globalConfig.DocEngine.Type == "" {
+			if v.IsSet("doc_engine") {
+				docEngineConfig := v.Sub("doc_engine")
+				if docEngineConfig != nil {
+					globalConfig.DocEngine.Type = EngineType(docEngineConfig.GetString("type"))
 				}
 			}
 		}
+
+		// Map es section from top-level (service_conf.yaml format)
 		if v.IsSet("es") {
 			esConfig := v.Sub("es")
 			if esConfig != nil {
+				// Set default engine type if not set
 				if globalConfig.DocEngine.Type == "" {
 					globalConfig.DocEngine.Type = EngineElasticsearch
 				}
+				// Always populate ES config if es section exists
 				if globalConfig.DocEngine.ES == nil {
 					globalConfig.DocEngine.ES = &ElasticsearchConfig{
 						Hosts:    esConfig.GetString("hosts"),
@@ -763,17 +717,23 @@ func FromConfigFile(configPath string) error {
 				}
 			}
 		}
+
+		// Map infinity section from top-level (service_conf.yaml format)
 		if v.IsSet("infinity") {
 			infConfig := v.Sub("infinity")
 			if infConfig != nil {
+				// Set default engine type if not set
 				if globalConfig.DocEngine.Type == "" {
 					globalConfig.DocEngine.Type = EngineInfinity
 				}
+				// Always populate Infinity config if infinity section exists
 				if globalConfig.DocEngine.Infinity == nil {
 					globalConfig.DocEngine.Infinity = &InfinityConfig{
-						URI:          infConfig.GetString("uri"),
-						PostgresPort: infConfig.GetInt("postgres_port"),
-						DBName:       infConfig.GetString("db_name"),
+						URI:                    infConfig.GetString("uri"),
+						PostgresPort:           infConfig.GetInt("postgres_port"),
+						DBName:                 infConfig.GetString("db_name"),
+						MappingFileName:        infConfig.GetString("mapping_file_name"),
+						DocMetaMappingFileName: infConfig.GetString("doc_meta_mapping_file_name"),
 					}
 				}
 			}
@@ -806,12 +766,12 @@ func FromConfigFile(configPath string) error {
 				if globalConfig.StorageEngine.Minio == nil {
 					globalConfig.StorageEngine.Minio = &MinioConfig{
 						Host:       minioConfig.GetString("host"),
+						Region:     minioConfig.GetString("region"),
 						User:       minioConfig.GetString("user"),
 						Password:   minioConfig.GetString("password"),
 						Secure:     minioConfig.GetBool("secure"),
 						PrefixPath: minioConfig.GetString("prefix_path"),
 						Verify:     minioConfig.GetBool("verify"),
-						Region:     minioConfig.GetString("region"),
 						Bucket:     minioConfig.GetString("bucket"),
 					}
 				}
@@ -926,8 +886,8 @@ func PrintAll() {
 
 	allSettings := globalViper.AllSettings()
 	zapLogger.Info("=== All Configuration Settings ===")
-	for key, value := range allSettings {
-		zapLogger.Info("config", zap.String("key", key), zap.Any("value", value))
+	for key := range allSettings {
+		zapLogger.Info("config", zap.String("key", key))
 	}
 	zapLogger.Info("=== End Configuration ===")
 }
@@ -990,15 +950,4 @@ func GetLanguage() string {
 	}
 
 	return "English"
-}
-
-func parseAuthSwitch(value string) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "on":
-		return true, nil
-	case "0", "false", "no", "off":
-		return false, nil
-	default:
-		return false, fmt.Errorf("invalid boolean")
-	}
 }

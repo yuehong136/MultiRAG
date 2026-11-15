@@ -22,10 +22,9 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"multirag/internal/common"
 	"net"
-	"net/netip"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -33,16 +32,12 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
-	"multirag/internal/common"
 	"multirag/internal/server"
 )
 
 var (
-	// Lifecycle operations serialize connection setup/teardown; readers only
-	// take clientMu long enough to obtain an immutable client snapshot.
-	lifecycleMu  sync.Mutex
-	clientMu     sync.RWMutex
 	globalClient *RedisClient
+	lifecycleMu  sync.RWMutex
 )
 
 // RedisClient wraps go-redis client with additional utility methods
@@ -110,114 +105,61 @@ const (
 	`
 )
 
-// Init publishes a connected client. A failed attempt may be retried; an
-// initialized client stays in use until Close is called.
+// Init initializes Redis client
 func Init(cfg *server.RedisConfig) error {
-	if cfg == nil {
-		return fmt.Errorf("redis configuration is required")
-	}
-	config := *cfg
-	// The existing config loader preserves the brackets in [IPv6]:port.
-	// Normalize only a valid bracketed IPv6 address before JoinHostPort.
-	if strings.HasPrefix(config.Host, "[") && strings.HasSuffix(config.Host, "]") {
-		address, err := netip.ParseAddr(config.Host[1 : len(config.Host)-1])
-		if err != nil || !address.Is6() {
-			return fmt.Errorf("redis bracketed host must be an IPv6 address")
-		}
-		config.Host = address.String()
-	}
-	if config.Host == "" || config.Host != strings.TrimSpace(config.Host) || strings.ContainsAny(config.Host, " \t\r\n/[]") {
-		return fmt.Errorf("redis host must be a nonempty hostname or unbracketed IP address")
-	}
-	if strings.Contains(config.Host, ":") {
-		if _, err := netip.ParseAddr(config.Host); err != nil {
-			return fmt.Errorf("redis host is not a valid IP address")
-		}
-	}
-	if config.Port < 1 || config.Port > 65535 || config.DB < 0 {
-		return fmt.Errorf("redis port must be between 1 and 65535 and database must be nonnegative")
-	}
-
 	lifecycleMu.Lock()
 	defer lifecycleMu.Unlock()
-	if Get() != nil {
+	if cfg == nil {
+		return fmt.Errorf("Redis config is required")
+	}
+	if cfg.Host == "" {
 		return nil
 	}
-	client := redis.NewClient(&redis.Options{
-		Addr:                  net.JoinHostPort(config.Host, strconv.Itoa(config.Port)),
-		Password:              config.Password,
-		DB:                    config.DB,
-		ContextTimeoutEnabled: true,
-	})
+	if cfg.Port < 1 || cfg.Port > 65535 || cfg.DB < 0 {
+		return fmt.Errorf("invalid Redis endpoint or database")
+	}
+	if globalClient != nil {
+		return nil
+	}
+	snapshot := *cfg
+	client := redis.NewClient(&redis.Options{Addr: net.JoinHostPort(snapshot.Host, strconv.Itoa(snapshot.Port)), Password: snapshot.Password, DB: snapshot.DB, ContextTimeoutEnabled: true})
 	ctx, cancel := context.WithTimeout(context.Background(), server.DefaultConnectTimeout)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
-		_ = client.Close()
-		return fmt.Errorf("failed to connect to Redis: %w", err)
+		client.Close()
+		return fmt.Errorf("connect Redis: %w", err)
 	}
-	connected := &RedisClient{
-		client:           client,
-		config:           &config,
-		luaDeleteIfEqual: redis.NewScript(luaDeleteIfEqualScript),
-		luaTokenBucket:   redis.NewScript(luaTokenBucketScript),
-	}
-	clientMu.Lock()
-	globalClient = connected
-	clientMu.Unlock()
-	if logger := common.Logger; logger != nil {
-		logger.Info("Redis client initialized", zap.String("host", config.Host), zap.Int("port", config.Port), zap.Int("db", config.DB))
-	}
+	globalClient = &RedisClient{client: client, config: &snapshot, luaDeleteIfEqual: redis.NewScript(luaDeleteIfEqualScript), luaTokenBucket: redis.NewScript(luaTokenBucketScript)}
 	return nil
 }
 
-// Get gets global Redis client instance
 func Get() *RedisClient {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
+	lifecycleMu.RLock()
+	defer lifecycleMu.RUnlock()
 	return globalClient
 }
 
-// Close closes Redis client
 func Close() error {
 	lifecycleMu.Lock()
-	defer lifecycleMu.Unlock()
-	clientMu.Lock()
 	previous := globalClient
 	globalClient = nil
-	clientMu.Unlock()
+	lifecycleMu.Unlock()
 	if previous != nil && previous.client != nil {
 		return previous.client.Close()
 	}
 	return nil
 }
 
-// IsEnabled checks if Redis is enabled (configured and initialized)
-func IsEnabled() bool {
-	client := Get()
-	return client != nil && client.client != nil
-}
+func IsEnabled() bool { return Get() != nil }
 
 // Health checks if Redis is healthy
 func (r *RedisClient) Health() bool {
-	if r.client == nil {
+	if r == nil || r.client == nil {
 		return false
 	}
-	ctx := context.Background()
-	if err := r.client.Ping(ctx).Err(); err != nil {
-		return false
-	}
-
-	testKey := "health_check_" + uuid.New().String()
-	testValue := "yy"
-	if err := r.client.Set(ctx, testKey, testValue, 3*time.Second).Err(); err != nil {
-		return false
-	}
-
-	val, err := r.client.Get(ctx, testKey).Result()
-	if err != nil || val != testValue {
-		return false
-	}
-	return true
+	ctx, cancel := context.WithTimeout(context.Background(), server.DefaultConnectTimeout)
+	defer cancel()
+	return r.client.Ping(ctx).Err() == nil
 }
 
 // Info returns Redis server information
@@ -928,15 +870,14 @@ type DistributedLock struct {
 
 // NewDistributedLock creates a new distributed lock
 func NewDistributedLock(lockKey string, lockValue string, timeout time.Duration, blockingTimeout time.Duration) *DistributedLock {
-	client := Get()
-	if client == nil {
+	if globalClient == nil {
 		return nil
 	}
 	if lockValue == "" {
 		lockValue = uuid.New().String()
 	}
 	return &DistributedLock{
-		client:          client,
+		client:          globalClient,
 		lockKey:         lockKey,
 		lockValue:       lockValue,
 		timeout:         timeout,
@@ -988,12 +929,11 @@ type TokenBucket struct {
 
 // NewTokenBucket creates a new token bucket
 func NewTokenBucket(key string, capacity, rate float64) *TokenBucket {
-	client := Get()
-	if client == nil {
+	if globalClient == nil {
 		return nil
 	}
 	return &TokenBucket{
-		client:   client,
+		client:   globalClient,
 		key:      key,
 		capacity: capacity,
 		rate:     rate,
@@ -1023,9 +963,6 @@ func (tb *TokenBucket) Allow(cost float64) (bool, float64) {
 
 // GetClient returns the underlying go-redis client for advanced usage
 func (r *RedisClient) GetClient() *redis.Client {
-	if r == nil {
-		return nil
-	}
 	return r.client
 }
 
@@ -1033,12 +970,4 @@ func (r *RedisClient) GetClient() *redis.Client {
 func RandomSleep(minMs, maxMs int) {
 	duration := time.Duration(rand.Intn(maxMs-minMs)+minMs) * time.Millisecond
 	time.Sleep(duration)
-}
-
-// PingContext checks connectivity without allocating health keys.
-func (r *RedisClient) PingContext(ctx context.Context) error {
-	if r == nil || r.client == nil {
-		return fmt.Errorf("redis is not initialized")
-	}
-	return r.client.Ping(ctx).Err()
 }

@@ -15,12 +15,10 @@ Python 继续是当前生产入口。Python 与 Go 使用独立数据库和文�
 不再直接跨端读写资产或共用任务。下述七表与物理索引格式是 Python 扩展实现，
 由 Python 模型与 Alembic 管理；Go 新核心不依赖这些表。
 已有 `backend_owner` 字段和约束保留，Python 只访问 Python owner 数据，不迁移或删除旧数据。
-旧 Go 资产协议仅用于过渡：核心模式下只读，worker 排空已存在任务，响应能力给出
-`writable:false`。客户端必须遵循该字段，不能仅用 owner 相同判断可写。
+Go 当前实现见 [Go Skills](GO_CORE.md)，不提供上述旧资产协议过渡层。
 
 首期空间仅属于鉴权得到的 tenant；不提供跨 tenant 分享、公共库或 KB 权限继承。
-Python 复用 `async_current_tenant_id`；Go 必须保持 JWT/API-key 对 tenant 的等价映射，
-不得信任请求体 tenant_id 或任意 X-tenant-id。不存在及越权资源统一 404。
+Python 复用 `async_current_tenant_id`，不得信任请求体 tenant_id 或任意 X-tenant-id。不存在及越权资源统一 404。
 
 ## 身份、版本和包
 
@@ -199,7 +197,7 @@ skill.active_version_id、space.active_generation_id及revision，不能先改ac
 count为完整删除的唯一File行（含目录），不存在ID报错，失败后代保留祖先，合法兄弟继续。
 跨存储非原子，errors不意味着零副作用。Skills内部清理适配此领域合同，不调用HTTP回环，
 不在外层包事务，不解析errors字符串猜资源结果；结合操作记录按已授权绑定独立读回。
-Go核心的独立删除保证见CORE_CONTRACT，不复用假成功engine Delete。正式交接证据记录在PROGRESS。
+Go 的实际删除路线见 [Go Skills](GO_CORE.md)。正式交接证据记录在PROGRESS。
 
 ## 验收
 

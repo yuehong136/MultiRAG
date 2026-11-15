@@ -29,7 +29,7 @@ import (
 
 func TestAgentExecutionHTTPMySQL(t *testing.T) {
 	f := scratch.New(t)
-	if err := f.DB.AutoMigrate(&entity.User{}, &entity.Tenant{}, &entity.UserTenant{}, &entity.APIToken{}, &entity.UserCanvas{}, &entity.UserCanvasVersion{}, &entity.API4Conversation{}); err != nil {
+	if err := f.DB.AutoMigrate(&entity.User{}, &entity.Tenant{}, &entity.UserTenant{}, &entity.APIToken{}, &entity.UserCanvas{}, &entity.UserCanvasVersion{}, &entity.API4Conversation{}, &entity.CanvasTemplate{}); err != nil {
 		t.Fatal(err)
 	}
 	previousDB := dao.DB
@@ -179,6 +179,56 @@ func TestAgentExecutionHTTPMySQL(t *testing.T) {
 	denied(request(revoked, "GET", "/"+shared, ""))
 	denied(request(team, "DELETE", "/"+shared, ""))
 	denied(request(invited, "GET", "?owner_ids="+owner, ""))
+	t.Run("templates_and_tags", func(t *testing.T) {
+		for i, templateID := range []string{"template-old", "template-new"} {
+			row := entity.CanvasTemplate{ID: templateID, Title: entity.JSONMap{"zh": "标题", "en": "Title"}, Description: entity.JSONMap{"en": "Description"}, DSL: entity.JSONMap{"exact": json.Number("9007199254740993")}}
+			if err := f.DB.Create(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := f.DB.Model(&row).Update("create_time", i+1).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		denied(request("", "GET", "/templates", ""))
+		for _, actor := range []string{owner, foreign, "api"} {
+			result := request(actor, "GET", "/templates", "")
+			rows, ok := result["data"].([]any)
+			if result["code"] != json.Number("0") || !ok || len(rows) != 2 {
+				t.Fatal("authenticated template catalogue shape", result)
+			}
+			for i, templateID := range []string{"template-new", "template-old"} {
+				row := rows[i].(map[string]any)
+				if row["id"] != templateID || row["title"].(map[string]any)["zh"] != "标题" || row["description"].(map[string]any)["en"] != "Description" || row["dsl"].(map[string]any)["exact"] != json.Number("9007199254740993") {
+					t.Fatal("template locale, exact DSL or newest-first order changed", row)
+				}
+			}
+		}
+		var beforeDSL, beforeTags string
+		if err := f.Read.QueryRow("SELECT dsl,tags FROM user_canvas WHERE id=?", id).Scan(&beforeDSL, &beforeTags); err != nil {
+			t.Fatal(err)
+		}
+		for _, actor := range []string{foreign, invited, revoked, team} {
+			denied(request(actor, "PUT", "/"+id+"/tags", `{"tags":["denied"]}`))
+		}
+		denied(request(owner, "PUT", "/"+id+"/tags", `{"tags":{"invalid":"type"}}`))
+		var tags string
+		if err := f.Read.QueryRow("SELECT tags FROM user_canvas WHERE id=?", id).Scan(&tags); err != nil || tags != beforeTags {
+			t.Fatal("denied tags changed SQL", err)
+		}
+		success(request(owner, "PUT", "/"+id+"/tags", `{"tags":[" ML ","ml","Data,Science","中文"]}`))
+		if err := f.Read.QueryRow("SELECT tags,dsl FROM user_canvas WHERE id=?", id).Scan(&tags, &dsl); err != nil || tags != "ML,Data Science,中文" || dsl != beforeDSL {
+			t.Fatal("native tag normalization or unrelated DSL changed", err)
+		}
+		success(request("api", "PUT", "/"+id+"/tags", `{"tags":[]}`))
+		if err := f.Read.QueryRow("SELECT tags FROM user_canvas WHERE id=?", id).Scan(&tags); err != nil || tags != "" {
+			t.Fatal("API-token explicit empty tags did not clear", err)
+		}
+		// The frozen access rule permits an active team member to edit a team canvas.
+		success(request(team, "PUT", "/"+shared+"/tags", `{"tags":["shared"]}`))
+		if err := f.Read.QueryRow("SELECT tags FROM user_canvas WHERE id=?", shared).Scan(&tags); err != nil || tags != "shared" {
+			t.Fatal("target shared-canvas tag access changed", err)
+		}
+	})
 
 	session := success(request(owner, "POST", "/"+id+"/sessions", `{"name":"real session","dsl":{"version":2,"exact":9007199254740993}}`))
 	sessionID := session["id"].(string)

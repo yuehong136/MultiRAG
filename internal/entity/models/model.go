@@ -20,10 +20,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -59,6 +57,18 @@ type Reasoning struct {
 	Budget  *ReasoningBudget `json:"-"`
 	Effort  *ReasoningEffort `json:"-"`
 	RawType string           `json:"type"`
+}
+
+// Reasoning represents the reasoning capability (can be one of three types)
+type ClearReasoningContent struct {
+	DefaultValue    bool     `json:"default_value"`
+	SupportedModels []string `json:"supported_models"`
+}
+
+// Reasoning represents the reasoning capability (can be one of three types)
+type Thinking struct {
+	DefaultValue    bool     `json:"default_value"`
+	SupportedModels []string `json:"supported_models"`
 }
 
 // UnmarshalJSON custom unmarshal for Reasoning
@@ -132,30 +142,12 @@ type Multimodal struct {
 
 // Features represents all features of a model
 type Features struct {
-	Multimodal *Multimodal `json:"multimodal,omitempty"`
-	Reasoning  *Reasoning  `json:"reasoning,omitempty"`
+	Multimodal    *Multimodal            `json:"multimodal,omitempty"`
+	Reasoning     *Reasoning             `json:"reasoning,omitempty"`
+	Thinking      *Thinking              `json:"thinking,omitempty"`
+	ClearThinking *ClearReasoningContent `json:"clear_thinking,omitempty"`
 }
 
-// ThinkingClearConfig describes whether reasoning content is cleared by default.
-type ThinkingClearConfig struct {
-	DefaultValue    bool     `json:"default_value"`
-	SupportedModels []string `json:"supported_models"`
-}
-
-// ThinkingConfig describes provider-level thinking support.
-type ThinkingConfig struct {
-	DefaultValue    bool     `json:"default_value"`
-	SupportedModels []string `json:"supported_models"`
-}
-
-// ProviderFeatures describes capabilities shared by selected provider
-type ProviderFeatures struct {
-	Thinking      *ThinkingConfig      `json:"thinking,omitempty"`
-	ClearThinking *ThinkingClearConfig `json:"clear_thinking,omitempty"`
-}
-
-// ModelThinking describes defaults declared by one model. Legacy provider defaults
-// remain a fallback for configurations that have not moved to model-level thinking.
 type ModelThinking struct {
 	DefaultValue  bool `json:"default_value"`
 	ClearThinking bool `json:"clear_thinking"`
@@ -163,135 +155,33 @@ type ModelThinking struct {
 
 // Model represents a single LLM model
 type Model struct {
-	Name              string         `json:"name"`
-	Alias             []string       `json:"alias,omitempty"`
-	MaxTokens         int            `json:"max_tokens"`
-	MaxDimension      *int           `json:"max_dimension,omitempty"`
-	Dimensions        []int          `json:"dimensions,omitempty"`
-	ModelTypes        []string       `json:"model_types"` // Capabilities, such as chat, embedding and rerank.
-	Features          Features       `json:"features"`
-	Thinking          *ModelThinking `json:"thinking,omitempty"`
-	Class             *string        `json:"class,omitempty"` // Model family, such as gpt or qwen3.
-	ModelTypeMap      map[string]bool
-	maxTokensDeclared bool
-}
-
-// UnmarshalJSON preserves an explicit zero token limit without changing the
-// integer contract used by inference and registration callers.
-func (m *Model) UnmarshalJSON(data []byte) error {
-	type plain Model
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	var fields struct {
-		MaxTokens *int `json:"max_tokens"`
-	}
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	decoded.maxTokensDeclared = fields.MaxTokens != nil
-	*m = Model(decoded)
-	return nil
-}
-
-// SupportedModel describes a discovered remote ID. Unknown metadata is omitted;
-// pointers preserve declared zero values, false thinking defaults and empty types.
-type SupportedModel struct {
 	Name         string         `json:"name"`
-	MaxTokens    *int           `json:"max_tokens,omitempty"`
-	MaxDimension *int           `json:"max_dimension,omitempty"`
-	Dimensions   *[]int         `json:"dimensions,omitempty"`
-	ModelTypes   *[]string      `json:"model_types,omitempty"`
-	Thinking     *ModelThinking `json:"thinking,omitempty"`
-}
-
-// DescribeSupportedModels enriches inventory without changing its IDs, order or
-// cardinality. It reads this injected catalog and never calls a provider or writes.
-func (pm *ProviderManager) DescribeSupportedModels(providerName string, names []string) []SupportedModel {
-	result := make([]SupportedModel, 0, len(names))
-	for _, name := range names {
-		row := SupportedModel{Name: name}
-		model, err := pm.GetModelByNameOrAlias(name)
-		if err != nil {
-			// Provider-specific declarations are useful when the shared catalog has
-			// no matching name. Unknown aliases never fall back to another model.
-			model, _ = pm.GetModelByName(providerName, name)
-			if model == nil && strings.EqualFold(providerName, "SiliconFlow") {
-				// This driver's inventory appends owned_by to the remote ID. Only
-				// metadata lookup drops that suffix; the published ID stays intact.
-				if separator := strings.LastIndexByte(name, '@'); separator > 0 && separator < len(name)-1 {
-					lookupName := name[:separator]
-					model, _ = pm.GetModelByNameOrAlias(lookupName)
-					if model == nil {
-						model, _ = pm.GetModelByName(providerName, lookupName)
-					}
-				}
-			}
-			if model != nil {
-				model = cloneCatalogModel(model)
-			}
-		}
-		if model != nil {
-			if model.maxTokensDeclared || model.MaxTokens != 0 {
-				value := model.MaxTokens
-				row.MaxTokens = &value
-			}
-			row.MaxDimension = model.MaxDimension
-			if model.Dimensions != nil {
-				row.Dimensions = &model.Dimensions
-			}
-			if model.ModelTypes != nil {
-				row.ModelTypes = &model.ModelTypes
-			}
-			row.Thinking = model.Thinking
-		}
-		result = append(result, row)
-	}
-	return result
-}
-
-// UnmarshalJSON validates suffix keys locally while preserving provider extensions.
-func (p *Provider) UnmarshalJSON(data []byte) error {
-	type plain Provider
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	var fields struct {
-		URLSuffix json.RawMessage `json:"url_suffix"`
-	}
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	if len(fields.URLSuffix) > 0 {
-		decoder := json.NewDecoder(bytes.NewReader(fields.URLSuffix))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&decoded.URLSuffix); err != nil {
-			return fmt.Errorf("url_suffix: %w", err)
-		}
-	}
-	*p = Provider(decoded)
-	return nil
+	MaxTokens    *int           `json:"max_tokens"`
+	ModelTypes   []string       `json:"model_types"`
+	Thinking     *ModelThinking `json:"thinking"`
+	Class        *string        `json:"class"`
+	MaxDimension *int           `json:"max_dimension"` // used by embedding models
+	Dimensions   []int          `json:"dimensions"`
+	Alias        []string       `json:"alias"`
+	ModelTypeMap map[string]bool
 }
 
 // Provider represents an LLM provider
 type Provider struct {
 	Name        string            `json:"name"`
-	Tags        string            `json:"tags"`
 	URL         map[string]string `json:"url"`
 	URLSuffix   URLSuffix         `json:"url_suffix"`
 	Models      []*Model          `json:"models"`
-	Features    ProviderFeatures  `json:"features"`
-	Class       string            `json:"class,omitempty"` // Default model family for this provider.
+	Features    Features          `json:"features"`
+	Class       string            `json:"class"`
 	ModelDriver ModelDriver
 }
 
 // ProviderManager manages provider and model operations
 type ProviderManager struct {
-	Providers  []Provider `json:"model_providers"`
-	allModels  []*Model
-	modelIndex map[string]*Model
+	Providers        []Provider     `json:"model_providers"`
+	AllModels        []Model        `json:"all_models"`
+	Alias2ModelIndex map[string]int `json:"alias2_model_index_map"`
 }
 
 // ModelResponse represents the standard response structure
@@ -301,14 +191,45 @@ type ModelResponse struct {
 	Message string                   `json:"message"`
 }
 
-// NewProviderManager creates a new ProviderManager by reading all JSON files from a directory
-func NewProviderManager(dirPath string) (*ProviderManager, error) {
+func decodeProviderConfig(data []byte) (Provider, error) {
+	var provider Provider
+	if err := json.Unmarshal(data, &provider); err != nil {
+		return Provider{}, err
+	}
+
+	var rawProvider struct {
+		URLSuffix json.RawMessage `json:"url_suffix"`
+	}
+	if err := json.Unmarshal(data, &rawProvider); err != nil {
+		return Provider{}, err
+	}
+	if len(rawProvider.URLSuffix) == 0 {
+		return provider, nil
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(rawProvider.URLSuffix))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&provider.URLSuffix); err != nil {
+		return Provider{}, err
+	}
+
+	return provider, nil
+}
+
+var providerManager *ProviderManager
+
+func GetProviderManager() *ProviderManager {
+	return providerManager
+}
+
+// InitProviderManager creates a new ProviderManager by reading all JSON files from a directory
+func InitProviderManager(dirPath string) error {
 	providers := []Provider{}
 
 	// Read all files in the directory
 	files, err := os.ReadDir(dirPath)
 	if err != nil {
-		return nil, fmt.Errorf("error reading directory %s: %w", dirPath, err)
+		return fmt.Errorf("error reading directory %s: %w", dirPath, err)
 	}
 
 	modelFactory := NewModelFactory()
@@ -332,36 +253,29 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 		var data []byte
 		data, err = os.ReadFile(filePath)
 		if err != nil {
-			return nil, fmt.Errorf("error reading file %s: %w", filePath, err)
+			return fmt.Errorf("error reading file %s: %w", filePath, err)
 		}
 
 		// Parse JSON
 		var provider Provider
-		if err = json.Unmarshal(data, &provider); err != nil {
-			return nil, fmt.Errorf("error parsing JSON from file %s: %w", filePath, err)
-		}
-		if provider.URL["default"] == "" && !strings.EqualFold(provider.Name, "vllm") && !strings.EqualFold(provider.Name, "ollama") && !strings.EqualFold(provider.Name, "LM-Studio") && !strings.EqualFold(provider.Name, "LocalAI") && !strings.EqualFold(provider.Name, "Xinference") && !strings.EqualFold(provider.Name, "mineru_local") && !strings.EqualFold(provider.Name, "PaddleOCR_Local") && !strings.EqualFold(provider.Name, "GPUStack") && !strings.EqualFold(provider.Name, "Azure-OpenAI") && !strings.EqualFold(provider.Name, "Bedrock") && !strings.EqualFold(provider.Name, "ModelScope") {
-			return nil, fmt.Errorf("provider %s has no default URL", provider.Name)
+		if provider, err = decodeProviderConfig(data); err != nil {
+			return fmt.Errorf("error parsing JSON from file %s: %w", filePath, err)
 		}
 
 		for _, model := range provider.Models {
-			if model.Thinking == nil && provider.Features.Thinking != nil && modelNameHasPrefix(model.Name, provider.Features.Thinking.SupportedModels) {
-				model.Thinking = &ModelThinking{
-					DefaultValue: provider.Features.Thinking.DefaultValue,
-				}
-				if provider.Features.ClearThinking != nil && modelNameHasPrefix(model.Name, provider.Features.ClearThinking.SupportedModels) {
-					model.Thinking.ClearThinking = provider.Features.ClearThinking.DefaultValue
-				}
+			if model == nil || strings.TrimSpace(model.Name) == "" {
+				return fmt.Errorf("provider %q contains a model without a name", provider.Name)
 			}
-			modelClass := provider.Class
-			if model.Class != nil && *model.Class != "" {
+			modelClass := model.Name
+			if strings.TrimSpace(provider.Class) != "" {
+				modelClass = provider.Class
+			}
+			if model.Class != nil && strings.TrimSpace(*model.Class) != "" {
 				modelClass = *model.Class
 			}
-			if modelClass == "" {
-				modelClass = ModelClassFromName(model.Name)
-			}
-			modelClass = strings.ToLower(modelClass)
+			modelClass = NormalizeModelFamily(&modelClass)
 			model.Class = &modelClass
+
 			model.ModelTypeMap = make(map[string]bool)
 			for _, modelType := range model.ModelTypes {
 				model.ModelTypeMap[modelType] = true
@@ -370,7 +284,7 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 
 		provider.ModelDriver, err = modelFactory.CreateModelDriver(provider.Name, provider.URL, provider.URLSuffix)
 		if err != nil {
-			return nil, fmt.Errorf("error creating model driver for provider %s: %w", provider.Name, err)
+			return fmt.Errorf("error creating model driver for provider %s: %w", provider.Name, err)
 		}
 
 		// Add to providers list
@@ -378,12 +292,56 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 	}
 
 	if len(providers) == 0 {
-		return nil, fmt.Errorf("no JSON files found in directory %s", dirPath)
+		return fmt.Errorf("no JSON files found in directory %s", dirPath)
 	}
 
-	return &ProviderManager{
-		Providers: providers,
-	}, nil
+	// Read the file.  Use a repo-root-relative path so that go test
+	// (which sets CWD to the package directory) can still find it.
+	var data []byte
+	data, err = os.ReadFile(filepath.Join(findRepoRoot(), "conf", "all_models.json"))
+	if err != nil {
+		return fmt.Errorf("error reading file 'conf/all_models.json': %w", err)
+	}
+
+	// Parse JSON
+	type AllModels struct {
+		Models []Model `json:"models"`
+	}
+	var allModels AllModels
+	if err = json.Unmarshal(data, &allModels); err != nil {
+		return fmt.Errorf("error parsing JSON from file 'conf/all_models.json': %w", err)
+	}
+
+	alias2ModelIndex := make(map[string]int)
+	for idx, model := range allModels.Models {
+		addModelAlias := func(alias string) error {
+			alias = strings.TrimSpace(alias)
+			if alias == "" {
+				return nil
+			}
+			lowerAlias := strings.ToLower(alias)
+			if existingIdx, ok := alias2ModelIndex[lowerAlias]; ok && existingIdx != idx {
+				return fmt.Errorf("duplicate alias %q for models %q and %q", alias, allModels.Models[existingIdx].Name, model.Name)
+			}
+			alias2ModelIndex[lowerAlias] = idx
+			return nil
+		}
+		if err = addModelAlias(model.Name); err != nil {
+			return err
+		}
+		for _, alias := range model.Alias {
+			if err = addModelAlias(alias); err != nil {
+				return err
+			}
+		}
+	}
+
+	providerManager = &ProviderManager{
+		Providers:        providers,
+		AllModels:        allModels.Models,
+		Alias2ModelIndex: alias2ModelIndex,
+	}
+	return nil
 }
 
 // 1. List all providers
@@ -392,11 +350,28 @@ func (pm *ProviderManager) ListProviders() ([]map[string]interface{}, error) {
 	var providers []map[string]interface{}
 
 	for _, provider := range pm.Providers {
+
+		modelTypeSet := make(map[string]struct{})
+		for _, model := range provider.Models {
+			for _, modelType := range model.ModelTypes {
+				modelTypeSet[modelType] = struct{}{}
+			}
+		}
+
+		// Always emit a non-nil slice. Python's provider_api_service.list_providers
+		// returns `[]` for empty model_types; clients (e.g. AvailableModels in
+		// web/src/pages/user-setting/setting-model/components/un-add-model.tsx)
+		// call .some() / .forEach() on this field, which crashes on null.
+		modelTypes := make([]string, 0, len(modelTypeSet))
+		for modelType := range modelTypeSet {
+			modelTypes = append(modelTypes, modelType)
+		}
+
 		providerData := map[string]interface{}{
-			"name":       provider.Name,
-			"tags":       provider.Tags,
-			"url":        provider.URL,
-			"url_suffix": provider.URLSuffix,
+			"name":        provider.Name,
+			"url":         provider.URL,
+			"model_types": modelTypes,
+			"url_suffix":  provider.URLSuffix,
 		}
 		providers = append(providers, providerData)
 	}
@@ -406,6 +381,51 @@ func (pm *ProviderManager) ListProviders() ([]map[string]interface{}, error) {
 	}
 
 	return providers, nil
+}
+
+func (pm *ProviderManager) ListAllModels() ([]map[string]interface{}, error) {
+
+	var modelList []map[string]interface{}
+
+	for _, model := range pm.AllModels {
+
+		modelData := map[string]interface{}{
+			"name":        model.Name,
+			"model_types": model.ModelTypes,
+		}
+		if model.Alias != nil {
+			modelData["alias"] = model.Alias
+		}
+		if model.Thinking != nil {
+			modelData["thinking"] = model.Thinking
+		}
+		if model.MaxTokens != nil {
+			modelData["max_tokens"] = *model.MaxTokens
+		}
+		if model.MaxDimension != nil {
+			modelData["max_dimension"] = *model.MaxDimension
+		}
+		if len(model.Dimensions) > 0 {
+			modelData["dimensions"] = model.Dimensions
+		}
+		modelList = append(modelList, modelData)
+	}
+
+	if len(modelList) == 0 {
+		return nil, fmt.Errorf("no models found")
+	}
+
+	return modelList, nil
+}
+
+func (pm *ProviderManager) GetModelByNameOrAlias(modelName string) *Model {
+	lowerModelName := strings.ToLower(modelName)
+	// Check if it is alias
+	modelIndex, ok := pm.Alias2ModelIndex[lowerModelName]
+	if ok {
+		return &pm.AllModels[modelIndex]
+	}
+	return nil
 }
 
 // 2. Show specific provider information (including base_url)
@@ -418,7 +438,6 @@ func (pm *ProviderManager) GetProviderByName(providerName string) (map[string]in
 
 	providerInfo := map[string]interface{}{
 		"name":         provider.Name,
-		"tags":         provider.Tags,
 		"base_url":     provider.URL,
 		"total_models": len(provider.Models),
 	}
@@ -433,24 +452,37 @@ func (pm *ProviderManager) ListModels(providerName string) ([]map[string]interfa
 		return nil, fmt.Errorf("provider '%s' not found", providerName)
 	}
 
-	models := []map[string]interface{}{}
+	modelList := []map[string]interface{}{}
 	for _, model := range provider.Models {
+		// Field name "model_type" (singular) matches the IInstanceModel
+		// contract in web/src/interfaces/database/llm.ts:75 and Python's
+		// LLM.to_dict() (api/db/db_models.py). The Go port previously
+		// emitted the plural "model_types", which broke used-model.tsx
+		// — the view rendered empty because the "model_type" key was
+		// undefined. IAvailableProvider.model_types (plural) is the
+		// other interface used by un-add-model.tsx and continues to
+		// receive the plural form from the dedicated /api/v1/providers/
+		// handler.
+		//
+		// `max_dimension` and `dimensions` are always emitted (nil → null,
+		// empty slice → null in JSON) to match Python's LLM.to_dict() and
+		// keep the response shape stable for clients that destructure
+		// the object.
 		modelData := map[string]interface{}{
-			"name":        model.Name,
-			"max_tokens":  model.MaxTokens,
-			"model_types": model.ModelTypes,
-			"features":    getFeatureNames(model),
+			"name":          model.Name,
+			"max_tokens":    model.MaxTokens,
+			"model_type":    model.ModelTypes,
+			"max_dimension": model.MaxDimension,
+			"dimensions":    model.Dimensions,
 		}
-		if model.MaxDimension != nil {
-			modelData["max_dimension"] = *model.MaxDimension
-		}
-		if model.Dimensions != nil {
-			modelData["dimensions"] = slices.Clone(model.Dimensions)
-		}
-		models = append(models, modelData)
+		modelList = append(modelList, modelData)
 	}
 
-	return models, nil
+	if len(modelList) == 0 {
+		return nil, fmt.Errorf("no models found")
+	}
+
+	return modelList, nil
 }
 
 func (pm *ProviderManager) GetModelByName(providerName, modelName string) (*Model, error) {
@@ -478,21 +510,20 @@ func (pm *ProviderManager) GetModelUrl(providerName, modelName, modelType string
 	if !model.ModelTypeMap[modelType] {
 		return nil, nil, fmt.Errorf("model '%s' does not support model type '%s'", modelName, modelType)
 	}
-	defaultURL := provider.URL["default"]
 
 	switch modelType {
 	case "chat":
-		url := fmt.Sprintf("%s%s", defaultURL, provider.URLSuffix.Chat)
+		url := fmt.Sprintf("%s%s", provider.URL, provider.URLSuffix.Chat)
 		return &url, nil, nil
 	case "async_chat":
-		chatUrl := fmt.Sprintf("%s%s", defaultURL, provider.URLSuffix.AsyncChat)
-		resultUrl := fmt.Sprintf("%s%s", defaultURL, provider.URLSuffix.AsyncResult)
+		chatUrl := fmt.Sprintf("%s%s", provider.URL, provider.URLSuffix.AsyncChat)
+		resultUrl := fmt.Sprintf("%s%s", provider.URL, provider.URLSuffix.AsyncResult)
 		return &chatUrl, &resultUrl, nil
 	case "embedding":
-		url := fmt.Sprintf("%s%s", defaultURL, provider.URLSuffix.Embedding)
+		url := fmt.Sprintf("%s%s", provider.URL, provider.URLSuffix.Embedding)
 		return &url, nil, nil
 	case "rerank":
-		url := fmt.Sprintf("%s%s", defaultURL, provider.URLSuffix.Rerank)
+		url := fmt.Sprintf("%s%s", provider.URL, provider.URLSuffix.Rerank)
 		return &url, nil, nil
 	default:
 		return nil, nil, fmt.Errorf("model '%s' does not support model type '%s'", modelName, modelType)
@@ -527,7 +558,7 @@ func (pm *ProviderManager) SearchModelInfo(providerName, modelName string, filte
 		switch filterBy {
 		case "max_tokens":
 			if maxVal, ok := filterValue.(int); ok {
-				if model.MaxTokens < maxVal {
+				if *model.MaxTokens < maxVal {
 					matchFilter = false
 					resp.Code = 400
 					resp.Message = fmt.Sprintf("Model does not meet filter criteria: max_tokens (%d) < %d",
@@ -550,7 +581,7 @@ func (pm *ProviderManager) SearchModelInfo(providerName, modelName string, filte
 			"name":        model.Name,
 			"max_tokens":  model.MaxTokens,
 			"model_types": model.ModelTypes,
-			"features":    getFeaturesMap(model),
+			//"features":    getFeaturesMap(model.Features),
 		}
 
 		if filterBy != "" && filterValue != nil {
@@ -574,20 +605,20 @@ func (pm *ProviderManager) SearchByFeature(featureType string) ModelResponse {
 		Message: "success",
 	}
 
-	for _, provider := range pm.Providers {
-		for _, model := range provider.Models {
-			if modelHasFeature(model, featureType) {
-				modelData := map[string]interface{}{
-					"provider":    provider.Name,
-					"name":        model.Name,
-					"max_tokens":  model.MaxTokens,
-					"model_types": model.ModelTypes,
-					"features":    getFeaturesMap(model),
-				}
-				resp.Data = append(resp.Data, modelData)
-			}
-		}
-	}
+	//for _, provider := range pm.Providers {
+	//	for _, model := range provider.Models {
+	//		if modelHasFeature(model.Features, featureType) {
+	//			modelData := map[string]interface{}{
+	//				"provider":    provider.Name,
+	//				"name":        model.Name,
+	//				"max_tokens":  model.MaxTokens,
+	//				"model_types": model.ModelTypes,
+	//				"features":    getFeaturesMap(model.Features),
+	//			}
+	//			resp.Data = append(resp.Data, modelData)
+	//		}
+	//	}
+	//}
 
 	if len(resp.Data) == 0 {
 		resp.Code = 404
@@ -613,7 +644,7 @@ func (pm *ProviderManager) SearchByType(modelType string) ModelResponse {
 					"name":        model.Name,
 					"max_tokens":  model.MaxTokens,
 					"model_types": model.ModelTypes,
-					"features":    getFeaturesMap(model),
+					//"features":    getFeaturesMap(model.Features),
 				}
 				resp.Data = append(resp.Data, modelData)
 			}
@@ -628,25 +659,29 @@ func (pm *ProviderManager) SearchByType(modelType string) ModelResponse {
 	return resp
 }
 
-// Helper: Get features map for response
-func getFeatureNames(model *Model) []string {
-	featureNames := make([]string, 0, 3)
-	if model.Features.Multimodal != nil && model.Features.Multimodal.Enabled {
-		featureNames = append(featureNames, "multimodal")
-	}
-	if model.Features.Reasoning != nil {
-		featureNames = append(featureNames, "reasoning")
-	}
+func GetFeatures(model *Model) []string {
+	var features []string
 	if model.Thinking != nil {
-		featureNames = append(featureNames, "thinking")
+		features = append(features, "thinking")
 	}
-	return featureNames
+	return features
+}
+
+func ConvertToFeaturesMap(model *Model) map[string]interface{} {
+	featuresMap := make(map[string]interface{})
+	if model.Thinking != nil {
+		thinkingMap := map[string]interface{}{
+			"default_value":   model.Thinking.DefaultValue,
+			"clear_reasoning": model.Thinking.ClearThinking,
+		}
+		featuresMap["thinking"] = thinkingMap
+	}
+	return featuresMap
 }
 
 // Helper: Get features map for response
-func getFeaturesMap(model *Model) map[string]interface{} {
+func getFeaturesMap(features Features) map[string]interface{} {
 	featuresMap := make(map[string]interface{})
-	features := model.Features
 
 	if features.Multimodal != nil && features.Multimodal.Enabled {
 		multimodalMap := map[string]interface{}{
@@ -687,19 +722,11 @@ func getFeaturesMap(model *Model) map[string]interface{} {
 		featuresMap["reasoning"] = reasoningMap
 	}
 
-	if model.Thinking != nil {
-		featuresMap["thinking"] = map[string]interface{}{
-			"default_value": model.Thinking.DefaultValue,
-			"clear_content": model.Thinking.ClearThinking,
-		}
-	}
-
 	return featuresMap
 }
 
 // Helper: Check if model has a specific feature
-func modelHasFeature(model *Model, featureType string) bool {
-	features := model.Features
+func modelHasFeature(features Features, featureType string) bool {
 	switch strings.ToLower(featureType) {
 	case "multimodal":
 		return features.Multimodal != nil && features.Multimodal.Enabled
@@ -711,20 +738,26 @@ func modelHasFeature(model *Model, featureType string) bool {
 		return features.Reasoning != nil && features.Reasoning.RawType == "budget"
 	case "reasoning_effort":
 		return features.Reasoning != nil && features.Reasoning.RawType == "effort"
-	case "thinking":
-		return model.Thinking != nil
 	default:
 		return false
 	}
 }
 
-func modelNameHasPrefix(modelName string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(modelName, prefix) {
-			return true
-		}
+// findRepoRoot walks up from CWD until it finds the repo root (marked by
+// conf/all_models.json).  This makes tests work regardless of the Go test
+// binary's CWD (which is set to the package directory by go test).
+func findRepoRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
 	}
-	return false
+	for dir != "/" && dir != "" {
+		if _, err := os.Stat(filepath.Join(dir, "conf", "all_models.json")); err == nil {
+			return dir
+		}
+		dir = filepath.Dir(dir)
+	}
+	return "."
 }
 
 // Helper: Find provider by name
@@ -755,97 +788,4 @@ func containsModelType(types []string, target string) bool {
 		}
 	}
 	return false
-}
-
-// LoadAllModels replaces the catalog only after complete validation at startup.
-// Provider-only fixtures do not depend on a process working directory.
-func (pm *ProviderManager) LoadAllModels(path string) error {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	var catalog []*Model
-	if err := json.Unmarshal(raw, &catalog); err != nil {
-		return fmt.Errorf("model catalog: %w", err)
-	}
-	index := make(map[string]*Model)
-	for _, model := range catalog {
-		if model == nil || strings.TrimSpace(model.Name) == "" || strings.TrimSpace(model.Name) != model.Name {
-			return fmt.Errorf("invalid catalog model name")
-		}
-		for _, name := range append([]string{model.Name}, model.Alias...) {
-			if name == "" || strings.TrimSpace(name) != name {
-				return fmt.Errorf("invalid catalog alias")
-			}
-			// Normalize lookup keys only; catalog names and remote IDs stay intact.
-			key := strings.ToLower(name)
-			if _, exists := index[key]; exists {
-				return fmt.Errorf("duplicate catalog name or alias %q", name)
-			}
-			index[key] = model
-		}
-	}
-	pm.allModels, pm.modelIndex = catalog, index
-	return nil
-}
-
-func (pm *ProviderManager) ListAllModels() []*Model {
-	result := make([]*Model, len(pm.allModels))
-	for i, model := range pm.allModels {
-		result[i] = cloneCatalogModel(model)
-	}
-	return result
-}
-
-func (pm *ProviderManager) GetModelByNameOrAlias(name string) (*Model, error) {
-	model, ok := pm.modelIndex[strings.ToLower(name)]
-	if !ok {
-		return nil, fmt.Errorf("model %q not found", name)
-	}
-	return cloneCatalogModel(model), nil
-}
-
-// cloneCatalogModel prevents consumers from changing catalog identity or metadata.
-func cloneCatalogModel(model *Model) *Model {
-	clone := *model
-	if model.MaxDimension != nil {
-		v := *model.MaxDimension
-		clone.MaxDimension = &v
-	}
-	clone.Dimensions = slices.Clone(model.Dimensions)
-	clone.Alias = slices.Clone(model.Alias)
-	clone.ModelTypes = slices.Clone(model.ModelTypes)
-	clone.ModelTypeMap = maps.Clone(model.ModelTypeMap)
-	if model.Thinking != nil {
-		v := *model.Thinking
-		clone.Thinking = &v
-	}
-	if model.Class != nil {
-		v := *model.Class
-		clone.Class = &v
-	}
-	if model.Features.Multimodal != nil {
-		v := *model.Features.Multimodal
-		v.InputModalities = slices.Clone(v.InputModalities)
-		v.OutputModalities = slices.Clone(v.OutputModalities)
-		clone.Features.Multimodal = &v
-	}
-	if model.Features.Reasoning != nil {
-		v := *model.Features.Reasoning
-		if v.Simple != nil {
-			p := *v.Simple
-			v.Simple = &p
-		}
-		if v.Budget != nil {
-			p := *v.Budget
-			v.Budget = &p
-		}
-		if v.Effort != nil {
-			p := *v.Effort
-			p.Options = slices.Clone(p.Options)
-			v.Effort = &p
-		}
-		clone.Features.Reasoning = &v
-	}
-	return &clone
 }

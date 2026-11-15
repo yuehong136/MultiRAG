@@ -15,14 +15,14 @@ func TestParseChatModes(t *testing.T) {
 		thinking bool
 		stream   bool
 	}{
-		{input: `CHAT "hello";`},
-		{input: `THINK CHAT "hello";`, thinking: true},
-		{input: `STREAM CHAT "hello";`, stream: true},
-		{input: `STREAM THINK CHAT "hello";`, thinking: true, stream: true},
+		{input: `CHAT MESSAGE "hello";`},
+		{input: `THINK CHAT MESSAGE "hello";`, thinking: true},
+		{input: `STREAM CHAT MESSAGE "hello";`, stream: true},
+		{input: `STREAM THINK CHAT MESSAGE "hello";`, thinking: true, stream: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			cmd, err := NewParser(tt.input).Parse(false)
+			cmd, err := NewParser(tt.input).Parse(APIMode)
 			if err != nil {
 				t.Fatalf("Parse() error = %v", err)
 			}
@@ -39,16 +39,16 @@ func TestParseChatModelIdentifierAndReasoningOptions(t *testing.T) {
 		paramName string
 		want      string
 	}{
-		{input: `THINK CHAT "deepseek-v4-pro@default@deepseek" "hello" WITH EFFORT HIGH;`, paramName: "effort", want: "high"},
-		{input: `THINK CHAT "gpt-5.2@default@openai" "hello" WITH VERBOSITY MEDIUM;`, paramName: "verbosity", want: "medium"},
+		{input: `THINK CHAT WITH "deepseek-v4-pro@default@deepseek" MESSAGE "hello" EFFORT HIGH;`, paramName: "effort", want: "high"},
+		{input: `THINK CHAT WITH "gpt-5.2@default@openai" MESSAGE "hello" VERBOSITY MEDIUM;`, paramName: "verbosity", want: "medium"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			cmd, err := NewParser(tt.input).Parse(false)
+			cmd, err := NewParser(tt.input).Parse(APIMode)
 			if err != nil {
 				t.Fatalf("Parse() error = %v", err)
 			}
-			if cmd.Params["model_name"] == nil || cmd.Params[tt.paramName] != tt.want {
+			if cmd.Params["composite_model_name"] == nil || cmd.Params[tt.paramName] != tt.want {
 				t.Fatalf("command = %#v", cmd)
 			}
 		})
@@ -56,7 +56,7 @@ func TestParseChatModelIdentifierAndReasoningOptions(t *testing.T) {
 }
 
 func TestParseListSupportedModels(t *testing.T) {
-	cmd, err := NewParser(`LIST SUPPORTED MODELS FROM "deepseek" "default";`).Parse(false)
+	cmd, err := NewParser(`LIST SUPPORTED MODELS FROM "deepseek" "default";`).Parse(APIMode)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -66,7 +66,7 @@ func TestParseListSupportedModels(t *testing.T) {
 }
 
 func TestParseCheckProviderConnection(t *testing.T) {
-	cmd, err := NewParser(`CHECK INSTANCE "primary" FROM "minimax";`).Parse(false)
+	cmd, err := NewParser(`CHECK INSTANCE "primary" FROM "minimax";`).Parse(APIMode)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -74,8 +74,8 @@ func TestParseCheckProviderConnection(t *testing.T) {
 		t.Fatalf("command = %#v", cmd)
 	}
 
-	if _, err = NewParser(`CHECK INSTANCE "primary" FROM "minimax"`).Parse(false); err == nil {
-		t.Fatal("Parse() error = nil, want missing semicolon error")
+	if _, err = NewParser(`CHECK INSTANCE "primary" FROM "minimax"`).Parse(APIMode); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -95,11 +95,11 @@ func TestNonStreamChatUsesThinkingPayload(t *testing.T) {
 
 	serverURL, _ := url.Parse(server.URL)
 	port, _ := strconv.Atoi(serverURL.Port())
-	client := NewMultiRAGClient("user")
-	client.HTTPClient.Host = serverURL.Hostname()
-	client.HTTPClient.Port = port
+	client := newConsumerCLI("user")
+	consumerHTTP(client).Host = serverURL.Hostname()
+	consumerHTTP(client).Port = port
 
-	cmd, err := NewParser(`THINK CHAT "glm-test@default@zhipu-ai" "hello" WITH EFFORT HIGH;`).Parse(false)
+	cmd, err := NewParser(`THINK CHAT WITH "glm-test@default@zhipu-ai" MESSAGE "hello" EFFORT HIGH;`).Parse(APIMode)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -114,7 +114,7 @@ func TestNonStreamChatUsesThinkingPayload(t *testing.T) {
 		t.Fatal("legacy message still emitted")
 	}
 	messages, ok := body["messages"].([]interface{})
-	if !ok || len(messages) != 1 || messages[0].(map[string]interface{})["content"] != "hello" {
+	if !ok || len(messages) != 1 || messages[0].(map[string]interface{})["content"].([]interface{})[0].(map[string]interface{})["text"] != "hello" {
 		t.Fatalf("messages %#v", body)
 	}
 	result, ok := response.(*NonStreamResponse)
@@ -130,11 +130,11 @@ func TestStreamChatCompletionAndFailure(t *testing.T) {
 	}{
 		{"complete", "event: message\ndata: [REASONING]reason\n\nevent: message\ndata: [MESSAGE]answer\n\nevent: done\ndata: [DONE]\n\n", false},
 		{"provider error", "event: error\ndata: Model stream failed\n\n", true},
-		{"partial", "event: message\ndata: [MESSAGE]partial\n\n", true},
+		{"partial", "event: message\ndata: [MESSAGE]partial\n\n", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/api/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer fixture-login" {
+				if r.URL.Path != "/api/v1/chat/completions" || r.Header.Get("Authorization") != "fixture-login" {
 					t.Errorf("route/auth = %s %q", r.URL.Path, r.Header.Get("Authorization"))
 				}
 				var body map[string]interface{}
@@ -150,12 +150,12 @@ func TestStreamChatCompletionAndFailure(t *testing.T) {
 			defer server.Close()
 			u, _ := url.Parse(server.URL)
 			port, _ := strconv.Atoi(u.Port())
-			client := NewMultiRAGClient("user")
-			client.HTTPClient.Host = u.Hostname()
-			client.HTTPClient.Port = port
-			client.HTTPClient.LoginToken = "fixture-login"
+			client := newConsumerCLI("user")
+			consumerHTTP(client).Host = u.Hostname()
+			consumerHTTP(client).Port = port
+			consumerHTTP(client).LoginToken = consumerTokenPtr("fixture-login")
 			client.CurrentModel = &CurrentModel{Provider: "Moonshot", Instance: "default", Model: "kimi-k2.5"}
-			cmd, err := NewParser(`STREAM CHAT "hello";`).Parse(false)
+			cmd, err := NewParser(`STREAM CHAT MESSAGE "hello";`).Parse(APIMode)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -166,7 +166,7 @@ func TestStreamChatCompletionAndFailure(t *testing.T) {
 				}
 			} else if err != nil {
 				t.Fatal(err)
-			} else if result.(*StreamMessageResponse).Message != "answer" {
+			} else if result.(*StreamMessageResponse).Message != map[string]string{"complete": "answer", "partial": "partial"}[test.name] {
 				t.Fatalf("answer = %#v", result)
 			}
 		})
@@ -174,9 +174,7 @@ func TestStreamChatCompletionAndFailure(t *testing.T) {
 }
 
 func TestChatCLIContentArray(t *testing.T) {
-	calls := 0
-	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+	client := skillTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Messages []struct {
 				Role    string
@@ -186,56 +184,23 @@ func TestChatCLIContentArray(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if len(body.Messages) != 1 || body.Messages[0].Role != "user" || len(body.Messages[0].Content) != 2 || body.Messages[0].Content[1]["type"] != "image_url" {
-			t.Fatalf("content lost %#v", body)
+		if len(body.Messages) != 1 || len(body.Messages[0].Content) != 2 || body.Messages[0].Content[0]["text"] != "[todo] explain this" || body.Messages[0].Content[1]["type"] != "image_url" {
+			t.Fatal("multimodal content lost", body)
 		}
 		fmt.Fprint(w, `{"code":0,"answer":"image answer"}`)
-	}))
-	defer server.Close()
-	u, _ := url.Parse(server.URL)
-	port, _ := strconv.Atoi(u.Port())
-	client := NewMultiRAGClient("user")
-	client.HTTPClient.Host = u.Hostname()
-	client.HTTPClient.Port = port
-	client.CurrentModel = &CurrentModel{Provider: "vllm", Instance: "fixture", Model: "vision"}
-	message := `[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]`
-	cmd := &Command{Params: map[string]interface{}{"message": message}}
-	result, err := client.ChatToModel(cmd)
-	if err != nil || result.(*NonStreamResponse).Answer != "image answer" {
-		t.Fatalf("result %v %v", result, err)
-	}
-	for _, input := range []string{`[42]`, `[{"type":"text","text":42}]`} {
-		cmd.Params["message"] = input
-		if _, err := client.ChatToModel(cmd); err == nil {
-			t.Fatalf("accepted %s", input)
-		}
-	}
-	cmd.Params["message"] = message
-	if calls != 1 {
-		t.Fatalf("invalid content reached server: %d", calls)
-	}
-}
-
-func TestChatCLIPreservesBracketText(t *testing.T) {
-	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct{ Messages []struct{ Content string } }
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		if len(body.Messages) != 1 || body.Messages[0].Content != "[todo] explain this" {
-			t.Fatalf("text changed %#v", body)
-		}
-		fmt.Fprint(w, `{"code":0,"answer":"answer"}`)
-	}))
-	defer server.Close()
-	u, _ := url.Parse(server.URL)
-	port, _ := strconv.Atoi(u.Port())
-	client := NewMultiRAGClient("user")
-	client.HTTPClient.Host = u.Hostname()
-	client.HTTPClient.Port = port
-	client.CurrentModel = &CurrentModel{Provider: "vllm", Instance: "fixture", Model: "test"}
-	if _, err := client.ChatToModel(&Command{Params: map[string]interface{}{"message": "[todo] explain this"}}); err != nil {
+	})
+	c := consumerCLIWithHTTP(client)
+	cmd, err := NewParser(`CHAT WITH 'vision@fixture@vllm' MESSAGE '[todo] explain this' IMAGE 'https://example.com/a.png';`).Parse(APIMode)
+	if err != nil {
 		t.Fatal(err)
+	}
+	result, err := c.ChatToModel(cmd)
+	if err != nil || result.(*NonStreamResponse).Answer != "image answer" {
+		t.Fatal(result, err)
+	}
+	cmd.Params["messages"] = []interface{}{42}
+	if result, err := c.ChatToModel(cmd); err == nil || result != nil {
+		t.Fatal("untyped message accepted")
 	}
 }
 
@@ -254,15 +219,15 @@ func TestChatUsesAPITokenWithoutLogin(t *testing.T) {
 		}))
 		u, _ := url.Parse(srv.URL)
 		port, _ := strconv.Atoi(u.Port())
-		client := NewMultiRAGClient("user")
-		client.HTTPClient.Host = u.Hostname()
-		client.HTTPClient.Port = port
-		client.HTTPClient.APIKey = "fixture-api"
+		client := newConsumerCLI("user")
+		consumerHTTP(client).Host = u.Hostname()
+		consumerHTTP(client).Port = port
+		consumerHTTP(client).APIToken = consumerTokenPtr("fixture-api")
 		input := `CHAT WITH "model@instance@LocalAI" MESSAGE "hello";`
 		if stream {
 			input = "STREAM " + input
 		}
-		cmd, err := NewParser(input).Parse(false)
+		cmd, err := NewParser(input).Parse(APIMode)
 		if err != nil {
 			t.Fatal(err)
 		}

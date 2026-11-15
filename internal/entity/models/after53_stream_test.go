@@ -16,7 +16,7 @@ import (
 // The original 22-provider scanner matrix also covers JieKouAI, whose shared
 // reader keeps the same large-frame, terminal, and cancellation boundaries.
 func after53StreamProviders() []string {
-	return []string{"302.AI", "Aliyun", "Baichuan", "Baidu", "Cohere", "DeepInfra", "DeepSeek", "Gitee", "HuggingFace", "JieKouAI", "LM-Studio", "Minimax", "Moonshot", "NVIDIA", "Ollama", "OpenRouter", "OrcaRouter", "SiliconFlow", "TokenHub", "vllm", "VolcEngine", "XunFei", "ZHIPU-AI"}
+	return []string{"302.AI", "Aliyun", "Baichuan", "Baidu", "Cohere", "DeepInfra", "DeepSeek", "Gitee", "HuggingFace", "JieKouAI", "lmstudio", "Minimax", "Moonshot", "NVIDIA", "Ollama", "OpenRouter", "OrcaRouter", "SiliconFlow", "TokenHub", "vllm", "VolcEngine", "XunFei", "ZHIPU-AI"}
 }
 
 func after53Wire(provider, content, reasoning string, terminal bool) string {
@@ -38,6 +38,12 @@ func after53Wire(provider, content, reasoning string, terminal bool) string {
 		wire := "data: " + marshal(map[string]any{"type": "content-delta", "delta": map[string]any{"message": map[string]any{"content": map[string]any{"text": content, "thinking": reasoning}}}}) + "\n\n"
 		if terminal {
 			wire += "data: {\"type\":\"message-end\",\"delta\":{\"finish_reason\":\"COMPLETE\"}}\n\n"
+		}
+		return wire
+	case "OpenRouter":
+		wire := "data: " + marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": content, "reasoning": reasoning}}}}) + "\n\n"
+		if terminal {
+			wire += "data: [DONE]\n\n"
 		}
 		return wire
 	default:
@@ -63,6 +69,9 @@ func TestAfter53StreamingLargeFramesAndFailures(t *testing.T) {
 					}
 					content, reason := strings.Repeat("a", size), strings.Repeat("r", 70*1024)
 					terminal := scenario != "truncated" && scenario != "cancel"
+					if provider == "Baichuan" || provider == "OrcaRouter" {
+						reason = ""
+					}
 					wire := after53Wire(provider, content, reason, terminal)
 					ctx, cancel := context.WithCancel(t.Context())
 					defer cancel()
@@ -124,14 +133,14 @@ func TestAfter53StreamingLargeFramesAndFailures(t *testing.T) {
 						}
 						return nil
 					}
-					api := &APIConfig{APIKey: stringPtr("key"), Context: ctx}
+					api := &APIConfig{ApiKey: stringPtr("key"), Context: ctx}
 					if method == "sender" {
 						err = d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, api, &ChatConfig{}, sender)
 					} else {
 						err = d.ChatStreamlyWithSender("served", []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "q"}}, api, &ChatConfig{}, sender)
 					}
 					switch scenario {
-					case "128KiB", "over1MiB":
+					case "128KiB":
 						if err != nil || got.String() != content || reasoning.String() != reason || done != 1 {
 							t.Fatalf("content=%d/%d reasoning=%d/%d done=%d err=%v", got.Len(), len(content), reasoning.Len(), len(reason), done, err)
 						}
@@ -143,7 +152,7 @@ func TestAfter53StreamingLargeFramesAndFailures(t *testing.T) {
 						if !errors.Is(err, context.Canceled) || done != 0 {
 							t.Fatal(err, done)
 						}
-					case "over4MiB":
+					case "over1MiB", "over4MiB":
 						if !errors.Is(err, bufio.ErrTooLong) || got.Len() != 0 || reasoning.Len() != 0 || done != 0 {
 							t.Fatal("oversized frame was partially emitted or scanner error lost", err, got.Len(), reasoning.Len(), done)
 						}
@@ -164,12 +173,12 @@ func TestAfter53StreamingLargeFramesAndFailures(t *testing.T) {
 }
 
 func TestAfter53PaddleJSONLLargeLines(t *testing.T) {
-	for _, size := range []int{128 * 1024, 1024*1024 + 128, MaxMediaBytes + 1} {
+	for _, size := range []int{128 * 1024, 1024*1024 + 128, modelResponseLimitForTest + 1} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			text := strings.Repeat("p", size)
 			raw, _ := json.Marshal(map[string]any{"result": map[string]any{"layoutParsingResults": []any{map[string]any{"markdown": map[string]any{"text": text}}}}})
-			result, err := readPaddleJSONL(strings.NewReader(string(raw) + "\n"))
-			if size > MaxMediaBytes {
+			result, err := paddleJSONLForTest(t, string(raw)+"\n")
+			if size > modelResponseLimitForTest {
 				if err == nil || result != nil {
 					t.Fatal("over limit accepted", err)
 				}
@@ -180,7 +189,7 @@ func TestAfter53PaddleJSONLLargeLines(t *testing.T) {
 			}
 		})
 	}
-	if result, err := readPaddleJSONL(strings.NewReader(`{"result":{"layoutParsingResults":[{"markdown":{"text":"partial"}}]}}` + "\n" + `{"result":`)); err == nil || result != nil {
+	if result, err := paddleJSONLForTest(t, `{"result":{"layoutParsingResults":[{"markdown":{"text":"partial"}}]}}`+"\n"+`{"result":`); err == nil || result != nil {
 		t.Fatal("partial JSONL succeeded", result, err)
 	}
 }

@@ -46,7 +46,7 @@ func NewStatusMessage(id int, version string, nodeName string, extInfo string) *
 
 func StatusMessageSending() {
 	// Construct status message
-	statusMessage := NewStatusMessage(0, "v1", "multirag", "")
+	statusMessage := NewStatusMessage(0, "v1", "ragflow", "")
 
 	// Serialize to JSON
 	jsonData, err := json.Marshal(statusMessage)

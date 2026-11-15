@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"testing"
 )
 
@@ -13,7 +13,7 @@ func TestInstanceProvidersCancelDuringStream(t *testing.T) {
 	for _, provider := range []string{"VolcEngine", "vllm"} {
 		t.Run(provider, func(t *testing.T) {
 			stopped := make(chan struct{})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
 				w.(http.Flusher).Flush()
@@ -29,7 +29,7 @@ func TestInstanceProvidersCancelDuringStream(t *testing.T) {
 			defer cancel()
 			key, name, message := "fixture", "model", "q"
 			done := false
-			err = driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(content, reason *string) error {
+			err = driver.ChatStreamlyWithSender(name, []Message{{Role: "user", Content: message}}, &APIConfig{ApiKey: &key, Context: ctx}, nil, func(content, reason *string) error {
 				if content != nil && *content == "[DONE]" {
 					done = true
 				}

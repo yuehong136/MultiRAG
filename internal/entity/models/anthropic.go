@@ -79,14 +79,11 @@ func (a *AnthropicModel) ChatWithMessages(modelName string, messages []Message, 
 		return nil, fmt.Errorf("model name is required")
 	}
 	if chatModelConfig != nil {
-		if chatModelConfig.Thinking != nil {
+		if chatModelConfig.Thinking != nil && *chatModelConfig.Thinking {
 			return nil, fmt.Errorf("anthropic thinking configuration is not implemented")
 		}
 		if chatModelConfig.MaxTokens != nil && *chatModelConfig.MaxTokens <= 0 {
 			return nil, fmt.Errorf("max tokens must be positive")
-		}
-		if chatModelConfig.Temperature != nil && chatModelConfig.TopP != nil {
-			return nil, fmt.Errorf("temperature and top_p cannot both be set")
 		}
 	}
 	apiKey := strings.TrimSpace(*apiConfig.ApiKey)

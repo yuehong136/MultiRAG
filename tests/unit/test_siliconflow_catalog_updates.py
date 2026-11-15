@@ -10,7 +10,7 @@ NAMES = ["Pro/deepseek-ai/DeepSeek-V4-Pro", "Pro/deepseek-ai/DeepSeek-V4-Flash",
 
 
 def test_four_models_have_exact_identifiers_contexts_and_capabilities() -> None:
-    native = json.loads((ROOT / "configs/models/siliconflow.json").read_text())
+    native = json.loads((ROOT / "conf/models/siliconflow.json").read_text())
     python = json.loads((ROOT / "configs/llm_factories.json").read_text())
     factory = next(item for item in python["factory_llm_infos"] if item["name"] == "SILICONFLOW")
     for index, name in enumerate(NAMES):

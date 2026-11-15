@@ -1,234 +1,285 @@
-// Package oauth implements bounded authorization-code protocol checks. It does
-// not map provider profiles or email addresses to platform accounts.
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
+// Package oauth ports the auth-client surface from api/apps/auth (Python)
+// to Go. It wires three flavors of OAuth/OIDC providers behind a common
+// Client interface so the login + callback handlers can stay flavor-blind:
+//
+//   - "oauth2": vanilla OAuth 2.0 authorization-code flow with a
+//     provider-supplied /userinfo endpoint
+//   - "oidc": OAuth 2.0 + OIDC discovery via .well-known/openid-configuration
+//   - "github": OAuth 2.0 plus GitHub's split user / emails endpoints
+//
+// Note on OIDC ID-token validation: the Python OIDCClient verifies the
+// id_token signature against the discovered JWKS and pulls extra claims out
+// of it. We deliberately do not yet pull in a JWT library here; the
+// /userinfo endpoint returns the same claims authenticated via the
+// access_token, which is the path we use exclusively. This is documented on
+// OIDCClient and tracked as a follow-up.
 package oauth
 
 import (
 	"context"
-	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/golang-jwt/jwt/v4"
 )
 
-var ErrProtocol = errors.New("oauth_protocol_error")
-
-// Config contains only server-controlled provider endpoints and credentials.
+// Config is the channel configuration consumed by NewClient. It mirrors the
+// shape of server.OAuthConfig but is copied here to keep this package free
+// of imports from the rest of the server.
 type Config struct {
-	Type, ClientID, ClientSecret, AuthorizationURL, TokenURL, UserinfoURL, RedirectURI, Scope, Issuer string
+	Type             string
+	ClientID         string
+	ClientSecret     string
+	AuthorizationURL string
+	TokenURL         string
+	UserinfoURL      string
+	RedirectURI      string
+	Scope            string
+	Issuer           string
 }
 
-type Client struct {
-	cfg     Config
-	http    *http.Client
-	jwksURI string
+// UserInfo is the normalized user profile returned by FetchUserInfo. Email
+// is the only field treated as required by the callback handler; the rest
+// are best-effort.
+type UserInfo struct {
+	Email     string `json:"email"`
+	Username  string `json:"username"`
+	Nickname  string `json:"nickname"`
+	AvatarURL string `json:"avatar_url"`
 }
-type Identity struct{ Issuer, Subject string }
-type tokenResponse struct {
+
+// Client is the auth-client surface used by the login + callback handlers.
+type Client interface {
+	AuthorizationURL(state string) (string, error)
+	ExchangeCodeForToken(ctx context.Context, code string) (*TokenResponse, error)
+	FetchUserInfo(ctx context.Context, accessToken, idToken string) (*UserInfo, error)
+}
+
+// TokenResponse is the subset of fields we use from the token endpoint
+// response.
+type TokenResponse struct {
 	AccessToken string `json:"access_token"`
-	IDToken     string `json:"id_token"`
-	TokenType   string `json:"token_type"`
+	TokenType   string `json:"token_type,omitempty"`
+	IDToken     string `json:"id_token,omitempty"`
+	ExpiresIn   int    `json:"expires_in,omitempty"`
+	Scope       string `json:"scope,omitempty"`
 }
 
-func validEndpoint(raw string) bool {
-	u, err := url.Parse(raw)
-	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.Fragment == ""
-}
+// HTTPRequestTimeout is the per-request timeout applied to token and
+// userinfo calls. Matches the Python http_request_timeout (7s).
+const HTTPRequestTimeout = 7 * time.Second
 
-// NewClient validates configuration without sending credentials to discovery.
-func NewClient(ctx context.Context, cfg Config) (*Client, error) {
-	c := &Client{cfg: cfg, http: &http.Client{Timeout: 7 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
-	if cfg.ClientID == "" || !validEndpoint(cfg.RedirectURI) {
-		return nil, ErrProtocol
-	}
-	if cfg.Type == "" {
+// NewClient returns the Client implementation matching cfg.Type. When type
+// is empty, Issuer presence selects OIDC; otherwise OAuth2.
+func NewClient(cfg Config) (Client, error) {
+	t := strings.ToLower(strings.TrimSpace(cfg.Type))
+	if t == "" {
 		if cfg.Issuer != "" {
-			cfg.Type = "oidc"
+			t = "oidc"
 		} else {
-			cfg.Type = "oauth2"
+			t = "oauth2"
 		}
 	}
-	switch cfg.Type {
-	case "github":
-		cfg.AuthorizationURL, cfg.TokenURL, cfg.UserinfoURL = "https://github.com/login/oauth/authorize", "https://github.com/login/oauth/access_token", "https://api.github.com/user"
-		if cfg.Scope == "" {
-			cfg.Scope = "read:user"
-		}
-	case "oidc":
-		if !validEndpoint(cfg.Issuer) {
-			return nil, ErrProtocol
-		}
-		var meta struct {
-			Issuer   string `json:"issuer"`
-			Auth     string `json:"authorization_endpoint"`
-			Token    string `json:"token_endpoint"`
-			Userinfo string `json:"userinfo_endpoint"`
-			JWKS     string `json:"jwks_uri"`
-		}
-		if err := c.request(ctx, http.MethodGet, strings.TrimRight(cfg.Issuer, "/")+"/.well-known/openid-configuration", "", "", &meta); err != nil || meta.Issuer != cfg.Issuer || !validEndpoint(meta.JWKS) {
-			return nil, ErrProtocol
-		}
-		cfg.AuthorizationURL, cfg.TokenURL, cfg.UserinfoURL = meta.Auth, meta.Token, meta.Userinfo
-		c.jwksURI = meta.JWKS
-		cfg.Scope = "openid " + cfg.Scope
+	switch t {
 	case "oauth2":
+		return newOAuthClient(cfg)
+	case "oidc":
+		return newOIDCClient(cfg)
+	case "github":
+		return newGitHubClient(cfg)
 	default:
-		return nil, ErrProtocol
+		return nil, fmt.Errorf("Unsupported type: %s", t)
 	}
-	if !validEndpoint(cfg.AuthorizationURL) || !validEndpoint(cfg.TokenURL) || !validEndpoint(cfg.UserinfoURL) {
-		return nil, ErrProtocol
-	}
-	c.cfg = cfg
-	return c, nil
 }
 
-func (c *Client) AuthorizationURL(state, verifier, nonce string) (string, error) {
-	if state == "" || len(verifier) < 43 || nonce == "" {
-		return "", ErrProtocol
-	}
-	u, _ := url.Parse(c.cfg.AuthorizationURL)
-	q := u.Query()
-	q.Set("client_id", c.cfg.ClientID)
-	q.Set("redirect_uri", c.cfg.RedirectURI)
-	q.Set("response_type", "code")
-	q.Set("scope", c.cfg.Scope)
-	q.Set("state", state)
-	digest := sha256.Sum256([]byte(verifier))
-	q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(digest[:]))
-	q.Set("code_challenge_method", "S256")
-	if c.cfg.Type == "oidc" {
-		q.Set("nonce", nonce)
-	}
-	u.RawQuery = q.Encode()
-	return u.String(), nil
+// oauthClient is the base OAuth 2.0 implementation. The OIDC and GitHub
+// flavors embed it and override fetchUserInfo.
+type oauthClient struct {
+	cfg        Config
+	httpClient *http.Client
 }
 
-func (c *Client) request(ctx context.Context, method, endpoint, form, bearer string, dest any) error {
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, strings.NewReader(form))
+func newOAuthClient(cfg Config) (*oauthClient, error) {
+	if cfg.ClientID == "" {
+		return nil, fmt.Errorf("oauth: client_id is required")
+	}
+	if cfg.AuthorizationURL == "" {
+		return nil, fmt.Errorf("oauth: authorization_url is required")
+	}
+	if cfg.TokenURL == "" {
+		return nil, fmt.Errorf("oauth: token_url is required")
+	}
+	if cfg.RedirectURI == "" {
+		return nil, fmt.Errorf("oauth: redirect_uri is required")
+	}
+	return &oauthClient{
+		cfg:        cfg,
+		httpClient: &http.Client{Timeout: HTTPRequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+	}, nil
+}
+
+// AuthorizationURL builds the URL the browser should be redirected to.
+// Mirrors OAuthClient.get_authorization_url.
+func (c *oauthClient) AuthorizationURL(state string) (string, error) {
+	params := url.Values{}
+	params.Set("client_id", c.cfg.ClientID)
+	params.Set("redirect_uri", c.cfg.RedirectURI)
+	params.Set("response_type", "code")
+	if c.cfg.Scope != "" {
+		params.Set("scope", c.cfg.Scope)
+	}
+	if state != "" {
+		params.Set("state", state)
+	}
+	sep := "?"
+	if strings.Contains(c.cfg.AuthorizationURL, "?") {
+		sep = "&"
+	}
+	return c.cfg.AuthorizationURL + sep + params.Encode(), nil
+}
+
+// ExchangeCodeForToken exchanges an authorization code for an access token.
+// Mirrors OAuthClient.exchange_code_for_token.
+func (c *oauthClient) ExchangeCodeForToken(ctx context.Context, code string) (*TokenResponse, error) {
+	form := url.Values{}
+	form.Set("client_id", c.cfg.ClientID)
+	form.Set("client_secret", c.cfg.ClientSecret)
+	form.Set("code", code)
+	form.Set("redirect_uri", c.cfg.RedirectURI)
+	form.Set("grant_type", "authorization_code")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return ErrProtocol
+		return nil, fmt.Errorf("Failed to exchange authorization code for token: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	if method == http.MethodPost {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	}
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	resp, err := c.http.Do(req)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return ErrProtocol
+		return nil, fmt.Errorf("Failed to exchange authorization code for token: %w", err)
 	}
 	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if len(body) > 1<<20 {
+		return nil, fmt.Errorf("OAuth response exceeds limit")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("Failed to exchange authorization code for token: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ErrProtocol
+		return nil, fmt.Errorf("authorization token exchange HTTP %d", resp.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
-	if err != nil || len(raw) > 1<<20 || json.Unmarshal(raw, dest) != nil {
-		return ErrProtocol
+
+	token := &TokenResponse{}
+	if jerr := json.Unmarshal(body, token); jerr != nil {
+		// Some providers (notably GitHub when Accept is not set) return
+		// application/x-www-form-urlencoded here instead of JSON.
+		if values, perr := url.ParseQuery(string(body)); perr == nil {
+			token.AccessToken = values.Get("access_token")
+			token.TokenType = values.Get("token_type")
+			token.IDToken = values.Get("id_token")
+			token.Scope = values.Get("scope")
+		} else {
+			return nil, fmt.Errorf("Failed to exchange authorization code for token: parse response: %w", jerr)
+		}
 	}
-	return nil
+	if token.AccessToken == "" {
+		return nil, fmt.Errorf("Failed to exchange authorization code for token: empty access_token")
+	}
+	return token, nil
 }
 
-// VerifyCode checks provider identity only. Callers must still require a
-// persisted provider-subject binding before granting a platform login.
-func (c *Client) VerifyCode(ctx context.Context, code, verifier, nonce string) (*Identity, error) {
-	if code == "" || len(verifier) < 43 {
-		return nil, ErrProtocol
+// FetchUserInfo fetches user information using the access token.
+// Mirrors OAuthClient.fetch_user_info / normalize_user_info.
+func (c *oauthClient) FetchUserInfo(ctx context.Context, accessToken, idToken string) (*UserInfo, error) {
+	if c.cfg.UserinfoURL == "" {
+		return nil, fmt.Errorf("Failed to fetch user info: userinfo_url is required")
 	}
-	form := url.Values{"client_id": {c.cfg.ClientID}, "client_secret": {c.cfg.ClientSecret}, "code": {code}, "redirect_uri": {c.cfg.RedirectURI}, "grant_type": {"authorization_code"}, "code_verifier": {verifier}}
-	var token tokenResponse
-	if c.request(ctx, http.MethodPost, c.cfg.TokenURL, form.Encode(), "", &token) != nil || token.AccessToken == "" || !strings.EqualFold(token.TokenType, "bearer") || strings.ContainsAny(token.AccessToken, "\r\n") {
-		return nil, ErrProtocol
+	raw, err := c.fetchUserinfoRaw(ctx, c.cfg.UserinfoURL, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to fetch user info: %w", err)
 	}
-	var profile map[string]json.RawMessage
-	var subject string
-	if c.cfg.Type == "oidc" {
-		claims, err := c.verifyIDToken(ctx, token.IDToken, nonce)
-		if err != nil {
-			return nil, ErrProtocol
+	return normalizeUserInfo(raw), nil
+}
+
+func (c *oauthClient) fetchUserinfoRaw(ctx context.Context, endpoint, accessToken string) (map[string]interface{}, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (4<<20)+1))
+	if len(body) > 4<<20 {
+		return nil, fmt.Errorf("OAuth response exceeds limit")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("OAuth HTTP %d", resp.StatusCode)
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("parse userinfo response: %w", err)
+	}
+	return out, nil
+}
+
+// normalizeUserInfo mirrors the Python normalize_user_info defaults: username
+// falls back to the email local part, nickname falls back to username, and
+// avatar_url falls back to OIDC's "picture" claim.
+func normalizeUserInfo(raw map[string]interface{}) *UserInfo {
+	ui := &UserInfo{}
+	if v, ok := raw["email"].(string); ok {
+		ui.Email = v
+	}
+	if v, ok := raw["username"].(string); ok && v != "" {
+		ui.Username = v
+	} else if ui.Email != "" {
+		if at := strings.IndexByte(ui.Email, '@'); at >= 0 {
+			ui.Username = ui.Email[:at]
+		} else {
+			ui.Username = ui.Email
 		}
-		subject = claims.Subject
 	}
-	if c.request(ctx, http.MethodGet, c.cfg.UserinfoURL, "", token.AccessToken, &profile) != nil {
-		return nil, ErrProtocol
-	}
-	if c.cfg.Type == "github" {
-		var id json.Number
-		if json.Unmarshal(profile["id"], &id) != nil || id.String() == "" {
-			return nil, ErrProtocol
-		}
-		subject = id.String()
+	if v, ok := raw["nickname"].(string); ok && v != "" {
+		ui.Nickname = v
 	} else {
-		var sub string
-		if json.Unmarshal(profile["sub"], &sub) != nil || sub == "" || (subject != "" && subject != sub) {
-			return nil, ErrProtocol
-		}
-		subject = sub
+		ui.Nickname = ui.Username
 	}
-	issuer := c.cfg.Issuer
-	if issuer == "" {
-		issuer = c.cfg.UserinfoURL
+	if v, ok := raw["avatar_url"].(string); ok && v != "" {
+		ui.AvatarURL = v
+	} else if v, ok := raw["picture"].(string); ok {
+		ui.AvatarURL = v
 	}
-	return &Identity{Issuer: issuer, Subject: subject}, nil
-}
-
-type idClaims struct {
-	jwt.RegisteredClaims
-	Nonce           string `json:"nonce"`
-	AuthorizedParty string `json:"azp"`
-}
-
-func (c *Client) verifyIDToken(ctx context.Context, raw, nonce string) (*idClaims, error) {
-	if raw == "" || nonce == "" {
-		return nil, ErrProtocol
-	}
-	var keys struct {
-		Keys []struct{ Kty, Kid, Use, Alg, N, E string } `json:"keys"`
-	}
-	if c.request(ctx, http.MethodGet, c.jwksURI, "", "", &keys) != nil {
-		return nil, ErrProtocol
-	}
-	claims := &idClaims{}
-	parsed, err := jwt.ParseWithClaims(raw, claims, func(token *jwt.Token) (any, error) {
-		kid, ok := token.Header["kid"].(string)
-		if !ok || kid == "" || token.Method != jwt.SigningMethodRS256 {
-			return nil, ErrProtocol
-		}
-		var selected *rsa.PublicKey
-		for _, key := range keys.Keys {
-			if key.Kid != kid || key.Kty != "RSA" || (key.Use != "" && key.Use != "sig") || (key.Alg != "" && key.Alg != "RS256") {
-				continue
-			}
-			n, e1 := base64.RawURLEncoding.DecodeString(key.N)
-			e, e2 := base64.RawURLEncoding.DecodeString(key.E)
-			if e1 != nil || e2 != nil || len(e) == 0 || len(e) > 4 || len(n) < 256 || selected != nil {
-				return nil, ErrProtocol
-			}
-			exponent := 0
-			for _, b := range e {
-				exponent = exponent*256 + int(b)
-			}
-			if exponent < 3 || exponent%2 == 0 {
-				return nil, ErrProtocol
-			}
-			selected = &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: exponent}
-		}
-		if selected == nil {
-			return nil, ErrProtocol
-		}
-		return selected, nil
-	}, jwt.WithValidMethods([]string{"RS256"}))
-	if err != nil || parsed == nil || !parsed.Valid || claims.Issuer != c.cfg.Issuer || !claims.VerifyAudience(c.cfg.ClientID, true) || claims.ExpiresAt == nil || claims.IssuedAt == nil || claims.Subject == "" || claims.Nonce != nonce || (len(claims.Audience) > 1 && claims.AuthorizedParty != c.cfg.ClientID) || (claims.AuthorizedParty != "" && claims.AuthorizedParty != c.cfg.ClientID) {
-		return nil, ErrProtocol
-	}
-	return claims, nil
+	return ui
 }

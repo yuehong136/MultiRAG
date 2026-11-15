@@ -1856,7 +1856,7 @@ func (s *Service) InitDefaultAdmin() error {
 				return fmt.Errorf("can't init admin: %w", err)
 			}
 			tenantName := defaultNickname + "'s Kingdom"
-			if err := tx.Create(&entity.Tenant{ID: userID, Name: &tenantName}).Error; err != nil {
+			if err := tx.Create(&entity.Tenant{ID: userID, Name: &tenantName, Status: &status}).Error; err != nil {
 				return err
 			}
 			if err := tx.Create(&entity.UserTenant{ID: utility.GenerateToken(), TenantID: userID, UserID: userID, InvitedBy: userID, Role: "owner", Status: &status}).Error; err != nil {

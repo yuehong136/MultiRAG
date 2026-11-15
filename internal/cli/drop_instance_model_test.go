@@ -14,27 +14,26 @@ import (
 func TestDropInstanceModelGrammarAndMode(t *testing.T) {
 	for _, input := range []string{
 		`DROP MODEL 'org/model' FROM 'vllm' 'local';`,
-		`DROP MODEL 'org/model' FROM PROVIDER 'vllm' INSTANCE 'local';`,
 		`DROP MODEL 'org/model' FROM 'vllm' 'local'`,
 	} {
-		cmd, err := NewParser(input).Parse(false)
+		cmd, err := NewParser(input).Parse(APIMode)
 		if err != nil || cmd.Type != "drop_instance_model" || !reflect.DeepEqual(cmd.Params["model_names"], []string{"org/model"}) || cmd.Params["instance_name"] != "local" {
 			t.Fatalf("%v %v", cmd, err)
 		}
-		if _, err := NewParser(input).Parse(true); err == nil {
+		if _, err := NewParser(input).Parse(AdminMode); err == nil {
 			t.Fatal("admin accepted user model deletion")
 		}
 	}
 	for _, input := range []string{`DROP MODEL 'm' FROM 'p';`, `DROP MODEL 'm' 'p' 'i';`, `DROP MODEL 'm' FROM 'p' 'i' garbage;`, `DROP MODEL 'm' FROM 'p' 'i'; garbage`, `DROP MODEL PROVIDER 'p';`} {
-		if _, err := NewParser(input).Parse(false); err == nil {
+		if _, err := NewParser(input).Parse(APIMode); err == nil {
 			t.Fatalf("accepted %s", input)
 		}
 	}
-	if _, err := NewParser(`DROP MODEL PROVIDER 'p';`).Parse(true); err == nil {
+	if _, err := NewParser(`DROP MODEL PROVIDER 'p';`).Parse(AdminMode); err == nil {
 		t.Fatal("dead admin command still parses")
 	}
-	cmd, err := NewParser(`ADD MODEL 'm' TO PROVIDER 'vllm' INSTANCE 'local' WITH TOKENS 1024 VISION CHAT EMBEDDING THINK;`).Parse(false)
-	if err != nil || !reflect.DeepEqual(cmd.Params["models"].([]customModelDeclaration)[0].Types, []string{"image2text", "chat", "embedding"}) {
+	cmd, err := NewParser(`ADD MODEL 'm' TO PROVIDER 'vllm' INSTANCE 'local' WITH TOKENS 1024 VISION CHAT EMBEDDING THINK;`).Parse(APIMode)
+	if err != nil || !reflect.DeepEqual(cmd.Params["models"].([]map[string]any)[0]["model_types"], []string{"vision", "chat", "embedding"}) {
 		t.Fatalf("%v %v", cmd, err)
 	}
 }
@@ -66,10 +65,10 @@ func TestDropInstanceModelClientErrorsAndEscaping(t *testing.T) {
 			defer server.Close()
 			u, _ := url.Parse(server.URL)
 			port, _ := strconv.Atoi(u.Port())
-			client := NewMultiRAGClient("user")
-			client.HTTPClient.Host = u.Hostname()
-			client.HTTPClient.Port = port
-			client.HTTPClient.LoginToken = "fixture"
+			client := newConsumerCLI("user")
+			consumerHTTP(client).Host = u.Hostname()
+			consumerHTTP(client).Port = port
+			consumerHTTP(client).LoginToken = consumerTokenPtr("fixture")
 			cmd := NewCommand("drop_instance_model")
 			cmd.Params["provider_name"] = "p?#"
 			cmd.Params["instance_name"] = "local name"
@@ -78,7 +77,7 @@ func TestDropInstanceModelClientErrorsAndEscaping(t *testing.T) {
 			if (err == nil) != test.success || (err != nil && strings.Contains(err.Error(), "secret-response")) {
 				t.Fatal(err)
 			}
-			client.ServerType = "admin"
+			client.Config.CLIMode = AdminMode
 			if _, err := client.DropInstanceModel(cmd); err == nil {
 				t.Fatal("admin request sent")
 			}

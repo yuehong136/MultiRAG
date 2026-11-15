@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 )
 
 // MinimaxModel implements ModelDriver for Minimax
@@ -515,6 +516,9 @@ func (m *MinimaxModel) AudioSpeech(modelName *string, audioContent *string, apiC
 	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return nil, err
 	}
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
 	if audioContent == nil || *audioContent == "" {
 		return nil, fmt.Errorf("text content is empty")
 	}
@@ -581,7 +585,8 @@ func (m *MinimaxModel) AudioSpeech(modelName *string, audioContent *string, apiC
 			StatusMsg  string `json:"status_msg"`
 		} `json:"base_resp"`
 		Data struct {
-			Audio string `json:"audio"` // HEX
+			Audio  string `json:"audio"` // HEX
+			Status *int   `json:"status"`
 		} `json:"data"`
 	}
 
@@ -592,13 +597,11 @@ func (m *MinimaxModel) AudioSpeech(modelName *string, audioContent *string, apiC
 	if raw, exists := envelope["error"]; exists && string(raw) != "null" {
 		return nil, fmt.Errorf("provider response error")
 	}
-	if raw, exists := envelope["base_resp"]; exists {
-		var status struct {
-			Code int `json:"status_code"`
-		}
-		if json.Unmarshal(raw, &status) != nil || status.Code != 0 {
-			return nil, fmt.Errorf("provider response error")
-		}
+	var status struct {
+		Code *int `json:"status_code"`
+	}
+	if json.Unmarshal(envelope["base_resp"], &status) != nil || status.Code == nil || *status.Code != 0 {
+		return nil, fmt.Errorf("provider response business success is required")
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -609,10 +612,13 @@ func (m *MinimaxModel) AudioSpeech(modelName *string, audioContent *string, apiC
 		return nil, fmt.Errorf("MiniMax TTS returned error: %d - %s", result.BaseResp.StatusCode, result.BaseResp.StatusMsg)
 	}
 
+	if result.Data.Status == nil || *result.Data.Status != 2 {
+		return nil, fmt.Errorf("incomplete speech response")
+	}
 	// format HEX
 	audioBytes, err := hex.DecodeString(result.Data.Audio)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode MiniMax hex audio: %w", err)
+	if err != nil || len(audioBytes) == 0 {
+		return nil, fmt.Errorf("invalid speech audio")
 	}
 
 	return &TTSResponse{
@@ -621,6 +627,12 @@ func (m *MinimaxModel) AudioSpeech(modelName *string, audioContent *string, apiC
 }
 
 func (m *MinimaxModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	if sender == nil {
+		return fmt.Errorf("sender is required")
+	}
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return fmt.Errorf("model name is required")
+	}
 	if err := m.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return err
 	}
@@ -690,28 +702,66 @@ func (m *MinimaxModel) AudioSpeechWithSender(modelName *string, audioContent *st
 
 	type minimaxTTSEvent struct {
 		Data struct {
-			Audio  string `json:"audio"`
-			Status int    `json:"status"`
+			Audio  *string `json:"audio"`
+			Status *int    `json:"status"`
 		} `json:"data"`
+		BaseResp struct {
+			StatusCode *int `json:"status_code"`
+		} `json:"base_resp"`
+		Error json.RawMessage `json:"error"`
 	}
-
+	complete := false
+	var delivered []byte
 	if _, err := ParseSSEStream[minimaxTTSEvent](resp.Body, func(event minimaxTTSEvent) error {
-		if event.Data.Audio != "" {
-			audioBytes, err := hex.DecodeString(event.Data.Audio)
-			if err == nil && len(audioBytes) > 0 {
-				chunk := string(audioBytes)
-				if errSend := sender(&chunk, nil); errSend != nil {
-					return errSend
+		if err := apiConfig.RequestContext().Err(); err != nil {
+			return err
+		}
+		if complete || event.Data.Audio == nil || event.Data.Status == nil || event.BaseResp.StatusCode == nil || *event.BaseResp.StatusCode != 0 || (len(event.Error) > 0 && string(event.Error) != "null") {
+			return fmt.Errorf("invalid speech stream response")
+		}
+		status := *event.Data.Status
+		if status != 1 && status != 2 {
+			return fmt.Errorf("invalid speech stream status")
+		}
+		audio, err := hex.DecodeString(*event.Data.Audio)
+		if err != nil {
+			return fmt.Errorf("invalid speech HEX")
+		}
+		if !utf8.Valid(audio) {
+			return fmt.Errorf("binary speech cannot be represented by the text stream sender")
+		}
+		if status == 2 {
+			complete = true
+			if len(delivered) > 0 {
+				if !bytes.Equal(delivered, audio) {
+					return fmt.Errorf("inconsistent final speech audio")
 				}
+				return nil
 			}
 		}
-
-		return nil
+		if len(audio) == 0 {
+			return fmt.Errorf("empty speech stream audio")
+		}
+		if len(delivered)+len(audio) > 20*1024*1024 {
+			return fmt.Errorf("speech stream exceeds 20 MiB")
+		}
+		chunk := string(audio)
+		if err := sender(&chunk, nil); err != nil {
+			return err
+		}
+		delivered = append(delivered, audio...)
+		return apiConfig.RequestContext().Err()
 	}); err != nil {
-		return fmt.Errorf("failed to scan response body: %w", err)
+		return err
 	}
-
-	return nil
+	if err := apiConfig.RequestContext().Err(); err != nil {
+		return err
+	}
+	if !complete || len(delivered) == 0 {
+		return fmt.Errorf("incomplete speech stream")
+	}
+	done := "[DONE]"
+	return sender(&done, nil)
 }
 
 // OCRFile OCR file

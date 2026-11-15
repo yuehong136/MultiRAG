@@ -16,7 +16,7 @@ func TestGoogleDiscoveryChecksKeysWithoutHTTP(t *testing.T) {
 	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, `{"models":[]}`) }))
 	defer server.Close()
 	driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
-	for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr("")}, {APIKey: stringPtr(" \t\n ")}} {
+	for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr("")}, {ApiKey: stringPtr(" \t\n ")}} {
 		if names, err := driver.ListModels(api); err == nil || names != nil {
 			t.Fatalf("invalid key accepted: %v %v", names, err)
 		}
@@ -26,7 +26,7 @@ func TestGoogleDiscoveryChecksKeysWithoutHTTP(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := driver.CheckConnection(&APIConfig{APIKey: stringPtr("key"), Context: ctx}); !errors.Is(err, context.Canceled) {
+	if err := driver.CheckConnection(&APIConfig{ApiKey: stringPtr("key"), Context: ctx}); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if calls.Load() != 0 {
@@ -50,7 +50,7 @@ func TestGoogleConnectionPropagatesLaterPageFailure(t *testing.T) {
 	}))
 	defer server.Close()
 	driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
-	err := driver.CheckConnection(&APIConfig{APIKey: stringPtr("fixture-key")})
+	err := driver.CheckConnection(&APIConfig{ApiKey: stringPtr("fixture-key")})
 	if err == nil || !strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "secret") || calls.Load() != 2 {
 		t.Fatalf("connection %v, calls %d", err, calls.Load())
 	}
@@ -77,7 +77,7 @@ func TestGoogleDiscoveryCancellationReachesLaterPage(t *testing.T) {
 	driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 	done := make(chan error, 1)
 	go func() {
-		names, err := driver.ListModels(&APIConfig{APIKey: stringPtr("key"), Context: ctx})
+		names, err := driver.ListModels(&APIConfig{ApiKey: stringPtr("key"), Context: ctx})
 		if names != nil {
 			t.Error("partial listing returned after cancellation")
 		}
@@ -114,7 +114,7 @@ func TestGoogleConstructorOwnsURLMap(t *testing.T) {
 	urls := map[string]string{"default": server.URL}
 	driver := NewGoogleModel(urls, URLSuffix{})
 	urls["default"] = "http://127.0.0.1:1"
-	if err := driver.CheckConnection(&APIConfig{APIKey: stringPtr("key")}); err != nil || calls.Load() != 1 {
+	if err := driver.CheckConnection(&APIConfig{ApiKey: stringPtr("key")}); err != nil || calls.Load() != 1 {
 		t.Fatalf("constructor retained caller map: %v", err)
 	}
 }
@@ -130,11 +130,11 @@ func TestGoogleDiscoveryRejectsMalformedResponses(t *testing.T) {
 			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
 			driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
-			names, err := driver.ListModels(&APIConfig{APIKey: stringPtr("fixture-key")})
+			names, err := driver.ListModels(&APIConfig{ApiKey: stringPtr("fixture-key")})
 			if names != nil || err == nil || strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "private error") {
 				t.Fatalf("bad listing succeeded or leaked: %v %v", names, err)
 			}
-			if err := driver.CheckConnection(&APIConfig{APIKey: stringPtr("fixture-key")}); err == nil || strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "private error") {
+			if err := driver.CheckConnection(&APIConfig{ApiKey: stringPtr("fixture-key")}); err == nil || strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "private error") {
 				t.Fatalf("bad inventory passed connection check or leaked: %v", err)
 			}
 		})
@@ -145,8 +145,8 @@ func TestGoogleDiscoveryAcceptsExplicitEmptyInventory(t *testing.T) {
 	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"models":[]}`) }))
 	defer server.Close()
 	driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
-	api := &APIConfig{APIKey: stringPtr("fixture-key")}
-	if names, err := driver.ListModels(api); err != nil || names == nil || len(names) != 0 {
+	api := &APIConfig{ApiKey: stringPtr("fixture-key")}
+	if names, err := driver.ListModels(api); err != nil || len(names) != 0 {
 		t.Fatalf("valid empty inventory: %v %v", names, err)
 	}
 	if err := driver.CheckConnection(api); err != nil {

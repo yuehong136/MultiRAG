@@ -268,8 +268,8 @@ func (v *VariableAggregatorComponent) Outputs() map[string]string {
 // strings/slices/maps are false, zero numbers are false, false is
 // false, everything else is true.
 func isTruthy(v any) bool {
-	if isNumberType(v) {
-		number, err := exactNumber(v)
+	if isNumberish(v) {
+		number, _, err := toFloat64(v)
 		return err == nil && number.Sign() != 0
 	}
 	switch x := v.(type) {

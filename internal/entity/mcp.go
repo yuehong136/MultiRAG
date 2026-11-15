@@ -23,13 +23,13 @@ type MCPServer struct {
 	TenantID    string  `gorm:"column:tenant_id;size:32;not null;index" json:"tenant_id"`
 	URL         string  `gorm:"column:url;size:2048;not null" json:"url"`
 	ServerType  string  `gorm:"column:server_type;size:32;not null" json:"server_type"`
-	Description *string `gorm:"column:description;type:text" json:"description,omitempty"`
-	Variables   JSONMap `gorm:"column:variables;type:jsonb" json:"variables,omitempty"`
-	Headers     JSONMap `gorm:"column:headers;type:jsonb" json:"headers,omitempty"`
+	Description *string `gorm:"column:description;type:longtext" json:"description,omitempty"`
+	Variables   JSONMap `gorm:"column:variables;type:longtext" json:"variables,omitempty"`
+	Headers     JSONMap `gorm:"column:headers;type:longtext" json:"headers,omitempty"`
 	BaseModel
 }
 
 // TableName specify table name
 func (MCPServer) TableName() string {
-	return "t_ai_mcp_server"
+	return "mcp_server"
 }

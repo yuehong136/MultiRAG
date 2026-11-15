@@ -23,6 +23,7 @@ import (
 	"gorm.io/gorm"
 
 	"multirag/internal/entity"
+	"multirag/internal/testsupport/scratch"
 )
 
 // setupKBTestDB initializes an in-memory SQLite database for KB DAO tests.
@@ -117,5 +118,88 @@ func TestKnowledgebaseDAO_DecreaseDocumentNum_ZeroDecrement(t *testing.T) {
 	}
 	if kb.ChunkNum != 15 {
 		t.Fatalf("chunk_num should be unchanged: expected 15, got %d", kb.ChunkNum)
+	}
+}
+
+func TestKnowledgebaseAccessRequiresActiveIdentitySQL(t *testing.T) {
+	f := scratch.New(t)
+	prior := DB
+	DB = f.DB
+	t.Cleanup(func() { DB = prior })
+	if err := DB.AutoMigrate(&entity.User{}, &entity.Tenant{}, &entity.UserTenant{}, &entity.Knowledgebase{}); err != nil {
+		t.Fatal(err)
+	}
+	active := "1"
+	for _, id := range []string{"owner", "member", "foreign"} {
+		if err := DB.Create(&entity.User{ID: id, Email: id + "@example.test", Nickname: id, Status: &active, IsActive: "1"}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := DB.Create(&entity.Tenant{ID: "owner", Status: &active}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Create(&entity.UserTenant{ID: "relation", TenantID: "owner", UserID: "member", Role: "normal", Status: &active, InvitedBy: "owner"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Create(&entity.Knowledgebase{ID: "kb", TenantID: "owner", CreatedBy: "owner", Name: "kb", Permission: "team", Status: &active, ParserConfig: entity.JSONMap{}}).Error; err != nil {
+		t.Fatal(err)
+	}
+	dao := NewKnowledgebaseDAO()
+	if !dao.Accessible("kb", "owner") || !dao.Accessible("kb", "member") || dao.Accessible("kb", "foreign") {
+		t.Fatal("canonical owner/team visibility")
+	}
+	update := func(table, key, field string, value interface{}) {
+		t.Helper()
+		if err := DB.Table(table).Where("id = ?", key).Update(field, value).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, role := range []string{"invite", "unknown"} {
+		update("user_tenant", "relation", "role", role)
+		if dao.Accessible("kb", "member") {
+			t.Fatal("nonmember role accepted", role)
+		}
+	}
+	for _, role := range []string{"owner", "normal", "admin"} {
+		update("user_tenant", "relation", "role", role)
+		if !dao.Accessible("kb", "member") {
+			t.Fatal("active member rejected", role)
+		}
+	}
+	update("user_tenant", "relation", "status", "0")
+	if dao.Accessible("kb", "member") {
+		t.Fatal("revoked membership accepted")
+	}
+	update("user_tenant", "relation", "status", "1")
+	update("user", "member", "is_active", "0")
+	if dao.Accessible("kb", "member") {
+		t.Fatal("disabled actor accepted")
+	}
+	update("user", "member", "is_active", "1")
+	update("user", "owner", "status", "0")
+	if dao.Accessible("kb", "owner") {
+		t.Fatal("deleted owner accepted")
+	}
+	update("user", "owner", "status", "1")
+	update("tenant", "owner", "status", "0")
+	if dao.Accessible("kb", "owner") || dao.Accessible("kb", "member") {
+		t.Fatal("disabled tenant accepted")
+	}
+	update("tenant", "owner", "status", "1")
+	update("knowledgebase", "kb", "permission", "me")
+	if !dao.Accessible("kb", "owner") || dao.Accessible("kb", "member") {
+		t.Fatal("private visibility changed")
+	}
+	update("knowledgebase", "kb", "permission", "unknown")
+	if dao.Accessible("kb", "member") {
+		t.Fatal("unknown permission broadened")
+	}
+	update("knowledgebase", "kb", "status", "0")
+	if dao.Accessible("kb", "owner") {
+		t.Fatal("deleted dataset accepted")
+	}
+	var count int
+	if err := f.Read.QueryRow("SELECT COUNT(*) FROM user_tenant WHERE tenant_id='owner'").Scan(&count); err != nil || count != 1 {
+		t.Fatal("independent membership readback", count, err)
 	}
 }

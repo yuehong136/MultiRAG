@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"testing"
@@ -17,7 +17,7 @@ import (
 func TestLocalAIChatAndStreaming(t *testing.T) {
 	for _, alias := range []string{"reasoning_content", "reasoning", "thinking"} {
 		t.Run(alias, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "" || r.URL.Path != "/v1/chat/completions" {
 					t.Error("optional auth/path")
 				}
@@ -44,7 +44,7 @@ func TestLocalAIChatAndStreaming(t *testing.T) {
 			config := &ChatConfig{Effort: &effort, Thinking: &thinking, MaxTokens: &max}
 			messages := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "history"}, {Role: "user", Content: "x"}}
 			result, err := driver.ChatWithMessages("local", messages, nil, config)
-			if err != nil || *result.Answer != "答案🙂" || result.ReasoningContent == nil || *result.ReasoningContent != "推理🙂" {
+			if err != nil || *result.Answer != "答案🙂" || result.ReasonContent == nil || *result.ReasonContent != "推理🙂" {
 				t.Fatalf("%v %v", result, err)
 			}
 			var got []string
@@ -75,7 +75,7 @@ func TestLocalAIStreamFailureLifecycle(t *testing.T) {
 		{"empty", "data: [DONE]\n", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, test.body) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, test.body) }))
 			defer srv.Close()
 			d := NewLocalAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
 			err := d.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "x"}}, nil, nil, func(*string, *string) error { return nil })
@@ -85,15 +85,16 @@ func TestLocalAIStreamFailureLifecycle(t *testing.T) {
 		})
 	}
 	t.Run("idle-and-cancel", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
 			w.(http.Flusher).Flush()
 			<-r.Context().Done()
 		}))
 		defer srv.Close()
 		d := NewLocalAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
-		d.streamIdleTimeout = 30 * time.Millisecond
-		err := d.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "x"}}, nil, nil, func(*string, *string) error { return nil })
+		idleCtx, idleCancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+		defer idleCancel()
+		err := d.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "x"}}, &APIConfig{Context: idleCtx}, nil, func(*string, *string) error { return nil })
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatal("idle", err)
 		}
@@ -110,7 +111,7 @@ func TestLocalAIStreamFailureLifecycle(t *testing.T) {
 	})
 }
 func TestLocalAIEmbeddingRerankDiscovery(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer fixture" {
 			t.Error("auth")
 		}
@@ -141,16 +142,16 @@ func TestLocalAIEmbeddingRerankDiscovery(t *testing.T) {
 	defer srv.Close()
 	d := NewLocalAIModel(map[string]string{"default": srv.URL}, URLSuffix{Models: "models", Embedding: "embeddings", Rerank: "rerank"})
 	key, name := "fixture", "local"
-	api := &APIConfig{APIKey: &key}
-	vectors, err := d.Embed(&name, []string{"a", "b"}, api, &EmbeddingConfig{Query: true, Dimension: 2})
+	api := &APIConfig{ApiKey: &key}
+	vectors, err := d.Embed(&name, []string{"a", "b"}, api, &EmbeddingConfig{Dimension: 2})
 	if err != nil || len(vectors) != 2 || vectors[0].Embedding[0] != 0 {
 		t.Fatalf("embed %v %v", vectors, err)
 	}
 	scores, err := d.Rerank(&name, "q", []string{"a", "b"}, api, nil)
-	if err != nil || len(scores.Data) != 2 || scores.Data[1].RelevanceScore != 0 {
+	if err != nil || len(scores.Data) != 2 || scores.Data[0].RelevanceScore != 0 || scores.Data[1].RelevanceScore != 1 {
 		t.Fatalf("rerank %v %v", scores, err)
 	}
-	if names, err := d.ListModels(api); err != nil || !reflect.DeepEqual(names, []string{"local"}) {
+	if names, err := d.ListModels(api); err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{"local@ignored"}) {
 		t.Fatal(names, err)
 	}
 	if err := d.CheckConnection(api); err != nil {
@@ -159,13 +160,11 @@ func TestLocalAIEmbeddingRerankDiscovery(t *testing.T) {
 	if _, err := d.Rerank(&name, "q", []string{"x"}, nil, &RerankConfig{TopN: -1}); err == nil {
 		t.Fatal("negative top accepted")
 	}
-	if _, ok := any(d).(OCRDriver); ok {
-		t.Fatal("LocalAI declares OCR")
+
+	if _, err := d.OCRFile(nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("LocalAI falsely accepts OCR")
 	}
-	if _, ok := any(d).(OCRURLDriver); ok {
-		t.Fatal("LocalAI declares OCR URL")
-	}
-	if _, err := d.Balance(nil); !errors.Is(err, ErrUnsupportedCapability) {
+	if _, err := d.Balance(nil); !(err != nil) {
 		t.Fatal(err)
 	}
 	if _, err := d.Embed(nil, nil, nil, nil); err != nil {
@@ -198,20 +197,18 @@ func TestLocalAIConstructorCustomDefaultTransport(t *testing.T) {
 	http.DefaultTransport = customProviderTransport{}
 	defer func() { http.DefaultTransport = previous }()
 	d := NewLocalAIModel(map[string]string{"default": "http://127.0.0.1:1"}, URLSuffix{})
-	if d.Name() != "LocalAI" || d.httpClient.Timeout != 0 {
+	if d.Name() != "localai" || d.baseModel.httpClient.Timeout != 0 {
 		t.Fatal("constructor")
 	}
-	tr := providerHTTPTransport()
-	if tr.TLSHandshakeTimeout <= 0 || tr.ResponseHeaderTimeout <= 0 {
-		t.Fatal("transport deadline")
+	if NewDriverHTTPClient().Transport != http.DefaultTransport {
+		t.Fatal("custom transport discarded")
 	}
-	tr.CloseIdleConnections()
 }
 
 func TestLocalAIStrictInferenceResults(t *testing.T) {
 	for _, body := range []string{`{"data":[{"embedding":[1]}]}`, `{"data":[{"index":null,"embedding":[1]}]}`, `{"data":[{"index":0,"embedding":[null]}]}`, `{"data":[{"index":0,"embedding":[1,2]}]}`, `{"error":"failed"}`, `{"data":[]}`} {
 		t.Run(body, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
 			defer srv.Close()
 			d := NewLocalAIModel(map[string]string{"default": srv.URL}, URLSuffix{Embedding: "embeddings"})
 			name := "m"
@@ -222,7 +219,7 @@ func TestLocalAIStrictInferenceResults(t *testing.T) {
 	}
 	for _, body := range []string{`{"results":[{"index":0}]}`, `{"results":[{"index":null,"relevance_score":0}]}`, `{"results":[{"index":0,"relevance_score":null}]}`, `{"results":[{"index":2,"relevance_score":0}]}`, `{"results":[{"index":0,"relevance_score":0},{"index":0,"relevance_score":1}]}`, `{"results":[]}`, `{"results":[{"index":0,"relevance_score":1e999}]}`} {
 		t.Run(strings.ReplaceAll(body, "/", ""), func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
 			defer srv.Close()
 			d := NewLocalAIModel(map[string]string{"default": srv.URL}, URLSuffix{Rerank: "rerank"})
 			name := "m"

@@ -20,7 +20,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
+	"multirag/internal/common"
+	"multirag/internal/engine"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -29,8 +30,6 @@ import (
 	"go.uber.org/zap"
 
 	rag "multirag/internal/binding"
-	"multirag/internal/common"
-	"multirag/internal/engine"
 )
 
 // PoolConfig configures the elastic analyzer pool
@@ -80,32 +79,11 @@ func Init(cfg *PoolConfig) error {
 			cfg = &PoolConfig{}
 		}
 
-		// Set default values with fallback search (similar to Python's rag_tokenizer)
+		// Set default values
 		if cfg.DictPath == "" {
-			cfg.DictPath = os.Getenv("RAG_DICT_PATH")
-		}
-		if cfg.DictPath == "" {
-			// Search for dictionary files in common locations
-			// C++ rag_analyzer expects {DictPath}/rag/huqie.txt
-			candidates := []string{
-				"./resource",                   // relative to working directory
-				"/usr/share/infinity/resource", // Docker container path
-			}
-			// Also try relative to executable location (for ./bin/server_main)
-			if exePath, err := os.Executable(); err == nil {
-				exeDir := filepath.Dir(exePath)
-				candidates = append([]string{
-					filepath.Join(exeDir, "..", "resource"), // {project}/bin/../resource
-				}, candidates...)
-			}
-			for _, p := range candidates {
-				absP, _ := filepath.Abs(p)
-				if _, err := os.Stat(filepath.Join(absP, "rag", "huqie.txt")); err == nil {
-					cfg.DictPath = absP
-					break
-				}
-			}
-			if cfg.DictPath == "" {
+			if env := os.Getenv("RAGFLOW_DICT_PATH"); env != "" {
+				cfg.DictPath = env
+			} else {
 				cfg.DictPath = "/usr/share/infinity/resource"
 			}
 		}
@@ -436,8 +414,10 @@ func withAnalyzerResult[T any](fn func(*rag.Analyzer) (T, error)) (T, error) {
 
 // Tokenize tokenizes the text and returns a space-separated string of tokens
 // Example: "hello world" -> "hello world"
+//
+// NOTE: For Infinity engine, returns input unchanged to match python's behavior
 func Tokenize(text string) (string, error) {
-	if engine.GetEngineType() == engine.EngineInfinity {
+	if engine.GetEngineType() == "infinity" {
 		return text, nil
 	}
 	return withAnalyzerResult(func(a *rag.Analyzer) (string, error) {
@@ -471,8 +451,10 @@ func SetFineGrained(fineGrained bool) {
 // FineGrainedTokenize performs fine-grained tokenization on space-separated tokens
 // Input: space-separated tokens (e.g., "hello world 测试")
 // Output: space-separated fine-grained tokens (e.g., "hello world 测 试")
+//
+// NOTE: For Infinity engine, returns input unchanged to match python's behavior
 func FineGrainedTokenize(tokens string) (string, error) {
-	if engine.GetEngineType() == engine.EngineInfinity {
+	if engine.GetEngineType() == "infinity" {
 		return tokens, nil
 	}
 	return withAnalyzerResult(func(a *rag.Analyzer) (string, error) {

@@ -18,10 +18,10 @@ package handler
 
 import (
 	"fmt"
+	"net/http"
 	"multirag/internal/common"
 	"multirag/internal/engine"
 	"multirag/internal/service"
-	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -32,11 +32,11 @@ type SkillSearchHandler struct {
 	searchService  *service.SkillSearchService
 	indexerService *service.SkillIndexerService
 	spaceService   *service.SkillSpaceService
-	docEngine      engine.SkillDocEngine
+	docEngine      engine.DocEngine
 }
 
 // NewSkillSearchHandler creates a new skill search handler
-func NewSkillSearchHandler(docEngine engine.SkillDocEngine) *SkillSearchHandler {
+func NewSkillSearchHandler(docEngine engine.DocEngine) *SkillSearchHandler {
 	return &SkillSearchHandler{
 		searchService:  service.NewSkillSearchService(),
 		indexerService: service.NewSkillIndexerService(),
@@ -173,12 +173,6 @@ func (h *SkillSearchHandler) IndexSkills(c *gin.Context) {
 		return
 	}
 
-	resolved, err := h.indexerService.ResolveSkills(c.Request.Context(), user.ID, req.SpaceID, req.Skills)
-	if err != nil {
-		jsonError(c, common.CodeDataError, err.Error())
-		return
-	}
-	req.Skills = resolved
 	// If embd_id not provided, get from skill search config
 	embdID := req.EmbdID
 	if embdID == "" {

@@ -18,31 +18,53 @@ package cli
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"multirag/internal/common"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 )
 
-// LoginUserInteractive performs interactive login with username and password
-func (c *MultiRAGClient) LoginUserInteractive(username, password string) error {
-	resp, err := c.HTTPClient.Request("GET", c.pingPath(), "", nil, nil)
-	if err != nil {
-		return &authError{message: "login ping failed", cause: err}
+func (c *CLI) LoginUserByCommand(cmd *Command) (ResponseIf, error) {
+	email, ok := cmd.Params["email"].(string)
+	if !ok {
+		return nil, fmt.Errorf("email not provided")
 	}
-	if !pingResponseOK(resp) {
-		return fmt.Errorf("server is down")
+	password, ok := cmd.Params["password"].(string)
+	if !ok {
+		password = ""
+	}
+
+	err := c.LoginUserInteractive(email, password)
+	if err != nil {
+		return nil, err
+	}
+
+	var result SimpleResponse
+	result.Code = 0
+	result.SetOutputFormat(c.Config.OutputFormat)
+	result.Message = "Login successful"
+
+	return &result, nil
+}
+
+// LoginUserInteractive performs interactive login with username and password
+func (c *CLI) LoginUserInteractive(email, password string) error {
+	// First, ping the server to check if it's available
+	_, err := c.PingServer(1)
+	if err != nil {
+		return err
 	}
 
 	// If password is not provided, prompt for it
 	if password == "" {
-		fmt.Printf("password for %s: ", username)
-		var err error
-		password, err = readPassword()
+		fmt.Printf("password for %s: ", email)
+		password, err = ReadPassword()
 		if err != nil {
 			return fmt.Errorf("failed to read password: %w", err)
 		}
@@ -50,64 +72,96 @@ func (c *MultiRAGClient) LoginUserInteractive(username, password string) error {
 	}
 
 	// Login
-	token, err := c.loginUser(username, password)
+	token, err := c.loginUser(email, password)
 	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		fmt.Println("Can't access server for login (connection failed)")
 		return err
 	}
 
-	c.HTTPClient.LoginToken = token
-	fmt.Printf("Login user %s successfully\n", username)
+	fmt.Printf("Login successfully\n")
+
+	switch c.Config.CLIMode {
+	case AdminMode:
+		c.AdminServerClient.LoginToken = &token
+		c.Config.AdminClientConfig.AdminName = &email
+		c.Config.AdminClientConfig.AdminPassword = &password
+	case APIMode:
+		c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].LoginToken = &token
+		c.Config.APIClientConfig.APIServerMap[c.Config.APIClientConfig.CurrentAPIServer].UserName = &email
+		c.Config.APIClientConfig.APIServerMap[c.Config.APIClientConfig.CurrentAPIServer].UserPassword = &password
+	default:
+		return fmt.Errorf("invalid server type")
+	}
 	return nil
 }
 
-// LoginUser performs user login
-func (c *MultiRAGClient) LoginUser(cmd *Command) error {
-	resp, err := c.HTTPClient.Request("GET", c.pingPath(), "", nil, nil)
-	if err != nil {
-		return &authError{message: "login ping failed", cause: err}
+func (c *CLI) PingByCommand(cmd *Command) (ResponseIf, error) {
+	iterations := 1
+	if iterationsParam, ok := cmd.Params["iterations"]; ok {
+		iterations = int(iterationsParam.(float64))
 	}
-	if !pingResponseOK(resp) {
-		return fmt.Errorf("server is down")
-	}
+	return c.PingServer(iterations)
+}
 
-	email, ok := cmd.Params["email"].(string)
-	if !ok {
-		return fmt.Errorf("email not provided")
-	}
-
-	// Get password from user input (hidden)
-	password, _ := cmd.Params["password"].(string)
-	if password == "" && c.PasswordPrompt != nil {
-		pwd, err := c.PasswordPrompt(fmt.Sprintf("password for %s: ", email))
-		if err != nil {
-			return fmt.Errorf("failed to read password: %w", err)
+func (c *CLI) PingServer(iterations int) (ResponseIf, error) {
+	var pingPath string
+	var resp *Response
+	var err error
+	switch c.Config.CLIMode {
+	case AdminMode:
+		pingPath = "/admin/ping"
+		if iterations > 1 {
+			return c.AdminServerClient.RequestWithIterations("GET", pingPath, "web", nil, nil, iterations)
 		}
-		password = pwd
-	} else if password == "" {
-		fmt.Printf("password for %s: ", email)
-		pwd, err := readPassword()
-		if err != nil {
-			return fmt.Errorf("failed to read password: %w", err)
+		resp, err = c.AdminServerClient.Request("GET", pingPath, "web", nil, nil)
+	case APIMode:
+		pingPath = "/system/ping"
+		if iterations > 1 {
+			return c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].RequestWithIterations("GET", pingPath, "web", nil, nil, iterations)
 		}
-		password = pwd
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("GET", pingPath, "web", nil, nil)
+	default:
+		return nil, fmt.Errorf("invalid server type")
 	}
-	password = strings.TrimSpace(password)
 
-	// Login
-	token, err := c.loginUser(email, password)
 	if err != nil {
-		return err
+		fmt.Printf("Error: %v\n", err)
+		fmt.Println("Can't access server for login (connection failed)")
+		return nil, err
 	}
 
-	c.HTTPClient.LoginToken = token
-	fmt.Printf("Login user %s successfully\n", email)
-	return nil
+	if resp.StatusCode != 200 {
+		fmt.Println("Server is down")
+		return nil, fmt.Errorf("server is down")
+	}
+
+	var result SimpleResponse
+	switch c.Config.CLIMode {
+	case AdminMode:
+		if err = json.Unmarshal(resp.Body, &result); err != nil {
+			return nil, fmt.Errorf("ping failed: invalid JSON (%w)", err)
+		}
+	case APIMode:
+		if string(resp.Body) == "pong" {
+			result.Code = 0
+			result.Message = "Pong"
+		} else {
+			result.Code = 1
+			result.Message = "Ping failed"
+		}
+	default:
+		return nil, fmt.Errorf("invalid server type")
+	}
+
+	result.Duration = resp.Duration
+	return &result, nil
 }
 
 // loginUser performs the actual login request
-func (c *MultiRAGClient) loginUser(email, password string) (string, error) {
-	// Encrypt with the selected connection's RSA public key.
-	encryptedPassword, err := c.encryptPassword(password)
+func (c *CLI) loginUser(email, password string) (string, error) {
+	// Encrypt password using scrypt (same as Python implementation)
+	encryptedPassword, err := EncryptPassword(password)
 	if err != nil {
 		return "", fmt.Errorf("failed to encrypt password: %w", err)
 	}
@@ -117,102 +171,98 @@ func (c *MultiRAGClient) loginUser(email, password string) (string, error) {
 		"password": encryptedPassword,
 	}
 
-	var path string
-	if c.ServerType == "admin" {
-		path = "/admin/login"
-	} else {
-		path = "/auth/login"
-		delete(payload, "email")
-		payload["username"] = email
+	var resp *Response
+	switch c.Config.CLIMode {
+	case AdminMode:
+		resp, err = c.AdminServerClient.Request("POST", "/admin/login", "", nil, payload)
+	case APIMode:
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("POST", "/auth/login", "", nil, payload)
+	default:
+		return "", fmt.Errorf("invalid server type")
 	}
 
-	resp, err := c.HTTPClient.Request("POST", path, "", nil, payload)
 	if err != nil {
-		return "", &authError{message: "login request failed", cause: err}
+		return "", err
 	}
 
-	if err := checkLoginResponse(resp); err != nil {
-		return "", err
+	var result SimpleResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return "", fmt.Errorf("login failed: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return "", fmt.Errorf("login failed: %s", result.Message)
 	}
 
 	token := resp.Headers.Get("Authorization")
 	if token == "" {
-		return "", &authError{message: "login failed: missing Authorization header"}
+		return "", fmt.Errorf("login failed: missing Authorization header")
 	}
 
 	return token, nil
 }
 
-// Logout ends the current session for both admin and user modes.
-func (c *MultiRAGClient) Logout() (ResponseIf, error) {
-	if c.HTTPClient.LoginToken == "" {
-		return nil, fmt.Errorf("not logged in")
+func (c *CLI) Logout() (ResponseIf, error) {
+
+	var resp *Response
+	var err error
+	switch c.Config.CLIMode {
+	case AdminMode:
+		if c.AdminServerClient.LoginToken == nil {
+			return nil, fmt.Errorf("not logged in")
+		}
+		resp, err = c.AdminServerClient.Request("POST", "/admin/logout", "web", nil, nil)
+	case APIMode:
+		if c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].LoginToken == nil {
+			return nil, fmt.Errorf("not logged in")
+		}
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("POST", "/auth/logout", "web", nil, nil)
+	default:
+		return nil, fmt.Errorf("invalid server type")
 	}
-	path, method := "/auth/logout", http.MethodPost
-	var headers map[string]string
-	if c.ServerType == "admin" {
-		path, method = "/admin/logout", http.MethodPost
-	} else {
-		// Python's user auth dependency requires the Bearer scheme. The Go
-		// user router accepts it too; admin retains its legacy raw token.
-		token := strings.TrimPrefix(c.HTTPClient.LoginToken, "Bearer ")
-		headers = map[string]string{"Authorization": "Bearer " + token}
-	}
-	resp, err := c.HTTPClient.Request(method, path, "web", headers, nil)
+
 	if err != nil {
-		return nil, fmt.Errorf("logout failed: %w", err)
-	}
-	if err := checkAuthResponse("logout", resp); err != nil {
 		return nil, err
 	}
-	c.HTTPClient.LoginToken = ""
-	return &SimpleResponse{Code: 0, Message: "Logout successful"}, nil
-}
 
-// ShowCurrentUser shows the current logged-in user information
-// TODO: Implement showing current user information when API is available
-func (c *MultiRAGClient) ShowCurrentUser(cmd *Command) (ResponseIf, error) {
-	// TODO: Call the appropriate API to get current user information
-	// Currently there is no /admin/user/info or /user/info API available
-	// The /admin/auth API only verifies authorization, does not return user info
-	return nil, fmt.Errorf("command 'SHOW CURRENT USER' is not yet implemented")
-}
-
-// readPassword reads a password from the terminal without echoing. Callers are
-// expected to print their own prompt beforehand. Falls back to plain (visible)
-// input when stdin is not a terminal (e.g. piped input).
-func readPassword() (string, error) {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return readPasswordFallback()
+	var result SimpleResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("login failed: invalid JSON (%w)", err)
 	}
 
-	passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println() // ReadPassword does not echo the trailing newline
-	if err != nil {
-		return "", err
+	if result.Code != 0 {
+		return nil, fmt.Errorf("login failed: %s", result.Message)
 	}
-	return strings.TrimSpace(string(passwordBytes)), nil
+
+	switch c.Config.CLIMode {
+	case AdminMode:
+		c.AdminServerClient.LoginToken = nil
+		c.Config.AdminClientConfig.AdminName = nil
+		c.Config.AdminClientConfig.AdminPassword = nil
+	case APIMode:
+		c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].LoginToken = nil
+		c.Config.APIClientConfig.APIServerMap[c.Config.APIClientConfig.CurrentAPIServer].UserName = nil
+		c.Config.APIClientConfig.APIServerMap[c.Config.APIClientConfig.CurrentAPIServer].UserPassword = nil
+	default:
+		return nil, fmt.Errorf("invalid server type")
+	}
+
+	return &result, nil
 }
 
-// readPasswordFallback reads password as plain text (fallback mode)
-func readPasswordFallback() (string, error) {
-	reader := bufio.NewReader(os.Stdin)
-	password, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(password), nil
-}
+func (c *CLI) ListAvailableProviders(cmd *Command) (ResponseIf, error) {
 
-// ==================== Model provider pool ====================
-
-func (c *MultiRAGClient) ListAvailableProviders(cmd *Command) (ResponseIf, error) {
-	endPoint := "/providers?available=true"
-	if c.ServerType == "admin" {
-		endPoint = "/admin/providers?available=true"
+	var resp *Response
+	var err error
+	switch c.Config.CLIMode {
+	case AdminMode:
+		resp, err = c.AdminServerClient.Request("GET", "/admin/providers?available=true", "web", nil, nil)
+	case APIMode:
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("GET", "/providers?available=true", "web", nil, nil)
+	default:
+		return nil, fmt.Errorf("invalid server type")
 	}
 
-	resp, err := c.HTTPClient.Request("GET", endPoint, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list providers: %w", err)
 	}
@@ -229,22 +279,30 @@ func (c *MultiRAGClient) ListAvailableProviders(cmd *Command) (ResponseIf, error
 	if result.Code != 0 {
 		return nil, fmt.Errorf("%s", result.Message)
 	}
-	result.Duration = 0
+	result.Duration = resp.Duration
 	return &result, nil
 }
 
-func (c *MultiRAGClient) ShowProvider(cmd *Command) (ResponseIf, error) {
+func (c *CLI) ShowProvider(cmd *Command) (ResponseIf, error) {
 	providerName, ok := cmd.Params["provider_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("provider_name not provided")
 	}
 
-	endPoint := fmt.Sprintf("/providers/%s", providerName)
-	if c.ServerType == "admin" {
+	var resp *Response
+	var err error
+	var endPoint string
+	switch c.Config.CLIMode {
+	case AdminMode:
 		endPoint = fmt.Sprintf("/admin/providers/%s", providerName)
+		resp, err = c.AdminServerClient.Request("GET", endPoint, "web", nil, nil)
+	case APIMode:
+		endPoint = fmt.Sprintf("/providers/%s", providerName)
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("GET", endPoint, "web", nil, nil)
+	default:
+		return nil, fmt.Errorf("invalid server type")
 	}
 
-	resp, err := c.HTTPClient.Request("GET", endPoint, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to show provider: %w", err)
 	}
@@ -261,22 +319,31 @@ func (c *MultiRAGClient) ShowProvider(cmd *Command) (ResponseIf, error) {
 	if result.Code != 0 {
 		return nil, fmt.Errorf("%s", result.Message)
 	}
-	result.Duration = 0
+	result.Duration = resp.Duration
 	return &result, nil
 }
 
-func (c *MultiRAGClient) ListModels(cmd *Command) (ResponseIf, error) {
+func (c *CLI) ListModels(cmd *Command) (ResponseIf, error) {
+
 	providerName, ok := cmd.Params["provider_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("provider_name not provided")
 	}
 
-	endPoint := fmt.Sprintf("/providers/%s/models", providerName)
-	if c.ServerType == "admin" {
+	var resp *Response
+	var err error
+	var endPoint string
+	switch c.Config.CLIMode {
+	case AdminMode:
 		endPoint = fmt.Sprintf("/admin/providers/%s/models", providerName)
+		resp, err = c.AdminServerClient.Request("GET", endPoint, "web", nil, nil)
+	case APIMode:
+		endPoint = fmt.Sprintf("/providers/%s/models", providerName)
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("GET", endPoint, "web", nil, nil)
+	default:
+		return nil, fmt.Errorf("invalid server type")
 	}
 
-	resp, err := c.HTTPClient.Request("GET", endPoint, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list models: %w", err)
 	}
@@ -293,11 +360,12 @@ func (c *MultiRAGClient) ListModels(cmd *Command) (ResponseIf, error) {
 	if result.Code != 0 {
 		return nil, fmt.Errorf("%s", result.Message)
 	}
-	result.Duration = 0
+	result.Duration = resp.Duration
 	return &result, nil
 }
 
-func (c *MultiRAGClient) ListSupportedModels(cmd *Command) (ResponseIf, error) {
+func (c *CLI) ListSupportedModels(cmd *Command) (ResponseIf, error) {
+
 	providerName, ok := cmd.Params["provider_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("provider_name not provided")
@@ -307,38 +375,41 @@ func (c *MultiRAGClient) ListSupportedModels(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("instance_name not provided")
 	}
 
-	endpoint := fmt.Sprintf("/providers/%s/instances/%s/models?supported=true", providerName, instanceName)
-	if c.ServerType == "admin" {
-		endpoint = fmt.Sprintf("/admin/providers/%s/instances/%s/models?supported=true", providerName, instanceName)
+	var resp *Response
+	var err error
+	var endPoint string
+	switch c.Config.CLIMode {
+	case AdminMode:
+		endPoint = fmt.Sprintf("/admin/providers/%s/instances/%s/models?supported=true", providerName, instanceName)
+		resp, err = c.AdminServerClient.Request("GET", endPoint, "web", nil, nil)
+	case APIMode:
+		endPoint = fmt.Sprintf("/providers/%s/instances/%s/models?supported=true", providerName, instanceName)
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("GET", endPoint, "web", nil, nil)
+	default:
+		return nil, fmt.Errorf("invalid server type")
 	}
-	authKind := "api"
-	if c.ServerType == "admin" {
-		authKind = "admin"
-	}
-	resp, err := c.HTTPClient.Request("GET", endpoint, authKind, nil, nil)
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to list supported models: %w", err)
+		return nil, fmt.Errorf("failed to list models: %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to list supported models: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to list models: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
 	}
-	data, err := catalogResponseData(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("invalid supported-model response: %w", err)
+
+	var result CommonResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to list models: invalid JSON (%w)", err)
 	}
-	var rows []map[string]interface{}
-	if err := json.Unmarshal(data, &rows); err != nil || rows == nil {
-		return nil, fmt.Errorf("invalid supported-model list")
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
 	}
-	for _, row := range rows {
-		if !validCatalogModel(row) {
-			return nil, fmt.Errorf("supported model requires name")
-		}
-	}
-	return &CommonResponse{Data: rows}, nil
+	result.Duration = resp.Duration
+	return &result, nil
 }
 
-func (c *MultiRAGClient) ShowModel(cmd *Command) (ResponseIf, error) {
+func (c *CLI) ShowProviderModel(cmd *Command) (ResponseIf, error) {
 	providerName, ok := cmd.Params["provider_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("provider_name not provided")
@@ -348,12 +419,19 @@ func (c *MultiRAGClient) ShowModel(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("model_name not provided")
 	}
 
-	endPoint := fmt.Sprintf("/providers/%s/models/%s", providerName, modelName)
-	if c.ServerType == "admin" {
+	var resp *Response
+	var err error
+	var endPoint string
+	switch c.Config.CLIMode {
+	case AdminMode:
 		endPoint = fmt.Sprintf("/admin/providers/%s/models/%s", providerName, modelName)
+		resp, err = c.AdminServerClient.Request("GET", endPoint, "web", nil, nil)
+	case APIMode:
+		endPoint = fmt.Sprintf("/providers/%s/models/%s", providerName, modelName)
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("GET", endPoint, "web", nil, nil)
+	default:
+		return nil, fmt.Errorf("invalid server type")
 	}
-
-	resp, err := c.HTTPClient.Request("GET", endPoint, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to show model: %w", err)
 	}
@@ -370,44 +448,50 @@ func (c *MultiRAGClient) ShowModel(cmd *Command) (ResponseIf, error) {
 	if result.Code != 0 {
 		return nil, fmt.Errorf("%s", result.Message)
 	}
-	result.Duration = 0
+	result.Duration = resp.Duration
 	return &result, nil
 }
 
-func (c *MultiRAGClient) SetDefaultModel(cmd *Command) (ResponseIf, error) {
+func (c *CLI) SetDefaultModel(cmd *Command) (ResponseIf, error) {
+
 	modelType, ok := cmd.Params["model_type"].(string)
 	if !ok {
 		return nil, fmt.Errorf("model_type not provided")
 	}
-	payload := map[string]any{"model_type": modelType}
-	if raw, ok := cmd.Params["model_selector"].(string); ok {
-		selected, err := modelSelectionPayload(raw)
-		if err != nil {
-			return nil, err
-		}
-		for k, v := range selected {
-			if k == "provider_name" {
-				k = "model_provider"
-			}
-			if k == "instance_name" {
-				k = "model_instance"
-			}
-			payload[k] = v
-		}
-	} else {
-		for _, k := range []string{"model_provider", "model_instance", "model_name"} {
-			value, ok := cmd.Params[k].(string)
-			if !ok || value == "" {
-				return nil, fmt.Errorf("%s not provided", k)
-			}
-			payload[k] = value
-		}
+
+	compositeModelName, ok := cmd.Params["composite_model_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("model_name not provided")
 	}
 
-	resp, err := c.HTTPClient.Request("PATCH", "/models/default", "web", nil, payload)
+	var providerName, instanceName, modelName string
+	var err error
+	modelName, instanceName, providerName, err = common.ExtractCompositeName(compositeModelName)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := map[string]interface{}{
+		"model_type":     modelType,
+		"model_provider": providerName,
+		"model_instance": instanceName,
+		"model_name":     modelName,
+	}
+
+	var resp *Response
+	switch c.Config.CLIMode {
+	case AdminMode:
+		resp, err = c.AdminServerClient.Request("PATCH", "/admin/models", "web", nil, payload)
+	case APIMode:
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("PATCH", "/models", "web", nil, payload)
+	default:
+		return nil, fmt.Errorf("invalid server type")
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to set default model: %w", err)
 	}
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("failed to set default model: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
 	}
@@ -416,111 +500,621 @@ func (c *MultiRAGClient) SetDefaultModel(cmd *Command) (ResponseIf, error) {
 	if err = json.Unmarshal(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("failed to set default model: invalid JSON (%w)", err)
 	}
+
 	if result.Code != 0 {
 		return nil, fmt.Errorf("%s", result.Message)
 	}
-	result.Duration = 0
+	result.Duration = resp.Duration
 	return &result, nil
 }
 
-func (c *MultiRAGClient) ListDefaultModels(cmd *Command) (ResponseIf, error) {
-	resp, err := c.HTTPClient.Request("GET", "/models/default", "web", nil, nil)
+func (c *CLI) ResetDefaultModel(cmd *Command) (ResponseIf, error) {
+
+	modelType, ok := cmd.Params["model_type"].(string)
+	if !ok {
+		return nil, fmt.Errorf("model_type not provided")
+	}
+
+	payload := map[string]interface{}{
+		"model_type": modelType,
+	}
+
+	var resp *Response
+	var err error
+	switch c.Config.CLIMode {
+	case AdminMode:
+		resp, err = c.AdminServerClient.Request("PATCH", "/admin/models", "web", nil, payload)
+	case APIMode:
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("PATCH", "/models", "web", nil, payload)
+	default:
+		return nil, fmt.Errorf("invalid server type")
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to reset default model: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to reset default model: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result SimpleResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to reset default model: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	result.Duration = resp.Duration
+	return &result, nil
+}
+
+func (c *CLI) ListDefaultModels(cmd *Command) (ResponseIf, error) {
+
+	var resp *Response
+	var err error
+	switch c.Config.CLIMode {
+	case AdminMode:
+		resp, err = c.AdminServerClient.Request("GET", "/admin/models", "web", nil, nil)
+	case APIMode:
+		resp, err = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].Request("GET", "/models/default", "web", nil, nil)
+	default:
+		return nil, fmt.Errorf("invalid server type")
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to list default models: %w", err)
 	}
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("failed to list default models: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
 	}
 
-	var result DefaultModelsResponse
+	var result ModelsResponse
 	if err = json.Unmarshal(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("failed to list default models: invalid JSON (%w)", err)
 	}
+
 	if result.Code != 0 {
 		return nil, fmt.Errorf("%s", result.Message)
 	}
+	result.Duration = resp.Duration
+	return &result, nil
+}
+
+func (c *CLI) ShowCommonCurrent(cmd *Command) (ResponseIf, error) {
+	var result *CommonDataResponse
+
+	switch c.Config.CLIMode {
+	case AdminMode:
+		response, err := c.GetAdminServerInfo()
+		if err != nil {
+			return nil, fmt.Errorf("failed to show current: %w", err)
+		}
+		result = response.(*CommonDataResponse)
+
+	case APIMode:
+		response, err := c.GetAPIServerInfo(c.Config.APIClientConfig.CurrentAPIServer)
+		if err != nil {
+			return nil, err
+		}
+		result = response.(*CommonDataResponse)
+
+		if c.CurrentModel != nil {
+			if result.Data == nil {
+				result.Data = make(map[string]interface{})
+			}
+			result.Data["model_provider"] = c.CurrentModel.Provider
+			result.Data["model_instance"] = c.CurrentModel.Instance
+			result.Data["model_model"] = c.CurrentModel.Model
+		}
+	default:
+		return nil, fmt.Errorf("invalid server type")
+	}
+
+	if result == nil {
+		result = &CommonDataResponse{}
+		if result.Data == nil {
+			result.Data = make(map[string]interface{})
+		}
+	}
+
+	result.Data["mode"] = c.Config.CLIMode
+	result.Data["output"] = c.Config.OutputFormat
+	result.Data["interactive"] = c.Config.Interactive
+	result.Data["verbose"] = c.Config.Verbose
+
+	return result, nil
+}
+
+func (c *CLI) ShowAdminServer(cmd *Command) (ResponseIf, error) {
+	return c.GetAdminServerInfo()
+}
+
+func (c *CLI) ShowAPIServer(cmd *Command) (ResponseIf, error) {
+	apiServerName, ok := cmd.Params["api_server_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("api_server_name not provided")
+	}
+	result, err := c.GetAPIServerInfo(apiServerName)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *CLI) ListAPIServer(cmd *Command) (ResponseIf, error) {
+
+	var result CommonResponse
+	result.Data = make([]map[string]interface{}, 0)
+
+	for serverName, apiServerConfig := range c.Config.APIClientConfig.APIServerMap {
+		element := map[string]interface{}{
+			"api_server": serverName,
+		}
+		element["api_server_ip"] = apiServerConfig.IP
+		element["api_server_port"] = apiServerConfig.Port
+		if apiServerConfig.UserName != nil {
+			element["user_name"] = *apiServerConfig.UserName
+		}
+		if apiServerConfig.UserPassword != nil {
+			element["user_password"] = strings.Repeat("*", len(*apiServerConfig.UserPassword))
+		}
+		if c.APIServerClientMap[serverName].LoginToken != nil {
+			element["auth"] = "login"
+		} else if apiServerConfig.ApiToken != nil {
+			element["auth"] = "api token"
+		} else {
+			element["auth"] = "no auth"
+		}
+		result.Data = append(result.Data, element)
+	}
+
+	return &result, nil
+}
+
+func (c *CLI) AddAPIServer(cmd *Command) (ResponseIf, error) {
+	apiServerName, ok := cmd.Params["server_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("server name not provided")
+	}
+	if c.Config.APIClientConfig.APIServerMap[apiServerName] != nil {
+		return nil, fmt.Errorf("api server already exists")
+	}
+
+	apiServerIP, ok := cmd.Params["server_ip"].(string)
+	if !ok {
+		return nil, fmt.Errorf("server ip not provided")
+	}
+	apiServerPort, ok := cmd.Params["server_port"].(int)
+	if !ok {
+		return nil, fmt.Errorf("server port not provided")
+	}
+	apiServerToken, ok := cmd.Params["server_token"].(string)
+	if !ok {
+		apiServerToken = ""
+	}
+
+	if c.Config.APIClientConfig.APIServerMap == nil {
+		c.Config.APIClientConfig.APIServerMap = make(map[string]*APIServerConfig)
+	}
+
+	c.Config.APIClientConfig.APIServerMap[apiServerName] = &APIServerConfig{
+		Name: apiServerName,
+		IP:   apiServerIP,
+		Port: apiServerPort,
+	}
+	c.Config.APIClientConfig.APIServerMap[apiServerName].IP = apiServerIP
+	c.Config.APIClientConfig.APIServerMap[apiServerName].Port = apiServerPort
+	if apiServerToken != "" {
+		c.Config.APIClientConfig.APIServerMap[apiServerName].ApiToken = &apiServerToken
+	}
+
+	if c.APIServerClientMap == nil {
+		c.APIServerClientMap = make(map[string]*HTTPClient)
+	}
+
+	if c.APIServerClientMap[apiServerName] != nil {
+		return nil, fmt.Errorf("api server: %s already exists", apiServerName)
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	c.APIServerClientMap[apiServerName] = &HTTPClient{
+		Host:           apiServerIP,
+		APIToken:       c.Config.APIClientConfig.APIServerMap[apiServerName].ApiToken,
+		Port:           apiServerPort,
+		APIVersion:     "v1",
+		ConnectTimeout: 5 * time.Second,
+		ReadTimeout:    60 * time.Second,
+		VerifySSL:      false,
+		client: &http.Client{
+			Transport: transport,
+			Timeout:   300 * time.Second,
+		},
+	}
+
+	var result SimpleResponse
+	result.Code = 0
+	result.Message = "api server deleted successfully"
 	result.Duration = 0
 	return &result, nil
 }
 
-// ListAllModels reads static metadata, independent of tenant instances.
-func (c *MultiRAGClient) ListAllModels(cmd *Command) (ResponseIf, error) {
-	body, err := c.catalogRequest("/all-models")
-	if err != nil {
-		return nil, err
+func (c *CLI) DeleteAPIServer(cmd *Command) (ResponseIf, error) {
+	apiServerName, ok := cmd.Params["server_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("server name not provided")
 	}
-	data, err := catalogResponseData(body)
-	if err != nil {
-		return nil, err
+	if apiServerName == c.Config.APIClientConfig.CurrentAPIServer {
+		return nil, fmt.Errorf("cannot delete current api server")
 	}
-	var rows []map[string]interface{}
-	if err := json.Unmarshal(data, &rows); err != nil || rows == nil {
-		return nil, fmt.Errorf("invalid catalog list")
+	delete(c.Config.APIClientConfig.APIServerMap, apiServerName)
+	delete(c.APIServerClientMap, apiServerName)
+	var result SimpleResponse
+	result.Code = 0
+	result.Message = "api server deleted successfully"
+	result.Duration = 0
+	return &result, nil
+}
+
+func (c *CLI) AddAdminServer(cmd *Command) (ResponseIf, error) {
+
+	if c.AdminServerClient != nil && c.AdminServerClient.LoginToken != nil {
+		return nil, fmt.Errorf("admin server already login, please logout")
 	}
-	for _, row := range rows {
-		if !validCatalogModel(row) {
-			return nil, fmt.Errorf("invalid catalog model")
+
+	adminServerIP, ok := cmd.Params["server_ip"].(string)
+	if !ok {
+		return nil, fmt.Errorf("server ip not provided")
+	}
+	adminServerPort, ok := cmd.Params["server_port"].(int)
+	if !ok {
+		return nil, fmt.Errorf("server port not provided")
+	}
+
+	if c.Config.AdminClientConfig == nil {
+		c.Config.AdminClientConfig = &AdminModeConfig{}
+	}
+
+	if adminServerIP != "" {
+		c.Config.AdminClientConfig.AdminHost = adminServerIP
+	}
+	if adminServerPort != 0 {
+		c.Config.AdminClientConfig.AdminPort = adminServerPort
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	c.AdminServerClient = &HTTPClient{
+		Host:           adminServerIP,
+		Port:           adminServerPort,
+		APIVersion:     "v1",
+		ConnectTimeout: 5 * time.Second,
+		ReadTimeout:    60 * time.Second,
+		VerifySSL:      false,
+		client: &http.Client{
+			Transport: transport,
+			Timeout:   300 * time.Second,
+		},
+	}
+
+	var result SimpleResponse
+	result.Code = 0
+	result.Message = "admin server added successfully"
+	result.Duration = 0
+	return &result, nil
+}
+
+func (c *CLI) DeleteAdminServer(cmd *Command) (ResponseIf, error) {
+
+	if c.AdminServerClient != nil && c.AdminServerClient.LoginToken != nil {
+		return nil, fmt.Errorf("admin server already login, please logout")
+	}
+
+	if c.Config.AdminClientConfig == nil {
+		return nil, fmt.Errorf("admin server not set")
+	}
+
+	c.Config.AdminClientConfig = nil
+
+	var result SimpleResponse
+	result.Code = 0
+	result.Message = "admin server deleted successfully"
+	result.Duration = 0
+	return &result, nil
+}
+
+func (c *CLI) SaveServerConfig(cmd *Command) (ResponseIf, error) {
+
+	switch c.Config.CLIMode {
+	case AdminMode:
+		if c.AdminServerClient.LoginToken == nil {
+			return nil, fmt.Errorf("admin server isn't already login")
+		}
+	case APIMode:
+		if c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].APIToken == nil && c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer].LoginToken == nil {
+			return nil, fmt.Errorf("API token not set. Please login first")
+		}
+	default:
+		return nil, fmt.Errorf("invalid server type")
+	}
+
+	return nil, fmt.Errorf("saving server configuration is not implemented")
+}
+
+func (c *CLI) GetAdminServerInfo() (ResponseIf, error) {
+	var result CommonDataResponse
+	result.Data = make(map[string]interface{})
+
+	if c.Config.AdminClientConfig == nil {
+		result.Data["admin_server"] = "N/A"
+	} else {
+		result.Data["admin_server_ip"] = c.Config.AdminClientConfig.AdminHost
+		result.Data["admin_server_port"] = c.Config.AdminClientConfig.AdminPort
+		if c.Config.AdminClientConfig.AdminName != nil {
+			result.Data["admin_name"] = *c.Config.AdminClientConfig.AdminName
+		}
+		if c.Config.AdminClientConfig.AdminPassword != nil {
+			result.Data["admin_password"] = strings.Repeat("*", len(*c.Config.AdminClientConfig.AdminPassword))
+		}
+		if c.AdminServerClient == nil || c.AdminServerClient.LoginToken == nil {
+			result.Data["auth"] = "no auth"
+		} else {
+			result.Data["auth"] = "login"
 		}
 	}
-	return &CommonResponse{Data: rows}, nil
+
+	return &result, nil
 }
 
-func (c *MultiRAGClient) ShowCatalogModel(cmd *Command) (ResponseIf, error) {
-	name, ok := cmd.Params["model_name"].(string)
+func (c *CLI) GetAPIServerInfo(serverName string) (ResponseIf, error) {
+	var result CommonDataResponse
+	result.Data = make(map[string]interface{})
+
+	if c.Config.APIClientConfig.APIServerMap == nil || c.Config.APIClientConfig.APIServerMap[serverName] == nil {
+		result.Data["api_server"] = "N/A"
+	} else {
+		result.Data["api_server"] = serverName
+		apiServerConfig := c.Config.APIClientConfig.APIServerMap[serverName]
+		result.Data["api_server_ip"] = apiServerConfig.IP
+		result.Data["api_server_port"] = apiServerConfig.Port
+		if apiServerConfig.UserName != nil {
+			result.Data["user_name"] = *apiServerConfig.UserName
+		}
+
+		if apiServerConfig.UserPassword != nil {
+			result.Data["user_password"] = strings.Repeat("*", len(*apiServerConfig.UserPassword))
+		}
+		if client := c.APIServerClientMap[serverName]; client != nil && client.LoginToken != nil {
+			result.Data["auth"] = "login"
+		} else if apiServerConfig.ApiToken != nil {
+			result.Data["auth"] = "api token"
+		} else {
+			result.Data["auth"] = "no auth"
+		}
+	}
+	return &result, nil
+}
+
+func (c *CLI) ListAllModels(cmd *Command) (ResponseIf, error) {
+
+	page, ok := cmd.Params["page"].(int)
+	if !ok {
+		page = 0
+	}
+
+	pageSize, ok := cmd.Params["page_size"].(int)
+	if !ok {
+		pageSize = 0
+	}
+
+	payload := map[string]interface{}{
+		"page":      page,
+		"page_size": pageSize,
+	}
+
+	var httpClient *HTTPClient
+	switch c.Config.CLIMode {
+	case AdminMode:
+		httpClient = c.AdminServerClient
+	case APIMode:
+		httpClient = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer]
+	default:
+		return nil, fmt.Errorf("invalid server type")
+	}
+
+	resp, err := httpClient.Request("GET", "/all-models", "web", nil, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list all models: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to list all models: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to list all models: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	if result.Data == nil {
+		return nil, fmt.Errorf("model response is missing data")
+	}
+	for _, model := range result.Data {
+		name, ok := model["name"].(string)
+		if !ok || strings.TrimSpace(name) == "" {
+			return nil, fmt.Errorf("model response contains invalid model identity")
+		}
+	}
+	result.Duration = resp.Duration
+	return &result, nil
+}
+
+func (c *CLI) ShowModel(cmd *Command) (ResponseIf, error) {
+
+	modelName, ok := cmd.Params["model_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("model_name not provided")
+	}
+
+	payload := map[string]interface{}{
+		"model_name": modelName,
+	}
+
+	var httpClient *HTTPClient
+	switch c.Config.CLIMode {
+	case AdminMode:
+		httpClient = c.AdminServerClient
+	case APIMode:
+		httpClient = c.APIServerClientMap[c.Config.APIClientConfig.CurrentAPIServer]
+	default:
+		return nil, fmt.Errorf("invalid server type")
+	}
+
+	resp, err := httpClient.Request("GET", "/all-models", "web", nil, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to show model: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to show model: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonDataResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to show model: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	if result.Data == nil {
+		return nil, fmt.Errorf("model response is missing data")
+	}
+	name, ok := result.Data["name"].(string)
 	if !ok || strings.TrimSpace(name) == "" {
-		return nil, fmt.Errorf("model_name required")
+		return nil, fmt.Errorf("model response contains invalid model identity")
 	}
-	body, err := c.catalogRequest("/all-models/detail?" + url.Values{"model_name": {name}}.Encode())
-	if err != nil {
-		return nil, err
-	}
-	data, err := catalogResponseData(body)
-	if err != nil {
-		return nil, err
-	}
-	var row map[string]interface{}
-	if err := json.Unmarshal(data, &row); err != nil || !validCatalogModel(row) {
-		return nil, fmt.Errorf("invalid catalog detail")
-	}
-	return &CommonDataResponse{Data: row}, nil
+	result.Duration = resp.Duration
+	return &result, nil
 }
 
-func (c *MultiRAGClient) catalogRequest(endpoint string) ([]byte, error) {
-	auth := "web"
-	if c.ServerType == "admin" {
-		endpoint = "/admin" + endpoint
-		auth = "admin"
+// readPassword reads password from terminal without echoing
+func ReadPassword() (string, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return ReadPasswordFallback()
 	}
-	response, err := c.HTTPClient.Request("GET", endpoint, auth, nil, nil)
+
+	fmt.Print("Password: ")
+	passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+
 	if err != nil {
-		return nil, fmt.Errorf("catalog request failed: %w", err)
+		return "", err
 	}
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("catalog request failed: HTTP %d", response.StatusCode)
-	}
-	return response.Body, nil
+
+	return strings.TrimSpace(string(passwordBytes)), nil
 }
 
-// catalogResponseData requires an explicit business status and payload. Missing
-// fields and JSON null must never become successful zero-value responses.
-func catalogResponseData(body []byte) (json.RawMessage, error) {
-	var envelope struct {
-		Code *int            `json:"code"`
-		Data json.RawMessage `json:"data"`
+// readPasswordFallback reads password as plain text (fallback mode)
+func ReadPasswordFallback() (string, error) {
+	fmt.Print("Password (will be visible): ")
+	reader := bufio.NewReader(os.Stdin)
+	password, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Code == nil {
-		return nil, fmt.Errorf("invalid catalog response")
-	}
-	if *envelope.Code != 0 {
-		return nil, fmt.Errorf("catalog request failed (code %d)", *envelope.Code)
-	}
-	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
-		return nil, fmt.Errorf("missing catalog data")
-	}
-	return envelope.Data, nil
+	return strings.TrimSpace(password), nil
 }
 
-func validCatalogModel(row map[string]interface{}) bool {
-	name, ok := row["name"].(string)
-	return ok && strings.TrimSpace(name) != ""
+// FlattenMap recursively flattens a nested map into dot-notation keys
+func FlattenMap(data map[string]interface{}, prefix string, result *[]map[string]interface{}) {
+	for key, value := range data {
+		// Build the current key path
+		currentKey := key
+		if prefix != "" {
+			currentKey = prefix + "." + key
+		}
+
+		// Check if the value is another nested map
+		if nestedMap, ok := value.(map[string]interface{}); ok {
+			// Recursively process the nested map
+			FlattenMap(nestedMap, currentKey, result)
+		} else {
+			// Leaf node: append to result slice
+			resultItem := map[string]interface{}{
+				"key":   currentKey,
+				"value": value,
+			}
+			*result = append(*result, resultItem)
+		}
+	}
+}
+
+func (c *CLI) UseAPIServer(cmd *Command) (ResponseIf, error) {
+	serverName, ok := cmd.Params["server_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("server_name not provided")
+	}
+
+	if c.Config.CLIMode == APIMode {
+		if c.Config.APIClientConfig.CurrentAPIServer == serverName {
+			return nil, fmt.Errorf("api server %s is already used", serverName)
+		}
+	}
+
+	var httpClient *HTTPClient
+	httpClient, ok = c.APIServerClientMap[serverName]
+	if !ok {
+		return nil, fmt.Errorf("api server %s not found", serverName)
+	}
+	if httpClient == nil {
+		return nil, fmt.Errorf("api server %s is nil", serverName)
+	}
+	var apiServerConfig *APIServerConfig
+	apiServerConfig, ok = c.Config.APIClientConfig.APIServerMap[serverName]
+	if !ok {
+		return nil, fmt.Errorf("api server %s not found in config", serverName)
+	}
+	if apiServerConfig == nil {
+		return nil, fmt.Errorf("api server %s is nil", serverName)
+	}
+
+	c.Config.APIClientConfig.CurrentAPIServer = serverName
+	c.Config.CLIMode = APIMode
+
+	var result SimpleResponse
+	result.Code = 0
+	result.Message = fmt.Sprintf("switch to api server %s", serverName)
+	result.Duration = 0
+	return &result, nil
+
+}
+
+func (c *CLI) UseAdminServer(cmd *Command) (ResponseIf, error) {
+
+	if c.Config.CLIMode == AdminMode {
+		return nil, fmt.Errorf("already in admin mode")
+	}
+
+	if c.AdminServerClient == nil || c.Config.AdminClientConfig == nil {
+		return nil, fmt.Errorf("admin server not added")
+	}
+
+	c.Config.CLIMode = AdminMode
+
+	var result SimpleResponse
+	result.Code = 0
+	result.Message = "switch to admin server"
+	result.Duration = 0
+	return &result, nil
 }

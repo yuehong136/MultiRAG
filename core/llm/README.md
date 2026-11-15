@@ -10,8 +10,8 @@
 2026-10-29 按 [OpenAI 模型目录](https://developers.openai.com/api/docs/models)和
 [退役公告](https://developers.openai.com/api/docs/deprecations)核对。
 Python 使用 `configs/llm_factories.json`，并行 Go 实现使用
-`configs/models/openai.json`；两份声明的模型名、能力与上下文保持一致，沿用各自 JSON schema。
-RAGFlow Go 的参照入口是 `conf/models/openai.json`，不是 Python 总目录；供应商声明仍需与官方接口核对。
+`conf/models/openai.json`。Go 目录按其冻结上游目标独立跟进，不要求与 Python 生产目录的
+模型列表或 token 单位一致；两侧沿用各自 schema。供应商声明仍需与官方接口核对。
 
 内置聊天目录保留 GPT-6 / 6.1、GPT-5.6、5.5、5.4 / mini 和 5.2。
 不再为新实例列出 GPT-3.5、GPT-4 系列、旧 o 系列、已弃用的 GPT-5 / 5.1 / 5.4-nano

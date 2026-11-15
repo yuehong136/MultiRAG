@@ -22,24 +22,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
-	"net"
+	ce "multirag/internal/cli/filesystem"
 	"net/http"
-	"strconv"
+	"strings"
 	"time"
 )
 
-// HTTPClient handles HTTP requests to the MultiRAG server
+// HTTPClient handles HTTP requests to the RAGFlow server
 type HTTPClient struct {
 	Host           string
 	Port           int
 	APIVersion     string
-	APIKey         string
-	LoginToken     string
+	APIToken       *string
+	LoginToken     *string
 	ConnectTimeout time.Duration
 	ReadTimeout    time.Duration
 	VerifySSL      bool
 	client         *http.Client
+	useAPIToken    bool
 }
 
 // NewHTTPClient creates a new HTTP client
@@ -52,7 +52,7 @@ func NewHTTPClient() *HTTPClient {
 		Port:           9382,
 		APIVersion:     "v1",
 		ConnectTimeout: 5 * time.Second,
-		ReadTimeout:    300 * time.Second,
+		ReadTimeout:    60 * time.Second,
 		VerifySSL:      false,
 		client: &http.Client{
 			Transport: transport,
@@ -63,7 +63,12 @@ func NewHTTPClient() *HTTPClient {
 
 // APIBase returns the API base URL
 func (c *HTTPClient) APIBase() string {
-	return fmt.Sprintf("%s/api/%s", net.JoinHostPort(c.Host, strconv.Itoa(c.Port)), c.APIVersion)
+	return fmt.Sprintf("%s:%d/api/%s", c.Host, c.Port, c.APIVersion)
+}
+
+// NonAPIBase returns the non-API base URL
+func (c *HTTPClient) NonAPIBase() string {
+	return fmt.Sprintf("%s:%d/%s", c.Host, c.Port, c.APIVersion)
 }
 
 // BuildURL builds the full URL for a given path
@@ -78,26 +83,27 @@ func (c *HTTPClient) BuildURL(path string) string {
 // Headers builds the request headers
 func (c *HTTPClient) Headers(authKind string, extra map[string]string) map[string]string {
 	headers := make(map[string]string)
+
 	switch authKind {
 	case "api":
-		if c.APIKey != "" {
-			headers["Authorization"] = fmt.Sprintf("Bearer %s", c.APIKey)
-		} else if c.LoginToken != "" {
-			// Fallback to login token for API requests (user mode).
-			// The Go server's ExtractAccessToken strips the "Bearer " prefix.
-			headers["Authorization"] = fmt.Sprintf("Bearer %s", c.LoginToken)
+		if c.APIToken != nil {
+			headers["Authorization"] = fmt.Sprintf("Bearer %s", *c.APIToken)
+		} else if c.LoginToken != nil {
+			// Fallback to login token for API requests (user mode)
+			headers["Authorization"] = fmt.Sprintf("Bearer %s", *c.LoginToken)
 		}
 	case "web":
-		if c.LoginToken != "" {
-			headers["Authorization"] = c.LoginToken
-		} else if c.APIKey != "" {
-			headers["Authorization"] = fmt.Sprintf("Bearer %s", c.APIKey)
+		if c.LoginToken != nil {
+			headers["Authorization"] = *c.LoginToken
+		} else if c.APIToken != nil {
+			headers["Authorization"] = fmt.Sprintf("Bearer %s", *c.APIToken)
 		}
 	case "admin":
-		if c.LoginToken != "" {
-			headers["Authorization"] = c.LoginToken
+		if c.LoginToken != nil {
+			headers["Authorization"] = *c.LoginToken
 		}
 	}
+
 	for k, v := range extra {
 		headers[k] = v
 	}
@@ -109,6 +115,7 @@ type Response struct {
 	StatusCode int
 	Body       []byte
 	Headers    http.Header
+	Duration   float64
 }
 
 // JSON parses the response body as JSON
@@ -122,21 +129,10 @@ func (r *Response) JSON() (map[string]interface{}, error) {
 
 // Request makes an HTTP request
 func (c *HTTPClient) Request(method, path string, authKind string, headers map[string]string, jsonBody map[string]interface{}) (*Response, error) {
-	return c.request(method, path, authKind, headers, jsonBody, 0)
-}
-
-// RequestBounded rejects oversized responses before buffering their complete body.
-func (c *HTTPClient) RequestBounded(method, path, authKind string, headers map[string]string, jsonBody map[string]interface{}, maxBytes int64) (*Response, error) {
-	if maxBytes <= 0 || maxBytes == math.MaxInt64 {
-		return nil, fmt.Errorf("positive response limit required")
+	if c == nil {
+		return nil, fmt.Errorf("HTTP Client is nil")
 	}
-	return c.request(method, path, authKind, headers, jsonBody, maxBytes)
-}
 
-func (c *HTTPClient) request(method, path, authKind string, headers map[string]string, jsonBody map[string]interface{}, maxBytes int64) (*Response, error) {
-	if c == nil || c.client == nil || c.Host == "" || c.Port < 1 || c.Port > 65535 {
-		return nil, fmt.Errorf("server client is not configured")
-	}
 	url := c.BuildURL(path)
 	mergedHeaders := c.Headers(authKind, headers)
 
@@ -162,43 +158,58 @@ func (c *HTTPClient) request(method, path, authKind string, headers map[string]s
 		req.Header.Set(k, v)
 	}
 
-	resp, err := c.client.Do(req)
+	var resp *http.Response
+	startTime := time.Now()
+	resp, err = c.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	duration := time.Since(startTime).Seconds()
 
-	var responseReader io.Reader = resp.Body
-	if maxBytes > 0 {
-		responseReader = io.LimitReader(resp.Body, maxBytes+1)
-	}
-	respBody, err := io.ReadAll(responseReader)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024*1024+1))
 	if err != nil {
 		return nil, err
 	}
 
-	if maxBytes > 0 && int64(len(respBody)) > maxBytes {
-		return nil, fmt.Errorf("HTTP response exceeds %d bytes", maxBytes)
+	if len(respBody) > 64*1024*1024 {
+		return nil, fmt.Errorf("response exceeds 64 MiB")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP request failed with status %d", resp.StatusCode)
+	}
+	if !strings.HasPrefix(resp.Header.Get("Content-Disposition"), "attachment") && (strings.Contains(resp.Header.Get("Content-Type"), "json") || strings.HasPrefix(strings.TrimSpace(string(respBody)), "{") || strings.TrimSpace(string(respBody)) == "null" || strings.HasPrefix(strings.TrimSpace(string(respBody)), "[")) {
+		var envelope map[string]json.RawMessage
+		if err := json.Unmarshal(respBody, &envelope); err != nil {
+			return nil, fmt.Errorf("invalid JSON response: %w", err)
+		}
+		var code int
+		rawCode, ok := envelope["code"]
+		if !ok || string(rawCode) == "null" {
+			return nil, fmt.Errorf("response is missing its business code")
+		}
+		if err := json.Unmarshal(rawCode, &code); err != nil {
+			return nil, fmt.Errorf("invalid response business code")
+		}
+		if code != 0 {
+			return nil, fmt.Errorf("request failed with business code %d", code)
+		}
 	}
 	return &Response{
 		StatusCode: resp.StatusCode,
 		Body:       respBody,
 		Headers:    resp.Header.Clone(),
+		Duration:   duration,
 	}, nil
 }
 
 // RequestWithIterations makes multiple HTTP requests for benchmarking
 // Returns a map with "duration" (total time in seconds) and "response_list"
-func (c *HTTPClient) RequestWithIterations(method, path string, authKind string, headers map[string]string, jsonBody map[string]interface{}, iterations int) (*BenchmarkRawResponse, error) {
-	if iterations <= 1 {
-		resp, err := c.Request(method, path, authKind, headers, jsonBody)
-		if err != nil {
-			return nil, err
-		}
-		return &BenchmarkRawResponse{
-			Duration:     0.0,
-			ResponseList: []*Response{resp},
-		}, nil
+func (c *HTTPClient) RequestWithIterations(method, path string, authKind string, headers map[string]string, jsonBody map[string]interface{}, iterations int) (*BenchmarkResponse, error) {
+	response := new(BenchmarkResponse)
+
+	if iterations < 1 {
+		return nil, fmt.Errorf("iterations must be positive")
 	}
 
 	url := c.BuildURL(path)
@@ -244,10 +255,13 @@ func (c *HTTPClient) RequestWithIterations(method, path string, authKind string,
 			return nil, err
 		}
 
-		respBody, err := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024*1024+1))
 		resp.Body.Close()
 		if err != nil {
 			return nil, err
+		}
+		if len(respBody) > 64*1024*1024 {
+			return nil, fmt.Errorf("response exceeds 64 MiB")
 		}
 
 		responseList = append(responseList, &Response{
@@ -259,10 +273,21 @@ func (c *HTTPClient) RequestWithIterations(method, path string, authKind string,
 		totalDuration += time.Since(start).Seconds()
 	}
 
-	return &BenchmarkRawResponse{
-		Duration:     totalDuration,
-		ResponseList: responseList,
-	}, nil
+	response.Code = 0
+	response.Duration = totalDuration
+	for _, resp := range responseList {
+		commandType := ""
+		if strings.HasSuffix(path, "/system/ping") {
+			commandType = "ping"
+		}
+		if isSuccess(resp, commandType) {
+			response.SuccessCount++
+		} else {
+			response.FailureCount++
+		}
+	}
+
+	return response, nil
 }
 
 // RequestJSON makes an HTTP request and returns JSON response
@@ -272,6 +297,59 @@ func (c *HTTPClient) RequestJSON(method, path string, authKind string, headers m
 		return nil, err
 	}
 	return resp.JSON()
+}
+
+// UploadMultipart uploads data using multipart/form-data
+func (c *HTTPClient) UploadMultipart(path string, contentType string, body io.Reader) error {
+	url := c.BuildURL(path)
+
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		return err
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", contentType)
+	if c.APIToken != nil {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *c.APIToken))
+	} else if c.LoginToken != nil {
+		req.Header.Set("Authorization", *c.LoginToken)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024*1024+1))
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("upload failed: HTTP %d", resp.StatusCode)
+	}
+
+	// Check response code
+	var result struct {
+		Code    *int   `json:"code"`
+		Message string `json:"message"`
+	}
+	if len(respBody) > 64*1024*1024 {
+		return fmt.Errorf("upload response exceeds 64 MiB")
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return fmt.Errorf("invalid upload response: %w", err)
+	}
+	if result.Code == nil {
+		return fmt.Errorf("upload response is missing its business code")
+	}
+	if *result.Code != 0 {
+		return fmt.Errorf("upload failed with business code %d", *result.Code)
+	}
+
+	return nil
 }
 
 // RequestStream makes an HTTP request for SSE streaming and returns the response body reader
@@ -312,10 +390,54 @@ func (c *HTTPClient) RequestStream(method, path string, authKind string, headers
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
 
 	return resp.Body, nil
+}
+
+// PasswordPromptFunc is a function type for password input
+type PasswordPromptFunc func(prompt string) (string, error)
+
+// CurrentModel holds the current model configuration
+type CurrentModel struct {
+	Provider string
+	Instance string
+	Model    string
+	ModelID  string
+}
+
+// httpClientAdapter adapts HTTPClient to ce.HTTPClientInterface
+type httpClientAdapter struct {
+	client *HTTPClient
+}
+
+func (a *httpClientAdapter) Request(method, path string, authKind string, headers map[string]string, jsonBody map[string]interface{}) (*ce.HTTPResponse, error) {
+	// Auto-detect auth kind based on available tokens
+	// If authKind is "auto" or empty, determine based on token availability
+	if authKind == "auto" || authKind == "" {
+		if a.client.useAPIToken && a.client.APIToken != nil {
+			authKind = "api"
+		} else if a.client.LoginToken != nil {
+			authKind = "web"
+		} else {
+			authKind = "web" // default
+		}
+	}
+	resp, err := a.client.Request(method, path, authKind, headers, jsonBody)
+	if err != nil {
+		return nil, err
+	}
+	return &ce.HTTPResponse{
+		StatusCode: resp.StatusCode,
+		Body:       resp.Body,
+		Headers:    resp.Headers,
+		Duration:   resp.Duration,
+	}, nil
+}
+
+func (a *httpClientAdapter) UploadMultipart(path string, contentType string, body io.Reader) error {
+	return a.client.UploadMultipart(path, contentType, body)
 }

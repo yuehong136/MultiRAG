@@ -6,24 +6,26 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/redis/go-redis/v9"
-	"gorm.io/driver/postgres"
+	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"multirag/internal/dao"
 	"multirag/internal/server"
 	"multirag/internal/storage"
 	"multirag/internal/testsupport"
@@ -34,6 +36,8 @@ type Config struct {
 	Redis         server.RedisConfig
 	MinIO         server.MinioConfig
 	Elasticsearch server.ElasticsearchConfig
+	Nats          server.NatsConfig
+	Infinity      server.InfinityConfig
 }
 
 type Services struct {
@@ -80,31 +84,14 @@ func (s *Objects) Get(bucket, key string, tenant ...string) ([]byte, error) {
 	return s.Storage.Get(bucket, key, tenant...)
 }
 
-func (s *Objects) GetContext(ctx context.Context, bucket, key string, tenant ...string) ([]byte, error) {
-	s.reserve(bucket, key)
-	return s.Storage.(storage.ContextReader).GetContext(ctx, bucket, key, tenant...)
-}
-func (s *Objects) ObjectExistsContext(ctx context.Context, bucket, key string) (bool, error) {
-	s.reserve(bucket, key)
-	return s.Storage.(interface {
-		ObjectExistsContext(context.Context, string, string) (bool, error)
-	}).ObjectExistsContext(ctx, bucket, key)
-}
-func (s *Objects) RemoveContext(ctx context.Context, bucket, key string, tenant ...string) error {
-	s.reserve(bucket, key)
-	return s.Storage.(interface {
-		RemoveContext(context.Context, string, string, ...string) error
-	}).RemoveContext(ctx, bucket, key, tenant...)
-}
-
 func New(t testing.TB) *Services {
 	t.Helper()
-	path := os.Getenv("MULTIRAG_AFTERDCF_G_CONFIG")
+	path := os.Getenv("MULTIRAG_GO_ALIGNMENT_CONFIG")
 	if path == "" {
 		if os.Getenv("REQUIRE_SERVICES") == "1" {
 			t.Fatal("private scratch services config required")
 		}
-		t.Skip("requires isolated PostgreSQL/Redis/MinIO")
+		t.Fatal("requires isolated MySQL/Redis/MinIO")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -114,7 +101,7 @@ func New(t testing.TB) *Services {
 	if json.Unmarshal(raw, &cfg) != nil {
 		t.Fatal("invalid private scratch config")
 	}
-	if !loopbackHost(cfg.Database.Host) || cfg.Database.Port < 1 || cfg.Database.Port > 65535 || cfg.Database.Database != "postgres" || !loopbackHost(cfg.Redis.Host) || cfg.Redis.Port < 1 || cfg.Redis.Port > 65535 || cfg.Redis.DB < 0 {
+	if !loopbackHost(cfg.Database.Host) || cfg.Database.Port < 1 || cfg.Database.Port > 65535 || cfg.Database.Database != "mysql" || cfg.Database.Driver != "mysql" || !loopbackHost(cfg.Redis.Host) || cfg.Redis.Port < 1 || cfg.Redis.Port > 65535 || cfg.Redis.DB < 0 {
 		t.Fatal("loopback admin/isolated Redis configuration required")
 	}
 	host, _, err := net.SplitHostPort(cfg.MinIO.Host)
@@ -122,44 +109,77 @@ func New(t testing.TB) *Services {
 		t.Fatal("unprefixed loopback object config required")
 	}
 	j := testsupport.NewCase(t)
-	prefix := "gdcf" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
-	name := "multirag_afterdcf_" + prefix
-	bucket := "multirag-afterdcf-" + prefix
-	j.Event("reserve-services", map[string]any{"database": name, "sql_endpoint": net.JoinHostPort(cfg.Database.Host, fmt.Sprint(cfg.Database.Port)), "schema": "usr_ai", "redis_endpoint": net.JoinHostPort(cfg.Redis.Host, fmt.Sprint(cfg.Redis.Port)), "redis_db": cfg.Redis.DB, "redis_owned_key_pattern": "*" + prefix + "*", "object_endpoint": cfg.MinIO.Host, "physical_bucket": bucket, "config_file": path})
-	dsn, err := dao.PostgresDSN(cfg.Database)
-	if err != nil {
-		t.Fatal("admin DSN")
+	prefix := "goa" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	name := "multirag_go_alignment_" + prefix
+	bucket := "multirag-go-alignment-" + prefix
+	leaseDirectory := filepath.Join(filepath.Dir(path), "redis-leases")
+	if info, e := os.Stat(leaseDirectory); e != nil || !info.IsDir() {
+		t.Fatal("pre-reserved Redis lease directory required")
 	}
-	admin, err := sql.Open("pgx", dsn)
+	j.Event("reserve-redis-db", map[string]any{"directory": leaseDirectory, "first": 16, "last": 1023, "owner": prefix})
+	var leasePath string
+	for index := 16; index <= 1023; index++ {
+		candidate := filepath.Join(leaseDirectory, fmt.Sprintf("db-%d.lease", index))
+		lease, e := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if errors.Is(e, os.ErrExist) {
+			continue
+		}
+		if e != nil {
+			t.Fatal("acquire Redis database lease")
+		}
+		_, e = lease.WriteString(prefix)
+		closeErr := lease.Close()
+		if e != nil || closeErr != nil {
+			os.Remove(candidate)
+			t.Fatal("write Redis database lease")
+		}
+		cfg.Redis.DB, leasePath = index, candidate
+		break
+	}
+	if leasePath == "" {
+		t.Fatal("isolated Redis database leases exhausted")
+	}
+	t.Cleanup(func() {
+		if e := os.Remove(leasePath); e != nil {
+			t.Error("release Redis database lease")
+		}
+	})
+	j.Event("reserve-services", map[string]any{"database": name, "sql_endpoint": net.JoinHostPort(cfg.Database.Host, fmt.Sprint(cfg.Database.Port)), "redis_endpoint": net.JoinHostPort(cfg.Redis.Host, fmt.Sprint(cfg.Redis.Port)), "redis_db": cfg.Redis.DB, "redis_owned_key_pattern": "*" + prefix + "*", "object_endpoint": cfg.MinIO.Host, "physical_bucket": bucket, "config_file": path})
+	dbConfig := mysqldriver.NewConfig()
+	dbConfig.User, dbConfig.Passwd = cfg.Database.Username, cfg.Database.Password
+	dbConfig.Net, dbConfig.Addr = "tcp", net.JoinHostPort(cfg.Database.Host, fmt.Sprint(cfg.Database.Port))
+	dbConfig.DBName, dbConfig.ParseTime, dbConfig.Loc = "mysql", true, time.Local
+	dbConfig.Timeout = 5 * time.Second
+	dbConfig.ReadTimeout = 20 * time.Second
+	dbConfig.WriteTimeout = 20 * time.Second
+	dsn := dbConfig.FormatDSN()
+	admin, err := sql.Open("mysql", dsn)
 	if err != nil {
 		t.Fatal("admin connection")
 	}
 	t.Cleanup(func() { admin.Close() })
 	var present bool
-	if err = admin.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", name).Scan(&present); err != nil || present {
+	if err = admin.QueryRow("SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name=?)", name).Scan(&present); err != nil || present {
 		t.Fatalf("scratch database precondition: %v", err)
 	}
 	t.Cleanup(func() {
-		if _, e := admin.Exec(`DROP DATABASE IF EXISTS "` + name + `" WITH (FORCE)`); e != nil {
+		if _, e := admin.Exec("DROP DATABASE IF EXISTS `" + name + "`"); e != nil {
 			t.Error("drop scratch database")
 		}
 		var exists bool
-		e := admin.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", name).Scan(&exists)
+		e := admin.QueryRow("SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name=?)", name).Scan(&exists)
 		j.Event("cleanup-database", map[string]any{"database": name, "absent": e == nil && !exists})
 		if e != nil || exists {
 			t.Error("independent database cleanup readback")
 		}
 	})
-	if _, err = admin.Exec(`CREATE DATABASE "` + name + `"`); err != nil {
+	if _, err = admin.Exec("CREATE DATABASE `" + name + "`"); err != nil {
 		t.Fatal("create scratch database")
 	}
 	cfg.Database.Database = name
-	cfg.Database.Schema = "usr_ai"
-	dsn, err = dao.PostgresDSN(cfg.Database)
-	if err != nil {
-		t.Fatal("scratch DSN")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	dbConfig.DBName = name
+	dsn = dbConfig.FormatDSN()
+	db, err := gorm.Open(gormmysql.Open(dsn), &gorm.Config{TranslateError: true, Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal("scratch connection")
 	}
@@ -168,10 +188,7 @@ func New(t testing.TB) *Services {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close() })
-	if err = db.Exec("CREATE SCHEMA usr_ai").Error; err != nil {
-		t.Fatal("scratch schema")
-	}
-	read, err := sql.Open("pgx", dsn)
+	read, err := sql.Open("mysql", dsn)
 	if err != nil {
 		t.Fatal("readback connection")
 	}
@@ -182,30 +199,20 @@ func New(t testing.TB) *Services {
 	if client.Ping(t.Context()).Err() != nil {
 		t.Fatal("scratch Redis unavailable")
 	}
+	if count, e := client.DBSize(t.Context()).Result(); e != nil || count != 0 {
+		t.Fatal("leased Redis database must be empty")
+	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
+		if e := client.FlushDB(ctx).Err(); e != nil {
+			t.Error("cleanup owned Redis database")
+		}
 		reader := redis.NewClient(options)
 		defer reader.Close()
-		keys := []string{}
-		iter := reader.Scan(ctx, 0, "*"+prefix+"*", 100).Iterator()
-		for iter.Next(ctx) {
-			keys = append(keys, iter.Val())
-		}
-		if iter.Err() != nil {
-			t.Error("Redis owned key enumeration")
-		}
-		if len(keys) > 0 {
-			if client.Del(ctx, keys...).Err() != nil {
-				t.Error("Redis owned key cleanup")
-			}
-		}
-		var remaining int64
-		if len(keys) > 0 {
-			remaining, err = reader.Exists(ctx, keys...).Result()
-		}
-		j.Event("cleanup-redis", map[string]any{"owned_key_pattern": "*" + prefix + "*", "keys": keys, "remaining": remaining, "confirmed": err == nil && remaining == 0})
-		if err != nil || remaining != 0 {
+		count, e := reader.DBSize(ctx).Result()
+		j.Event("cleanup-redis", map[string]any{"database": cfg.Redis.DB, "remaining": count, "confirmed": e == nil && count == 0})
+		if e != nil || count != 0 {
 			t.Error("independent Redis cleanup readback")
 		}
 	})

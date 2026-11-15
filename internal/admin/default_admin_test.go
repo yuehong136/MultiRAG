@@ -33,8 +33,12 @@ func TestInitDefaultAdminAtomicSQL(t *testing.T) {
 		t.Fatal("idempotent bootstrap", err)
 	}
 	var userID, password, relationID, tenantID string
+	var tenantStatus string
 	if err := f.Read.QueryRow("SELECT id,password FROM user WHERE email=?", "admin@ragflow.io").Scan(&userID, &password); err != nil || !CheckWerkzeugPassword(base64.StdEncoding.EncodeToString([]byte("admin")), password) {
 		t.Fatal("target bootstrap password/hash lost", err)
+	}
+	if err := f.Read.QueryRow("SELECT status FROM tenant WHERE id=?", userID).Scan(&tenantStatus); err != nil || tenantStatus != "1" {
+		t.Fatal("bootstrap tenant is not active", err)
 	}
 	if err := f.Read.QueryRow("SELECT id,tenant_id FROM user_tenant WHERE user_id=?", userID).Scan(&relationID, &tenantID); err != nil || relationID == "" || tenantID != userID {
 		t.Fatal("bootstrap owner membership absent", err)

@@ -5,70 +5,45 @@ import (
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestModelChatRequestBooleanPresence(t *testing.T) {
-	for _, flags := range []string{"", `,"stream":false,"thinking":false`, `,"stream":true,"thinking":true`} {
-		var req ChatToModelRequest
-		if err := json.Unmarshal([]byte(`{"provider_name":"Moonshot","instance_name":"default","model_name":"kimi-k2.5","message":"hello"`+flags+`}`), &req); err != nil {
+func TestCanonicalModelChatRequestShape(t *testing.T) {
+	for _, flag := range []bool{false, true} {
+		raw := `{"model_id":"0123456789abcdef0123456789abcdef","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"https://example.invalid/a.png"}}]}]}`
+		var request ChatToModelRequest
+		if err := json.Unmarshal([]byte(raw), &request); err != nil {
 			t.Fatal(err)
 		}
-		if flags == "" {
-			if req.Stream != nil || req.Thinking != nil {
-				t.Fatal("omitted flags lost")
-			}
-		} else if req.Stream == nil || req.Thinking == nil || *req.Stream != strings.Contains(flags, "true") || *req.Thinking != *req.Stream {
-			t.Fatalf("flags = %#v", req)
+		if request.ModelID == nil || request.Stream || request.Thinking || len(request.Messages) != 1 {
+			t.Fatal("canonical request defaults lost")
+		}
+		request.Stream = flag
+		encoded, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var again ChatToModelRequest
+		if err := json.Unmarshal(encoded, &again); err != nil || again.Stream != flag || !reflect.DeepEqual(again.Messages, request.Messages) {
+			t.Fatal("messages changed during wire roundtrip", err)
 		}
 	}
 }
-
-func TestModelChatRejectsInvalidBodyBeforeService(t *testing.T) {
+func TestCanonicalModelChatBinderRejectsInvalidTypes(t *testing.T) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	h := NewProviderHandler(nil, nil)
-	router.POST("/chat/completions", h.ChatToModel)
-	for _, body := range []string{`{`, `{}`, `{"provider_name":"P","instance_name":"I","model_name":"M"}`, `{"provider_name":" ","instance_name":"I","model_name":"M","message":"q"}`, `{"provider_name":"P","instance_name":"I","model_name":"M","message":"q","stream":"false"}`} {
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(body)))
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("body %s returned %d", body, w.Code)
+	handler := NewProviderHandler(nil, nil)
+	router.POST("/chat", handler.ChatToModel)
+	for _, raw := range []string{`{`, `{"model_id":17}`, `{"stream":"false"}`, `{"messages":"message"}`} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(raw)))
+		var body struct {
+			Code int `json:"code"`
 		}
-	}
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(`{"provider_name":"P","instance_name":"I","model_name":"M","message":"q"}`)))
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("authentication = %d", w.Code)
-	}
-}
-
-func TestModelChatMessageContracts(t *testing.T) {
-	for _, test := range []struct {
-		body  string
-		valid bool
-		count int
-	}{
-		{`{"message":"legacy"}`, true, 1},
-		{`{"messages":[{"role":"system","content":"rules"},{"role":"assistant","content":"old","reasoning_content":"thought"},{"role":"user","content":"next"}],"stream":true}`, true, 3},
-		{`{"messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}`, true, 1},
-		{`{"messages":[]}`, false, 0}, {`{"messages":[{}]}`, false, 0},
-		{`{"message":"legacy","messages":[]}`, false, 0},
-		{`{"messages":[{"role":"user","content":42}]}`, false, 0},
-		{`{"messages":[{"role":"user","content":{"text":"x"}}]}`, false, 0},
-		{`{"messages":[{"role":"user","content":[{"type":"text","text":"x"}]}],"stream":true}`, true, 1},
-	} {
-		var req ChatToModelRequest
-		if err := json.Unmarshal([]byte(test.body), &req); err != nil {
-			t.Fatal(err)
-		}
-		messages, err := req.chatMessages()
-		if (err == nil) != test.valid || (test.valid && len(messages) != test.count) {
-			t.Fatalf("%s: %#v %v", test.body, messages, err)
-		}
-		if test.valid && test.count == 3 && (messages[1].ReasoningContent == nil || *messages[1].ReasoningContent != "thought") {
-			t.Fatal("reasoning history lost")
+		if json.Unmarshal(response.Body.Bytes(), &body) != nil || body.Code == 0 {
+			t.Fatal("invalid body accepted", raw, response.Code)
 		}
 	}
 }

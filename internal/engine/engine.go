@@ -18,7 +18,7 @@ package engine
 
 import (
 	"context"
-
+	"multirag/internal/common"
 	"multirag/internal/engine/types"
 )
 
@@ -28,63 +28,72 @@ type EngineType string
 const (
 	EngineElasticsearch EngineType = "elasticsearch"
 	EngineInfinity      EngineType = "infinity"
-	EngineMilvus        EngineType = "milvus"
 )
 
 // DocEngine document storage engine interface
 type DocEngine interface {
-	// Search
-	Search(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error)
-
-	// Chunk stores use a base name and an explicit dataset scope. ES shares the
-	// tenant index; Infinity resolves its per-dataset physical table internally.
+	// Chunk operations
 	CreateChunkStore(ctx context.Context, baseName, datasetID string, vectorSize int, parserID string) error
-	InsertChunks(ctx context.Context, chunks []map[string]interface{}, baseName, datasetID string) ([]string, error)
-	UpdateChunks(ctx context.Context, condition, newValue map[string]interface{}, baseName, datasetID string) error
-	DeleteChunks(ctx context.Context, condition map[string]interface{}, baseName, datasetID string) (int64, error)
+	InsertChunks(ctx context.Context, chunks []map[string]interface{}, baseName string, datasetID string) ([]string, error)
+	UpdateChunks(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, baseName string, datasetID string) error
+	DeleteChunks(ctx context.Context, condition map[string]interface{}, baseName string, datasetID string) (int64, error)
+	Search(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error)
 	GetChunk(ctx context.Context, baseName, chunkID string, datasetIDs []string) (interface{}, error)
 	DropChunkStore(ctx context.Context, baseName, datasetID string) error
 	ChunkStoreExists(ctx context.Context, baseName, datasetID string) (bool, error)
 
-	// Metadata stores are named by tenant, never inferred from a chunk base name.
+	// Document metadata operations
 	CreateMetadataStore(ctx context.Context, tenantID string) error
 	InsertMetadata(ctx context.Context, metadata []map[string]interface{}, tenantID string) ([]string, error)
-	// UpdateMetadata merges keys into the document row; new keys win.
-	UpdateMetadata(ctx context.Context, docID, datasetID string, metaFields map[string]interface{}, tenantID string) error
+	UpdateMetadata(ctx context.Context, docID string, datasetID string, metaFields map[string]interface{}, tenantID string) error
 	DeleteMetadata(ctx context.Context, condition map[string]interface{}, tenantID string) (int64, error)
-	// DeleteMetadataKeys removes literal keys; deleting the last key removes the row.
-	DeleteMetadataKeys(ctx context.Context, docID, datasetID string, keys []string, tenantID string) error
+	DeleteMetadataKeys(ctx context.Context, docID string, datasetID string, keys []string, tenantID string) error
 	DropMetadataStore(ctx context.Context, tenantID string) error
 	MetadataStoreExists(ctx context.Context, tenantID string) (bool, error)
+	SearchMetadata(ctx context.Context, req *types.SearchMetadataRequest) (*types.SearchMetadataResult, error)
+
+	// Document operations (used by skill indexing)
+	IndexDocument(ctx context.Context, indexName, docID string, doc interface{}) error
+	DeleteDocument(ctx context.Context, indexName, docID string) error
+	BulkIndex(ctx context.Context, indexName string, docs []interface{}) (interface{}, error)
 
 	// Utility functions for search result processing
 	GetFields(chunks []map[string]interface{}, fields []string) map[string]map[string]interface{}
 	GetAggregation(chunks []map[string]interface{}, fieldName string) []map[string]interface{}
 	GetHighlight(chunks []map[string]interface{}, keywords []string, fieldName string) map[string]string
-	GetDocIDs(chunks []map[string]interface{}) []string
+	GetChunkIDs(chunks []map[string]interface{}) []string
+	KNNScores(ctx context.Context, chunks []map[string]interface{}, queryVector []float64, topK int) (map[string]interface{}, error)
+	GetScores(searchResult map[string]interface{}) map[string]float64
 
 	// Health check
 	Ping(ctx context.Context) error
 	Close() error
-}
 
-// ManagementChunkReader explicitly opts into reading disabled chunks after SQL
-// authorization. Ordinary GetChunk callers retain the engine's retrieval policy.
-type ManagementChunkReader interface {
-	GetChunkForManagement(ctx context.Context, baseName, chunkID string, datasetIDs []string) (interface{}, error)
+	// GetType returns the engine type
+	GetType() string
+
+	// FilterDocIdsByMetaPushdown runs a metadata filter directly against
+	// the doc metadata index, returning matching doc IDs or nil if push-down
+	// is not supported (caller should fall back to in-memory filtering).
+	// conditions is a list of filter objects with keys: key, op, value
+	FilterDocIdsByMetaPushdown(ctx context.Context, kbIDs []string, conditions []map[string]interface{}, logic string) []string
 }
 
 // Type returns the engine type (helper method for runtime type checking)
 // This is a workaround since we can't import elasticsearch or infinity packages directly
 func Type(docEngine DocEngine) EngineType {
-	// Type checking through interface methods is not straightforward
-	// This is a placeholder that should be implemented differently
-	// or rely on configuration to know the type
-	return EngineType("unknown")
+	if docEngine == nil {
+		return EngineType("")
+	}
+	return EngineType(docEngine.GetType())
 }
 
-// MetadataScanner optionally streams a complete, scoped metadata snapshot.
-// Implementations must close cursors on visitor errors and cancellation.
-type MetadataScanner interface {
-	ScanMetadata(ctx context.Context, req *types.SearchRequest, visit func([]map[string]interface{}) error) error
+type MessageQueue interface {
+	Init() error
+	Close() error
+	InitConsumer(subject string) error
+	PublishTask(subject string, payload []byte) error
+	GetMessages(messageCount int) ([]common.TaskHandle, error)
+	ListMessages(messageType string, pending bool) ([]map[string]string, error)
+	ShowMessageQueue() (map[string]string, error)
 }

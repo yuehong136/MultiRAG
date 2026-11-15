@@ -17,12 +17,14 @@
 package handler
 
 import (
+	"encoding/json"
 	"multirag/internal/common"
+	"multirag/internal/server"
+	"multirag/internal/service"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
-
-	"multirag/internal/service"
 )
 
 // SystemHandler system handler
@@ -48,11 +50,21 @@ func (h *SystemHandler) Ping(c *gin.Context) {
 	c.String(http.StatusOK, "pong")
 }
 
-// Health health check
+// Health check
 func (h *SystemHandler) Health(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"status": "ok",
 	})
+}
+
+// Healthz reports dependency health in the Python-compatible format.
+func (h *SystemHandler) Healthz(c *gin.Context) {
+	result, allOK := h.systemService.Healthz(c.Request.Context())
+	statusCode := http.StatusOK
+	if !allOK {
+		statusCode = http.StatusInternalServerError
+	}
+	c.JSON(statusCode, result)
 }
 
 // GetConfig get system configuration
@@ -89,21 +101,75 @@ func (h *SystemHandler) GetConfig(c *gin.Context) {
 // @Success 200 {object} config.Config
 // @Router /v1/system/configs [get]
 func (h *SystemHandler) GetConfigs(c *gin.Context) {
-	_, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+	cfg := server.GetConfig()
+	if cfg == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "Configuration not initialized",
+		})
 		return
 	}
-	config, err := h.systemService.GetPublicConfigs()
+
+	// Marshal into a response-owned object so source credentials remain usable.
+	raw, err := json.Marshal(cfg)
 	if err != nil {
-		jsonError(c, common.CodeServerError, "Configuration unavailable.")
+		jsonInternalError(c, err)
 		return
 	}
-	jsonResponse(c, common.CodeSuccess, config, "success")
+	var public map[string]interface{}
+	if err := json.Unmarshal(raw, &public); err != nil {
+		jsonInternalError(c, err)
+		return
+	}
+	var redact func(interface{})
+	redact = func(value interface{}) {
+		switch item := value.(type) {
+		case map[string]interface{}:
+			for key, child := range item {
+				normalized := strings.ToLower(strings.ReplaceAll(key, "_", ""))
+				if strings.Contains(normalized, "password") || strings.Contains(normalized, "secret") || strings.Contains(normalized, "token") || normalized == "apikey" || normalized == "accesskey" || normalized == "privatekey" || normalized == "authorization" {
+					item[key] = "[REDACTED]"
+				} else {
+					redact(child)
+				}
+			}
+		case []interface{}:
+			for _, child := range item {
+				redact(child)
+			}
+		}
+	}
+	redact(public)
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    public,
+	})
 }
 
-// GetVersion get MultiRAG version
-// @Summary Get MultiRAG Version
+// GetStatus get RAGFlow status
+func (h *SystemHandler) GetStatus(c *gin.Context) {
+	_, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	status, err := h.systemService.GetStatus()
+	if err != nil {
+		jsonInternalError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"data":    status,
+		"message": "success",
+	})
+}
+
+// GetVersion get RAGFlow version
+// @Summary Get RAGFlow Version
 // @Description Get the current version of the application
 // @Tags system
 // @Accept json
@@ -130,75 +196,46 @@ func (h *SystemHandler) GetVersion(c *gin.Context) {
 
 // GetLogLevel returns the current log level
 func (h *SystemHandler) GetLogLevel(c *gin.Context) {
-	_, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
-		return
-	}
-	level := common.GetLevel()
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
-		"data":    gin.H{"level": level},
+		"data":    common.GetLogLevels(),
 	})
 }
 
 // SetLogLevelRequest set log level request
 type SetLogLevelRequest struct {
+	PkgName string `json:"pkg_name" binding:"required"`
 	Level   string `json:"level" binding:"required"`
-	PkgName string `json:"pkg_name,omitempty"`
 }
 
 // SetLogLevel sets the log level at runtime
 func (h *SystemHandler) SetLogLevel(c *gin.Context) {
-	_, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
-		return
-	}
 	var req SetLogLevelRequest
-	if err := bindObjectJSON(c, &req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "level is required",
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeDataError,
+			"message": "pkg_name and level are required",
 		})
 		return
 	}
 
-	if req.PkgName != "" && req.PkgName != "root" {
-		jsonError(c, common.CodeArgumentError, "Package log levels are unavailable.")
-		return
-	}
-	if err := common.SetLevel(req.Level); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": err.Error(),
+	if err := common.SetPackageLogLevel(req.PkgName, req.Level); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeDataError,
+			"message": "Invalid log level: " + req.Level,
 		})
 		return
+	}
+
+	config := server.GetConfig()
+	if req.PkgName == "root" && config != nil {
+		config.Log.Level = common.GetLevel()
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
-		"message": "Log level updated successfully",
-		"data":    gin.H{"level": req.Level},
+		"message": "success",
+		"data":    gin.H{"pkg_name": req.PkgName, "level": req.Level},
 	})
-}
-
-// Healthz returns failure status whenever any required dependency fails.
-func (h *SystemHandler) Healthz(c *gin.Context) {
-	result, ok := h.systemService.Healthz(c.Request.Context())
-	status := http.StatusOK
-	if !ok {
-		status = http.StatusInternalServerError
-	}
-	c.JSON(status, result)
-}
-
-func (h *SystemHandler) GetStatus(c *gin.Context) {
-	_, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
-		return
-	}
-	jsonResponse(c, common.CodeSuccess, h.systemService.GetStatus(c.Request.Context()), "success")
 }

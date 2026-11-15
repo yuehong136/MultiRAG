@@ -17,14 +17,13 @@ package nlp
 import (
 	"encoding/json"
 	"os"
+	"sync/atomic"
 	"path/filepath"
+	"multirag/internal/common"
 	"regexp"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
-
-	"multirag/internal/common"
 
 	"go.uber.org/zap"
 )
@@ -59,11 +58,10 @@ func NewSynonym(redis RedisClient, resPath string, wordnetDir string) *Synonym {
 		wordNet:    nil, // Will be initialized below
 		resPath:    resPath,
 	}
-
 	s.lookupNum.Store(100000000)
 
 	if resPath == "" {
-		s.resPath = "core/res"
+		s.resPath = "rag/res"
 	}
 
 	// Initialize WordNet with provided path
@@ -144,7 +142,7 @@ func (s *Synonym) load() {
 	//
 	//var dict map[string][]string
 	//if jsonErr := json.Unmarshal([]byte(data), &dict); jsonErr != nil {
-	//	common.Error("Fail to load synonym!", jsonErr)
+	//	logger.Error("Fail to load synonym!", jsonErr)
 	//	return
 	//}
 	//
@@ -171,9 +169,9 @@ func (s *Synonym) Lookup(tk string, topN int) []string {
 
 	if res, ok := s.dictionary[key]; ok {
 		if len(res) > topN {
-			return append([]string(nil), res[:topN]...)
+			return res[:topN]
 		}
-		return append([]string(nil), res...)
+		return res
 	}
 
 	// 2) If not found and tk is purely alphabetical, fallback to WordNet
@@ -199,7 +197,9 @@ func (s *Synonym) Lookup(tk string, topN int) []string {
 			}
 		}
 
+		// Sort for deterministic results (map iteration order is non-deterministic in Go)
 		sort.Strings(wnRes)
+
 		if len(wnRes) > topN {
 			return wnRes[:topN]
 		}

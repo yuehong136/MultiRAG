@@ -265,7 +265,7 @@ def test_embedding_deadline_closes_the_request(sdk_http: SDKHTTP) -> None:
 async def test_catalog_identity_and_unsupported_rerank_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
     root = Path(__file__).resolve().parents[2]
     factories = json.loads((root / "configs/llm_factories.json").read_text())["factory_llm_infos"]
-    models = json.loads((root / "configs/models/replicate.json").read_text())["models"]
+    models = json.loads((root / "conf/models/replicate.json").read_text())["models"]
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", factories)
     catalog = model_provider_service.catalog("Replicate")
     assert {(model.model_name, tuple(model.model_types)) for model in catalog} == {(model["name"], tuple(model["model_types"])) for model in models}

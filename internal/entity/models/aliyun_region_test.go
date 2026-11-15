@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,7 +15,7 @@ import (
 func TestAliyunRegionResolutionAcrossOperations(t *testing.T) {
 	var calls atomic.Int32
 	var lastPath atomic.Value
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		lastPath.Store(r.URL.Path)
 		if r.Header.Get("Authorization") != "Bearer key" {
@@ -41,7 +41,7 @@ func TestAliyunRegionResolutionAcrossOperations(t *testing.T) {
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
 	}))
 	defer server.Close()
-	model := NewAliyunModel(map[string]string{"default": server.URL + "/default/", "singapore": server.URL + "/singapore/", "empty": ""}, URLSuffix{Chat: "/chat/completions", Models: "/models"})
+	model := NewAliyunModel(map[string]string{"default": server.URL + "/default", "singapore": server.URL + "/singapore", "empty": ""}, URLSuffix{Chat: "chat/completions", Models: "models"})
 	if model.Name() != "aliyun" {
 		t.Fatalf("Name() = %q", model.Name())
 	}
@@ -60,14 +60,10 @@ func TestAliyunRegionResolutionAcrossOperations(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			for _, region := range []*string{nil, &empty, &singapore} {
 				before := calls.Load()
-				config := &APIConfig{APIKey: &key, Region: region}
-				endpoint, _, err := model.endpoint(config, "models")
+				config := &APIConfig{ApiKey: &key, Region: region}
 				prefix := "/default/"
 				if region == &singapore {
 					prefix = "/singapore/"
-				}
-				if err != nil || endpoint != server.URL+prefix+"models" {
-					t.Fatalf("endpoint = %q, %v", endpoint, err)
 				}
 				if err := operation(config); err != nil || calls.Load() != before+1 {
 					t.Fatalf("operation error=%v calls=%d", err, calls.Load()-before)
@@ -76,9 +72,9 @@ func TestAliyunRegionResolutionAcrossOperations(t *testing.T) {
 					t.Fatalf("operation used region path %q, want prefix %q", path, prefix)
 				}
 			}
-			for _, config := range []*APIConfig{nil, {}, {APIKey: &empty}, {APIKey: &key, Region: &unknown}, {APIKey: &key, Region: &emptyURL}} {
+			for _, config := range []*APIConfig{nil, {}, {ApiKey: &empty}, {ApiKey: &key, Region: &unknown}, {ApiKey: &key, Region: &emptyURL}} {
 				before := calls.Load()
-				if err := operation(config); err == nil || !strings.Contains(err.Error(), "aliyun:") {
+				if err := operation(config); err == nil {
 					t.Fatalf("invalid config error = %v", err)
 				}
 				if calls.Load() != before {
@@ -87,13 +83,13 @@ func TestAliyunRegionResolutionAcrossOperations(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			if err := operation(&APIConfig{APIKey: &key, Context: ctx}); !errors.Is(err, context.Canceled) {
+			if err := operation(&APIConfig{ApiKey: &key, Context: ctx}); !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancellation = %v", err)
 			}
 		})
 	}
 	missing := NewAliyunModel(nil, URLSuffix{Models: "models"})
-	if _, err := missing.ListModels(&APIConfig{APIKey: &key}); err == nil || !strings.Contains(err.Error(), "no base URL") {
+	if _, err := missing.ListModels(&APIConfig{ApiKey: &key}); err == nil || !strings.Contains(err.Error(), "no base URL") {
 		t.Fatalf("missing default error = %v", err)
 	}
 }

@@ -5,272 +5,180 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
+	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"multirag/internal/common"
-	"multirag/internal/dao"
 	"multirag/internal/entity"
-	"multirag/internal/entity/models"
 	"multirag/internal/server"
 	"multirag/internal/testsupport"
 )
 
-// TestRegistrationCatalogZeroASR preserves zero/omitted catalog limits without
-// loosening custom declarations or creating an empty disabled override.
 func TestRegistrationCatalogZeroASR(t *testing.T) {
-	config, address := os.Getenv("MULTIRAG_BATCH_G_CONFIG"), os.Getenv("MULTIRAG_BATCH_G_ZERO_ADDR")
-	if config == "" {
-		if os.Getenv("REQUIRE_SERVICES") == "1" {
-			t.Fatal("owned scratch PostgreSQL required")
-		}
-		t.Skip("requires owned scratch PostgreSQL")
-	}
-	if address == "" {
-		t.Fatal("exact listener must be reserved before creation")
-	}
-	root := filepath.Join("..", "..")
-	if _, err := os.Stat("go.mod"); err == nil {
-		root = "."
-	}
-	t.Chdir(root)
-	if err := common.Init("error"); err != nil {
-		t.Fatal(err)
-	}
-	if err := server.FromConfigFile(config); err != nil {
-		t.Fatal("private config unavailable")
-	}
+	f := canonicalModelDatabase(t)
 	cfg := server.GetConfig()
-	if cfg.Database.Host != "127.0.0.1" || !strings.HasPrefix(cfg.Database.Database, "multirag_batch_g_") {
-		t.Fatal("unowned database")
-	}
-	journal := testsupport.NewCase(t)
-	journal.Event("before-schema", map[string]any{"database": cfg.Database.Database})
-	if err := dao.InitDB(); err != nil {
-		t.Fatal(err)
-	}
-	pool, _ := dao.DB.DB()
-	defer pool.Close()
-	dsn, err := dao.PostgresDSN(cfg.Database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	read, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer read.Close()
-	snapshot := func() string {
-		t.Helper()
-		var result string
-		if err := read.QueryRow("SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text,'[]') FROM (SELECT id,email FROM t_ai_users UNION ALL SELECT id,provider_name FROM tenant_model_provider UNION ALL SELECT id,instance_name FROM tenant_model_instance UNION ALL SELECT id,model_name FROM tenant_model UNION ALL SELECT id,asr_id FROM t_ai_tenants UNION ALL SELECT id,role FROM t_ai_user_tenants UNION ALL SELECT id,name FROM t_ai_files) t").Scan(&result); err != nil {
-			t.Fatal(err)
-		}
-		return result
-	}
-	var calls atomic.Int64
-	var srv *httptest.Server
+	priorDefaults, priorEnabled := cfg.UserDefaultLLM.DefaultModels, cfg.Authentication.RegisterEnabled
 	t.Cleanup(func() {
-		if srv == nil {
-			return
-		}
-		srv.Close()
-		conn, err := net.DialTimeout("tcp", address, 200*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			t.Error("listener remains")
-		}
-		journal.Event("listener-cleanup-readback", map[string]any{"address": address, "absent": err != nil})
+		cfg.UserDefaultLLM.DefaultModels = priorDefaults
+		cfg.Authentication.RegisterEnabled = priorEnabled
 	})
-	journal.Event("reserve-listener", map[string]any{"address": address})
-	listener, err := net.Listen("tcp", address)
+	cfg.Authentication.RegisterEnabled = true
+	cfg.UserDefaultLLM.DefaultModels = server.DefaultModelsConfig{ASRModel: server.ModelConfig{Factory: "Groq", Name: "whisper-large-v3", APIKey: "controlled-asr-key", BaseURL: "https://controlled.invalid/v1"}}
+	active := "1"
+	if err := f.DB.Create(&entity.LLM{LLMName: "whisper-large-v3", FID: "Groq", ModelType: "speech2text", Tags: "ASR", MaxTokens: 0, Status: &active}).Error; err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	keyPath := filepath.Join(directory, "conf", "private.pem")
+	f.Journal.Event("reserve-registration-key", map[string]any{"path": keyPath})
+	if err := os.Mkdir(filepath.Dir(keyPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-	audio := []byte("RIFF-owned-wave")
-	srv = &httptest.Server{Listener: listener, Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		if r.URL.Path != "/v1/audio/transcriptions" || r.Header.Get("Authorization") != "Bearer owned-asr-key" {
-			t.Error("wrong ASR route or credential")
-			w.WriteHeader(400)
-			return
-		}
-		if err := r.ParseMultipartForm(32 << 20); err != nil {
-			t.Error(err)
-			w.WriteHeader(400)
-			return
-		}
-		if r.FormValue("max_tokens") != "" {
-			t.Error("invented ASR token budget")
-		}
-		switch r.FormValue("model") {
-		case "whisper-large-v3", "whisper-large-v3-turbo", "explicit-zero-asr":
-		default:
-			t.Error("wrong ASR model")
-		}
-		file, _, err := r.FormFile("file")
-		if err != nil {
-			t.Error(err)
-			w.WriteHeader(400)
-			return
-		}
-		data, _ := io.ReadAll(file)
-		file.Close()
-		if !bytes.Equal(data, audio) {
-			t.Error("audio changed")
-		}
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"text":"catalog zero works"}`)
-	})}}
-	srv.Start()
-	keyData, err := os.ReadFile("configs/private.pem")
-	if err != nil {
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0600); err != nil {
 		t.Fatal(err)
 	}
-	block, _ := pem.Decode(keyData)
-	der := block.Bytes
-	if block.Headers["Proc-Type"] != "" {
-		der, err = x509.DecryptPEMBlock(block, []byte("Welcome"))
+	t.Chdir(directory)
+	encrypt := func(value string) string {
+		t.Helper()
+		raw, err := rsa.EncryptPKCS1v15(rand.Reader, &key.PublicKey, []byte(value))
 		if err != nil {
 			t.Fatal(err)
 		}
+		return base64.StdEncoding.EncodeToString(raw)
 	}
-	key, err := x509.ParsePKCS1PrivateKey(der)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encrypted, err := rsa.EncryptPKCS1v15(rand.Reader, &key.PublicKey, []byte(base64.StdEncoding.EncodeToString([]byte("owned-zero-password"))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager := dao.GetModelProviderManager()
-	resolver := NewModelProviderService()
-	us := NewUserService()
-	for index, name := range []string{"whisper-large-v3", "whisper-large-v3-turbo"} {
-		t.Run(name, func(t *testing.T) {
-			definition, err := manager.GetModelByName("Groq", name)
-			if err != nil || definition.MaxTokens != 0 {
-				t.Fatal("catalog zero precondition", err)
-			}
-			cfg.UserDefaultLLM.DefaultModels = server.DefaultModelsConfig{ASRModel: server.ModelConfig{Factory: "Groq", Name: name, APIKey: "owned-asr-key", BaseURL: srv.URL + "/v1"}}
-			req := &RegisterRequest{Email: name + "@owned.invalid", Nickname: "zero", Password: base64.StdEncoding.EncodeToString(encrypted)}
-			if index == 0 {
-				if _, err := read.Exec("ALTER TABLE t_ai_files ADD CONSTRAINT zero_asr_reject_root CHECK (name != '/')"); err != nil {
-					t.Fatal(err)
-				}
-				before := snapshot()
-				if _, code, err := us.Register(req); err == nil || code != common.CodeServerError {
-					t.Fatal("late SQL failure accepted")
-				}
-				if snapshot() != before {
-					t.Fatal("zero catalog failure left account/model rows")
-				}
-				if _, err := read.Exec("ALTER TABLE t_ai_files DROP CONSTRAINT zero_asr_reject_root"); err != nil {
-					t.Fatal(err)
-				}
-			}
-			user, code, err := us.Register(req)
-			if err != nil || code != 0 {
-				t.Fatal("legitimate zero catalog registration rejected", code, err)
-			}
-			var ref string
-			var overrides int
-			if err := read.QueryRow("SELECT asr_id FROM t_ai_tenants WHERE id=$1", user.ID).Scan(&ref); err != nil || ref != name+"@default-asr@Groq" {
-				t.Fatal("default ASR reference", ref, err)
-			}
-			if err := read.QueryRow("SELECT count(*) FROM tenant_model m JOIN tenant_model_provider p ON p.id=m.provider_id WHERE p.tenant_id=$1", user.ID).Scan(&overrides); err != nil || overrides != 0 {
-				t.Fatal("catalog zero created a custom/disabled override", overrides, err)
-			}
-			driver, resolvedName, api, err := resolver.getModelConfig(user.ID, "", entity.ModelTypeSpeech2Text)
-			if err != nil || resolvedName != name {
-				t.Fatal("default zero resolver failed", err)
-			}
-			capability, ok := driver.(models.ASRDriver)
-			if !ok {
-				t.Fatal("ASR capability missing")
-			}
-			result, err := capability.TranscribeAudio(&resolvedName, audio, api, nil)
-			if err != nil || result == nil || result.Text == nil || *result.Text != "catalog zero works" {
-				t.Fatal("controlled default ASR failed", err)
-			}
-			if definition.MaxTokens != 0 {
-				t.Fatal("catalog zero mutated")
-			}
-			if code, err := resolver.UpdateModelStatus("Groq", "default-asr", name, user.ID, "inactive"); err != nil || code != 0 {
+	userService := NewUserService()
+	snapshot := func() []int64 {
+		t.Helper()
+		out := make([]int64, 0, 8)
+		for _, table := range []string{"user", "tenant", "user_tenant", "file", "tenant_llm", "tenant_model_provider", "tenant_model_instance", "tenant_model"} {
+			var count int64
+			if err := f.Read.QueryRow("SELECT COUNT(*) FROM `" + table + "`").Scan(&count); err != nil {
 				t.Fatal(err)
 			}
-			beforeCalls := calls.Load()
-			if _, _, _, err := resolver.getModelConfig(user.ID, "", entity.ModelTypeSpeech2Text); !errors.Is(err, errModelDisabled) {
-				t.Fatal("catalog disable marker bypassed", err)
-			}
-			if calls.Load() != beforeCalls {
-				t.Fatal("disabled model contacted provider")
-			}
-			if code, err := resolver.UpdateModelStatus("Groq", "default-asr", name, user.ID, "active"); err != nil || code != 0 {
-				t.Fatal(err)
-			}
-			if _, _, _, err := resolver.getModelConfig(user.ID, "", entity.ModelTypeSpeech2Text); err != nil {
-				t.Fatal("catalog re-enable failed", err)
-			}
-			if index == 0 {
-				journal.Event("reserve-explicit-zero-model", map[string]any{"tenant": user.ID, "provider": "Groq", "instance": "default-asr", "model": "explicit-zero-asr", "maxTokens": 0})
-				request := &AddCustomModelRequest{ProviderName: "Groq", InstanceName: "default-asr", ModelName: "explicit-zero-asr", ModelTypes: []string{"asr"}, MaxTokens: 0}
-				if code, err := resolver.AddCustomModel(request, user.ID); err != nil || code != 0 {
-					t.Fatal("explicit zero custom model rejected", code, err)
-				}
-				var storedExtra, storedType string
-				if err := read.QueryRow("SELECT m.extra,m.model_type FROM tenant_model m JOIN tenant_model_provider p ON p.id=m.provider_id WHERE p.tenant_id=$1 AND m.model_name=$2", user.ID, request.ModelName).Scan(&storedExtra, &storedType); err != nil {
-					t.Fatal("explicit zero independent SQL readback", err)
-				}
-				var values map[string]any
-				if err := json.Unmarshal([]byte(storedExtra), &values); err != nil || values["max_tokens"] != float64(0) || storedType != string(entity.ModelTypeSpeech2Text) {
-					t.Fatal("explicit zero or normalized capability changed", err)
-				}
-				customDriver, customName, customAPI, err := resolver.getModelConfig(user.ID, request.ModelName+"@default-asr@Groq", entity.ModelTypeSpeech2Text)
-				if err != nil || customName != request.ModelName {
-					t.Fatal("explicit zero custom resolver failed", err)
-				}
-				customASR, ok := customDriver.(models.ASRDriver)
-				if !ok {
-					t.Fatal("explicit zero custom ASR capability missing")
-				}
-				customResult, err := customASR.TranscribeAudio(&customName, audio, customAPI, nil)
-				if err != nil || customResult == nil || customResult.Text == nil || *customResult.Text != "catalog zero works" {
-					t.Fatal("explicit zero controlled ASR failed", err)
-				}
-				before := snapshot()
-				request.ModelName, request.MaxTokens = "invalid-negative-asr", -1
-				beforeCalls := calls.Load()
-				if code, err := resolver.AddCustomModel(request, user.ID); err == nil || code != common.CodeBadRequest || snapshot() != before || calls.Load() != beforeCalls {
-					t.Fatal("negative custom declaration accepted or caused effects", code, err)
-				}
-				journal.Event("explicit-zero-model-readback", map[string]any{"tenant": user.ID, "maxTokens": 0, "customSQL": true, "controlledMultipart": true, "negativeNoEffects": true})
-			}
-			journal.Event("zero-asr-contract", map[string]any{"model": name, "maxTokens": definition.MaxTokens, "defaultResolver": true, "controlledMultipart": true, "disabledProviderCalls": 0})
-		})
-	}
-	if extra, err := decodeCustomModelExtra(`{"max_tokens":0,"model_types":["asr"]}`); err != nil || extra.MaxTokens != 0 {
-		t.Fatal("explicit zero custom token limit rejected", err)
-	}
-	for _, raw := range []string{`{}`, `{"max_tokens":null}`, `{"max_tokens":-1}`, `{"max_tokens":1.5}`, `{"max_tokens":true}`} {
-		if _, err := decodeCustomModelExtra(raw); err == nil {
-			t.Fatal("invalid custom token declaration accepted", raw)
+			out = append(out, count)
 		}
+		return out
 	}
-	if calls.Load() != 3 {
-		t.Fatal("unexpected controlled ASR call count", calls.Load())
-	}
+	t.Run("registration_rollback_and_zero", func(t *testing.T) {
+		request := &RegisterRequest{Email: "registered-zero@example.invalid", Nickname: "zero", Password: encrypt("controlled-password")}
+		f.Journal.Event("reserve-registration-trigger", map[string]any{"name": "reject_zero_registration_file"})
+		if err := f.DB.Exec("CREATE TRIGGER reject_zero_registration_file BEFORE INSERT ON file FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='controlled registration failure'").Error; err != nil {
+			t.Fatal(err)
+		}
+		before := snapshot()
+		user, code, err := userService.Register(request)
+		if err == nil || code == common.CodeSuccess || user != nil || !reflect.DeepEqual(before, snapshot()) {
+			t.Fatal("late registration failure persisted account/defaults", code, err)
+		}
+		if err := f.DB.Exec("DROP TRIGGER reject_zero_registration_file").Error; err != nil {
+			t.Fatal(err)
+		}
+		user, code, err = userService.Register(request)
+		if err != nil || code != common.CodeSuccess || user == nil {
+			t.Fatal("registration failed", code, err)
+		}
+		var reference, hash string
+		var tokens int64
+		if err := f.Read.QueryRow("SELECT asr_id FROM tenant WHERE id=?", user.ID).Scan(&reference); err != nil || reference != "whisper-large-v3" {
+			t.Fatal("original registration default contract", reference, err)
+		}
+		if err := f.Read.QueryRow("SELECT max_tokens FROM tenant_llm WHERE tenant_id=? AND llm_factory=? AND llm_name=?", user.ID, "Groq", "whisper-large-v3").Scan(&tokens); err != nil || tokens != 0 {
+			t.Fatal("legal zero became an invented budget", tokens, err)
+		}
+		if err := f.Read.QueryRow("SELECT password FROM user WHERE id=?", user.ID).Scan(&hash); err != nil || !userService.VerifyPassword(hash, "controlled-password") {
+			t.Fatal("registered password could not be verified", err)
+		}
+		var count int
+		if err := f.Read.QueryRow("SELECT COUNT(*) FROM tenant_model_provider WHERE tenant_id=?", user.ID).Scan(&count); err != nil || count != 0 {
+			t.Fatal("registration invented a new-model binding", count, err)
+		}
+	})
+	t.Run("invalid_RSA_has_no_writes", func(t *testing.T) {
+		for i, password := range []string{"not-base64", base64.StdEncoding.EncodeToString([]byte("invalid-ciphertext")), ""} {
+			before := snapshot()
+			user, code, err := userService.Register(&RegisterRequest{Email: fmt.Sprintf("bad-rsa-%d@example.invalid", i), Nickname: "invalid", Password: password})
+			if err == nil || code == common.CodeSuccess || user != nil || !reflect.DeepEqual(before, snapshot()) {
+				t.Fatal("invalid RSA created account or default rows", i, code, err)
+			}
+		}
+	})
+	t.Run("canonical_model_binding_zero_ASR", func(t *testing.T) {
+		audio := []byte("RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80\x3e\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00")
+		var calls atomic.Int32
+		upstream := testsupport.NewHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			if r.URL.Path != "/audio/transcriptions" || r.Header.Get("Authorization") != "Bearer controlled-asr-key" || r.ParseMultipartForm(1<<20) != nil {
+				t.Error("original ASR request contract", r.URL)
+				w.WriteHeader(400)
+				return
+			}
+			file, _, err := r.FormFile("file")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer file.Close()
+			data, err := io.ReadAll(file)
+			if err != nil || !bytes.Equal(data, audio) || r.FormValue("max_tokens") != "" {
+				t.Error("ASR content or legal zero changed")
+			}
+			fmt.Fprint(w, `{"text":"zero works"}`)
+		}))
+		svc := NewModelProviderService()
+		owner := "model-owner"
+		provider, instance, name := "Groq", "zero", "whisper-large-v3"
+		if code, err := svc.AddModelProvider(provider, owner); err != nil || code != common.CodeSuccess {
+			t.Fatal(code, err)
+		}
+		if code, err := svc.CreateProviderInstance(provider, instance, "controlled-asr-key", upstream.URL, "default", owner); err != nil || code != common.CodeSuccess {
+			t.Fatal(code, err)
+		}
+		request := &AddModelRequest{ProviderName: provider, InstanceName: instance, Models: []ModelRequest{{ModelName: name, ModelTypes: []string{"asr"}, MaxTokens: 0}}}
+		if code, err := svc.AddModel(request, owner); err != nil || code != common.CodeSuccess {
+			t.Fatal(code, err)
+		}
+		beforeDeclaration := snapshot()
+		negative := &AddModelRequest{ProviderName: provider, InstanceName: instance, Models: []ModelRequest{{ModelName: "invalid-negative-asr", ModelTypes: []string{"asr"}, MaxTokens: -1}}}
+		if code, err := svc.AddModel(negative, owner); err == nil || code == common.CodeSuccess || !reflect.DeepEqual(beforeDeclaration, snapshot()) || calls.Load() != 0 {
+			t.Fatal("negative model declaration changed SQL or reached supplier", code, err)
+		}
+		var extra string
+		if err := f.Read.QueryRow("SELECT extra FROM tenant_model WHERE model_name=?", name).Scan(&extra); err != nil {
+			t.Fatal(err)
+		}
+		var declaration map[string]any
+		if json.Unmarshal([]byte(extra), &declaration) != nil || declaration["max_tokens"] != float64(0) {
+			t.Fatal("zero custom declaration not persisted")
+		}
+		encoded := base64.StdEncoding.EncodeToString(audio)
+		result, code, err := svc.TranscribeAudio(&provider, &instance, &name, nil, owner, &encoded, nil, nil)
+		if err != nil || code != common.CodeSuccess || result == nil || result.Text != "zero works" || calls.Load() != 1 {
+			t.Fatal("actual original ASR failed", code, err)
+		}
+		if code, err := svc.UpdateModelStatus(provider, instance, name, owner, "inactive"); err != nil || code != common.CodeSuccess {
+			t.Fatal(code, err)
+		}
+		before := snapshot()
+		beforeCalls := calls.Load()
+		if result, _, err := svc.TranscribeAudio(&provider, &instance, &name, nil, owner, &encoded, nil, nil); err == nil || result != nil || calls.Load() != beforeCalls || !reflect.DeepEqual(before, snapshot()) {
+			t.Fatal("disabled model reached supplier or changed SQL", err)
+		}
+		if strings.Contains(extra, "controlled-asr-key") {
+			t.Fatal("model declaration duplicated credentials")
+		}
+	})
 }

@@ -1,329 +1,876 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package models
 
 import (
-	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
+	"mime/multipart"
 	"net/http"
-	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
-// CoHereModel adapts Cohere V2 chat, embeddings and rerank to ModelDriver.
-type CoHereModel struct{ *openAIChatDriver }
-
-func NewCoHereModel(baseURL map[string]string, suffix URLSuffix) *CoHereModel {
-	return &CoHereModel{newOpenAIChatDriver(baseURL, suffix, "cohere", cohereChatBody)}
+type CoHereModel struct {
+	baseModel BaseModel
 }
 
-func cohereChatBody(name string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
-	body, err := openAIChatBody(name, messages, config, stream)
+func (c *CoHereModel) NewInstance(baseURL map[string]string) ModelDriver {
+	return NewCoHereModel(baseURL, c.baseModel.URLSuffix)
+}
+
+func NewCoHereModel(baseURL map[string]string, urlSuffix URLSuffix) *CoHereModel {
+	if baseURL != nil {
+		copied := make(map[string]string, len(baseURL))
+		for region, value := range baseURL {
+			copied[region] = value
+		}
+		baseURL = copied
+	}
+	return &CoHereModel{
+		baseModel: BaseModel{
+			BaseURL:    baseURL,
+			URLSuffix:  urlSuffix,
+			httpClient: NewDriverHTTPClient(),
+		},
+	}
+}
+
+func (c *CoHereModel) Name() string {
+	return "cohere"
+}
+
+func (c *CoHereModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	if chatModelConfig != nil && chatModelConfig.Stream != nil && *chatModelConfig.Stream {
+		return nil, fmt.Errorf("stream must be false in ChatWithMessages")
+	}
+	if err := c.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("messages is empty")
+	}
+
+	resolvedBaseURL, err := c.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
 		return nil, err
 	}
-	delete(body, "top_p")
-	delete(body, "stop")
-	if config == nil || config.Temperature == nil {
-		body["temperature"] = 0.3
+	url := fmt.Sprintf("%s/%s", resolvedBaseURL, c.baseModel.URLSuffix.Chat)
+
+	// Convert messages to API format
+	apiMessages := make([]map[string]interface{}, len(messages))
+	for i, msg := range messages {
+		apiMessages[i] = map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
+		}
 	}
-	if config != nil {
-		if config.TopP != nil {
-			body["p"] = *config.TopP
+
+	// Build request body
+	reqBody := map[string]interface{}{
+		"model":       modelName,
+		"messages":    apiMessages,
+		"stream":      false,
+		"temperature": 0.3,
+	}
+
+	if chatModelConfig != nil {
+		if chatModelConfig.Stream != nil {
+			reqBody["stream"] = *chatModelConfig.Stream
 		}
-		if config.Stop != nil {
-			body["stop_sequences"] = *config.Stop
+
+		if chatModelConfig.MaxTokens != nil {
+			reqBody["max_tokens"] = *chatModelConfig.MaxTokens
 		}
-		if config.Thinking != nil {
-			mode := "disabled"
-			if *config.Thinking {
-				mode = "enabled"
+
+		if chatModelConfig.Temperature != nil {
+			reqBody["temperature"] = *chatModelConfig.Temperature
+		}
+
+		if chatModelConfig.TopP != nil {
+			reqBody["top_p"] = *chatModelConfig.TopP
+		}
+
+		if chatModelConfig.Thinking != nil {
+			if *chatModelConfig.Thinking {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "enabled",
+				}
+			} else {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "disabled",
+				}
 			}
-			body["thinking"] = map[string]string{"type": mode}
 		}
 	}
-	return body, nil
-}
 
-// decodeCoHereJSON rejects trailing JSON as well as malformed response bodies.
-func decodeCoHereJSON(reader io.Reader, target any) error {
-	decoder := json.NewDecoder(reader)
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	var trailing any
-	if decoder.Decode(&trailing) != io.EOF {
-		return fmt.Errorf("provider response has trailing content")
-	}
-	return nil
-}
-
-func (c *CoHereModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
-	body, err := cohereChatBody(name, messages, config, false)
+	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	local, cancel := modelCallConfig(api)
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
 	defer cancel()
-	resp, err := c.request(http.MethodPost, c.URLSuffix.Chat, local, body)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("content-Type", "application/json")
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("bearer %s", strings.TrimSpace(*apiConfig.ApiKey)))
+
+	resp, err := c.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	var result struct {
-		Message struct {
-			Content []struct {
-				Type     string `json:"type"`
-				Text     string `json:"text"`
-				Thinking string `json:"thinking"`
-			} `json:"content"`
-		} `json:"message"`
-		Error        json.RawMessage `json:"error"`
-		FinishReason string          `json:"finish_reason"`
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if len(body) > 20*1024*1024 {
+		return nil, fmt.Errorf("provider response exceeds20MiB")
 	}
-	if err := decodeCoHereJSON(resp.Body, &result); err != nil {
-		return nil, fmt.Errorf("cohere: decode chat: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-	if strings.HasPrefix(strings.ToUpper(result.FinishReason), "ERROR") || len(result.Error) > 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("cohere: provider chat error")
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Cohere chat API error: %d %s", resp.StatusCode, "[redacted]")
 	}
-	var answer, reasoning strings.Builder
-	for _, block := range result.Message.Content {
-		if block.Type == "thinking" {
-			reasoning.WriteString(block.Thinking)
-		} else if block.Type == "text" {
-			answer.WriteString(block.Text)
+
+	// Parse response
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if result["error"] != nil {
+		return nil, fmt.Errorf("Cohere provider error")
+	}
+	if finish, ok := result["finish_reason"].(string); ok && finish != "" && finish != "COMPLETE" && finish != "MAX_TOKENS" && finish != "STOP_SEQUENCE" && finish != "TOOL_CALL" {
+		return nil, fmt.Errorf("Cohere unsuccessful completion")
+	}
+	messageMap, ok := result["message"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no message found in Cohere response: %s", "[redacted]")
+	}
+
+	contentArray, ok := messageMap["content"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("content is not an array in Cohere response")
+	}
+
+	var fullContent string
+	var reasonContent string
+	for _, cBlock := range contentArray {
+		cmap, ok := cBlock.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if blockType, ok := cmap["type"].(string); ok && blockType == "thinking" {
+			if thinkingText, ok := cmap["thinking"].(string); ok {
+				reasonContent += thinkingText
+			}
+		} else if text, ok := cmap["text"].(string); ok {
+			fullContent += text
 		}
 	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
+
+	if strings.TrimSpace(fullContent) == "" {
+		return nil, fmt.Errorf("Cohere returned no answer")
 	}
-	if strings.TrimSpace(answer.String()) == "" {
-		return nil, fmt.Errorf("cohere: no text answer")
+	chatResponse := &ChatResponse{
+		Answer:        &fullContent,
+		ReasonContent: &reasonContent,
 	}
-	a, r := answer.String(), reasoning.String()
-	return &ChatResponse{Answer: &a, ReasoningContent: &r}, nil
+
+	return chatResponse, nil
 }
 
-func (c *CoHereModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	api, cancelCall := modelStreamConfig(api)
-	defer cancelCall()
+func (c *CoHereModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	if modelConfig != nil && modelConfig.Stream != nil && !*modelConfig.Stream {
+		return fmt.Errorf("stream must be true in ChatStreamlyWithSender")
+	}
 	if sender == nil {
-		return fmt.Errorf("cohere: stream sender is required")
+		return fmt.Errorf("sender is required")
 	}
-	body, err := cohereChatBody(name, messages, config, true)
+
+	if err := c.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return err
+	}
+
+	if len(messages) == 0 {
+		return fmt.Errorf("messages is empty")
+	}
+
+	resolvedBaseURL, err := c.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
 		return err
 	}
-	resp, err := c.request(http.MethodPost, c.URLSuffix.Chat, api, body)
+	url := fmt.Sprintf("%s/%s", resolvedBaseURL, c.baseModel.URLSuffix.Chat)
+
+	apiMessages := make([]map[string]interface{}, len(messages))
+	for i, msg := range messages {
+		apiMessages[i] = map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
+		}
+	}
+
+	reqBody := map[string]interface{}{
+		"model":       modelName,
+		"messages":    apiMessages,
+		"stream":      true,
+		"temperature": 1,
+	}
+
+	if modelConfig != nil {
+		if modelConfig.MaxTokens != nil {
+			reqBody["max_tokens"] = *modelConfig.MaxTokens
+		}
+		if modelConfig.Temperature != nil {
+			reqBody["temperature"] = *modelConfig.Temperature
+		}
+		if modelConfig.TopP != nil {
+			reqBody["p"] = *modelConfig.TopP
+		}
+	}
+
+	if modelConfig != nil {
+		if modelConfig.Stream != nil {
+			reqBody["stream"] = *modelConfig.Stream
+		}
+
+		if modelConfig.MaxTokens != nil {
+			reqBody["max_tokens"] = *modelConfig.MaxTokens
+		}
+
+		if modelConfig.Temperature != nil {
+			reqBody["temperature"] = *modelConfig.Temperature
+		}
+
+		if modelConfig.TopP != nil {
+			reqBody["top_p"] = *modelConfig.TopP
+		}
+
+		if modelConfig.Thinking != nil {
+			if *modelConfig.Thinking {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "enabled",
+				}
+			} else {
+				reqBody["thinking"] = map[string]interface{}{
+					"type": "disabled",
+				}
+			}
+		}
+	}
+
+	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), streamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", strings.TrimSpace(*apiConfig.ApiKey)))
+
+	resp, err := c.baseModel.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	receivedAnswer := false
-	for scanner.Scan() {
-		if err := requestContext(api).Err(); err != nil {
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Cohere stream API error %d: %s", resp.StatusCode, "[redacted]")
+	}
+
+	sawTerminal := false
+	sawContent := false
+	done, err := ParseSSEStream[map[string]interface{}](resp.Body, func(event map[string]interface{}) error {
+		if err := apiConfig.RequestContext().Err(); err != nil {
 			return err
 		}
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
+		if event == nil || event["error"] != nil || sawTerminal {
+			return fmt.Errorf("invalid Cohere stream response")
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
-			continue
+		eventType, ok := event["type"].(string)
+		if !ok {
+			return fmt.Errorf("Cohere stream event type missing")
 		}
-		var event struct {
-			Type  string `json:"type"`
-			Delta struct {
-				Message struct {
-					Content struct {
-						Text     string `json:"text"`
-						Thinking string `json:"thinking"`
-					} `json:"content"`
-				} `json:"message"`
-				FinishReason string `json:"finish_reason"`
-			} `json:"delta"`
-			Error json.RawMessage `json:"error"`
+
+		if event["error"] != nil || eventType == "error" {
+			return fmt.Errorf("Cohere provider stream error")
 		}
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return fmt.Errorf("cohere: decode stream: %w", err)
-		}
-		if event.Type == "error" || len(event.Error) > 0 && string(event.Error) != "null" {
-			return fmt.Errorf("cohere: provider stream error")
-		}
-		switch event.Type {
-		case "message-end":
-			if !receivedAnswer || strings.HasPrefix(strings.ToUpper(event.Delta.FinishReason), "ERROR") {
-				return fmt.Errorf("cohere: stream returned no complete text answer")
+		if eventType == "message-end" {
+			if delta, ok := event["delta"].(map[string]interface{}); ok {
+				if finish, ok := delta["finish_reason"].(string); ok && finish != "" && finish != "COMPLETE" && finish != "MAX_TOKENS" && finish != "STOP_SEQUENCE" && finish != "TOOL_CALL" {
+					return fmt.Errorf("Cohere unsuccessful completion")
+				}
 			}
-			done := "[DONE]"
-			return sender(&done, nil)
-		case "content-delta":
-			content := event.Delta.Message.Content
-			if content.Thinking != "" {
-				if err := sender(nil, &content.Thinking); err != nil {
+			sawTerminal = true
+			return nil
+		}
+
+		if eventType == "content-delta" {
+			delta, ok := event["delta"].(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("invalid Cohere content delta")
+			}
+			msg, ok := delta["message"].(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("invalid Cohere message delta")
+			}
+			content, ok := msg["content"].(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("invalid Cohere content")
+			}
+			for _, field := range []string{"thinking", "text"} {
+				if value := content[field]; value != nil {
+					if _, ok := value.(string); !ok {
+						return fmt.Errorf("invalid Cohere content value")
+					}
+				}
+			}
+
+			if thinking, ok := content["thinking"].(string); ok && thinking != "" {
+				if err := sender(nil, &thinking); err != nil {
+					return err
+				}
+				if err := apiConfig.RequestContext().Err(); err != nil {
 					return err
 				}
 			}
-			if err := requestContext(api).Err(); err != nil {
-				return err
-			}
-			if content.Text != "" {
-				if err := sender(&content.Text, nil); err != nil {
+
+			if text, ok := content["text"].(string); ok && text != "" {
+				if strings.TrimSpace(text) != "" {
+					sawContent = true
+				}
+				if err := sender(&text, nil); err != nil {
 					return err
 				}
-				receivedAnswer = receivedAnswer || strings.TrimSpace(content.Text) != ""
+				if err := apiConfig.RequestContext().Err(); err != nil {
+					return err
+				}
 			}
-		case "message-start", "content-start", "content-end", "citation-start", "citation-end":
-			// Metadata events do not contain answer text.
-		default:
-			return fmt.Errorf("cohere: unsupported stream event %q", event.Type)
 		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to scan response body: %w", err)
 	}
-	if err := requestContext(api).Err(); err != nil {
+	if !sawContent || !done && !sawTerminal {
+		return fmt.Errorf("Cohere: stream ended before [DONE] or finish_reason")
+	}
+
+	if err := apiConfig.RequestContext().Err(); err != nil {
 		return err
 	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	return io.ErrUnexpectedEOF
+	endOfStream := "[DONE]"
+	return sender(&endOfStream, nil)
 }
 
-func (c *CoHereModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
+func (c *CoHereModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	if len(texts) > 0 && (modelName == nil || strings.TrimSpace(*modelName) == "") {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	if embeddingConfig != nil && embeddingConfig.Dimension < 0 {
+		return nil, fmt.Errorf("invalid embedding dimension")
+	}
+	if err := c.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
 	if len(texts) == 0 {
 		return []EmbeddingData{}, nil
 	}
-	if name == nil || strings.TrimSpace(*name) == "" {
-		return nil, fmt.Errorf("cohere: embedding model name is required")
-	}
-	dimension := 0
-	if config != nil {
-		dimension = config.Dimension
-	}
-	if dimension < 0 {
-		return nil, fmt.Errorf("cohere: embedding dimension must be non-negative")
-	}
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	vectors := make([][]float64, 0, len(texts))
-	for start := 0; start < len(texts); start += 32 {
-		end := min(start+32, len(texts))
-		body := map[string]any{"model": *name, "texts": texts[start:end], "input_type": "search_document", "embedding_types": []string{"float"}}
-		if config != nil && config.Query {
-			body["input_type"] = "search_query"
-		}
-		if config != nil && config.Dimension > 0 {
-			body["output_dimension"] = config.Dimension
-		}
-		resp, err := c.request(http.MethodPost, c.URLSuffix.Embedding, local, body)
-		if err != nil {
-			return nil, err
-		}
-		var result struct {
-			Embeddings struct {
-				Float [][]*float64 `json:"float"`
-			} `json:"embeddings"`
-			Error json.RawMessage `json:"error"`
-		}
-		decodeErr := decodeCoHereJSON(resp.Body, &result)
-		resp.Body.Close()
-		if decodeErr != nil {
-			return nil, fmt.Errorf("cohere: decode embeddings: %w", decodeErr)
-		}
-		if len(result.Error) > 0 && string(result.Error) != "null" || len(result.Embeddings.Float) != end-start {
-			return nil, fmt.Errorf("cohere: embedding count mismatch or provider error")
-		}
-		for _, raw := range result.Embeddings.Float {
-			if len(raw) == 0 {
-				return nil, fmt.Errorf("cohere: empty embedding")
-			}
-			if dimension == 0 {
-				dimension = len(raw)
-			}
-			if len(raw) != dimension {
-				return nil, fmt.Errorf("cohere: inconsistent embedding dimensions")
-			}
-			vector := make([]float64, len(raw))
-			for i, value := range raw {
-				if value == nil || math.IsInf(*value, 0) || math.IsNaN(*value) {
-					return nil, fmt.Errorf("cohere: invalid embedding value")
-				}
-				vector[i] = *value
-			}
-			vectors = append(vectors, vector)
-		}
-	}
-	if err := requestContext(local).Err(); err != nil {
+
+	resolvedBaseURL, err := c.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
 		return nil, err
 	}
-	return embeddingData(vectors), nil
-}
+	baseURL := strings.TrimSuffix(resolvedBaseURL, "/")
+	suffix := strings.TrimPrefix(c.baseModel.URLSuffix.Embedding, "/")
+	url := fmt.Sprintf("%s/%s", baseURL, suffix)
 
-func (c *CoHereModel) Rerank(name *string, query string, texts []string, api *APIConfig, config *RerankConfig) (*RerankResponse, error) {
-	return rerankHTTP(c.httpClient, c.BaseURL, c.URLSuffix.Rerank, name, query, texts, api, config, nil)
-}
-
-func (c *CoHereModel) ListModels(api *APIConfig) ([]string, error) {
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	names := []string{}
-	seenTokens := map[string]bool{}
-	token := ""
-	for {
-		suffix := c.URLSuffix.Models
-		if token != "" {
-			separator := "?"
-			if strings.Contains(suffix, "?") {
-				separator = "&"
-			}
-			suffix += separator + "page_token=" + url.QueryEscape(token)
-		}
-		resp, err := c.request(http.MethodGet, suffix, local, nil)
-		if err != nil {
-			return nil, err
-		}
-		var result struct {
-			Models *[]struct {
-				Name string `json:"name"`
-			} `json:"models"`
-			Next  string          `json:"next_page_token"`
-			Error json.RawMessage `json:"error"`
-		}
-		decodeErr := decodeCoHereJSON(resp.Body, &result)
-		resp.Body.Close()
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		if result.Models == nil || len(result.Error) > 0 && string(result.Error) != "null" {
-			return nil, fmt.Errorf("cohere: missing model list or provider error")
-		}
-		for _, item := range *result.Models {
-			if strings.TrimSpace(item.Name) == "" {
-				return nil, fmt.Errorf("cohere: invalid model name")
-			}
-			names = append(names, item.Name)
-		}
-		if err := requestContext(local).Err(); err != nil {
-			return nil, err
-		}
-		if result.Next == "" {
-			return names, nil
-		}
-		if seenTokens[result.Next] {
-			return nil, fmt.Errorf("cohere: repeated model page token")
-		}
-		seenTokens[result.Next] = true
-		token = result.Next
+	reqBody := map[string]interface{}{
+		"model":           *modelName,
+		"texts":           texts,
+		"input_type":      "search_document",
+		"embedding_types": []string{"float"},
 	}
+	// This is only available for embed-v4 and newer models. Possible values are 256, 512, 1024, and 1536. The default is 1536.
+	if embeddingConfig != nil && embeddingConfig.Dimension > 0 {
+		reqBody["output_dimension"] = embeddingConfig.Dimension
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", strings.TrimSpace(*apiConfig.ApiKey)))
+
+	resp, err := c.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if len(body) > 20*1024*1024 {
+		return nil, fmt.Errorf("provider response exceeds20MiB")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Cohere embedding API error: status %d, body: %s", resp.StatusCode, "[redacted]")
+	}
+
+	var result struct {
+		Embeddings struct {
+			Float [][]float64 `json:"float"`
+		} `json:"embeddings"`
+	}
+	if err = json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if len(result.Embeddings.Float) == 0 {
+		return nil, fmt.Errorf("Cohere embedding response contains no float data: %s", "[redacted]")
+	}
+
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil || (envelope["error"] != nil && string(envelope["error"]) != "null") {
+		return nil, fmt.Errorf("invalid embedding response")
+	}
+	var numeric struct {
+		Embeddings struct {
+			Float [][]*float64 `json:"float"`
+		} `json:"embeddings"`
+	}
+	if json.Unmarshal(body, &numeric) != nil || len(numeric.Embeddings.Float) != len(texts) {
+		return nil, fmt.Errorf("invalid embedding count")
+	}
+	dimension := 0
+	for _, row := range numeric.Embeddings.Float {
+		if len(row) == 0 {
+			return nil, fmt.Errorf("empty embedding vector")
+		}
+		if dimension == 0 {
+			dimension = len(row)
+		}
+		if len(row) != dimension || embeddingConfig != nil && embeddingConfig.Dimension > 0 && len(row) != embeddingConfig.Dimension {
+			return nil, fmt.Errorf("embedding dimension mismatch")
+		}
+		for _, value := range row {
+			if value == nil {
+				return nil, fmt.Errorf("null embedding coordinate")
+			}
+		}
+	}
+	var embeddings []EmbeddingData
+	for i, floatArr := range result.Embeddings.Float {
+		embeddings = append(embeddings, EmbeddingData{
+			Embedding: floatArr,
+			Index:     i,
+		})
+	}
+
+	return embeddings, nil
 }
 
-func (c *CoHereModel) CheckConnection(api *APIConfig) error {
-	_, err := c.ListModels(api)
+func (c *CoHereModel) Rerank(modelName *string, query string, documents []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	if len(documents) > 0 && (modelName == nil || strings.TrimSpace(*modelName) == "") {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	if rerankConfig == nil {
+		rerankConfig = &RerankConfig{}
+	}
+	if rerankConfig.TopN < 0 {
+		return nil, fmt.Errorf("top_n must be nonnegative")
+	}
+	if len(documents) > 0 && (modelName == nil || strings.TrimSpace(*modelName) == "") {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	if err := c.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
+	if len(documents) == 0 {
+		return &RerankResponse{}, nil
+	}
+
+	resolvedBaseURL, err := c.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	baseURL := strings.TrimSuffix(resolvedBaseURL, "/")
+	suffix := strings.TrimPrefix(c.baseModel.URLSuffix.Rerank, "/")
+	url := fmt.Sprintf("%s/%s", baseURL, suffix)
+
+	var topN = rerankConfig.TopN
+	if rerankConfig.TopN == 0 {
+		topN = len(documents)
+	}
+
+	reqBody := map[string]interface{}{
+		"model":     *modelName,
+		"query":     query,
+		"documents": documents,
+		"top_n":     topN,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", strings.TrimSpace(*apiConfig.ApiKey)))
+
+	resp, err := c.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if len(body) > 20*1024*1024 {
+		return nil, fmt.Errorf("provider response exceeds20MiB")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Cohere rerank API error: status %d, body: %s", resp.StatusCode, "[redacted]")
+	}
+
+	var rerankResp struct {
+		Results []RerankResult  `json:"results"`
+		Error   json.RawMessage `json:"error"`
+	}
+
+	if err := json.Unmarshal(body, &rerankResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	expected := topN
+	if expected > len(documents) {
+		expected = len(documents)
+	}
+	if (len(rerankResp.Error) > 0 && string(rerankResp.Error) != "null") || len(rerankResp.Results) != expected {
+		return nil, fmt.Errorf("Cohere invalid rerank response")
+	}
+	var rerankResponse RerankResponse
+	seen := make(map[int]bool, len(rerankResp.Results))
+	for _, result := range rerankResp.Results {
+		if result.Index < 0 || result.Index >= len(documents) || seen[result.Index] {
+			return nil, fmt.Errorf("Cohere invalid rerank index")
+		}
+		seen[result.Index] = true
+		rerankResult := RerankResult{
+			Index:          result.Index,
+			RelevanceScore: result.RelevanceScore,
+		}
+		rerankResponse.Data = append(rerankResponse.Data, rerankResult)
+	}
+
+	return &rerankResponse, nil
+}
+
+// TranscribeAudio transcribe audio
+func (c *CoHereModel) TranscribeAudio(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig) (*ASRResponse, error) {
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	if err := c.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
+	if file == nil || *file == "" {
+		return nil, fmt.Errorf("file is missing")
+	}
+
+	resolvedBaseURL, err := c.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/%s", resolvedBaseURL, c.baseModel.URLSuffix.ASR)
+
+	// multipart body
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	// open audio file
+	audioFile, err := os.Open(*file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open audio file: %w", err)
+	}
+	defer audioFile.Close()
+
+	// create multipart file field
+
+	if err = writer.WriteField("model", *modelName); err != nil {
+		return nil, fmt.Errorf("failed to write model name: %w", err)
+	}
+	// extra params
+	if asrConfig != nil && asrConfig.Params != nil {
+		for key, value := range asrConfig.Params {
+
+			var val string
+
+			switch v := value.(type) {
+			case string:
+				val = v
+			case bool:
+				val = strconv.FormatBool(v)
+			case int:
+				val = strconv.Itoa(v)
+			case int64:
+				val = strconv.FormatInt(v, 10)
+			case float32:
+				val = strconv.FormatFloat(float64(v), 'f', -1, 32)
+			case float64:
+				val = strconv.FormatFloat(v, 'f', -1, 64)
+			default:
+				val = fmt.Sprintf("%v", v)
+			}
+
+			if err = writer.WriteField(key, val); err != nil {
+				return nil, fmt.Errorf("failed to write field %s: %w", key, err)
+			}
+		}
+	}
+
+	// all form fields (model, language) must appear before the file part in the multipart body
+	part, err := writer.CreateFormFile("file", filepath.Base(*file))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create form file: %w", err)
+	}
+
+	if _, err := io.Copy(part, audioFile); err != nil {
+		return nil, fmt.Errorf("failed to copy audio file: %w", err)
+	}
+
+	if err = writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close writer: %w", err)
+	}
+
+	// build request
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), longOpCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, &body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.ApiKey))
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := c.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, (20<<20)+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if len(respBody) > 20<<20 {
+		return nil, fmt.Errorf("media response exceeds limit")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Cohere ASR API error: status %d, body: %s", resp.StatusCode, "[redacted]")
+	}
+
+	var result struct {
+		Text *string `json:"text"`
+	}
+
+	if err = json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if result.Text == nil {
+		return nil, fmt.Errorf("ASR response contains no text")
+	}
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(respBody, &envelope) != nil || envelope == nil || envelope["error"] != nil {
+		return nil, fmt.Errorf("invalid transcription response")
+	}
+	if code := envelope["code"]; code != nil {
+		var n float64
+		if json.Unmarshal(code, &n) != nil || n != 0 {
+			return nil, fmt.Errorf("transcription provider error")
+		}
+	}
+
+	return &ASRResponse{Text: *result.Text}, nil
+}
+
+func (c *CoHereModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", c.Name())
+}
+
+// AudioSpeech convert text to audio
+func (c *CoHereModel) AudioSpeech(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig) (*TTSResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", c.Name())
+}
+
+func (c *CoHereModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", c.Name())
+}
+
+// OCRFile OCR file
+func (c *CoHereModel) OCRFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, ocrConfig *OCRConfig) (*OCRFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", c.Name())
+}
+
+// ParseFile parse file
+func (c *CoHereModel) ParseFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, parseFileConfig *ParseFileConfig) (*ParseFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", c.Name())
+}
+
+func (c *CoHereModel) ListModels(apiConfig *APIConfig) ([]ListModelResponse, error) {
+	if err := c.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
+	resolvedBaseURL, err := c.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/%s", resolvedBaseURL, c.baseModel.URLSuffix.Models)
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("bearer %s", strings.TrimSpace(*apiConfig.ApiKey)))
+
+	resp, err := c.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024+1))
+	if len(body) > 20*1024*1024 {
+		return nil, fmt.Errorf("provider response exceeds20MiB")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Cohere API request failed with status %d: %s", resp.StatusCode, "[redacted]")
+	}
+
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil || envelope == nil || envelope["models"] == nil || string(envelope["models"]) == "null" || (envelope["error"] != nil && string(envelope["error"]) != "null") {
+		return nil, fmt.Errorf("invalid models response")
+	}
+	// Parse response
+	var result struct {
+		Models []struct {
+			ModelName string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	models := make([]DSModel, 0, len(result.Models))
+	for _, model := range result.Models {
+		if model.ModelName != "" {
+			models = append(models, DSModel{
+				ID:      model.ModelName,
+				OwnedBy: c.Name(),
+			})
+		}
+	}
+
+	return ParseListModel(ModelList{Models: models}), nil
+}
+
+func (c *CoHereModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("%s, no such method", c.Name())
+}
+
+func (c *CoHereModel) CheckConnection(apiConfig *APIConfig) error {
+	_, err := c.ListModels(apiConfig)
 	return err
 }
 
-var _ ModelDriver = (*CoHereModel)(nil)
+func (c *CoHereModel) ListTasks(apiConfig *APIConfig) ([]ListTaskStatus, error) {
+	return nil, fmt.Errorf("%s, no such method", c.Name())
+}
+
+func (c *CoHereModel) ShowTask(taskID string, apiConfig *APIConfig) (*TaskResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", c.Name())
+}

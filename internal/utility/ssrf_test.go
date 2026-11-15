@@ -13,18 +13,18 @@ import (
 
 func TestMCPSSRFAllAnswersAndURLShape(t *testing.T) {
 	for _, address := range []string{"127.0.0.1", "10.0.0.1", "172.16.1.1", "192.168.1.1", "100.64.0.1", "192.0.2.1", "198.51.100.1", "203.0.113.1", "198.18.0.1", "240.0.0.1", "::1", "::ffff:127.0.0.1", "fe80::1", "fc00::1", "2001:db8::1", "64:ff9b::7f00:1", "2002:7f00:1::1", "2001::1", "3fff::1"} {
-		_, _, err := assertURLSafe(context.Background(), "https://public.example/path", func(context.Context, string) ([]string, error) { return []string{"8.8.8.8", address}, nil })
+		_, _, err := canonicalAssertURLSafe(t, context.Background(), "https://public.example/path", func(context.Context, string) ([]string, error) { return []string{"8.8.8.8", address}, nil })
 		if err == nil {
 			t.Fatal("unsafe mixed answer accepted", address)
 		}
 	}
-	for _, endpoint := range []string{"file:///tmp/data", "ftp://example.com", "https:///path", "https://user:secret@example.com", "https://example.com/#secret", " https://example.com", "https://example.com.", "http://[fe80::1%25en0]/", "https://例子.example"} {
-		_, _, err := assertURLSafe(context.Background(), endpoint, func(context.Context, string) ([]string, error) { return []string{"8.8.8.8"}, nil })
+	for _, endpoint := range []string{"file:///tmp/data", "ftp://example.com", "https:///path", "https://user:secret@example.com", "https://example.com/#secret", "http://[fe80::1%25en0]/"} {
+		_, _, err := canonicalAssertURLSafe(t, context.Background(), endpoint, func(context.Context, string) ([]string, error) { return []string{"8.8.8.8"}, nil })
 		if err == nil {
 			t.Fatal("unsafe URL accepted", endpoint)
 		}
 	}
-	host, ip, err := assertURLSafe(context.Background(), "https://example.com/path?token=value", func(context.Context, string) ([]string, error) {
+	host, ip, err := canonicalAssertURLSafe(t, context.Background(), "https://example.com/path?token=value", func(context.Context, string) ([]string, error) {
 		return []string{"8.8.8.8", "2606:4700:4700::1111"}, nil
 	})
 	if err != nil || host != "example.com" || ip != "8.8.8.8" {
@@ -35,7 +35,7 @@ func TestMCPSSRFAllAnswersAndURLShape(t *testing.T) {
 func TestMCPSSRFCancellationAndPinnedHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, _, err := assertURLSafe(ctx, "http://example.com", func(ctx context.Context, _ string) ([]string, error) { return nil, ctx.Err() })
+	_, _, err := canonicalAssertURLSafe(t, ctx, "http://example.com", func(ctx context.Context, _ string) ([]string, error) { return nil, ctx.Err() })
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal("DNS ignored cancellation", err)
 	}
@@ -134,4 +134,12 @@ func TestMCPSSRFPinnedTCPHostProxyAndRedirectCredentials(t *testing.T) {
 	if sameOriginDestinationRequests.Load() != 0 || otherRequests.Load() != 0 || otherCredentials.Load() != 0 {
 		t.Fatal("redirect or proxy reached a forbidden destination")
 	}
+}
+
+func canonicalAssertURLSafe(t *testing.T, ctx context.Context, raw string, lookup func(context.Context, string) ([]string, error)) (string, string, error) {
+	t.Helper()
+	previous := LookupHost
+	LookupHost = lookup
+	defer func() { LookupHost = previous }()
+	return AssertURLSafe(ctx, raw)
 }

@@ -19,280 +19,107 @@ package models
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"google.golang.org/genai"
 )
 
-// GoogleModel implements Gemini text chat, embeddings and model discovery.
-type GoogleModel struct {
-	BaseURL   map[string]string
-	URLSuffix URLSuffix
-}
+// Google SDK decoding accepts JSON null as a numeric zero and panics on a
+// top-level null response. Check the original nonstream body before the SDK
+// discards that information, then let the SDK perform its normal conversion.
+type googleResponseTransport struct{ base http.RoundTripper }
 
-func NewGoogleModel(baseURL map[string]string, urlSuffix URLSuffix) *GoogleModel {
-	return &GoogleModel{BaseURL: maps.Clone(baseURL), URLSuffix: urlSuffix}
-}
-
-func (g *GoogleModel) Name() string { return "google" }
-
-func googleContext(config *APIConfig) (context.Context, context.CancelFunc) {
-	ctx := context.Background()
-	if config != nil && config.Context != nil {
-		ctx = config.Context
-	}
-	return context.WithTimeout(ctx, 2*time.Minute)
-}
-
-func (g *GoogleModel) client(ctx context.Context, config *APIConfig) (*genai.Client, error) {
-	if config == nil || config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "" {
-		return nil, errors.New("Google API key is required")
-	}
-	baseURL := ""
-	if config.Region != nil {
-		baseURL = strings.TrimSpace(g.BaseURL[*config.Region])
-	}
-	if baseURL == "" {
-		baseURL = strings.TrimSpace(g.BaseURL["default"])
-	}
-	if baseURL == "" {
-		return nil, errors.New("Google base URL is not configured")
-	}
-	// A selected custom endpoint must fail closed rather than let the SDK
-	// reinterpret malformed URLs or attach credentials to an unintended target.
-	endpoint, err := url.Parse(baseURL)
-	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" {
-		return nil, errors.New("Google base URL must be an HTTP(S) endpoint without credentials, query or fragment")
-	}
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: strings.TrimSpace(*config.APIKey), Backend: genai.BackendGeminiAPI,
-		HTTPClient:  &http.Client{Timeout: 2 * time.Minute},
-		HTTPOptions: genai.HTTPOptions{BaseURL: baseURL},
-	})
-	if err != nil {
-		return nil, errors.New("Google client configuration is invalid")
-	}
-	return client, nil
-}
-
-// Provider bodies and transport URLs may contain credentials. Preserve useful status
-// and cancellation without exposing either in returned errors.
-func googleRequestError(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	var apiError genai.APIError
-	if errors.As(err, &apiError) {
-		return fmt.Errorf("Google request failed (HTTP %d)", apiError.Code)
-	}
-	return errors.New("Google request failed")
-}
-
-func googleGenerationConfig(config *ChatConfig) *genai.GenerateContentConfig {
-	result := &genai.GenerateContentConfig{}
-	if config == nil {
-		return result
-	}
-	if config.Thinking != nil {
-		result.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: *config.Thinking}
-		if !*config.Thinking {
-			budget := int32(0)
-			result.ThinkingConfig.ThinkingBudget = &budget
-		}
-	}
-	if config.MaxTokens != nil {
-		result.MaxOutputTokens = int32(*config.MaxTokens)
-	}
-	if config.Temperature != nil {
-		v := float32(*config.Temperature)
-		result.Temperature = &v
-	}
-	if config.TopP != nil {
-		v := float32(*config.TopP)
-		result.TopP = &v
-	}
-	if config.Stop != nil {
-		result.StopSequences = append([]string(nil), (*config.Stop)...)
-	}
-	return result
-}
-
-func validateGoogleChat(modelName, message *string) error {
-	if modelName == nil || strings.TrimSpace(*modelName) == "" {
-		return errors.New("Google model name is required")
-	}
-	if message == nil {
-		return errors.New("Google message is required")
-	}
-	return nil
-}
-
-// googleText separates thought parts from answer parts, guarding usage-only chunks.
-func googleText(response *genai.GenerateContentResponse, thinking bool) (string, string) {
-	var answer, reasoning strings.Builder
-	if response == nil || len(response.Candidates) == 0 || response.Candidates[0] == nil || response.Candidates[0].Content == nil {
-		return "", ""
-	}
-	for _, part := range response.Candidates[0].Content.Parts {
-		if part == nil {
-			continue
-		}
-		if part.Thought {
-			if thinking {
-				reasoning.WriteString(part.Text)
-			}
-		} else {
-			answer.WriteString(part.Text)
-		}
-	}
-	return answer.String(), reasoning.String()
-}
-
-func (g *GoogleModel) generate(modelName string, contents []*genai.Content, apiConfig *APIConfig, config *ChatConfig, generation *genai.GenerateContentConfig) (*ChatResponse, error) {
-	ctx, cancel := googleContext(apiConfig)
-	defer cancel()
-	client, err := g.client(ctx, apiConfig)
-	if err != nil {
-		return nil, err
-	}
-	response, err := client.Models.GenerateContent(ctx, modelName, contents, generation)
-	if err != nil {
-		return nil, googleRequestError(ctx, err)
-	}
-	answer, reasoning := googleText(response, config != nil && config.Thinking != nil && *config.Thinking)
-	if answer == "" {
-		return nil, errors.New("Google returned no text answer")
-	}
-	return &ChatResponse{Answer: &answer, ReasoningContent: &reasoning}, nil
-}
-
-// ChatWithMessages preserves roles, system instructions and text/image content.
-func (g *GoogleModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
-	if strings.TrimSpace(modelName) == "" {
-		return nil, errors.New("Google model name is required")
-	}
-	contents, generation, err := googleHistory(messages, config)
-	if err != nil {
-		return nil, err
-	}
-	return g.generate(modelName, contents, apiConfig, config, generation)
-}
-
-func (g *GoogleModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if err := ValidateMessages(messages); err != nil {
-		return err
-	}
-	if strings.TrimSpace(modelName) == "" || len(messages) == 0 {
-		return errors.New("Google model and messages are required")
-	}
-	contents, generation, err := googleHistory(messages, config)
-	if err != nil {
-		return err
-	}
-	if sender == nil {
-		return errors.New("Google stream sender is required")
-	}
-	ctx, cancel := googleContext(apiConfig)
-	defer cancel()
-	client, err := g.client(ctx, apiConfig)
-	if err != nil {
-		return err
-	}
-	receivedAnswer, finished := false, false
-	for response, err := range client.Models.GenerateContentStream(ctx, modelName, contents, generation) {
-		if err != nil {
-			return googleRequestError(ctx, err)
-		}
-		if response != nil {
-			for _, candidate := range response.Candidates {
-				if candidate != nil && candidate.FinishReason != "" {
-					finished = true
-				}
-			}
-		}
-		answer, reasoning := googleText(response, config != nil && config.Thinking != nil && *config.Thinking)
-		if reasoning != "" {
-			if err := sender(nil, &reasoning); err != nil {
-				return err
-			}
-		}
-		if answer != "" {
-			receivedAnswer = true
-			if err := sender(&answer, nil); err != nil {
-				return err
-			}
-		}
-	}
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if !receivedAnswer {
-		return errors.New("Google returned no text answer")
-	}
-	if !finished {
-		return io.ErrUnexpectedEOF
-	}
-	done := "[DONE]"
-	return sender(&done, nil)
-}
-
-// googleResponseTransport rejects null objects before SDK conversion can panic,
-// and null embedding values before the SDK's []float32 decoding turns them into zero.
-type googleResponseTransport struct {
-	base       http.RoundTripper
-	embeddings bool
-}
-
-func (t googleResponseTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	response, err := t.base.RoundTrip(request)
-	if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
+func (g googleResponseTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := g.base.RoundTrip(request)
+	if err != nil || response == nil || response.StatusCode != http.StatusOK || strings.Contains(request.URL.Path, ":streamGenerateContent") {
 		return response, err
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := io.ReadAll(io.LimitReader(response.Body, 20*1024*1024+1))
 	response.Body.Close()
 	if err != nil {
-		return nil, errors.New("could not read Google response")
+		return nil, err
 	}
-	var payload struct {
-		Embeddings []*struct {
-			Values []*float32 `json:"values"`
-		} `json:"embeddings"`
-		Models *[]map[string]json.RawMessage `json:"models"`
-		Error  json.RawMessage               `json:"error"`
+	if len(body) > 20*1024*1024 {
+		return nil, fmt.Errorf("Google response exceeds limit")
 	}
-	if err := json.Unmarshal(body, &payload); err != nil || bytes.Equal(bytes.TrimSpace(body), []byte("null")) || len(payload.Error) != 0 && string(payload.Error) != "null" {
-		return nil, errors.New("invalid Google response")
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(body, &object); err != nil || object == nil {
+		return nil, fmt.Errorf("invalid Google response")
 	}
-	if t.embeddings && len(payload.Embeddings) == 0 {
-		return nil, errors.New("invalid Google embedding response")
-	}
-	if !t.embeddings {
-		if payload.Models == nil {
-			return nil, errors.New("missing Google model inventory")
+	if raw, ok := object["error"]; ok && string(raw) != "null" {
+		var failure struct {
+			Code int `json:"code"`
 		}
-		for _, model := range *payload.Models {
-			var name string
-			if err := json.Unmarshal(model["name"], &name); err != nil || strings.TrimSpace(name) == "" {
-				return nil, errors.New("invalid Google model response")
+		_ = json.Unmarshal(raw, &failure)
+		return nil, genai.APIError{Code: failure.Code}
+	}
+	if strings.HasSuffix(request.URL.Path, ":generateContent") {
+		var candidates []struct {
+			Content *struct {
+				Parts []json.RawMessage `json:"parts"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(object["candidates"], &candidates); err != nil || len(candidates) == 0 || candidates[0].Content == nil || len(candidates[0].Content.Parts) == 0 {
+			return nil, fmt.Errorf("empty Google chat response")
+		}
+		for _, part := range candidates[0].Content.Parts {
+			var value map[string]json.RawMessage
+			if err := json.Unmarshal(part, &value); err != nil || value == nil {
+				return nil, fmt.Errorf("invalid Google response part")
 			}
 		}
 	}
-	for _, embedding := range payload.Embeddings {
-		if embedding == nil {
-			return nil, errors.New("invalid Google embedding")
+	if request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/models") {
+		raw, ok := object["models"]
+		if !ok || string(raw) == "null" {
+			return nil, fmt.Errorf("Google response has no inventory")
 		}
-		for _, value := range embedding.Values {
-			if value == nil {
-				return nil, errors.New("invalid Google embedding value")
+		var models []json.RawMessage
+		if err := json.Unmarshal(raw, &models); err != nil {
+			return nil, fmt.Errorf("invalid Google inventory")
+		}
+		for _, raw := range models {
+			var model struct {
+				Name        string `json:"name"`
+				DisplayName string `json:"displayName"`
+			}
+			if err := json.Unmarshal(raw, &model); err != nil || strings.TrimSpace(model.Name) == "" && strings.TrimSpace(model.DisplayName) == "" {
+				return nil, fmt.Errorf("invalid Google model identity")
+			}
+		}
+	}
+	if strings.HasSuffix(request.URL.Path, ":batchEmbedContents") || strings.HasSuffix(request.URL.Path, ":embedContent") {
+		raw, ok := object["embeddings"]
+		if !ok || string(raw) == "null" {
+			return nil, fmt.Errorf("Google response has no embeddings")
+		}
+		var rows []struct {
+			Values []*float64 `json:"values"`
+		}
+		if err := json.Unmarshal(raw, &rows); err != nil || rows == nil {
+			return nil, fmt.Errorf("invalid Google embeddings")
+		}
+		for _, row := range rows {
+			if len(row.Values) == 0 {
+				return nil, fmt.Errorf("empty Google embedding")
+			}
+			nonzero := false
+			for _, value := range row.Values {
+				if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) || math.Abs(*value) > math.MaxFloat32 {
+					return nil, fmt.Errorf("invalid Google embedding value")
+				}
+				nonzero = nonzero || *value != 0
+			}
+			if !nonzero {
+				return nil, fmt.Errorf("zero Google embedding")
 			}
 		}
 	}
@@ -300,181 +127,655 @@ func (t googleResponseTransport) RoundTrip(request *http.Request) (*http.Respons
 	return response, nil
 }
 
-// Embed uses the SDK's batchEmbedContents endpoint and retains provider order.
-func (g *GoogleModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
-	if len(texts) == 0 {
-		return []EmbeddingData{}, nil
-	}
-	if modelName == nil || strings.TrimSpace(*modelName) == "" {
-		return nil, errors.New("Google model name is required")
-	}
-	for _, text := range texts {
-		if strings.TrimSpace(text) == "" {
-			return nil, errors.New("Google embedding text must not be blank")
+type googleModelPage struct {
+	items         []DSModel
+	nextPageToken string
+}
+
+func collectGoogleModelNames(ctx context.Context, listPage func(context.Context, string) (googleModelPage, error)) ([]ListModelResponse, error) {
+	var models []DSModel
+	pageToken := ""
+	seen := make(map[string]bool)
+
+	for {
+		if seen[pageToken] {
+			return nil, fmt.Errorf("Google model list repeated a page token")
 		}
-	}
-	embeddingConfig := &genai.EmbedContentConfig{TaskType: "RETRIEVAL_DOCUMENT"}
-	if config != nil {
-		if config.Dimension < 0 || config.Dimension > math.MaxInt32 {
-			return nil, errors.New("Google embedding dimension must be a non-negative int32")
+		seen[pageToken] = true
+		page, err := listPage(ctx, pageToken)
+		if err != nil {
+			return nil, err
 		}
-		if config.Dimension > 0 {
-			dimension := int32(config.Dimension)
-			embeddingConfig.OutputDimensionality = &dimension
+
+		models = append(models, page.items...)
+		if page.nextPageToken == "" {
+			return ParseListModel(ModelList{Models: models}), nil
 		}
-		if config.Query {
-			embeddingConfig.TaskType = "RETRIEVAL_QUERY"
-		}
+		pageToken = page.nextPageToken
 	}
-	ctx, cancel := googleContext(apiConfig)
-	defer cancel()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	client, err := g.client(ctx, apiConfig)
+}
+
+var googleListModels = func(ctx context.Context, config *genai.ClientConfig) ([]ListModelResponse, error) {
+	client, err := genai.NewClient(ctx, config)
 	if err != nil {
 		return nil, err
 	}
-	// Each SDK client is request-scoped; other Google calls retain their transport.
-	client.ClientConfig().HTTPClient.Transport = googleResponseTransport{base: http.DefaultTransport, embeddings: true}
+
+	return collectGoogleModelNames(ctx, func(ctx context.Context, pageToken string) (googleModelPage, error) {
+		models, err := client.Models.List(ctx, &genai.ListModelsConfig{PageToken: pageToken})
+		if err != nil {
+			if ctx.Err() != nil {
+				return googleModelPage{}, ctx.Err()
+			}
+			var apiErr genai.APIError
+			if errors.As(err, &apiErr) {
+				return googleModelPage{}, fmt.Errorf("Google request failed with status %d", apiErr.Code)
+			}
+			return googleModelPage{}, fmt.Errorf("Google model list request failed")
+		}
+
+		var modelNames []DSModel
+		for _, m := range models.Items {
+			modelName := strings.TrimSpace(m.DisplayName)
+			if modelName == "" {
+				modelName = strings.TrimSpace(m.Name)
+			}
+			if modelName != "" {
+				modelNames = append(modelNames, DSModel{
+					ID:      modelName,
+					OwnedBy: "Google",
+				})
+			}
+		}
+		return googleModelPage{items: modelNames, nextPageToken: models.NextPageToken}, nil
+	})
+}
+
+// GoogleModel implements ModelDriver for Google AI
+type GoogleModel struct {
+	baseModel BaseModel
+}
+
+// NewGoogleModel creates a new Google AI model instance
+func NewGoogleModel(baseURL map[string]string, urlSuffix URLSuffix) *GoogleModel {
+	if baseURL != nil {
+		copied := make(map[string]string, len(baseURL))
+		for region, value := range baseURL {
+			copied[region] = value
+		}
+		baseURL = copied
+	}
+	return &GoogleModel{
+		baseModel: BaseModel{
+			BaseURL:    baseURL,
+			URLSuffix:  urlSuffix,
+			httpClient: NewDriverHTTPClient(),
+		},
+	}
+}
+
+func (g *GoogleModel) NewInstance(baseURL map[string]string) ModelDriver {
+	return NewGoogleModel(baseURL, g.baseModel.URLSuffix)
+}
+
+func (g *GoogleModel) Name() string {
+	return "google"
+}
+
+func (g *GoogleModel) clientConfig(apiKey string, apiConfig *APIConfig) *genai.ClientConfig {
+	client := *g.baseModel.httpClient
+	client.Transport = googleResponseTransport{base: client.Transport}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &genai.ClientConfig{APIKey: apiKey, Backend: genai.BackendGeminiAPI, HTTPClient: &client, HTTPOptions: genai.HTTPOptions{BaseURL: g.baseURL(apiConfig)}}
+}
+
+func (g *GoogleModel) baseURL(apiConfig *APIConfig) string {
+	baseURL, err := g.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		defaultConfig := &APIConfig{}
+		if apiConfig != nil {
+			defaultConfig.BaseURL = apiConfig.BaseURL
+		}
+		baseURL, err = g.baseModel.GetBaseURL(defaultConfig)
+		if err != nil {
+			return ""
+		}
+	}
+	return strings.TrimSpace(baseURL)
+}
+
+func (g *GoogleModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	if err := g.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(modelName) == "" {
+		return nil, fmt.Errorf("model name is empty")
+	}
+
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("messages is empty")
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+	if endpoint := g.baseURL(apiConfig); endpoint != "" {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return nil, fmt.Errorf("invalid Google endpoint")
+		}
+	}
+
+	client, err := genai.NewClient(ctx, g.clientConfig(strings.TrimSpace(*apiConfig.ApiKey), apiConfig))
+	if err != nil {
+		return nil, err
+	}
+
+	generation := &genai.GenerateContentConfig{}
+	if chatModelConfig != nil {
+		if chatModelConfig.Temperature != nil {
+			value := float32(*chatModelConfig.Temperature)
+			generation.Temperature = &value
+		}
+		if chatModelConfig.TopP != nil {
+			value := float32(*chatModelConfig.TopP)
+			generation.TopP = &value
+		}
+		if chatModelConfig.MaxTokens != nil {
+			generation.MaxOutputTokens = int32(*chatModelConfig.MaxTokens)
+		}
+		if chatModelConfig.Stop != nil {
+			generation.StopSequences = append([]string(nil), (*chatModelConfig.Stop)...)
+		}
+		if chatModelConfig.Thinking != nil {
+			generation.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: *chatModelConfig.Thinking}
+			if !*chatModelConfig.Thinking {
+				budget := int32(0)
+				generation.ThinkingConfig.ThinkingBudget = &budget
+			}
+		}
+	}
+	var contents []*genai.Content
+	for _, msg := range messages {
+		var role genai.Role = genai.RoleUser
+		switch msg.Role {
+		case "user", "system":
+		case "assistant", "model":
+			role = genai.RoleModel
+		default:
+			return nil, fmt.Errorf("unsupported message role")
+		}
+		var parts []*genai.Part
+		var rawParts []any
+		switch value := msg.Content.(type) {
+		case string:
+			parts = append(parts, genai.NewPartFromText(value))
+		case []interface{}:
+			rawParts = value
+		case []map[string]interface{}:
+			for _, item := range value {
+				rawParts = append(rawParts, item)
+			}
+		default:
+			return nil, fmt.Errorf("unsupported message content")
+		}
+		for _, item := range rawParts {
+			part, ok := item.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("invalid multimodal part")
+			}
+			kind, _ := part["type"].(string)
+			switch kind {
+			case "text":
+				text, ok := part["text"].(string)
+				if !ok {
+					return nil, fmt.Errorf("text part is not text")
+				}
+				parts = append(parts, genai.NewPartFromText(text))
+			case "image_url":
+				image, ok := part["image_url"].(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("invalid image part")
+				}
+				raw, ok := image["url"].(string)
+				if !ok || strings.TrimSpace(raw) == "" {
+					return nil, fmt.Errorf("image URL is required")
+				}
+				if strings.HasPrefix(raw, "data:") {
+					header, data, ok := strings.Cut(strings.TrimPrefix(raw, "data:"), ",")
+					if !ok || !strings.HasSuffix(header, ";base64") {
+						return nil, fmt.Errorf("invalid image data URL")
+					}
+					mime := strings.TrimSuffix(header, ";base64")
+					if !strings.HasPrefix(mime, "image/") {
+						return nil, fmt.Errorf("unsupported image MIME type")
+					}
+					content, err := base64.StdEncoding.DecodeString(data)
+					if err != nil || len(content) == 0 {
+						return nil, fmt.Errorf("invalid image bytes")
+					}
+					parts = append(parts, genai.NewPartFromBytes(content, mime))
+				} else {
+					parsed, err := url.Parse(raw)
+					if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Fragment != "" {
+						return nil, fmt.Errorf("invalid image URL")
+					}
+					mime := "image/jpeg"
+					for _, ext := range []string{"png", "webp", "gif"} {
+						if strings.HasSuffix(strings.ToLower(parsed.Path), "."+ext) {
+							mime = "image/" + ext
+						}
+					}
+					parts = append(parts, genai.NewPartFromURI(raw, mime))
+				}
+			default:
+				return nil, fmt.Errorf("unsupported multimodal part")
+			}
+		}
+		if len(parts) == 0 {
+			return nil, fmt.Errorf("message content is empty")
+		}
+		if msg.Role == "system" {
+			if generation.SystemInstruction == nil {
+				generation.SystemInstruction = &genai.Content{}
+			}
+			generation.SystemInstruction.Parts = append(generation.SystemInstruction.Parts, parts...)
+			continue
+		}
+		contents = append(contents, genai.NewContentFromParts(parts, role))
+	}
+	if len(contents) == 0 {
+		return nil, fmt.Errorf("user messages are required")
+	}
+
+	// Generate content (non-streaming)
+	response, err := client.Models.GenerateContent(ctx, modelName, contents, generation)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		var apiErr genai.APIError
+		if errors.As(err, &apiErr) {
+			return nil, fmt.Errorf("Google request failed with status %d", apiErr.Code)
+		}
+		return nil, fmt.Errorf("Google chat request failed")
+	}
+
+	if response == nil || len(response.Candidates) == 0 || response.Candidates[0] == nil || response.Candidates[0].Content == nil {
+		return nil, fmt.Errorf("empty Google chat response")
+	}
+	answer, reason := "", ""
+	for _, part := range response.Candidates[0].Content.Parts {
+		if part == nil {
+			continue
+		}
+		if part.Thought {
+			if chatModelConfig != nil && chatModelConfig.Thinking != nil && *chatModelConfig.Thinking {
+				reason += part.Text
+			}
+		} else {
+			answer += part.Text
+		}
+	}
+	if answer == "" {
+		return nil, fmt.Errorf("empty Google chat response")
+	}
+	return &ChatResponse{Answer: &answer, ReasonContent: &reason}, nil
+}
+
+func (g *GoogleModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
+	if sender == nil {
+		return fmt.Errorf("sender is required")
+	}
+
+	if err := g.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return err
+	}
+
+	if len(messages) == 0 {
+		return fmt.Errorf("messages is empty")
+	}
+	if strings.TrimSpace(modelName) == "" {
+		return fmt.Errorf("model name is empty")
+	}
+	if sender == nil {
+		return fmt.Errorf("sender is nil")
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), streamCallTimeout)
+	defer cancel()
+	if endpoint := g.baseURL(apiConfig); endpoint != "" {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("invalid Google endpoint")
+		}
+	}
+
+	client, err := genai.NewClient(ctx, g.clientConfig(strings.TrimSpace(*apiConfig.ApiKey), apiConfig))
+	if err != nil {
+		return err
+	}
+
+	generation := &genai.GenerateContentConfig{}
+	if chatModelConfig != nil {
+		if chatModelConfig.Temperature != nil {
+			value := float32(*chatModelConfig.Temperature)
+			generation.Temperature = &value
+		}
+		if chatModelConfig.TopP != nil {
+			value := float32(*chatModelConfig.TopP)
+			generation.TopP = &value
+		}
+		if chatModelConfig.MaxTokens != nil {
+			generation.MaxOutputTokens = int32(*chatModelConfig.MaxTokens)
+		}
+		if chatModelConfig.Stop != nil {
+			generation.StopSequences = append([]string(nil), (*chatModelConfig.Stop)...)
+		}
+		if chatModelConfig.Thinking != nil {
+			generation.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: *chatModelConfig.Thinking}
+			if !*chatModelConfig.Thinking {
+				budget := int32(0)
+				generation.ThinkingConfig.ThinkingBudget = &budget
+			}
+		}
+	}
+	var contents []*genai.Content
+	for _, msg := range messages {
+		var role genai.Role = genai.RoleUser
+		switch msg.Role {
+		case "user", "system":
+		case "assistant", "model":
+			role = genai.RoleModel
+		default:
+			return fmt.Errorf("unsupported message role")
+		}
+		var parts []*genai.Part
+		var rawParts []any
+		switch value := msg.Content.(type) {
+		case string:
+			parts = append(parts, genai.NewPartFromText(value))
+		case []interface{}:
+			rawParts = value
+		case []map[string]interface{}:
+			for _, item := range value {
+				rawParts = append(rawParts, item)
+			}
+		default:
+			return fmt.Errorf("unsupported message content")
+		}
+		for _, item := range rawParts {
+			part, ok := item.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("invalid multimodal part")
+			}
+			kind, _ := part["type"].(string)
+			switch kind {
+			case "text":
+				text, ok := part["text"].(string)
+				if !ok {
+					return fmt.Errorf("text part is not text")
+				}
+				parts = append(parts, genai.NewPartFromText(text))
+			case "image_url":
+				image, ok := part["image_url"].(map[string]interface{})
+				if !ok {
+					return fmt.Errorf("invalid image part")
+				}
+				raw, ok := image["url"].(string)
+				if !ok || strings.TrimSpace(raw) == "" {
+					return fmt.Errorf("image URL is required")
+				}
+				if strings.HasPrefix(raw, "data:") {
+					header, data, ok := strings.Cut(strings.TrimPrefix(raw, "data:"), ",")
+					if !ok || !strings.HasSuffix(header, ";base64") {
+						return fmt.Errorf("invalid image data URL")
+					}
+					mime := strings.TrimSuffix(header, ";base64")
+					if !strings.HasPrefix(mime, "image/") {
+						return fmt.Errorf("unsupported image MIME type")
+					}
+					content, err := base64.StdEncoding.DecodeString(data)
+					if err != nil || len(content) == 0 {
+						return fmt.Errorf("invalid image bytes")
+					}
+					parts = append(parts, genai.NewPartFromBytes(content, mime))
+				} else {
+					parsed, err := url.Parse(raw)
+					if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Fragment != "" {
+						return fmt.Errorf("invalid image URL")
+					}
+					mime := "image/jpeg"
+					for _, ext := range []string{"png", "webp", "gif"} {
+						if strings.HasSuffix(strings.ToLower(parsed.Path), "."+ext) {
+							mime = "image/" + ext
+						}
+					}
+					parts = append(parts, genai.NewPartFromURI(raw, mime))
+				}
+			default:
+				return fmt.Errorf("unsupported multimodal part")
+			}
+		}
+		if len(parts) == 0 {
+			return fmt.Errorf("message content is empty")
+		}
+		if msg.Role == "system" {
+			if generation.SystemInstruction == nil {
+				generation.SystemInstruction = &genai.Content{}
+			}
+			generation.SystemInstruction.Parts = append(generation.SystemInstruction.Parts, parts...)
+			continue
+		}
+		contents = append(contents, genai.NewContentFromParts(parts, role))
+	}
+	if len(contents) == 0 {
+		return fmt.Errorf("user messages are required")
+	}
+
+	answered, completed := false, false
+	for response, err := range client.Models.GenerateContentStream(ctx, modelName, contents, generation) {
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			var apiErr genai.APIError
+			if errors.As(err, &apiErr) {
+				return fmt.Errorf("Google request failed with status %d", apiErr.Code)
+			}
+			return fmt.Errorf("Google stream request failed")
+		}
+		if response == nil || len(response.Candidates) == 0 || response.Candidates[0] == nil {
+			continue
+		}
+		candidate := response.Candidates[0]
+		if candidate.FinishReason == genai.FinishReasonStop {
+			completed = true
+		}
+		if candidate.Content == nil {
+			continue
+		}
+		for _, part := range candidate.Content.Parts {
+			if part == nil || part.Text == "" {
+				continue
+			}
+			text := part.Text
+			if part.Thought {
+				if chatModelConfig != nil && chatModelConfig.Thinking != nil && *chatModelConfig.Thinking {
+					if err := sender(nil, &text); err != nil {
+						return err
+					}
+				}
+			} else {
+				answered = true
+				if err := sender(&text, nil); err != nil {
+					return err
+				}
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !answered || !completed {
+		return fmt.Errorf("incomplete Google chat stream")
+	}
+	done := "[DONE]"
+	return sender(&done, nil)
+}
+
+func (g *GoogleModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	if len(texts) > 0 && (modelName == nil || strings.TrimSpace(*modelName) == "") {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	if err := g.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+	if len(texts) == 0 {
+		return nil, fmt.Errorf("texts is empty")
+	}
+	if embeddingConfig != nil && (embeddingConfig.Dimension < 0 || embeddingConfig.Dimension > math.MaxInt32) {
+		return nil, fmt.Errorf("invalid embedding dimension")
+	}
+	for _, text := range texts {
+		if strings.TrimSpace(text) == "" {
+			return nil, fmt.Errorf("embedding text is empty")
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	if endpoint := g.baseURL(apiConfig); endpoint != "" {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return nil, fmt.Errorf("invalid Google endpoint")
+		}
+	}
+
+	client, err := genai.NewClient(ctx, g.clientConfig(strings.TrimSpace(*apiConfig.ApiKey), apiConfig))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client: %w", err)
+	}
+
 	contents := make([]*genai.Content, len(texts))
 	for i, text := range texts {
 		contents[i] = genai.NewContentFromText(text, genai.RoleUser)
 	}
-	response, err := client.Models.EmbedContent(ctx, *modelName, contents, embeddingConfig)
+
+	var cfg *genai.EmbedContentConfig
+	if embeddingConfig != nil && embeddingConfig.Dimension > 0 {
+		dim := int32(embeddingConfig.Dimension)
+		cfg = &genai.EmbedContentConfig{OutputDimensionality: &dim}
+	}
+
+	resp, err := client.Models.EmbedContent(ctx, *modelName, contents, cfg)
 	if err != nil {
-		return nil, googleRequestError(ctx, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if response == nil || len(response.Embeddings) != len(texts) {
-		return nil, errors.New("Google embedding count does not match input")
-	}
-	vectors := make([][]float64, len(response.Embeddings))
-	for i, embedding := range response.Embeddings {
-		if embedding == nil {
-			return nil, errors.New("Google returned an invalid embedding")
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
-		if config != nil && config.Dimension > 0 && len(embedding.Values) != config.Dimension {
-			return nil, errors.New("Google embedding dimension does not match request")
+		var apiErr genai.APIError
+		if errors.As(err, &apiErr) {
+			return nil, fmt.Errorf("Google request failed with status %d", apiErr.Code)
 		}
-		vectors[i] = make([]float64, len(embedding.Values))
-		nonzero := false
-		for j, value := range embedding.Values {
-			vectors[i][j] = float64(value)
-			nonzero = nonzero || value != 0
+		return nil, fmt.Errorf("Google embedding request failed")
+	}
+
+	if resp == nil {
+		return nil, fmt.Errorf("empty Google embedding response")
+	}
+	if len(resp.Embeddings) != len(texts) {
+		return nil, fmt.Errorf("expected %d embeddings, got %d", len(texts), len(resp.Embeddings))
+	}
+
+	result := make([]EmbeddingData, len(resp.Embeddings))
+	dimension := 0
+	for i, emb := range resp.Embeddings {
+		if emb == nil || len(emb.Values) == 0 {
+			return nil, fmt.Errorf("empty Google embedding vector")
 		}
-		if !nonzero {
-			return nil, errors.New("Google returned an empty or zero embedding")
+		if dimension == 0 {
+			dimension = len(emb.Values)
+		}
+		if len(emb.Values) != dimension {
+			return nil, fmt.Errorf("inconsistent Google embedding dimensions")
+		}
+		if embeddingConfig != nil && embeddingConfig.Dimension > 0 && len(emb.Values) != embeddingConfig.Dimension {
+			return nil, fmt.Errorf("Google embedding dimension mismatch")
+		}
+		vec := make([]float64, len(emb.Values))
+		for j, v := range emb.Values {
+			vec[j] = float64(v)
+		}
+		result[i] = EmbeddingData{
+			Embedding: vec,
+			Index:     i,
 		}
 	}
-	if err := ValidateEmbeddings(vectors, len(texts)); err != nil {
-		return nil, err
-	}
-	return embeddingData(vectors), nil
-}
-func (g *GoogleModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
-	return nil, errors.New("Google balance lookup is unsupported")
+
+	return result, nil
 }
 
-func (g *GoogleModel) ListModels(apiConfig *APIConfig) ([]string, error) {
-	ctx, cancel := googleContext(apiConfig)
-	defer cancel()
-	client, err := g.client(ctx, apiConfig)
-	if err != nil {
+func (g *GoogleModel) ListModels(apiConfig *APIConfig) ([]ListModelResponse, error) {
+	if err := g.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return nil, err
 	}
-	client.ClientConfig().HTTPClient.Transport = googleResponseTransport{base: http.DefaultTransport}
-	names := []string{}
-	seen := map[string]bool{}
-	token := ""
-	for {
-		page, err := client.Models.List(ctx, &genai.ListModelsConfig{PageToken: token})
-		if err != nil {
-			return nil, googleRequestError(ctx, err)
-		}
-		for _, model := range page.Items {
-			if model != nil {
-				names = append(names, model.Name)
-			}
-		}
-		if page.NextPageToken == "" {
-			return names, nil
-		}
-		if seen[page.NextPageToken] {
-			return nil, errors.New("Google returned a repeated model page token")
-		}
-		seen[page.NextPageToken] = true
-		token = page.NextPageToken
-	}
+
+	return googleListModels(apiConfig.RequestContext(), g.clientConfig(strings.TrimSpace(*apiConfig.ApiKey), apiConfig))
 }
+
+func (g *GoogleModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("no such method")
+}
+
 func (g *GoogleModel) CheckConnection(apiConfig *APIConfig) error {
 	_, err := g.ListModels(apiConfig)
 	return err
 }
 
-func (m *GoogleModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
-	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
+// Rerank calculates similarity scores between query and documents
+func (g *GoogleModel) Rerank(modelName *string, query string, documents []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return nil, fmt.Errorf("%s, Rerank not implemented", g.Name())
 }
 
-func googleHistory(messages []Message, config *ChatConfig) ([]*genai.Content, *genai.GenerateContentConfig, error) {
-	if err := ValidateMessages(messages); err != nil {
-		return nil, nil, err
-	}
-	generation := googleGenerationConfig(config)
-	var contents []*genai.Content
-	var system []*genai.Part
-	for _, message := range messages {
-		var parts []*genai.Part
-		if message.ReasoningContent != nil && *message.ReasoningContent != "" {
-			parts = append(parts, &genai.Part{Text: *message.ReasoningContent, Thought: true})
-		}
-		if text, ok := message.Content.(string); ok {
-			parts = append(parts, genai.NewPartFromText(text))
-		} else {
-			items, err := ContentParts(message.Content)
-			if err != nil {
-				return nil, nil, err
-			}
-			for _, part := range items {
-				if part["type"] == "text" {
-					parts = append(parts, genai.NewPartFromText(part["text"].(string)))
-					continue
-				}
-				if message.Role == "system" {
-					return nil, nil, errors.New("Google system instructions only support text")
-				}
-				if part["type"] != "image_url" {
-					return nil, nil, fmt.Errorf("Google does not support %s content in this adapter", part["type"])
-				}
-				img := part["image_url"].(map[string]any)
-				raw := img["url"].(string)
-				if strings.HasPrefix(raw, "data:") {
-					mime, data, err := imageData(raw)
-					if err != nil {
-						return nil, nil, err
-					}
-					parts = append(parts, genai.NewPartFromBytes(data, mime))
-				} else {
-					parts = append(parts, &genai.Part{FileData: &genai.FileData{FileURI: raw}})
-				}
-			}
-		}
-		switch message.Role {
-		case "system":
-			system = append(system, parts...)
-		case "user":
-			contents = append(contents, genai.NewContentFromParts(parts, genai.RoleUser))
-		case "assistant", "model":
-			contents = append(contents, genai.NewContentFromParts(parts, genai.RoleModel))
-		}
-	}
-	if len(contents) == 0 {
-		return nil, nil, errors.New("Google conversation requires a user or model message")
-	}
-	if len(system) != 0 {
-		generation.SystemInstruction = genai.NewContentFromParts(system, genai.RoleUser)
-	}
-	return contents, generation, nil
+// TranscribeAudio transcribe audio
+func (g *GoogleModel) TranscribeAudio(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig) (*ASRResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", g.Name())
+}
+
+func (g *GoogleModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", g.Name())
+}
+
+// AudioSpeech convert text to audio
+func (g *GoogleModel) AudioSpeech(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig) (*TTSResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", g.Name())
+}
+
+func (g *GoogleModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", g.Name())
+}
+
+// OCRFile OCR file
+func (g *GoogleModel) OCRFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, ocrConfig *OCRConfig) (*OCRFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", g.Name())
+}
+
+// ParseFile parse file
+func (g *GoogleModel) ParseFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, parseFileConfig *ParseFileConfig) (*ParseFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", g.Name())
+}
+
+func (g *GoogleModel) ListTasks(apiConfig *APIConfig) ([]ListTaskStatus, error) {
+	return nil, fmt.Errorf("%s, no such method", g.Name())
+}
+
+func (g *GoogleModel) ShowTask(taskID string, apiConfig *APIConfig) (*TaskResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", g.Name())
 }

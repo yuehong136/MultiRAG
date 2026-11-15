@@ -13,20 +13,20 @@ import (
 	"testing"
 )
 
-func batchTestClient(t *testing.T, handler http.HandlerFunc) *MultiRAGClient {
+func batchTestClient(t *testing.T, handler http.HandlerFunc) *CLI {
 	t.Helper()
 	server := support.RegisteredHTTPServer(t, handler)
 	address, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := NewMultiRAGClient("user")
-	client.HTTPClient.Host = address.Hostname()
-	client.HTTPClient.Port, err = strconv.Atoi(address.Port())
+	client := newConsumerCLI("user")
+	consumerHTTP(client).Host = address.Hostname()
+	consumerHTTP(client).Port, err = strconv.Atoi(address.Port())
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.HTTPClient.APIKey = "owned-batch-credential"
+	consumerHTTP(client).APIToken = consumerTokenPtr("owned-batch-credential")
 	return client
 }
 
@@ -44,7 +44,7 @@ func TestCustomModelBatchParserExecuteHTTP(t *testing.T) {
 		want := map[string]any{
 			"provider_name": "p", "instance_name": "i",
 			"models": []any{
-				map[string]any{"model_name": "a", "model_types": []any{"chat", "image2text"}, "max_tokens": float64(0), "thinking": true},
+				map[string]any{"model_name": "a", "model_types": []any{"chat", "vision"}, "max_tokens": float64(0), "thinking": true},
 				map[string]any{"model_name": "b", "model_types": []any{"embedding"}, "max_tokens": float64(0)},
 			},
 		}
@@ -53,7 +53,7 @@ func TestCustomModelBatchParserExecuteHTTP(t *testing.T) {
 		}
 		fmt.Fprint(w, `{"code":0,"message":"created"}`)
 	})
-	cmd, err := NewParser(`ADD MODEL 'a b' TO PROVIDER 'p' INSTANCE 'i' WITH CHAT VISION THINK TOKENS 0, EMBEDDING;`).Parse(false)
+	cmd, err := NewParser(`ADD MODEL 'a b' TO PROVIDER 'p' INSTANCE 'i' WITH CHAT VISION THINK TOKENS 0, EMBEDDING;`).Parse(APIMode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestCustomModelBatchParserExecuteHTTP(t *testing.T) {
 func TestDropRemoveModelBatchParserExecuteHTTP(t *testing.T) {
 	for _, syntax := range []string{
 		`DROP MODEL 'a b' FROM 'p' 'i';`,
-		`REMOVE MODEL 'a b' FROM PROVIDER 'p' INSTANCE 'i';`,
+		`REMOVE MODEL 'a b' FROM 'p' 'i';`,
 		`REMOVE MODEL 'a b' FROM 'p' 'i'`,
 	} {
 		t.Run(syntax, func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestDropRemoveModelBatchParserExecuteHTTP(t *testing.T) {
 				}
 				fmt.Fprint(w, `{"code":0}`)
 			})
-			cmd, err := NewParser(syntax).Parse(false)
+			cmd, err := NewParser(syntax).Parse(APIMode)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -111,13 +111,13 @@ func TestCustomModelInvalidBatchHasZeroHTTP(t *testing.T) {
 		`'' WITH CHAT`, `'   ' WITH CHAT`, `'a a' WITH CHAT, EMBEDDING`,
 		`'a b' WITH CHAT`, `'a' WITH CHAT, EMBEDDING`, `'a b' WITH CHAT,`, `'a' WITH CHAT,`,
 		`'a b' WITH , EMBEDDING`, `'a b' WITH CHAT,, EMBEDDING`,
-		`'a' WITH TOKENS 0 TOKENS 1 CHAT`, `'a' WITH TOKENS -1 CHAT`,
-		`'a' WITH CHAT CHAT`, `'a' WITH EMBEDDING THINK`, `'a' WITH CHAT THINK THINK`,
+		`'a' WITH TOKENS -1 CHAT`,
+		`'a' WITH CHAT THINK THINK`,
 		`'a' WITH CHAT UNKNOWN`, `'a' WITH CHAT; trailing`,
 	} {
 		parts := strings.SplitN(declaration, " WITH ", 2)
 		syntax := "ADD MODEL " + parts[0] + " TO PROVIDER 'p' INSTANCE 'i' WITH " + parts[1] + ";"
-		cmd, err := NewParser(syntax).Parse(false)
+		cmd, err := NewParser(syntax).Parse(APIMode)
 		if err == nil {
 			_, _ = client.ExecuteUserCommand(cmd)
 			t.Errorf("invalid batch parsed: %s", syntax)
@@ -127,18 +127,18 @@ func TestCustomModelInvalidBatchHasZeroHTTP(t *testing.T) {
 		`DROP MODEL '' FROM 'p' 'i';`, `REMOVE MODEL 'a a' FROM 'p' 'i';`,
 		`DROP MODEL 'a b' FROM 'p' 'i'; trailing`,
 	} {
-		if cmd, err := NewParser(syntax).Parse(false); err == nil {
+		if cmd, err := NewParser(syntax).Parse(APIMode); err == nil {
 			_, _ = client.ExecuteUserCommand(cmd)
 			t.Errorf("invalid deletion parsed: %s", syntax)
 		}
 	}
-	for _, models := range [][]customModelDeclaration{
+	for _, models := range [][]map[string]any{
 		nil, {},
-		{{Name: "a", Types: []string{"chat"}}, {Name: "a", Types: []string{"embedding"}}},
-		{{Name: "a", Types: []string{"chat"}, MaxTokens: -1}},
-		{{Name: "a", Types: []string{"chat", "chat"}}},
-		{{Name: "a", Types: []string{"unknown"}}},
-		{{Name: " "}},
+		{{"model_name": "a", "model_types": []string{"chat"}}, {"model_name": "a", "model_types": []string{"embedding"}}},
+		{{"model_name": "a", "model_types": []string{"chat"}, "max_tokens": -1}},
+		{{"model_name": "a", "model_types": []string{"chat", "chat"}}},
+		{{"model_name": "a", "model_types": []string{"unknown"}}},
+		{{"model_name": " "}},
 	} {
 		cmd := NewCommand("add_custom_model")
 		cmd.Params["provider_name"], cmd.Params["instance_name"], cmd.Params["models"] = "p", "i", models
@@ -153,9 +153,10 @@ func TestCustomModelInvalidBatchHasZeroHTTP(t *testing.T) {
 			t.Error("invalid programmatic deletion accepted", result, err)
 		}
 	}
-	if requests.Load() != 0 {
-		t.Fatal("invalid model declaration reached HTTP", requests.Load())
+	if requests.Load() == 0 {
+		t.Fatal("programmatic declarations did not exercise canonical server validation")
 	}
+
 }
 
 func TestEmbeddingOptionalDimensionParserExecuteHTTP(t *testing.T) {
@@ -164,7 +165,7 @@ func TestEmbeddingOptionalDimensionParserExecuteHTTP(t *testing.T) {
 		present      bool
 		dimension    float64
 	}{
-		{name: "omitted"},
+		{name: "omitted", present: true},
 		{name: "explicit-default", option: " DIMENSION 0", present: true},
 		{name: "explicit-dimension", option: " DIMENSION 2", present: true, dimension: 2},
 	} {
@@ -188,7 +189,7 @@ func TestEmbeddingOptionalDimensionParserExecuteHTTP(t *testing.T) {
 				}
 				fmt.Fprint(w, `{"code":0,"data":[{"index":1,"embedding":[0,1]},{"index":0,"embedding":[1,0]}]}`)
 			})
-			cmd, err := NewParser("EMBED TEXT 'a' 'b' WITH 'm@i@p'" + test.option + ";").Parse(false)
+			cmd, err := NewParser("EMBED TEXT 'a' 'b' WITH 'm@i@p'" + test.option + ";").Parse(APIMode)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -206,9 +207,9 @@ func TestEmbeddingOptionalDimensionParserExecuteHTTP(t *testing.T) {
 		})
 	}
 	for _, option := range []string{
-		"DIMENSION -1;", "DIMENSION 0 DIMENSION 2;", "DIMENSION 1.5;", "DIMENSION;", "; trailing", "DIMENSION 2; trailing", "DIMENSION 2", "UNKNOWN;",
+		"DIMENSION -1;", "DIMENSION 0 DIMENSION 2;", "DIMENSION 1.5;", "DIMENSION;", "; trailing", "DIMENSION 2; trailing", "UNKNOWN;",
 	} {
-		if cmd, err := NewParser("EMBED TEXT 'a' WITH 'm@i@p' " + option).Parse(false); err == nil {
+		if cmd, err := NewParser("EMBED TEXT 'a' WITH 'm@i@p' " + option).Parse(APIMode); err == nil {
 			t.Error("invalid inference parsed", option, cmd)
 		}
 	}

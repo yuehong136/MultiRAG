@@ -206,275 +206,70 @@ jobs:
     env:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: ci_go
-          POSTGRES_PASSWORD: '123456'
-          POSTGRES_DB: multirag_go_models_a_skills_ci
-        ports: ['5432/tcp']
-        options: >-
-          --tmpfs /var/lib/postgresql/data:rw,size=536870912
-          --health-cmd "pg_isready -U ci_go -d multirag_go_models_a_skills_ci"
-          --health-interval 5s --health-timeout 5s --health-retries 20
-      redis:
-        image: valkey/valkey:8
-        ports: ['6379/tcp']
-        options: >-
-          --health-cmd "valkey-cli ping"
-          --health-interval 5s --health-timeout 5s --health-retries 20
+      REQUIRE_SERVICES: '1'
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
         with:
           version: '0.12.5'
       - uses: ./.github/actions/setup-go-native
-      - name: Private configuration for owned MinIO test buckets
+      - name: Prepare isolated Go acceptance services
         run: |
           set -euo pipefail
-          docker run -d --name ci-go-minio -p 127.0.0.1:9000:9000 \
-            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=12345678 \
-            pgsty/minio:RELEASE.2026-03-25T00-00-00Z server /data
-          export MULTIRAG_GO_TEST_MINIO_CONFIG="$RUNNER_TEMP/go-minio.json"
-          echo "MULTIRAG_GO_TEST_MINIO_CONFIG=$MULTIRAG_GO_TEST_MINIO_CONFIG" >> "$GITHUB_ENV"
-          umask 077
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          Path(os.environ['MULTIRAG_GO_TEST_MINIO_CONFIG']).write_text(json.dumps({
-              'host': '127.0.0.1:9000', 'user': 'minioadmin',
-              'password': '12345678', 'secure': False,
-          }))
-          PY
-          for attempt in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then exit 0; fi
-            sleep 2
-          done
-          docker logs --tail 100 ci-go-minio
-          exit 1
-      - name: Build, vet and separate command binaries
+          sudo sysctl -w vm.max_map_count=262144
+          python3 scripts/run_registered.py --evidence-root .test-results/go --label go-services-start \
+            --input scripts/go_test_services.py --input go.mod --input go.sum \
+            -- python3 scripts/go_test_services.py start --root .test-results/go
+          echo "MULTIRAG_GO_ALIGNMENT_CONFIG=$GITHUB_WORKSPACE/.test-results/go/isolated-services/scratch.json" >> "$GITHUB_ENV"
+      - name: Build and vet canonical Go commands
         run: |
           set -euo pipefail
           mkdir -p .test-results/go/bin
           git rev-parse HEAD > .test-results/go/backend-sha.txt
           test "$(cat .test-results/go/backend-sha.txt)" = "$GITHUB_SHA"
-          go version | tee .test-results/go/toolchain.txt
+          go version > .test-results/go/toolchain.txt
           cmake --version >> .test-results/go/toolchain.txt
           git -C resource rev-parse HEAD >> .test-results/go/toolchain.txt
           go build ./internal/...
-          go vet ./internal/...
-          for command in multirag_cli server_main admin_server; do
+          go vet -tags=integration ./internal/...
+          for command in multirag_cli server_main admin_server ingestor; do
             go build -o ".test-results/go/bin/$command" "./cmd/$command.go"
           done
-      - name: Prepare owned management regression database
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-          PG_PORT: ${{ job.services.postgres.ports[5432] }}
-          PGHOST: 127.0.0.1
-          PGPORT: ${{ job.services.postgres.ports[5432] }}
-          PGUSER: ci_go
-          PGPASSWORD: '123456'
-          PGDATABASE: postgres
+          echo "MULTIRAG_M_CLI=$GITHUB_WORKSPACE/.test-results/go/bin/multirag_cli" >> "$GITHUB_ENV"
+      - name: Prepare real native format fixtures
         run: |
           set -euo pipefail
+          go mod download github.com/gabriel-vasile/mimetype
+          export GO_MODULE_CACHE="$(go env GOMODCACHE)"
           python3 - <<'PY'
-          import json, os
+          import json, os, shutil
           from pathlib import Path
-          Path('.test-results/go/after33-database.json').write_text(json.dumps({
-              'database': 'multirag_after33_g_ci', 'host': '127.0.0.1',
-              'port': int(os.environ['PG_PORT']), 'container': os.environ['PG_CONTAINER'],
-              'status': 'registered-before-create', 'borrowed_service': True,
-          }, indent=2))
-          private = Path(os.environ['RUNNER_TEMP']) / 'go-after10bbe.json'
-          probe = Path(os.environ['RUNNER_TEMP']) / 'go-after10bbe-probe.json'
-          Path('.test-results/go/deepseek-config.json').write_text(json.dumps({
-              'paths': [str(private), str(probe)], 'host': '127.0.0.1',
-              'port': int(os.environ['PG_PORT']),
-              'status': 'registered-before-create', 'credentials_omitted': True,
-          }, indent=2))
-          from urllib.parse import quote
-          import secrets
-          dsn = ('postgres://' + quote(os.environ['PGUSER'], safe='') + ':' +
-                 quote(os.environ['PGPASSWORD'], safe='') + '@127.0.0.1:' +
-                 os.environ['PG_PORT'] + '/postgres?sslmode=disable')
-          for path, listen in [(private, '127.0.0.1:18961'), (probe, '127.0.0.1:18962')]:
-              with path.open('x') as output:
-                  os.chmod(path, 0o600)
-                  json.dump({
-                      'admin_dsn': dsn, 'pg_endpoint': '127.0.0.1:' + os.environ['PG_PORT'],
-                      'listen': listen, 'mysql_listen': '127.0.0.1:18962',
-                      'multirag': {'secret_key': secrets.token_hex(32)},
-                  }, output)
+          root=Path('.test-results/go')
+          target=root/'native-fixtures'
+          source=Path(os.environ['GO_MODULE_CACHE'])/'github.com/gabriel-vasile/mimetype@v1.4.2/testdata'
+          items={f'sample.{ext}':str(source/f'{ext}.{ext}') for ext in ('doc','docx','ppt','pptx','xls','xlsx')}
+          (root/'native-fixtures-reservation.json').write_text(json.dumps({'directory':str(target),'sources':items}))
+          target.mkdir()
+          for name,path in items.items(): shutil.copyfile(path,target/name)
           PY
-          psql -v ON_ERROR_STOP=1 -c 'CREATE DATABASE multirag_after33_g_ci'
-      - name: Prepare isolated Go file, memory and recovery services
-        env:
-          PG_PORT: ${{ job.services.postgres.ports[5432] }}
-          REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+          echo "MULTIRAG_OFFICE_FIXTURES=$GITHUB_WORKSPACE/.test-results/go/native-fixtures" >> "$GITHUB_ENV"
+      - name: Go race and actual service regression
         run: |
-          set -euo pipefail
-          sudo sysctl -w vm.max_map_count=262144
           python3 - <<'PY'
-          import json, os, socket, subprocess, sys, time, urllib.request
+          import json, shutil, subprocess
           from pathlib import Path
-          sys.path.insert(0, 'scripts')
-          from resource_journal import Journal
-          root = Path('.test-results/go')
-          private = Path(os.environ['RUNNER_TEMP'])
-          identity = os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
-          images = {'ci-go-afterdcf-es': 'elasticsearch:8.11.3',
-                    'ci-go-afterdcf-infinity': 'infiniflow/infinity:v0.7.0'}
-          files = [private / 'go-afterdcf.json', private / 'go-afterdcf-infinity.json',
-                   private / 'go-afterdcf-infinity.toml']
-          journal = Journal(root / 'afterdcf-services.jsonl', create=True)
-          journal.event('reserve-ci-services', containers=images, identity=identity,
-                        private_paths=[str(path) for path in files],
-                        outputs=['afterdcf-services.json', 'afterdcf-cleanup.json'],
-                        diagnostics=[name + '.log' for name in images])
-          ports, listeners = [], []
-          for _ in range(3):
-              journal.event('reserve-ci-port', host='127.0.0.1', port=0, owner=identity)
-              listener = socket.socket()
-              listener.bind(('127.0.0.1', 0))
-              listeners.append(listener)
-              ports.append(listener.getsockname()[1])
-          es, thrift, http = ports
-          journal.event('reserve-ci-container-ports', es=es, infinity_thrift=thrift, infinity_http=http)
-          for listener in listeners:
-              listener.close()
-          record = {'identity': identity, 'containers': images, 'ports': ports,
-                    'private_paths': [str(path) for path in files]}
-          with (root / 'afterdcf-services.json').open('x') as output:
-              json.dump(record, output); output.flush(); os.fsync(output.fileno())
-          config = Path('docker/infinity_conf.toml').read_text()
-          config = config.replace('buffer_manager_size      = "8GB"', 'buffer_manager_size      = "1GB"')
-          config = config.replace('memindex_memory_quota    = "1GB"', 'memindex_memory_quota    = "512MB"')
-          config = config.replace('connection_pool_size     = 128', 'connection_pool_size     = 32')
-          os.umask(0o077)
-          with files[2].open('x') as output:
-              output.write(config); output.flush(); os.fsync(output.fileno())
-          label = 'multirag.ci.afterdcf=' + identity
-          subprocess.run(['docker', 'run', '-d', '--name', 'ci-go-afterdcf-es', '--label', label,
-                          '--memory', '2g', '-p', f'127.0.0.1:{es}:9200',
-                          '-e', 'discovery.type=single-node', '-e', 'xpack.security.enabled=false',
-                          '-e', 'ES_JAVA_OPTS=-Xms512m -Xmx512m', images['ci-go-afterdcf-es']], check=True)
-          subprocess.run(['docker', 'run', '-d', '--name', 'ci-go-afterdcf-infinity', '--label', label,
-                          '--memory', '2g', '--tmpfs', '/var/infinity:rw,size=2147483648',
-                          '-p', f'127.0.0.1:{thrift}:23817', '-p', f'127.0.0.1:{http}:23820',
-                          '--ulimit', 'nofile=500000:500000',
-                          '-v', str(files[2]) + ':/infinity_conf.toml:ro',
-                          images['ci-go-afterdcf-infinity'], '-f', '/infinity_conf.toml'], check=True)
-          for endpoint in [f'http://127.0.0.1:{es}', f'http://127.0.0.1:{http}/admin/node/current']:
-              for attempt in range(90):
-                  try:
-                      with urllib.request.urlopen(endpoint, timeout=2) as response:
-                          if response.status == 200:
-                              break
-                  except OSError:
-                      pass
-                  time.sleep(2)
-              else:
-                  raise RuntimeError('Owned Go service did not become ready')
-          configs = [
-              {'Database': {'Driver': 'postgres', 'Host': '127.0.0.1', 'Port': int(os.environ['PG_PORT']),
-                            'Database': 'postgres', 'Username': 'ci_go', 'Password': '123456', 'Schema': 'usr_ai'},
-               'Redis': {'Host': '127.0.0.1', 'Port': int(os.environ['REDIS_PORT']), 'DB': 1},
-               'MinIO': {'Host': '127.0.0.1:9000', 'User': 'minioadmin', 'Password': '12345678'},
-               'Elasticsearch': {'Hosts': f'http://127.0.0.1:{es}'}},
-              {'URI': f'127.0.0.1:{thrift}', 'DBName': 'default_db'},
-          ]
-          for path, value in zip(files[:2], configs, strict=True):
-              with path.open('x') as output:
-                  json.dump(value, output); output.flush(); os.fsync(output.fileno())
-          journal.event('ci-services-ready', identity=identity, ports=ports)
-          journal.close()
+          root=Path('.test-results/go')
+          result=subprocess.run(['python3','scripts/run_registered.py','--evidence-root',str(root),'--label','go-canonical-race','--input','go.mod','--input','go.sum','--input','scripts/go_test_services.py','--','go','test','-tags=integration','-race','-count=1','-json','./internal/...'],capture_output=True,text=True)
+          print(result.stdout,end='')
+          print(result.stderr,end='')
+          receipt=json.loads(result.stdout.splitlines()[-1])
+          shutil.copyfile(root/(receipt['run_id']+'.output'),root/'tests.jsonl')
+          if result.returncode: raise SystemExit(result.returncode)
+          subprocess.run(['python3','scripts/ci_checks.py','go-audit','--reports',str(root)],check=True)
           PY
-      - name: Go race regression (live opt-ins remain explicit)
-        env:
-          MULTIRAG_SKILL_EMBEDDING_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_go_models_a_skills_ci?sslmode=disable
-          MULTIRAG_AFTER33_G_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_after33_g_ci?sslmode=disable
-          MULTIRAG_AFTER33_CLI: ${{ github.workspace }}/.test-results/go/bin/multirag_cli
-          MULTIRAG_DEEPSEEK_CONFIG: ${{ runner.temp }}/go-after10bbe.json
-          MULTIRAG_QWEN_CONFIG: ${{ runner.temp }}/go-after10bbe.json
-          MULTIRAG_AFTER10BBE_S_CONFIG: ${{ runner.temp }}/go-after10bbe.json
-          MULTIRAG_AFTERDCF_G_CONFIG: ${{ runner.temp }}/go-afterdcf.json
-          MULTIRAG_AFTERDCF_G_INFINITY_CONFIG: ${{ runner.temp }}/go-afterdcf-infinity.json
-        run: |
-          set -euo pipefail
-          go test -race -count=1 -json ./internal/... | tee .test-results/go/tests.jsonl
-          REQUIRE_SERVICES=1 MULTIRAG_AFTER10BBE_G_CONFIG="$RUNNER_TEMP/go-after10bbe.json" \
-            go test -race -tags integration -count=1 -json ./internal/handler \
-              -run '^(TestAfter10bbeAgentMetadataHTTPAndSQL|TestHandlerInternalErrorsSQLHTTP)$' | tee -a .test-results/go/tests.jsonl
-          REQUIRE_SERVICES=1 MULTIRAG_AFTER10BBE_G_CONFIG="$RUNNER_TEMP/go-after10bbe-probe.json" \
-            go test -race -tags integration -count=1 -json ./internal/service \
-              -run '^TestAfter10bbeDBProbeMySQLProtocol$' | tee -a .test-results/go/tests.jsonl
-          python3 scripts/ci_checks.py go-audit --reports .test-results/go
-      - name: Go memory service diagnostics and precise cleanup
+      - name: Independently clean owned Go services
         if: always()
-        run: |
-          python3 - <<'PY'
-          import json, os, socket, subprocess
-          from pathlib import Path
-          root = Path('.test-results/go')
-          path = root / 'afterdcf-services.json'
-          if not path.exists():
-              raise SystemExit(0)
-          record = json.loads(path.read_text())
-          for name in record['containers']:
-              inventory = subprocess.check_output(['docker', 'container', 'ls', '-a', '--format', '{{.Names}}'], text=True).splitlines()
-              if name in inventory:
-                  container = json.loads(subprocess.check_output(['docker', 'inspect', name], text=True))[0]
-                  if container['Config']['Labels'].get('multirag.ci.afterdcf') != record['identity']:
-                      raise RuntimeError('Refuse cleanup of unowned Go service')
-                  logs = subprocess.run(['docker', 'logs', name], capture_output=True, text=True)
-                  (root / (name + '.log')).write_text(logs.stdout + logs.stderr)
-                  subprocess.run(['docker', 'rm', '-f', '-v', name], check=True)
-              inventory = subprocess.check_output(['docker', 'container', 'ls', '-a', '--format', '{{.Names}}'], text=True).splitlines()
-              if name in inventory:
-                  raise RuntimeError('Owned Go service remains')
-          for port in record['ports']:
-              with socket.socket() as reader:
-                  reader.settimeout(1)
-                  if reader.connect_ex(('127.0.0.1', port)) == 0:
-                      raise RuntimeError('Owned Go port remains open')
-          for name in record['private_paths']:
-              Path(name).unlink(missing_ok=True)
-          record.update(containers_absent=True, ports_closed=True, private_files_absent=True)
-          with (root / 'afterdcf-cleanup.json').open('x') as output:
-              json.dump(record, output); output.flush(); os.fsync(output.fileno())
-          PY
-      - name: Drop owned management regression database
-        if: always()
-        env:
-          PGHOST: 127.0.0.1
-          PGPORT: ${{ job.services.postgres.ports[5432] }}
-          PGUSER: ci_go
-          PGPASSWORD: '123456'
-          PGDATABASE: postgres
-        run: |
-          set -euo pipefail
-          psql -v ON_ERROR_STOP=1 -c 'DROP DATABASE IF EXISTS multirag_after33_g_ci WITH (FORCE)'
-          remaining=$(psql -At \
-            -c "SELECT count(*) FROM pg_database WHERE datname = 'multirag_after33_g_ci'")
-          test "$remaining" = 0
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          path = Path('.test-results/go/after33-database.json')
-          record = json.loads(path.read_text()) if path.exists() else {'database': 'multirag_after33_g_ci'}
-          record.update(status='cleaned', independent_database_absent=True)
-          path.parent.mkdir(parents=True, exist_ok=True)
-          path.write_text(json.dumps(record, indent=2))
-          PY
-      - name: MinIO diagnostics and cleanup
-        if: always()
-        run: |
-          mkdir -p .test-results/go
-          docker logs --tail 200 ci-go-minio > .test-results/go/minio.log 2>&1 || true
-          docker rm -f -v ci-go-minio >/dev/null 2>&1 || true
-          rm -f "$MULTIRAG_GO_TEST_MINIO_CONFIG"
-          rm -f "$RUNNER_TEMP/go-after10bbe.json" "$RUNNER_TEMP/go-after10bbe-probe.json"
+        run: python3 scripts/go_test_services.py stop --root .test-results/go
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:

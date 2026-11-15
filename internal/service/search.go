@@ -118,7 +118,7 @@ func (s *SearchService) toSearchAppResponse(search *entity.Search) map[string]in
 		"status":        search.Status,
 		"create_time":   search.CreateTime,
 		"update_time":   search.UpdateTime,
-		"search_config": search.SearchConfig,
+		"search_config": map[string]interface{}(search.SearchConfig),
 	}
 
 	if search.Avatar != nil {
@@ -134,13 +134,13 @@ func (s *SearchService) toSearchAppResponse(search *entity.Search) map[string]in
 }
 
 // CreateSearchResponse create search response
-// Reference: api/apps/restful_apis/search_api.py::create_search - returns {"search_id": req["id"]}
+// Reference: api/apps/restful_apis/search_api.py::create - returns {"search_id": req["id"]}
 type CreateSearchResponse struct {
 	SearchID string `json:"search_id"` // UUID format
 }
 
 // CreateSearch creates a new search app
-// Reference: api/apps/restful_apis/search_api.py::create_search
+// Reference: api/apps/restful_apis/search_api.py::create
 // Python implementation steps:
 // 1. Get JSON request body with name (required) and description (optional)
 // 2. Validate name is string, non-empty, and max 255 bytes
@@ -191,8 +191,16 @@ func (s *SearchService) CreateSearch(userID string, name string, description *st
 }
 
 func (s *SearchService) GetSearchDetail(userID string, searchID string) (*entity.Search, error) {
+	var activeUsers int64
+	if err := dao.DB.Model(&entity.User{}).Where("id = ? AND status = ? AND is_active = ?", userID, "1", "1").Count(&activeUsers).Error; err != nil {
+		return nil, err
+	}
+	if activeUsers != 1 {
+		return nil, fmt.Errorf("has no permission for this operation")
+	}
+
 	// Step 1: Get user tenants (same as Python UserTenantService.query(user_id=current_user.id))
-	tenants, err := s.userTenantDAO.GetActiveByUserID(userID)
+	tenants, err := s.userTenantDAO.GetByUserID(userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user tenants: %w", err)
 	}
@@ -201,6 +209,13 @@ func (s *SearchService) GetSearchDetail(userID string, searchID string) (*entity
 	// Python: for tenant in tenants: if SearchService.query(tenant_id=tenant.tenant_id, id=search_id): break
 	hasPermission := false
 	for _, tenant := range tenants {
+		if tenant.Role != "owner" && tenant.Role != "normal" && tenant.Role != "admin" {
+			continue
+		}
+		record, err := dao.NewTenantDAO().GetByID(tenant.TenantID)
+		if err != nil || record == nil || record.Status == nil || *record.Status != "1" {
+			continue
+		}
 		searches, err := s.searchDAO.QueryByTenantIDAndID(tenant.TenantID, searchID)
 		if err != nil {
 			continue // Try next tenant
@@ -348,7 +363,7 @@ func (s *SearchService) GetDetail(searchID string) (map[string]interface{}, erro
 		"status":        search.Status,
 		"create_time":   search.CreateTime,
 		"update_time":   search.UpdateTime,
-		"search_config": search.SearchConfig,
+		"search_config": map[string]interface{}(search.SearchConfig),
 	}
 
 	if search.Avatar != nil {

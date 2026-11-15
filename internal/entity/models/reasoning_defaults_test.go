@@ -37,7 +37,11 @@ func TestReasoningDefaultsPreserveCallerConfigHTTP(t *testing.T) {
 						t.Error(err)
 						return
 					}
-					if r.URL.Path != "/instance/chat" || r.Header.Get("Authorization") != "Bearer fixture" {
+					wantPath := "/instance/chat"
+					if provider == "VolcEngine" && body["stream"] == true {
+						wantPath = "/instance/chat/completions"
+					}
+					if r.URL.Path != wantPath || r.Header.Get("Authorization") != "Bearer fixture" {
 						t.Error("instance endpoint or authentication changed")
 					}
 					var thinking any
@@ -62,14 +66,18 @@ func TestReasoningDefaultsPreserveCallerConfigHTTP(t *testing.T) {
 					if body["stream"] == true {
 						fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n")
 					} else {
-						fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
+						if provider == "DeepSeek" {
+							fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"reason"}}]}`)
+						} else {
+							fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"reason"}}]}`)
+						}
 					}
 				}))
 				driver, err := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL + "/instance"}, URLSuffix{Chat: "chat"})
 				if err != nil {
 					t.Fatal(err)
 				}
-				api := &APIConfig{APIKey: stringPtr("fixture")}
+				api := &APIConfig{ApiKey: stringPtr("fixture")}
 				name, question := "served", "question"
 				var group sync.WaitGroup
 				for range 3 {
@@ -101,6 +109,7 @@ func TestReasoningDefaultsPreserveCallerConfigHTTP(t *testing.T) {
 }
 
 func TestBoundReasoningDefaultsHTTP(t *testing.T) {
+	boundConfig := &ChatConfig{}
 	for _, provider := range []string{"DeepSeek", "VolcEngine"} {
 		t.Run(provider, func(t *testing.T) {
 			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +133,11 @@ func TestBoundReasoningDefaultsHTTP(t *testing.T) {
 				if body.Stream {
 					fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n")
 				} else {
-					fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
+					if provider == "DeepSeek" {
+						fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"reason"}}]}`)
+					} else {
+						fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"reason"}}]}`)
+					}
 				}
 			}))
 			driver, err := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
@@ -132,16 +145,17 @@ func TestBoundReasoningDefaultsHTTP(t *testing.T) {
 				t.Fatal(err)
 			}
 			name, on := "served", true
-			bound := NewChatModel(driver, &name, &APIConfig{APIKey: stringPtr("fixture")})
-			bound.ModelConfig.Thinking = &on
+			bound := NewChatModel(driver, &name, &APIConfig{ApiKey: stringPtr("fixture")})
+			boundConfig.
+				Thinking = &on
 			history := []map[string]string{{"role": "user", "content": "question"}}
-			if answer, err := bound.Chat("rules", history, nil); err != nil || answer != "answer" {
+			if answer, err := chatAnswerForTest(bound, messagesForTest("rules", history), boundConfig); err != nil || answer != "answer" {
 				t.Fatal(answer, err)
 			}
-			if err := bound.ChatStreamlyWithSender(chatHistory("rules", history), nil, func(*string, *string) error { return nil }); err != nil {
+			if err := bound.ModelDriver.ChatStreamlyWithSender(*bound.ModelName, messagesForTest("rules", history), bound.APIConfig, boundConfig, func(*string, *string) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
-			if bound.ModelConfig.Effort != nil || bound.ModelConfig.Verbosity != nil || bound.ModelConfig.Thinking != &on || !on {
+			if boundConfig.Effort != nil || boundConfig.Verbosity != nil || boundConfig.Thinking != &on || !on {
 				t.Fatal("bound defaults mutated")
 			}
 		})

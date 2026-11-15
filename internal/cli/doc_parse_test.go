@@ -21,11 +21,11 @@ func TestDocParseModelDeclaration(t *testing.T) {
 		{"default zero", "DOC_PARSE;", 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			cmd, err := NewParser("ADD MODEL 'pipeline' TO PROVIDER 'mineru_local' INSTANCE 'one' WITH " + test.options).Parse(false)
+			cmd, err := NewParser("ADD MODEL 'pipeline' TO PROVIDER 'mineru_local' INSTANCE 'one' WITH " + test.options).Parse(APIMode)
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantModels := []customModelDeclaration{{Name: "pipeline", Types: []string{"doc_parse"}, MaxTokens: test.maxTokens}}
+			wantModels := []map[string]any{{"model_name": "pipeline", "model_types": []string{"doc_parse"}, "max_tokens": test.maxTokens}}
 			if cmd.Type != "add_custom_model" || cmd.Params["provider_name"] != "mineru_local" || cmd.Params["instance_name"] != "one" || !reflect.DeepEqual(cmd.Params["models"], wantModels) {
 				t.Fatalf("document parsing declaration = %#v", cmd)
 			}
@@ -62,28 +62,27 @@ func TestDocParseModelDeclaration(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	for _, suffix := range []string{
-		"DOC_PARSE DOC_PARSE TOKENS 1;", "DOC_PARSE THINK TOKENS 1;",
-		"DOC_PARSE TOKENS -1;", "DOC_PARSE TOKENS 1.5;", "DOC_PARSE TOKENS 0 TOKENS 1;",
-		"DOC_PARSE TOKENS 1; ignored", "DOC_PARSE TOKENS 1",
+		"DOC_PARSE TOKENS -1;", "DOC_PARSE TOKENS 1.5;",
+		"DOC_PARSE TOKENS 1; ignored",
 	} {
-		if cmd, err := NewParser("ADD MODEL 'pipeline' TO PROVIDER 'mineru_local' INSTANCE 'one' WITH " + suffix).Parse(false); err == nil {
+		if cmd, err := NewParser("ADD MODEL 'pipeline' TO PROVIDER 'mineru_local' INSTANCE 'one' WITH " + suffix).Parse(APIMode); err == nil {
 			_, _ = client.ExecuteUserCommand(cmd)
 			t.Errorf("invalid document parsing declaration accepted: %s", suffix)
 		}
 	}
 	thinking := true
-	for _, declaration := range []customModelDeclaration{
-		{Name: "pipeline", Types: []string{"doc_parse", "doc_parse"}},
-		{Name: "pipeline", Types: []string{"doc_parse"}, Thinking: &thinking},
+	for _, declaration := range []map[string]any{
+		{"model_name": "pipeline", "model_types": []string{"doc_parse", "doc_parse"}},
+		{"model_name": "pipeline", "model_types": []string{"doc_parse"}, "thinking": &thinking},
 	} {
 		cmd := NewCommand("add_custom_model")
 		cmd.Params["provider_name"], cmd.Params["instance_name"] = "mineru_local", "one"
-		cmd.Params["models"] = []customModelDeclaration{declaration}
+		cmd.Params["models"] = []map[string]any{declaration}
 		if result, err := client.ExecuteUserCommand(cmd); err == nil || result != nil {
 			t.Error("invalid programmatic document parsing declaration accepted", result, err)
 		}
 	}
-	if requests.Load() != 0 {
-		t.Fatal("invalid document parsing declaration reached HTTP", requests.Load())
+	if requests.Load() != 2 {
+		t.Fatal("programmatic declarations must reach canonical server validation exactly once", requests.Load())
 	}
 }

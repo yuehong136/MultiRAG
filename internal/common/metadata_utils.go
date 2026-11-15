@@ -1,7 +1,24 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package common
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/big"
 	"sort"
@@ -9,317 +26,405 @@ import (
 	"strings"
 )
 
-// MetaCondition is a predicate over one metadata field.
+// MetaCondition represents a single parsed filter condition.
 type MetaCondition struct {
-	Operator string
-	Key      string
-	Value    interface{}
+	Operator string      // "=", "≠", ">", "<", "≥", "≤", "contains", "not contains", "in", "not in", "start with", "end with", "empty", "not empty"
+	Key      string      // metadata field name
+	Value    interface{} // comparison value
 }
 
-// MetaValueDocs maps each flattened field value to its documents.
+// MetaValueDocs maps a metadata field value to the document IDs that have that value.
+// Example: {"Zhang San": ["doc1", "doc2"], "Li Si": ["doc3"]}
 type MetaValueDocs map[string][]string
 
-// MetaData is the flattened metadata directory used during retrieval.
+// MetaData maps a metadata field name to its value→documents mapping.
+// Example: {"author": {"Zhang San": ["doc1"]}, "year": {"2024": ["doc1", "doc2"]}}
 type MetaData map[string]MetaValueDocs
 
-// MetaFilterInput groups predicates with their boolean operator.
+// MetaFilterInput groups filter conditions with their logic operator.
 type MetaFilterInput struct {
 	Conditions []MetaCondition
-	Logic      string
-	invalid    bool
+	Logic      string // "and" | "or"
 }
 
-// NormalizeOperator translates API aliases to the shared predicate symbols.
-func NormalizeOperator(operator string) string {
-	switch operator {
-	case "is", "==":
-		return "="
-	case "not is", "!=":
-		return "≠"
-	case ">=":
-		return "≥"
-	case "<=":
-		return "≤"
-	default:
-		return operator
-	}
+// operatorMapping translates Python-style operators to internal symbols.
+var operatorMapping = map[string]string{
+	"is":     "=",
+	"not is": "≠",
+	">=":     "≥",
+	"<=":     "≤",
+	"!=":     "≠",
+	"==":     "=",
 }
 
-// ParseAndConvert preserves invalid predicates so a malformed filter cannot
-// become an absent filter. Only an absent or explicitly empty list means no filter.
-func ParseAndConvert(condition map[string]interface{}) *MetaFilterInput {
-	if condition == nil {
+// ParseAndConvert converts raw API conditions into MetaFilterInput.
+// Equivalent to Python: meta_filter(metas, convert_conditions(cond), cond.get("logic"))
+func ParseAndConvert(metadataCondition map[string]interface{}) *MetaFilterInput {
+	if metadataCondition == nil {
 		return nil
 	}
-	input := &MetaFilterInput{Logic: "and"}
-	if raw, exists := condition["logic"]; exists {
-		var ok bool
-		input.Logic, ok = raw.(string)
-		input.invalid = !ok
+
+	logic, _ := metadataCondition["logic"].(string)
+	if logic == "" {
+		logic = "and"
 	}
-	input.invalid = input.invalid || !ValidMetaConditions(nil, input.Logic)
-	raw, exists := condition["conditions"]
-	if !exists {
-		if input.invalid {
-			return input
+
+	rawConditions, ok := metadataCondition["conditions"].([]interface{})
+	if !ok || len(rawConditions) == 0 {
+		if _, present := metadataCondition["conditions"]; !present && len(metadataCondition) == 0 {
+			return nil
 		}
-		return nil
+		if ok && len(rawConditions) == 0 && (logic == "and" || logic == "or") {
+			return nil
+		}
+		return &MetaFilterInput{Conditions: []MetaCondition{{Operator: "invalid"}}, Logic: logic}
 	}
-	conditions, ok := raw.([]interface{})
-	if !ok {
-		input.invalid = true
-		return input
-	}
-	if len(conditions) == 0 && !input.invalid {
-		return nil
-	}
-	for _, rawCondition := range conditions {
-		item, ok := rawCondition.(map[string]interface{})
+
+	var conditions []MetaCondition
+	for _, raw := range rawConditions {
+		cond, ok := raw.(map[string]interface{})
 		if !ok {
-			input.invalid = true
-			continue
+			return &MetaFilterInput{Conditions: []MetaCondition{{Operator: "invalid"}}, Logic: logic}
 		}
-		key, keyOK := item["name"].(string)
-		operator, operatorOK := item["comparison_operator"].(string)
-		input.invalid = input.invalid || !keyOK || !operatorOK
-		input.Conditions = append(input.Conditions, MetaCondition{Key: key, Operator: NormalizeOperator(operator), Value: item["value"]})
+		name, _ := cond["name"].(string)
+		if name == "" {
+			return &MetaFilterInput{Conditions: []MetaCondition{{Operator: "invalid"}}, Logic: logic}
+		}
+		op, _ := cond["comparison_operator"].(string)
+		op = convertOperator(op)
+		if op == "" {
+			return &MetaFilterInput{Conditions: []MetaCondition{{Operator: "invalid"}}, Logic: logic}
+		}
+		conditions = append(conditions, MetaCondition{
+			Operator: op,
+			Key:      name,
+			Value:    cond["value"],
+		})
 	}
-	return input
-}
 
-// ValidMetaConditions validates the entire expression before evaluating AND/OR.
-// A malformed exclusion must invalidate an OR expression as well.
-func ValidMetaConditions(conditions []MetaCondition, logic string) bool {
-	if logic != "" && logic != "and" && logic != "or" {
-		return false
-	}
-	for _, condition := range conditions {
-		if strings.TrimSpace(condition.Key) == "" {
-			return false
-		}
-		switch NormalizeOperator(condition.Operator) {
-		case "empty", "not empty":
-			continue
-		case "in", "not in":
-			if _, ok := metadataMembership(condition.Value); !ok {
-				return false
-			}
-		case "=", "≠", ">", "<", "≥", "≤", "contains", "not contains", "start with", "end with":
-			if _, ok := metadataScalar(condition.Value); !ok {
-				return false
-			}
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-// MetaFilter is the single matcher for API and model-generated predicates.
-// Missing fields never match, including negative and empty predicates.
-func MetaFilter(metadata MetaData, input *MetaFilterInput) []string {
-	if input == nil {
+	if len(conditions) == 0 {
 		return nil
 	}
-	if input.invalid || !ValidMetaConditions(input.Conditions, input.Logic) {
+
+	return &MetaFilterInput{
+		Conditions: conditions,
+		Logic:      logic,
+	}
+}
+
+// convertOperator translates operator aliases to their canonical form.
+
+func convertOperator(op string) string {
+	if mapped, exists := operatorMapping[op]; exists {
+		return mapped
+	}
+	return op
+}
+
+// NormalizeOperator is the exported equivalent of convertOperator.
+func NormalizeOperator(op string) string { return convertOperator(op) }
+
+// MetaFilter applies filter conditions against metadata and returns matching doc IDs.
+// Python equivalent: common/metadata_utils.py::meta_filter()
+func MetaFilter(metas MetaData, input *MetaFilterInput) []string {
+	if input == nil || len(input.Conditions) == 0 {
+		return nil
+	}
+
+	logic := input.Logic
+	if logic == "" {
+		logic = "and"
+	}
+
+	var docIDs *map[string]struct{}
+
+	if logic != "and" && logic != "or" {
 		return []string{}
 	}
-	if len(input.Conditions) == 0 {
-		return nil
-	}
-	var matches map[string]struct{}
-	for _, condition := range input.Conditions {
-		current := make(map[string]struct{})
-		operator := NormalizeOperator(condition.Operator)
-		var lookup map[string]struct{}
-		if operator == "in" || operator == "not in" {
-			values, _ := metadataMembership(condition.Value)
-			lookup = make(map[string]struct{}, len(values))
-			for _, value := range values {
-				if operator == "not in" {
-					value = strings.ToLower(value)
-				}
-				lookup[value] = struct{}{}
-			}
+	for _, f := range input.Conditions {
+		if _, found := metas[f.Key]; !found {
+			continue
 		}
-		for value, documents := range metadata[condition.Key] {
-			matched := false
-			if lookup != nil {
-				if operator == "not in" {
-					value = strings.ToLower(value)
+		switch convertOperator(f.Operator) {
+		case "=", "≠", ">", "<", "≥", "≤", "contains", "not contains", "start with", "end with", "empty", "not empty":
+		case "in", "not in":
+			switch list := f.Value.(type) {
+			case []string:
+			case []interface{}:
+				for _, value := range list {
+					if value == nil {
+						return []string{}
+					}
+					switch v := value.(type) {
+					case string, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, json.Number:
+					case float64:
+						if math.IsNaN(v) || math.IsInf(v, 0) {
+							return []string{}
+						}
+					case float32:
+						if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+							return []string{}
+						}
+					default:
+						return []string{}
+					}
 				}
-				_, matched = lookup[value]
-				if operator == "not in" {
-					matched = !matched
-				}
-			} else {
-				matched = matchMetadataValue(value, operator, condition.Value)
+			default:
+				return []string{}
 			}
-			if matched {
-				for _, document := range documents {
-					current[document] = struct{}{}
-				}
-			}
-		}
-		if matches == nil {
-			matches = current
-		} else if input.Logic == "or" {
-			for document := range current {
-				matches[document] = struct{}{}
-			}
-		} else {
-			for document := range matches {
-				if _, exists := current[document]; !exists {
-					delete(matches, document)
-				}
-			}
-		}
-		if input.Logic != "or" && len(matches) == 0 {
+		default:
 			return []string{}
 		}
 	}
-	result := make([]string, 0, len(matches))
-	for document := range matches {
-		result = append(result, document)
+	for _, f := range input.Conditions {
+		v2docs, ok := metas[f.Key]
+		if !ok {
+			if logic == "and" {
+				return []string{}
+			}
+			continue
+		}
+
+		matched := filterOut(v2docs, convertOperator(f.Operator), f.Value)
+
+		if docIDs == nil {
+			s := make(map[string]struct{}, len(matched))
+			for _, id := range matched {
+				s[id] = struct{}{}
+			}
+			docIDs = &s
+		} else {
+			if logic == "and" {
+				s := make(map[string]struct{})
+				for _, id := range matched {
+					if _, exists := (*docIDs)[id]; exists {
+						s[id] = struct{}{}
+					}
+				}
+				docIDs = &s
+				if len(*docIDs) == 0 {
+					return []string{}
+				}
+			} else {
+				for _, id := range matched {
+					(*docIDs)[id] = struct{}{}
+				}
+			}
+		}
+	}
+
+	if docIDs == nil {
+		return []string{}
+	}
+	result := make([]string, 0, len(*docIDs))
+	for id := range *docIDs {
+		result = append(result, id)
 	}
 	sort.Strings(result)
 	return result
 }
 
-func metadataMembership(value interface{}) ([]string, bool) {
-	var values []interface{}
-	switch items := value.(type) {
-	case string:
-		// Existing Go manual filters use comma-separated membership operands.
-		for _, item := range strings.Split(items, ",") {
-			if item = strings.TrimSpace(item); item != "" {
-				values = append(values, item)
+// filterOut returns matching doc IDs for a single (value → matchedDocs) map and operator.
+// For "in" and "not in", it delegates to filterSet for O(n+m) hash-map-based filtering;
+// all other operators use matchValue for per-element predicate evaluation.
+func filterOut(v2docs MetaValueDocs, operator string, value interface{}) []string {
+	if operator == "in" || operator == "not in" {
+		return filterSet(v2docs, operator, value)
+	}
+	var ids []string
+	for input, docids := range v2docs {
+		if matchValue(input, operator, value) {
+			ids = append(ids, docids...)
+		}
+	}
+	return ids
+}
+
+// filterSet handles "in" and "not in" operators using O(1) hash map lookups.
+//
+// Instead of the O(n×m) linear scan that matchValue performs for these operators
+// (n = distinct metadata values, m = filter list size), filterSet builds a lookup
+// map from the filter value list once (O(m)) then tests each metadata entry in
+// O(1) time (O(n)), yielding O(n+m) overall.
+//
+// Case sensitivity follows the same contract as matchValue:
+//   - "in":      case-sensitive  (exact match via toString(item) == input)
+//   - "not in":  case-insensitive (strings.ToLower on both sides)
+//
+// When value is not a []interface{} (should not happen in normal call paths),
+// filterSet returns nil — no metadata values match "in", and for "not in" it
+// defensively returns nil as well (rather than returning all entries, which could
+// silently bypass a misconfigured filter).
+func filterSet(v2docs MetaValueDocs, operator string, value interface{}) []string {
+	list, ok := value.([]interface{})
+	if typed, yes := value.([]string); yes {
+		list = make([]interface{}, len(typed))
+		for i, v := range typed {
+			list[i] = v
+		}
+		ok = true
+	}
+	if !ok {
+		return nil
+	}
+
+	if operator == "not in" {
+		// Build case-insensitive exclusion set.
+		lookup := make(map[string]bool, len(list))
+		for _, item := range list {
+			lookup[strings.ToLower(toString(item))] = true
+		}
+		var ids []string
+		for input, docids := range v2docs {
+			if !lookup[strings.ToLower(input)] {
+				ids = append(ids, docids...)
 			}
 		}
-	case []interface{}:
-		values = items
-	case []string:
-		for _, item := range items {
-			values = append(values, item)
-		}
-	default:
-		return nil, false
+		return ids
 	}
-	result := make([]string, 0, len(values))
-	for _, item := range values {
-		text, ok := metadataScalar(item)
-		if !ok {
-			return nil, false
-		}
-		result = append(result, text)
-	}
-	return result, true
-}
 
-func metadataScalar(value interface{}) (string, bool) {
-	switch scalar := value.(type) {
-	case string:
-		return scalar, true
-	case bool:
-		return strconv.FormatBool(scalar), true
-	case int:
-		return strconv.Itoa(scalar), true
-	case int8:
-		return strconv.FormatInt(int64(scalar), 10), true
-	case int16:
-		return strconv.FormatInt(int64(scalar), 10), true
-	case int32:
-		return strconv.FormatInt(int64(scalar), 10), true
-	case int64:
-		return strconv.FormatInt(scalar, 10), true
-	case uint:
-		return strconv.FormatUint(uint64(scalar), 10), true
-	case uint8:
-		return strconv.FormatUint(uint64(scalar), 10), true
-	case uint16:
-		return strconv.FormatUint(uint64(scalar), 10), true
-	case uint32:
-		return strconv.FormatUint(uint64(scalar), 10), true
-	case uint64:
-		return strconv.FormatUint(scalar, 10), true
-	case float32:
-		return metadataFloat(float64(scalar), 32)
-	case float64:
-		return metadataFloat(scalar, 64)
-	case json.Number:
-		if number, err := scalar.Float64(); err == nil && !math.IsNaN(number) && !math.IsInf(number, 0) {
-			return scalar.String(), true
+	// "in": build case-sensitive inclusion set.
+	lookup := make(map[string]bool, len(list))
+	for _, item := range list {
+		lookup[toString(item)] = true
+	}
+	var ids []string
+	for input, docids := range v2docs {
+		if lookup[input] {
+			ids = append(ids, docids...)
 		}
 	}
-	return "", false
+	return ids
 }
 
-func metadataFloat(value float64, bits int) (string, bool) {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return "", false
+// matchValue checks if a single metadata value matches the operator+value.
+func matchValue(input string, operator string, value interface{}) bool {
+	switch operator {
+	case "empty":
+		return input == ""
+	case "not empty":
+		return input != ""
 	}
-	return strconv.FormatFloat(value, 'f', -1, bits), true
-}
 
-func matchMetadataValue(value, operator string, operand interface{}) bool {
-	if operator == "empty" {
-		return value == ""
-	}
-	if operator == "not empty" {
-		return value != ""
-	}
-	filter, _ := metadataScalar(operand)
-	valueLower, filterLower := strings.ToLower(value), strings.ToLower(filter)
+	valStr := toString(value)
+
 	switch operator {
 	case "contains":
-		return strings.Contains(valueLower, filterLower)
+		return strings.Contains(strings.ToLower(input), strings.ToLower(valStr))
 	case "not contains":
-		return !strings.Contains(valueLower, filterLower)
+		return !strings.Contains(strings.ToLower(input), strings.ToLower(valStr))
 	case "start with":
-		return strings.HasPrefix(valueLower, filterLower)
+		return strings.HasPrefix(strings.ToLower(input), strings.ToLower(valStr))
 	case "end with":
-		return strings.HasSuffix(valueLower, filterLower)
+		return strings.HasSuffix(strings.ToLower(input), strings.ToLower(valStr))
+
+		// "in" and "not in" are intentionally omitted from matchValue.
+		// filterOut (line 177) intercepts these operators and delegates
+		// them to filterSet for O(n+m) hash-map-based filtering, so they
+		// never reach this function through normal call paths.
 	}
-	if metadataDate(filter) && !metadataDate(value) {
-		return operator == "≠"
-	}
-	left, leftErr := strconv.ParseFloat(value, 64)
-	right, rightErr := strconv.ParseFloat(filter, 64)
-	comparison := strings.Compare(valueLower, filterLower)
-	if leftErr == nil && rightErr == nil && !math.IsNaN(left) && !math.IsNaN(right) && !math.IsInf(left, 0) && !math.IsInf(right, 0) {
-		// Keep large integers and decimal values exact after recognizing a
-		// numeric spelling; float64 equality would conflate adjacent integers.
-		leftNumber, leftOK := new(big.Rat).SetString(value)
-		rightNumber, rightOK := new(big.Rat).SetString(filter)
-		if leftOK && rightOK {
-			comparison = leftNumber.Cmp(rightNumber)
+
+	// Comparison operators: =, ≠, >, <, ≥, ≤
+	return compareValues(input, valStr, operator)
+}
+
+// compareValues handles numeric/date/string comparison.
+func compareValues(a, b, operator string) bool {
+	// If filter value (b) is a date, only compare if data (a) is also a date.
+	// Non-date values should not be compared against date filters (matching Python behavior).
+	if isDate(b) {
+		if !isDate(a) {
+			return operator == "≠"
 		}
+		return compareString(a, b, operator)
 	}
+
+	// Try numeric comparison
+	af, okA := new(big.Rat).SetString(a)
+	bf, okB := new(big.Rat).SetString(b)
+	if okA && okB {
+		return compareFloat(float64(af.Cmp(bf)), 0, operator)
+	}
+
+	// Fall back to case-insensitive string comparison
+	return compareString(strings.ToLower(a), strings.ToLower(b), operator)
+}
+
+func compareFloat(a, b float64, operator string) bool {
 	switch operator {
 	case "=":
-		return comparison == 0
+		return a == b
 	case "≠":
-		return comparison != 0
+		return a != b
 	case ">":
-		return comparison > 0
+		return a > b
 	case "<":
-		return comparison < 0
+		return a < b
 	case "≥":
-		return comparison >= 0
+		return a >= b
 	case "≤":
-		return comparison <= 0
+		return a <= b
 	}
 	return false
 }
 
-func metadataDate(value string) bool {
-	if len(value) != 10 || value[4] != '-' || value[7] != '-' {
+func compareString(a, b string, operator string) bool {
+	switch operator {
+	case "=":
+		return a == b
+	case "≠":
+		return a != b
+	case ">":
+		return a > b
+	case "<":
+		return a < b
+	case "≥":
+		return a >= b
+	case "≤":
+		return a <= b
+	}
+	return false
+}
+
+// isDate checks if a string is in YYYY-MM-DD format.
+func isDate(s string) bool {
+	if len(s) != 10 {
 		return false
 	}
-	for index, character := range value {
-		if index != 4 && index != 7 && (character < '0' || character > '9') {
+	if s[4] != '-' || s[7] != '-' {
+		return false
+	}
+	for i := 0; i < 10; i++ {
+		if i == 4 || i == 7 {
+			continue
+		}
+		if s[i] < '0' || s[i] > '9' {
 			return false
 		}
 	}
 	return true
+}
+
+// toString converts a value to string for comparison.
+func toString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	switch s := v.(type) {
+	case string:
+		return s
+	case float64:
+		return strconv.FormatFloat(s, 'f', -1, 64)
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, json.Number:
+		return fmt.Sprint(s)
+	case float32:
+		return strconv.FormatFloat(float64(s), 'f', -1, 32)
+	case bool:
+		if s {
+			return "true"
+		}
+		return "false"
+	default:
+		return ""
+	}
 }

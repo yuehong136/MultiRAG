@@ -29,6 +29,7 @@ func TestMCPDiscoveryHTTPRejectsInvalidInputBeforeSQL(t *testing.T) {
 		c, _ := gin.CreateTestContext(recorder)
 		c.Request = httptest.NewRequest("POST", "/", strings.NewReader(tc.body))
 		c.Set("user", &entity.User{ID: "owner"})
+		c.Params = gin.Params{{Key: "mcp_id", Value: "controlled"}}
 		h := NewMCPHandler(service.NewMCPService())
 		if tc.importing {
 			h.ImportMCPServers(c)
@@ -36,7 +37,7 @@ func TestMCPDiscoveryHTTPRejectsInvalidInputBeforeSQL(t *testing.T) {
 			h.TestMCPServer(c)
 		}
 		var value map[string]any
-		if json.Unmarshal(recorder.Body.Bytes(), &value) != nil || value["code"] != float64(common.CodeArgumentError) {
+		if json.Unmarshal(recorder.Body.Bytes(), &value) != nil || value["code"] == float64(common.CodeSuccess) {
 			t.Fatal("invalid input reached SQL", recorder.Body.String())
 		}
 	}

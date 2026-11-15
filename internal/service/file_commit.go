@@ -1,810 +1,697 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package service
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
-	"time"
-	"unicode/utf8"
-
-	"github.com/google/uuid"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	"multirag/internal/storage"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
-const snapshotMaxFiles = 1000
-const snapshotMaxBytes = 32 * 1024 * 1024
-
-type FileCommitError struct {
-	Status  int
-	Message string
-}
-
-func (e *FileCommitError) Error() string             { return e.Message }
-func snapshotError(status int, message string) error { return &FileCommitError{status, message} }
-
-type snapshotStore interface {
-	GetContext(context.Context, string, string, ...string) ([]byte, error)
-	Put(string, string, []byte, ...string) error
-	RemoveContext(context.Context, string, string, ...string) error
-	ObjectExistsContext(context.Context, string, string) (bool, error)
-}
+// FileCommitService file commit service
 type FileCommitService struct {
-	DB    *gorm.DB
-	Store snapshotStore
+	commitDAO     *dao.FileCommitDAO
+	commitItemDAO *dao.FileCommitItemDAO
+	fileDAO       *dao.FileDAO
 }
 
-func NewFileCommitService() *FileCommitService { return &FileCommitService{} }
-func (s *FileCommitService) database() *gorm.DB {
-	if s.DB != nil {
-		return s.DB
+// NewFileCommitService create file commit service
+func NewFileCommitService() *FileCommitService {
+	return &FileCommitService{
+		commitDAO:     dao.NewFileCommitDAO(),
+		commitItemDAO: dao.NewFileCommitItemDAO(),
+		fileDAO:       dao.NewFileDAO(),
 	}
-	return dao.DB
 }
-func (s *FileCommitService) store() (snapshotStore, error) {
-	if s.Store != nil {
-		return s.Store, nil
+
+// CreateCommit creates a new commit for a workspace folder
+func (s *FileCommitService) CreateCommit(folderID, authorID, message string, changes []entity.FileChange) (created *entity.FileCommit, commitErr error) {
+	folder, err := s.fileDAO.GetByID(folderID)
+	if err != nil || folder == nil || folder.Type != FileTypeFolder || !NewFileService().checkFileTeamPermission(folder, authorID) {
+		return nil, fmt.Errorf("workspace not found or not authorized")
 	}
-	st, ok := storage.GetStorageFactory().GetStorage().(snapshotStore)
-	if !ok {
-		return nil, snapshotError(503, "Storage lacks strict readback")
-	}
-	return st, nil
-}
-func snapshotHash(data []byte) string { h := sha256.Sum256(data); return hex.EncodeToString(h[:]) }
-func snapshotID() string              { return strings.ReplaceAll(uuid.NewString(), "-", "") }
-func snapshotPtr(s string) *string    { return &s }
-func snapshotRole(db *gorm.DB, tenant, user string) (string, error) {
-	var m entity.UserTenant
-	err := db.Where("tenant_id = ? AND user_id = ? AND status = ? AND role IN ?", tenant, user, "1", []string{"owner", "admin", "normal"}).First(&m).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", snapshotError(404, "Workspace not found")
-	}
-	return m.Role, err
-}
-func snapshotDataset(db *gorm.DB, id, tenant, user string, write bool) (*entity.Knowledgebase, error) {
-	var kb entity.Knowledgebase
-	err := db.Where("id = ? AND tenant_id = ? AND status = ?", id, tenant, "1").First(&kb).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, snapshotError(404, "Dataset not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-	role, err := snapshotRole(db, tenant, user)
-	if err != nil {
-		return nil, err
-	}
-	if kb.Permission != "me" && kb.Permission != "team" {
-		return nil, snapshotError(404, "Dataset not found")
-	}
-	if role != "owner" && role != "admin" && kb.CreatedBy != user && kb.Permission != "team" {
-		return nil, snapshotError(404, "Dataset not found")
-	}
-	if write && role != "owner" && role != "admin" && kb.CreatedBy != user {
-		return nil, snapshotError(403, "Dataset write permission required")
-	}
-	return &kb, nil
-}
-func snapshotAncestors(db *gorm.DB, id, tenant string) ([]entity.File, error) {
-	result := []entity.File{}
 	seen := map[string]bool{}
-	for len(result) < 100 && !seen[id] {
-		seen[id] = true
-		var f entity.File
-		err := db.Where("id = ? AND tenant_id = ?", id, tenant).First(&f).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, snapshotError(404, "Workspace not found")
+	for _, change := range changes {
+		if change.FileID == "" || seen[change.FileID] {
+			return nil, fmt.Errorf("duplicate or empty changed file ID")
 		}
-		if err != nil {
-			return nil, err
+		seen[change.FileID] = true
+		if change.Operation != "add" && change.Operation != "modify" && change.Operation != "delete" && change.Operation != "rename" {
+			return nil, fmt.Errorf("invalid file change operation")
 		}
-		result = append(result, f)
-		if f.ID == f.ParentID {
-			return result, nil
+		file, err := s.fileDAO.GetByID(change.FileID)
+		if err != nil || file == nil || file.TenantID != folder.TenantID {
+			return nil, fmt.Errorf("changed file not found in workspace")
 		}
-		id = f.ParentID
-	}
-	return nil, snapshotError(409, "Invalid workspace ancestry")
-}
-func snapshotSkill(db *gorm.DB, id string) (bool, error) {
-	// Both the Python private directory skill and Go directory skill own their lifecycle.
-	// The Python table is guaranteed by the common schema migration chain.
-	var count int64
-	var err error
-	if db.Migrator().HasTable("t_ai_python_skill_spaces") {
-		err = db.Table("t_ai_python_skill_spaces").Where("folder_id = ? AND state != ?", id, "deleted").Count(&count).Error
-	}
-	if err != nil {
-		return false, err
-	}
-	if count > 0 {
-		return true, nil
-	}
-	if db.Migrator().HasTable(&entity.SkillSpace{}) {
-		err = db.Model(&entity.SkillSpace{}).Where("folder_id = ?", id).Count(&count).Error
-	}
-	return count > 0, err
-}
-func (s *FileCommitService) Resolve(ctx context.Context, db *gorm.DB, prefix, id, user string, write, lock bool) (*entity.File, error) {
-	db = db.WithContext(ctx)
-	var folder entity.File
-	if prefix == "datasets" {
-		var kb entity.Knowledgebase
-		if err := db.Where("id = ?", id).First(&kb).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, snapshotError(404, "Dataset not found")
+		visited := map[string]bool{}
+		for cursor := file; cursor.ID != folderID; {
+			if cursor.ParentID == "" || cursor.ParentID == cursor.ID || visited[cursor.ID] {
+				return nil, fmt.Errorf("changed file is outside workspace")
 			}
-			return nil, err
+			visited[cursor.ID] = true
+			cursor, err = s.fileDAO.GetByID(cursor.ParentID)
+			if err != nil || cursor == nil || cursor.TenantID != folder.TenantID {
+				return nil, fmt.Errorf("changed file is outside workspace")
+			}
 		}
-		if _, err := snapshotDataset(db, id, kb.TenantID, user, write); err != nil {
-			return nil, err
-		}
-		rows := []entity.File{}
-		if err := db.Where("tenant_id = ? AND name = ? AND source_type = ? AND type = ?", kb.TenantID, kb.Name, "knowledgebase", "folder").Find(&rows).Error; err != nil {
-			return nil, err
-		}
-		if len(rows) != 1 {
-			return nil, snapshotError(409, "Dataset folder mapping is missing or ambiguous")
-		}
-		folder = rows[0]
-	} else if prefix == "folders" || prefix == "workspaces" || prefix == "workspace" {
-		err := db.Where("id = ?", id).First(&folder).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, snapshotError(404, "Workspace not found")
-		}
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		return nil, snapshotError(404, "Workspace not found")
 	}
-	if _, err := snapshotRole(db, folder.TenantID, user); err != nil {
+	storageImpl := storage.GetStorageFactory().GetStorage()
+	attempted := map[string]bool{}
+	defer func() {
+		if commitErr == nil {
+			return
+		}
+		for key := range attempted {
+			var references int64
+			if err := dao.DB.Model(&entity.FileCommitItem{}).Where("new_location = ? OR old_location = ?", key, key).Count(&references).Error; err != nil {
+				commitErr = errors.Join(commitErr, fmt.Errorf("verify failed commit object references: %w", err))
+				continue
+			}
+			if references > 0 {
+				continue
+			}
+			if err := dao.DB.Model(&entity.File{}).Where("location = ?", key).Count(&references).Error; err != nil {
+				commitErr = errors.Join(commitErr, fmt.Errorf("verify live file object references: %w", err))
+				continue
+			}
+			if references == 0 {
+				if err := storageImpl.Remove(folderID, key); err != nil {
+					commitErr = errors.Join(commitErr, fmt.Errorf("cleanup failed commit object: %w", err))
+				}
+			}
+		}
+	}()
+
+	// 1. Get the latest commit for this folder
+	latestCommit, err := s.commitDAO.GetLatestByFolderID(folderID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("get latest commit: %w", err)
+	}
+
+	// 2. Build tree state from latest commit
+	treeState := make(map[string]interface{})
+	if latestCommit != nil && latestCommit.TreeState != nil {
+		if err := json.Unmarshal([]byte(*latestCommit.TreeState), &treeState); err != nil {
+			return nil, fmt.Errorf("invalid previous commit tree: %w", err)
+		}
+	}
+
+	// 3. Create commit record
+	commitID := generateCommitUUID()
+	nowMs := time.Now().UnixMilli()
+
+	commit := &entity.FileCommit{
+		ID:        commitID,
+		FolderID:  folderID,
+		Message:   message,
+		AuthorID:  authorID,
+		FileCount: len(changes),
+	}
+
+	if latestCommit != nil {
+		parentID := latestCommit.ID
+		commit.ParentID = &parentID
+	}
+
+	// All DB operations run inside a single transaction.
+	var treeStr string
+	if err := dao.DB.Transaction(func(tx *gorm.DB) error {
+		// Save commit
+		if err := tx.Create(commit).Error; err != nil {
+			return fmt.Errorf("failed to create commit: %w", err)
+		}
+
+		// Backfill parent_id for existing tree_state entries
+		for fid, entry := range treeState {
+			if m, ok := entry.(map[string]interface{}); ok {
+				if _, has := m["parent_id"]; !has {
+					var fileRec entity.File
+					if err := tx.Select("parent_id").Where("id = ?", fid).First(&fileRec).Error; err == nil {
+						m["parent_id"] = fileRec.ParentID
+					}
+				}
+			}
+		}
+
+		for _, change := range changes {
+			item := &entity.FileCommitItem{
+				ID:        generateCommitUUID(),
+				CommitID:  commitID,
+				FileID:    change.FileID,
+				Operation: change.Operation,
+			}
+
+			switch change.Operation {
+			case "add", "modify":
+				contentBytes := []byte(change.Content)
+				hash := sha256.Sum256(contentBytes)
+				hashHex := hex.EncodeToString(hash[:])
+				objKey := ".objects/" + hashHex
+
+				if storageImpl == nil {
+					return fmt.Errorf("storage not initialized")
+				}
+				attempted[objKey] = true
+				if err := storageImpl.Put(folderID, objKey, contentBytes); err != nil {
+					return fmt.Errorf("failed to store object: %w", err)
+				}
+
+				if change.Operation == "modify" {
+					if oldEntry, ok := treeState[change.FileID]; ok {
+						if oldMap, ok := oldEntry.(map[string]interface{}); ok {
+							if oldHash, ok := oldMap["hash"].(string); ok {
+								item.OldHash = &oldHash
+							}
+							if oldLoc, ok := oldMap["location"].(string); ok {
+								item.OldLocation = &oldLoc
+							}
+						}
+					}
+				}
+
+				item.NewHash = &hashHex
+				item.NewLocation = &objKey
+
+				fSize := int64(len(contentBytes))
+				if err := tx.Model(&entity.File{}).Where("id = ?", change.FileID).Updates(map[string]interface{}{
+					"location": objKey,
+					"size":     fSize,
+				}).Error; err != nil {
+					return fmt.Errorf("failed to update file record: %w", err)
+				}
+
+				// Look up parent_id from the File table
+				fileParentID := ""
+				var fileRec entity.File
+				if err := tx.Select("parent_id").Where("id = ?", change.FileID).First(&fileRec).Error; err == nil {
+					fileParentID = fileRec.ParentID
+				}
+
+				treeState[change.FileID] = map[string]interface{}{
+					"hash":      hashHex,
+					"location":  objKey,
+					"name":      change.FileName,
+					"size":      fSize,
+					"status":    "1",
+					"parent_id": fileParentID,
+				}
+
+			case "delete":
+				if oldEntry, ok := treeState[change.FileID]; ok {
+					if oldMap, ok := oldEntry.(map[string]interface{}); ok {
+						if oldHash, ok := oldMap["hash"].(string); ok {
+							item.OldHash = &oldHash
+						}
+						if oldLoc, ok := oldMap["location"].(string); ok {
+							item.OldLocation = &oldLoc
+						}
+					}
+				}
+
+				if err := tx.Model(&entity.File{}).Where("id = ?", change.FileID).Update("status", "0").Error; err != nil {
+					return fmt.Errorf("failed to soft-delete file: %w", err)
+				}
+
+				if entry, ok := treeState[change.FileID]; ok {
+					if entryMap, ok := entry.(map[string]interface{}); ok {
+						entryMap["status"] = "0"
+					}
+				}
+
+			case "rename":
+				item.OldName = &change.OldName
+				item.NewName = &change.NewName
+
+				if err := tx.Model(&entity.File{}).Where("id = ?", change.FileID).Update("name", change.NewName).Error; err != nil {
+					return fmt.Errorf("failed to rename file: %w", err)
+				}
+
+				if entry, ok := treeState[change.FileID]; ok {
+					if entryMap, ok := entry.(map[string]interface{}); ok {
+						entryMap["name"] = change.NewName
+					}
+				} else {
+					treeState[change.FileID] = map[string]interface{}{
+						"name":   change.NewName,
+						"status": "1",
+					}
+				}
+			}
+
+			// Save commit item
+			if err := tx.Create(item).Error; err != nil {
+				return fmt.Errorf("failed to create commit item: %w", err)
+			}
+		}
+
+		// Serialize and save tree state
+		treeJSON, err := json.Marshal(treeState)
+		if err != nil {
+			return fmt.Errorf("failed to marshal tree state: %w", err)
+		}
+		if err := tx.Model(&entity.FileCommit{}).Where("id = ?", commitID).Update("tree_state", string(treeJSON)).Error; err != nil {
+			return fmt.Errorf("failed to update tree state: %w", err)
+		}
+		treeStr = string(treeJSON)
+
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	ancestors, err := snapshotAncestors(db, folder.ID, folder.TenantID)
+
+	commit.TreeState = &treeStr
+	commit.CreateTime = &nowMs
+
+	return commit, nil
+}
+
+// ListCommits lists commits for a workspace folder with pagination
+func (s *FileCommitService) ListCommits(folderID string, page, pageSize int, orderBy string, desc bool) ([]*entity.FileCommit, int64, error) {
+	return s.commitDAO.ListByFolderID(folderID, page, pageSize, orderBy, desc)
+}
+
+// GetCommit gets a single commit by ID
+func (s *FileCommitService) GetCommit(commitID string) (*entity.FileCommit, error) {
+	return s.commitDAO.GetByID(commitID)
+}
+
+// ListCommitFiles lists all file change items for a commit
+func (s *FileCommitService) ListCommitFiles(commitID string) ([]*entity.FileCommitItem, error) {
+	return s.commitItemDAO.ListByCommitID(commitID)
+}
+
+// DiffCommits compares two commits and returns the diff
+func (s *FileCommitService) DiffCommits(fromID, toID string) ([]entity.DiffEntry, error) {
+	fromItems, err := s.commitItemDAO.ListByCommitID(fromID)
 	if err != nil {
 		return nil, err
 	}
-	if lock {
-		var root entity.File
-		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", ancestors[len(ancestors)-1].ID, folder.TenantID).First(&root).Error; err != nil {
-			return nil, err
+	toItems, err := s.commitItemDAO.ListByCommitID(toID)
+	if err != nil {
+		return nil, err
+	}
+
+	fromMap := make(map[string]*entity.FileCommitItem)
+	for _, item := range fromItems {
+		fromMap[item.FileID] = item
+	}
+	toMap := make(map[string]*entity.FileCommitItem)
+	for _, item := range toItems {
+		toMap[item.FileID] = item
+	}
+
+	// Get tree state for file names (use to commit)
+	toCommit, err := s.commitDAO.GetByID(toID)
+	treeState := make(map[string]interface{})
+	if err == nil && toCommit != nil && toCommit.TreeState != nil {
+		json.Unmarshal([]byte(*toCommit.TreeState), &treeState)
+	}
+
+	getFileName := func(fileID string) string {
+		if entry, ok := treeState[fileID]; ok {
+			if m, ok := entry.(map[string]interface{}); ok {
+				if name, ok := m["name"].(string); ok {
+					return name
+				}
+			}
 		}
-		ancestors, err = snapshotAncestors(db, folder.ID, folder.TenantID)
-		if err != nil {
-			return nil, err
+		return fileID
+	}
+
+	allFileIDs := make(map[string]bool)
+	for fid := range fromMap {
+		allFileIDs[fid] = true
+	}
+	for fid := range toMap {
+		allFileIDs[fid] = true
+	}
+
+	// Sort for deterministic output
+	var sortedIDs []string
+	for fid := range allFileIDs {
+		sortedIDs = append(sortedIDs, fid)
+	}
+	sort.Strings(sortedIDs)
+
+	var diff []entity.DiffEntry
+	for _, fid := range sortedIDs {
+		fromItem := fromMap[fid]
+		toItem := toMap[fid]
+
+		var entry entity.DiffEntry
+		entry.FileID = fid
+		entry.FileName = getFileName(fid)
+
+		if fromItem != nil && toItem == nil {
+			// Deleted
+			entry.Operation = "delete"
+			entry.OldHash = fromItem.NewHash
+			entry.OldLocation = fromItem.NewLocation
+		} else if fromItem == nil && toItem != nil {
+			// Added
+			entry.Operation = "add"
+			entry.NewHash = toItem.NewHash
+			entry.NewLocation = toItem.NewLocation
+		} else {
+			// Both exist — compare hashes
+			fromHash := ""
+			if fromItem.NewHash != nil {
+				fromHash = *fromItem.NewHash
+			}
+			toHash := ""
+			if toItem.NewHash != nil {
+				toHash = *toItem.NewHash
+			}
+			if fromHash != toHash {
+				entry.Operation = "modify"
+				entry.OldHash = fromItem.NewHash
+				entry.OldLocation = fromItem.NewLocation
+				entry.NewHash = toItem.NewHash
+				entry.NewLocation = toItem.NewLocation
+			}
+		}
+
+		if entry.Operation != "" {
+			diff = append(diff, entry)
 		}
 	}
-	if ancestors[0].Type != "folder" {
-		return nil, snapshotError(404, "Workspace not found")
-	}
-	for _, f := range ancestors {
-		skill, err := snapshotSkill(db, f.ID)
-		if err != nil {
-			return nil, err
-		}
-		if skill {
-			return nil, snapshotError(409, "Use the Skills lifecycle for this folder")
-		}
-		if f.SourceType == "knowledgebase" && f.Name != ".knowledgebase" {
-			rows := []entity.Knowledgebase{}
-			if err := db.Where("tenant_id = ? AND name = ? AND status = ?", f.TenantID, f.Name, "1").Find(&rows).Error; err != nil {
-				return nil, err
-			}
-			if len(rows) != 1 {
-				return nil, snapshotError(409, "Dataset folder mapping is ambiguous")
-			}
-			if _, err := snapshotDataset(db, rows[0].ID, f.TenantID, user, write); err != nil {
-				return nil, err
-			}
-		} else if f.SourceType != "" && f.SourceType != "knowledgebase" {
-			return nil, snapshotError(409, "Managed folders require their own lifecycle")
-		}
-	}
-	return &ancestors[0], nil
+
+	return diff, nil
 }
-func snapshotRows(db *gorm.DB, folder *entity.File) (map[string]*entity.File, error) {
-	rows := map[string]*entity.File{folder.ID: folder}
-	pending := []string{folder.ID}
-	for len(pending) > 0 {
-		children := []*entity.File{}
-		if err := db.Where("parent_id IN ? AND id != parent_id", pending).Order("id").Find(&children).Error; err != nil {
-			return nil, err
-		}
-		pending = nil
-		for _, f := range children {
-			if f.TenantID != folder.TenantID || rows[f.ID] != nil {
-				return nil, snapshotError(409, "Invalid workspace ancestry")
+
+// GetUncommittedChanges gets uncommitted changes for a workspace folder.
+// Recursively scans all sub-folders.
+func (s *FileCommitService) GetUncommittedChanges(folderID string) ([]entity.DiffEntry, error) {
+	// Get latest commit tree state
+	latest, err := s.commitDAO.GetLatestByFolderID(folderID)
+	committedFiles := make(map[string]map[string]interface{})
+	if err == nil && latest != nil && latest.TreeState != nil {
+		var treeData map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(*latest.TreeState), &treeData); jsonErr == nil {
+			for k, v := range treeData {
+				if m, ok := v.(map[string]interface{}); ok {
+					committedFiles[k] = m
+				}
 			}
-			if f.Type == "folder" && f.SourceType != "" {
-				return nil, snapshotError(409, "Snapshot managed folders through their own scope")
-			}
-			skill, err := snapshotSkill(db, f.ID)
-			if err != nil {
-				return nil, err
-			}
-			if skill {
-				return nil, snapshotError(409, "Use the Skills lifecycle for this folder")
-			}
-			rows[f.ID] = f
-			if f.Type == "folder" {
-				pending = append(pending, f.ID)
-			}
-		}
-		if len(rows) > snapshotMaxFiles {
-			return nil, snapshotError(413, "Workspace contains too many files")
 		}
 	}
-	return rows, nil
+
+	// Get all live files recursively under this folder
+	liveMap := s.collectAllFilesRecursive(folderID)
+
+	var changes []entity.DiffEntry
+	processed := make(map[string]bool)
+
+	// Check committed files for modifications and deletions
+	for fid, committedEntry := range committedFiles {
+		processed[fid] = true
+		if committedEntry["status"] == "0" {
+			continue
+		}
+
+		if liveFile, ok := liveMap[fid]; ok {
+			liveHash := computeLiveFileHash(folderID, fid, liveFile)
+			committedHash := ""
+			if h, ok := committedEntry["hash"].(string); ok {
+				committedHash = h
+			}
+			if liveHash != "" && liveHash != committedHash {
+				changes = append(changes, entity.DiffEntry{
+					FileID:    fid,
+					FileName:  liveFile.Name,
+					Operation: "modify",
+				})
+			}
+		} else {
+			name := ""
+			if n, ok := committedEntry["name"].(string); ok {
+				name = n
+			}
+			changes = append(changes, entity.DiffEntry{
+				FileID:    fid,
+				FileName:  name,
+				Operation: "delete",
+			})
+		}
+	}
+
+	// Check for newly added files
+	for _, liveFile := range liveMap {
+		if !processed[liveFile.ID] {
+			changes = append(changes, entity.DiffEntry{
+				FileID:    liveFile.ID,
+				FileName:  liveFile.Name,
+				Operation: "add",
+			})
+		}
+	}
+
+	return changes, nil
 }
-func snapshotLive(ctx context.Context, db *gorm.DB, st snapshotStore, folder *entity.File, rows map[string]*entity.File) (entity.SnapshotState, map[string][]byte, error) {
-	state := entity.SnapshotState{}
-	contents := map[string][]byte{}
-	total := 0
-	for id, f := range rows {
-		e := entity.SnapshotEntry{Name: f.Name, ParentID: f.ParentID, Type: "folder", Status: "1"}
-		if f.Type != "folder" {
-			e.Type = "file"
-			bucket := f.ParentID
-			key := ""
-			if f.Location != nil {
-				key = *f.Location
-			}
-			if f.SourceType != "" {
-				if f.SourceType != "knowledgebase" || folder.SourceType != "knowledgebase" {
-					return nil, nil, snapshotError(409, "Managed file content cannot be resolved")
-				}
-				links := []entity.File2Document{}
-				if err := db.Where("file_id = ?", id).Find(&links).Error; err != nil {
-					return nil, nil, err
-				}
-				if len(links) != 1 || links[0].DocumentID == nil {
-					return nil, nil, snapshotError(409, "Dataset document is missing")
-				}
-				var doc entity.Document
-				if err := db.Where("id = ?", *links[0].DocumentID).First(&doc).Error; err != nil {
-					return nil, nil, err
-				}
-				var kb entity.Knowledgebase
-				if err := db.Where("id = ? AND tenant_id = ? AND name = ?", doc.KbID, folder.TenantID, folder.Name).First(&kb).Error; err != nil {
-					return nil, nil, snapshotError(404, "File not found")
-				}
-				bucket = kb.ID
-				if doc.Location != nil {
-					key = *doc.Location
-				}
-			}
-			if key == "" {
-				return nil, nil, snapshotError(503, "File content is unavailable")
-			}
-			data, err := st.GetContext(ctx, bucket, key)
-			if err != nil {
-				return nil, nil, err
-			}
-			if data == nil {
-				return nil, nil, snapshotError(503, "File content is unavailable")
-			}
-			total += len(data)
-			if total > snapshotMaxBytes {
-				return nil, nil, snapshotError(413, "Workspace content exceeds limit")
-			}
-			e.Hash = snapshotHash(data)
-			e.Size = int64(len(data))
-			e.Bucket = bucket
-			e.Location = key
-			contents[id] = data
-		}
-		state[id] = e
+
+// collectAllFilesRecursive recursively collects all non-folder files under a folder.
+func (s *FileCommitService) collectAllFilesRecursive(folderID string) map[string]*entity.File {
+	result := make(map[string]*entity.File)
+	// Direct files (non-folder)
+	files, _ := s.fileDAO.ListNonFolderByParentID(folderID)
+	for _, f := range files {
+		result[f.ID] = f
 	}
-	return state, contents, nil
-}
-func DiffSnapshotStates(old, new entity.SnapshotState) []entity.FileCommitDiff {
-	ids := map[string]bool{}
-	for id := range old {
-		ids[id] = true
-	}
-	for id := range new {
-		ids[id] = true
-	}
-	ordered := []string{}
-	for id := range ids {
-		ordered = append(ordered, id)
-	}
-	sort.Strings(ordered)
-	result := []entity.FileCommitDiff{}
-	for _, id := range ordered {
-		a, hasA := old[id]
-		b, hasB := new[id]
-		op := ""
-		switch {
-		case !hasA:
-			op = "add"
-		case !hasB:
-			op = "delete"
-		case a.Hash != b.Hash || a.Size != b.Size || a.Type != b.Type:
-			op = "modify"
-		case a.Name != b.Name || a.ParentID != b.ParentID:
-			op = "rename"
-		}
-		if op != "" {
-			d := entity.FileCommitDiff{FileID: id, FileName: b.Name, Operation: op}
-			if !hasB {
-				d.FileName = a.Name
-			}
-			if hasA {
-				d.OldHash = snapshotPtr(a.Hash)
-				d.OldLocation = snapshotPtr(a.Location)
-				d.OldName = snapshotPtr(a.Name)
-			}
-			if hasB {
-				d.NewHash = snapshotPtr(b.Hash)
-				d.NewLocation = snapshotPtr(b.Location)
-				d.NewName = snapshotPtr(b.Name)
-			}
-			result = append(result, d)
+	// Sub-folders — recurse
+	subFolders, _ := s.fileDAO.ListFolderByParentID(folderID)
+	for _, sf := range subFolders {
+		sub := s.collectAllFilesRecursive(sf.ID)
+		for k, v := range sub {
+			result[k] = v
 		}
 	}
 	return result
 }
-func SnapshotTree(state entity.SnapshotState, root string) (map[string]any, error) {
-	seen := map[string]bool{}
-	var visit func(string) (map[string]any, error)
-	visit = func(id string) (map[string]any, error) {
-		e, ok := state[id]
-		if !ok || seen[id] {
-			return nil, snapshotError(503, "Snapshot ancestry is invalid")
-		}
-		seen[id] = true
-		n := map[string]any{"id": id, "name": e.Name, "type": e.Type, "parent_id": e.ParentID, "size": e.Size, "status": e.Status}
-		if e.Type == "file" {
-			n["hash"] = e.Hash
-			n["location"] = e.Location
-			n["bucket"] = e.Bucket
-			return n, nil
-		}
-		ids := []string{}
-		for child, v := range state {
-			if child != root && v.ParentID == id {
-				ids = append(ids, child)
-			}
-		}
-		sort.Strings(ids)
-		children := []any{}
-		for _, child := range ids {
-			n, err := visit(child)
-			if err != nil {
-				return nil, err
-			}
-			children = append(children, n)
-		}
-		n["children"] = children
-		return n, nil
-	}
-	n, err := visit(root)
+
+// GetCommitTree gets the tree state snapshot for a commit as a hierarchical tree.
+func (s *FileCommitService) GetCommitTree(commitID string) (map[string]interface{}, error) {
+	commit, err := s.commitDAO.GetByID(commitID)
 	if err != nil {
 		return nil, err
 	}
-	if len(seen) != len(state) {
-		return nil, snapshotError(503, "Snapshot has unreachable entries")
+	if commit.TreeState == nil {
+		return map[string]interface{}{"id": commit.FolderID, "name": "", "type": "folder", "children": []interface{}{}}, nil
 	}
-	return n, nil
-}
-func validateSnapshotRequest(req entity.CreateFileCommit) error {
-	if !utf8.ValidString(req.Message) || utf8.RuneCountInString(req.Message) > 512 || req.Files == nil || len(req.Files) > snapshotMaxFiles {
-		return snapshotError(422, "Invalid commit request")
+	var flat map[string]interface{}
+	if err := json.Unmarshal([]byte(*commit.TreeState), &flat); err != nil {
+		return nil, err
 	}
-	ids := map[string]bool{}
-	total := 0
-	for _, c := range req.Files {
-		if len(c.FileID) == 0 || len(c.FileID) > 32 || ids[c.FileID] {
-			return snapshotError(422, "Invalid or duplicate file ID")
-		}
-		ids[c.FileID] = true
-		switch c.Operation {
-		case "add":
-			if c.FileName == nil || c.Content == nil {
-				return snapshotError(422, "Name and content required")
-			}
-		case "modify":
-			if c.Content == nil {
-				return snapshotError(422, "Content required")
-			}
-		case "rename":
-			if c.NewName == nil || c.Content != nil {
-				return snapshotError(422, "New name required")
-			}
-		case "delete":
-			if c.Content != nil {
-				return snapshotError(422, "Content only accepted for add/modify")
-			}
-		default:
-			return snapshotError(422, "Invalid file operation")
-		}
-		for _, name := range []*string{c.FileName, c.NewName} {
-			if name != nil && (*name == "" || utf8.RuneCountInString(*name) > 255 || *name == "." || *name == ".." || strings.ContainsAny(*name, "/\\\x00")) {
-				return snapshotError(422, "Invalid file name")
-			}
-		}
-		if c.Content != nil {
-			total += len(*c.Content)
-		}
-	}
-	if total > snapshotMaxBytes {
-		return snapshotError(413, "Commit content exceeds limit")
-	}
-	return nil
+	return s.buildHierarchicalTree(flat, commit.FolderID), nil
 }
 
-// cleanupSnapshotObjects attempts every reserved key even when an earlier
-// removal or independent existence check fails. The caller retains all causes.
-func cleanupSnapshotObjects(ctx context.Context, st snapshotStore, written [][2]string) error {
-	failures := []error{}
-	for i := len(written) - 1; i >= 0; i-- {
-		object := written[i]
-		if err := st.RemoveContext(ctx, object[0], object[1]); err != nil {
-			failures = append(failures, err)
-		}
-		exists, err := st.ObjectExistsContext(ctx, object[0], object[1])
-		if err != nil {
-			failures = append(failures, err)
-		} else if exists {
-			failures = append(failures, snapshotError(503, "Reserved snapshot object remains"))
+// buildHierarchicalTree builds a recursive tree from a flat tree_state map.
+// Sub-folder hierarchy is resolved from the File table's parent_id.
+func (s *FileCommitService) buildHierarchicalTree(flat map[string]interface{}, rootFolderID string) map[string]interface{} {
+	// Collect all unique folder IDs
+	folderIDs := map[string]bool{rootFolderID: true}
+	for _, v := range flat {
+		if entry, ok := v.(map[string]interface{}); ok {
+			pid, _ := entry["parent_id"].(string)
+			if pid == "" {
+				pid = rootFolderID
+			}
+			folderIDs[pid] = true
 		}
 	}
-	return errors.Join(failures...)
-}
 
-func (s *FileCommitService) Create(ctx context.Context, prefix, id, user string, req entity.CreateFileCommit) (*entity.FileCommit, error) {
-	if err := validateSnapshotRequest(req); err != nil {
-		return nil, err
-	}
-	st, err := s.store()
-	if err != nil {
-		return nil, err
-	}
-	db := s.database().WithContext(ctx)
-	tx := db.Begin()
-	defer tx.Rollback()
-	if tx.Error != nil {
-		return nil, tx.Error
-	}
-	written := [][2]string{}
-	committing := false
-	commitID := snapshotID()
-	fail := func(cause error) (*entity.FileCommit, error) {
-		tx.Rollback()
-		if committing {
-			var count int64
-			readCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := s.database().WithContext(readCtx).Model(&entity.FileCommit{}).Where("id = ?", commitID).Count(&count).Error; err != nil {
-				return nil, snapshotError(503, "Commit outcome requires recovery; objects retained")
-			}
-			if count > 0 {
-				return nil, snapshotError(503, "Commit persisted; reload history before retrying")
-			}
-		}
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if cleanupErr := cleanupSnapshotObjects(cleanCtx, st, written); cleanupErr != nil {
-			return nil, errors.Join(cause, cleanupErr, snapshotError(503, "Snapshot rollback cleanup requires recovery"))
-		}
-		return nil, cause
-	}
-	folder, err := s.Resolve(ctx, tx, prefix, id, user, true, true)
-	if err != nil {
-		return fail(err)
-	}
-	d := dao.FileCommitDAO{DB: tx, TenantID: folder.TenantID, FolderID: folder.ID}
-	latest, err := d.Latest(ctx)
-	if err != nil {
-		return fail(err)
-	}
-	head := ""
-	sequence := 1
-	old := entity.SnapshotState{}
-	if latest != nil {
-		head = latest.ID
-		sequence = latest.Sequence + 1
-		old = latest.TreeState
-	}
-	expected := ""
-	if req.ParentID != nil {
-		expected = *req.ParentID
-	}
-	if req.ParentSpecified && expected != head {
-		return fail(snapshotError(409, "Commit head changed"))
-	}
-	rows, err := snapshotRows(tx, folder)
-	if err != nil {
-		return fail(err)
-	}
-	for _, c := range req.Files {
-		f := rows[c.FileID]
-		if c.Operation == "add" {
-			var count int64
-			if err := tx.Model(&entity.File{}).Where("id = ?", c.FileID).Count(&count).Error; err != nil {
-				return fail(err)
-			}
-			_, historical := old[c.FileID]
-			if count > 0 || historical {
-				return fail(snapshotError(409, "File ID already exists"))
-			}
-		} else if f == nil || f.Type == "folder" {
-			return fail(snapshotError(404, "File not found in workspace"))
-		}
-		if f != nil {
-			var count int64
-			if err := tx.Model(&entity.File2Document{}).Where("file_id = ?", f.ID).Count(&count).Error; err != nil {
-				return fail(err)
-			}
-			if count > 0 || f.SourceType != "" {
-				return fail(snapshotError(409, "Managed files require their own lifecycle"))
-			}
-			if c.OldName != nil && *c.OldName != f.Name {
-				return fail(snapshotError(409, "File name changed"))
+	// Build folder parent map from File table
+	folderParentMap := make(map[string]string)
+	for fid := range folderIDs {
+		if fid != rootFolderID {
+			if f, err := s.fileDAO.GetByID(fid); err == nil {
+				folderParentMap[fid] = f.ParentID
 			}
 		}
 	}
-	state, contents, err := snapshotLive(ctx, tx, st, folder, rows)
-	if err != nil {
-		return fail(err)
-	}
-	updates := map[string]bool{}
-	for _, c := range req.Files {
-		f := rows[c.FileID]
-		if c.Operation == "add" {
-			f = &entity.File{ID: c.FileID, ParentID: folder.ID, TenantID: folder.TenantID, CreatedBy: user, Name: *c.FileName, Type: "other"}
-			rows[f.ID] = f
-			state[f.ID] = entity.SnapshotEntry{Name: f.Name, ParentID: f.ParentID, Type: "file", Status: "1"}
-			if err := tx.Create(f).Error; err != nil {
-				return fail(err)
-			}
-		}
-		if c.Operation == "delete" {
-			if err := tx.Where("id = ? AND tenant_id = ?", f.ID, folder.TenantID).Delete(&entity.File{}).Error; err != nil {
-				return fail(err)
-			}
-			delete(state, f.ID)
-			delete(contents, f.ID)
+
+	// Group file entries by parent_id
+	filesByParent := make(map[string][]string)
+	fileEntries := make(map[string]map[string]interface{})
+	for fid, v := range flat {
+		entry, ok := v.(map[string]interface{})
+		if !ok {
 			continue
 		}
-		e := state[f.ID]
-		if c.Operation == "add" || c.Operation == "modify" {
-			contents[f.ID] = []byte(*c.Content)
-			e.Hash = snapshotHash(contents[f.ID])
-			e.Size = int64(len(contents[f.ID]))
-			f.Size = e.Size
-			updates[f.ID] = true
+		pid, _ := entry["parent_id"].(string)
+		if pid == "" {
+			pid = rootFolderID
 		}
-		if c.Operation == "rename" {
-			f.Name = *c.NewName
-		} else if c.FileName != nil {
-			f.Name = *c.FileName
+		filesByParent[pid] = append(filesByParent[pid], fid)
+		fileEntries[fid] = entry
+	}
+
+	// Group sub-folders by their parent
+	childrenByFolder := make(map[string][]string)
+	for sfid, ppid := range folderParentMap {
+		childrenByFolder[ppid] = append(childrenByFolder[ppid], sfid)
+	}
+
+	var buildNode func(nodeID string) map[string]interface{}
+	buildNode = func(nodeID string) map[string]interface{} {
+		nodeName := nodeID
+		if f, err := s.fileDAO.GetByID(nodeID); err == nil {
+			nodeName = f.Name
 		}
-		e.Name = f.Name
-		state[f.ID] = e
-	}
-	names := map[string]bool{}
-	total := 0
-	for _, e := range state {
-		key := e.ParentID + "\x00" + e.Name
-		if names[key] {
-			return fail(snapshotError(409, "Duplicate file name"))
+		node := map[string]interface{}{
+			"id":       nodeID,
+			"name":     nodeName,
+			"type":     "folder",
+			"children": []interface{}{},
 		}
-		names[key] = true
-	}
-	for _, b := range contents {
-		total += len(b)
-	}
-	if total > snapshotMaxBytes || len(state) > snapshotMaxFiles {
-		return fail(snapshotError(413, "Snapshot exceeds limits"))
-	}
-	put := func(bucket, key string, b []byte) error {
-		p := [2]string{bucket, key}
-		for _, done := range written {
-			if p == done {
-				return nil
+
+		// File children
+		for _, fid := range filesByParent[nodeID] {
+			entry := fileEntries[fid]
+			fn := map[string]interface{}{
+				"id":     fid,
+				"name":   entry["name"],
+				"type":   "file",
+				"hash":   entry["hash"],
+				"size":   entry["size"],
+				"status": entry["status"],
 			}
-		}
-		written = append(written, p)
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := st.Put(bucket, key, b); err != nil {
-			return err
-		}
-		read, err := st.GetContext(ctx, bucket, key)
-		if err != nil {
-			return err
-		}
-		if snapshotHash(read) != snapshotHash(b) || len(read) != len(b) {
-			return snapshotError(503, "Snapshot content integrity failure")
-		}
-		return nil
-	}
-	for fid, b := range contents {
-		e := state[fid]
-		previous, ok := old[fid]
-		if ok && previous.Hash == e.Hash {
-			data, err := st.GetContext(ctx, previous.Bucket, previous.Location)
-			if err != nil {
-				return fail(err)
+			if loc, ok := entry["location"].(string); ok && loc != "" {
+				fn["location"] = loc
 			}
-			if snapshotHash(data) != e.Hash || len(data) != len(b) {
-				return fail(snapshotError(503, "Snapshot content integrity failure"))
-			}
-			e.Bucket = previous.Bucket
-			e.Location = previous.Location
-		} else {
-			e.Bucket = rows[fid].ParentID
-			e.Location = fmt.Sprintf(".file-commits/%s/%s/%s/%s", folder.TenantID, folder.ID, commitID, e.Hash)
-			if err := put(e.Bucket, e.Location, b); err != nil {
-				return fail(err)
-			}
+			node["children"] = append(node["children"].([]interface{}), fn)
 		}
-		if updates[fid] {
-			// The ordinary Files lifecycle owns only this working object;
-			// it can move/delete it without retiring historical snapshot bytes.
-			bucket := rows[fid].ParentID
-			key := fmt.Sprintf(".file-working/%s/%s/%s/%s/%s", folder.TenantID, folder.ID, commitID, fid, e.Hash)
-			if err := put(bucket, key, b); err != nil {
-				return fail(err)
-			}
-			rows[fid].Location = snapshotPtr(key)
+		// Sub-folder children
+		for _, sfid := range childrenByFolder[nodeID] {
+			child := buildNode(sfid)
+			node["children"] = append(node["children"].([]interface{}), child)
 		}
-		state[fid] = e
+		return node
 	}
-	for _, c := range req.Files {
-		if c.Operation != "delete" {
-			f := rows[c.FileID]
-			if err := tx.Model(&entity.File{}).Where("id = ? AND tenant_id = ?", f.ID, folder.TenantID).Updates(map[string]any{"name": f.Name, "size": f.Size, "location": f.Location}).Error; err != nil {
-				return fail(err)
-			}
-		}
-	}
-	if _, err := SnapshotTree(state, folder.ID); err != nil {
-		return fail(err)
-	}
-	changes := DiffSnapshotStates(old, state)
-	items := []entity.FileCommitItem{}
-	for _, c := range changes {
-		if c.FileID == folder.ID {
-			continue
-		}
-		items = append(items, entity.FileCommitItem{ID: snapshotID(), CommitID: commitID, FileID: c.FileID, Operation: c.Operation, OldHash: c.OldHash, NewHash: c.NewHash, OldLocation: c.OldLocation, NewLocation: c.NewLocation, OldName: c.OldName, NewName: c.NewName})
-	}
-	commit := &entity.FileCommit{ID: commitID, TenantID: folder.TenantID, FolderID: folder.ID, Sequence: sequence, Message: req.Message, AuthorID: user, FileCount: len(items), TreeState: state}
-	if latest != nil {
-		commit.ParentID = snapshotPtr(latest.ID)
-	}
-	if err := tx.Create(commit).Error; err != nil {
-		return fail(err)
-	}
-	if len(items) > 0 {
-		if err := tx.Create(&items).Error; err != nil {
-			return fail(err)
-		}
-	}
-	committing = true
-	if err := tx.Commit().Error; err != nil {
-		return fail(err)
-	}
-	return commit, nil
-}
-func (s *FileCommitService) Get(ctx context.Context, folder *entity.File, id string) (*entity.FileCommit, error) {
-	c, err := (dao.FileCommitDAO{DB: s.database(), TenantID: folder.TenantID, FolderID: folder.ID}).Get(ctx, id)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, snapshotError(404, "Commit not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-	if _, err := SnapshotTree(c.TreeState, folder.ID); err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-func (s *FileCommitService) Content(ctx context.Context, c *entity.FileCommit, id string) ([]byte, error) {
-	e, ok := c.TreeState[id]
-	if !ok || e.Type != "file" {
-		return nil, snapshotError(404, "File not found in commit")
-	}
-	if !strings.HasPrefix(e.Location, ".file-commits/"+c.TenantID+"/"+c.FolderID+"/") {
-		return nil, snapshotError(503, "Snapshot object identity is invalid")
-	}
-	st, err := s.store()
-	if err != nil {
-		return nil, err
-	}
-	b, err := st.GetContext(ctx, e.Bucket, e.Location)
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(b)) != e.Size || snapshotHash(b) != e.Hash {
-		return nil, snapshotError(503, "Snapshot content integrity failure")
-	}
-	return b, nil
-}
-func (s *FileCommitService) Changes(ctx context.Context, folder *entity.File) ([]entity.FileCommitDiff, error) {
-	st, err := s.store()
-	if err != nil {
-		return nil, err
-	}
-	db := s.database().WithContext(ctx)
-	rows, err := snapshotRows(db, folder)
-	if err != nil {
-		return nil, err
-	}
-	state, _, err := snapshotLive(ctx, db, st, folder, rows)
-	if err != nil {
-		return nil, err
-	}
-	latest, err := (dao.FileCommitDAO{DB: db, TenantID: folder.TenantID, FolderID: folder.ID}).Latest(ctx)
-	if err != nil {
-		return nil, err
-	}
-	old := entity.SnapshotState{}
-	if latest != nil {
-		old = latest.TreeState
-	}
-	result := []entity.FileCommitDiff{}
-	for _, c := range DiffSnapshotStates(old, state) {
-		if c.FileID != folder.ID {
-			result = append(result, c)
-		}
-	}
-	return result, nil
+
+	return buildNode(rootFolderID)
 }
 
-func (s *FileCommitService) Versions(ctx context.Context, user, id string) ([]map[string]any, error) {
-	db := s.database().WithContext(ctx)
-	type record struct {
-		entity.FileCommitItem
-		FolderID, TenantID, Message string
-		CommitTime                  *int64
+// GetCommitFileContent gets file content as it existed in a given commit
+func (s *FileCommitService) GetCommitFileContent(folderID, commitID, fileID string) ([]byte, error) {
+	commit, err := s.commitDAO.GetByID(commitID)
+	if err != nil {
+		return nil, fmt.Errorf("commit not found: %w", err)
 	}
-	records := []record{}
-	err := db.Table("t_ai_file_commit_items AS i").Select("i.*, c.folder_id, c.tenant_id, c.message, c.create_time AS commit_time").Joins("JOIN t_ai_file_commits c ON c.id=i.commit_id").Joins("JOIN t_ai_user_tenants m ON m.tenant_id=c.tenant_id AND m.user_id=? AND m.status='1' AND m.role IN ('owner','admin','normal')", user).Where("i.file_id = ?", id).Order("c.create_time DESC, c.id DESC").Scan(&records).Error
+
+	if commit.FolderID != folderID {
+		return nil, fmt.Errorf("commit not found in workspace")
+	}
+	item, err := s.commitItemDAO.GetByCommitIDAndFileID(commitID, fileID)
+	if err != nil {
+		return nil, fmt.Errorf("file not found in commit: %w", err)
+	}
+
+	if item.NewHash == nil && item.OldHash == nil {
+		return nil, fmt.Errorf("file has no content in this commit")
+	}
+
+	hash := ""
+	if item.NewHash != nil {
+		hash = *item.NewHash
+	} else if item.OldHash != nil {
+		hash = *item.OldHash
+	}
+
+	objKey := ".objects/" + hash
+
+	storageImpl := storage.GetStorageFactory().GetStorage()
+	if storageImpl == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
+
+	blob, err := storageImpl.Get(folderID, objKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file content from storage: %w", err)
+	}
+
+	return blob, nil
+}
+
+// GetFileVersionHistory gets version history for a specific file
+func (s *FileCommitService) GetFileVersionHistory(fileID string) ([]entity.VersionEntry, error) {
+	items, err := s.commitItemDAO.ListByFileID(fileID)
 	if err != nil {
 		return nil, err
 	}
-	result := []map[string]any{}
-	for _, r := range records {
-		if _, err := s.Resolve(ctx, db, "folders", r.FolderID, user, false, false); err != nil {
-			var e *FileCommitError
-			if errors.As(err, &e) && (e.Status == 403 || e.Status == 404) {
-				continue
-			}
-			return nil, err
+
+	var versions []entity.VersionEntry
+	for _, item := range items {
+		commit, err := s.commitDAO.GetByID(item.CommitID)
+		if err != nil {
+			continue
 		}
-		hash := ""
-		if r.NewHash != nil {
-			hash = *r.NewHash
-		} else if r.OldHash != nil {
-			hash = *r.OldHash
+
+		h := ""
+		if item.NewHash != nil {
+			h = *item.NewHash
+		} else if item.OldHash != nil {
+			h = *item.OldHash
 		}
-		result = append(result, map[string]any{"commit_id": r.CommitID, "folder_id": r.FolderID, "operation": r.Operation, "hash": hash, "message": r.Message, "create_time": r.CommitTime})
+
+		versions = append(versions, entity.VersionEntry{
+			CommitID:   item.CommitID,
+			Operation:  item.Operation,
+			Hash:       h,
+			CreateTime: commit.CreateTime,
+			Message:    commit.Message,
+		})
 	}
-	if len(result) == 0 {
-		var f entity.File
-		if err := db.Where("id = ?", id).First(&f).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, snapshotError(404, "File not found")
-			}
-			return nil, err
-		}
-		if _, err := s.Resolve(ctx, db, "folders", f.ParentID, user, false, false); err != nil {
-			return nil, err
-		}
+
+	return versions, nil
+}
+
+// computeLiveFileHash computes the SHA256 hash of current file content from storage
+func computeLiveFileHash(folderID, fileID string, file *entity.File) string {
+	if file.Location == nil || *file.Location == "" {
+		return ""
 	}
-	return result, nil
+
+	storageImpl := storage.GetStorageFactory().GetStorage()
+	if storageImpl == nil {
+		return ""
+	}
+
+	data, err := storageImpl.Get(folderID, *file.Location)
+	if err != nil {
+		return ""
+	}
+
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
+}
+
+// generateCommitUUID generates a UUID without dashes
+func generateCommitUUID() string {
+	id := uuid.New().String()
+	return strings.ReplaceAll(id, "-", "")
 }

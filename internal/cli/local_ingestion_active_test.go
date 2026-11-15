@@ -1,10 +1,9 @@
 package cli
 
 import (
-	"archive/zip"
-	"bytes"
-	"encoding/json"
+	"fmt"
 	"github.com/google/uuid"
+	"io"
 	"multirag/internal/testsupport"
 	"os"
 	"os/exec"
@@ -15,7 +14,7 @@ import (
 
 func TestLocalIngestionCLIExecutesActualContent(t *testing.T) {
 	journal := testsupport.NewCase(t)
-	root := filepath.Join(os.TempDir(), "after22-cli-"+uuid.NewString())
+	root := filepath.Join(os.TempDir(), "go-align-local-cli-"+uuid.NewString())
 	journal.Event("reserve-local-fixtures", map[string]any{"path": root})
 	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
@@ -23,83 +22,75 @@ func TestLocalIngestionCLIExecutesActualContent(t *testing.T) {
 	t.Cleanup(func() {
 		err := os.RemoveAll(root)
 		_, readErr := os.Stat(root)
-		journal.Event("local-fixtures-cleanup", map[string]any{"path": root, "remove_ok": err == nil, "absent": os.IsNotExist(readErr)})
+		journal.Event("local-fixtures-cleanup", map[string]any{"path": root, "absent": os.IsNotExist(readErr)})
 		if err != nil || !os.IsNotExist(readErr) {
 			t.Error("fixture cleanup")
 		}
 	})
-	write := func(name string, data []byte) string {
-		t.Helper()
-		p := filepath.Join(root, name)
-		if err := os.WriteFile(p, data, 0600); err != nil {
+	write := func(name, data string) string {
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
-		return p
+		return path
 	}
-	text := write("source.txt", []byte("one\n\n二"))
-	dsl := write("pipeline.json", []byte(`{"pipeline":[{"operator":"split","strategy":"paragraph"}]}`))
-	repeated := write("repeated.json", []byte(`{"pipeline":[{"operator":"preprocess"},{"operator":"preprocess"},{"operator":"split","strategy":"paragraph"},{"operator":"split","strategy":"char"}]}`))
-	bad := write("bad.json", []byte(`{"pipeline":[{"operator":"split","typo":true}]}`))
-	cfg := write("config.json", []byte(`{"lib_type":"builtin"}`))
-	var buffer bytes.Buffer
-	zw := zip.NewWriter(&buffer)
-	part, err := zw.Create("word/document.xml")
-	if err != nil {
-		t.Fatal(err)
+	source := write("source.txt", "one\n\n二")
+	dsl := write("pipeline.json", `{"pipeline":[{"operator":"split","strategy":"paragraph"}]}`)
+	repeated := write("repeated.json", `{"pipeline":[{"operator":"preprocess"},{"operator":"preprocess"},{"operator":"split","strategy":"paragraph"},{"operator":"split","strategy":"char"}]}`)
+	bad := write("bad.json", "{")
+	commands := []struct{ input, want string }{
+		{fmt.Sprintf("CHUNK '%s' WITH '%s';", source, dsl), "二"},
+		{fmt.Sprintf("EXPLAIN CHUNK 'missing.txt' WITH '%s';", dsl), "Chunk Pipeline Plan:"},
+		{fmt.Sprintf("CHUNK '%s' WITH '%s';", source, repeated), "二"},
 	}
-	part.Write([]byte(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Actual Office text</w:t></w:r></w:p></w:body></w:document>`))
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
+	fixtures := os.Getenv("MULTIRAG_OFFICE_FIXTURES")
+	if fixtures == "" {
+		t.Fatal("registered native fixtures required")
 	}
-	doc := write("source.docx", buffer.Bytes())
-	commands := []string{"CHUNK '" + text + "' WITH '" + dsl + "';", "EXPLAIN CHUNK 'missing.txt' WITH '" + dsl + "';", "PARSE FILE '" + doc + "' WITH '" + cfg + "';", "CHUNK '" + text + "' WITH '" + repeated + "';"}
-	client := NewMultiRAGClient("user")
-	client.HTTPClient.client.Transport = &registryTransport{}
-	for i, input := range commands {
-		if looksLikeContextEngine(input) {
-			t.Fatal("local command escaped SQL parser")
-		}
-		cmd, err := NewParser(input).Parse(false)
+	for _, ext := range []string{"doc", "docx", "ppt", "pptx", "xls", "xlsx"} {
+		commands = append(commands, struct{ input, want string }{fmt.Sprintf("PARSE FILE '%s';", filepath.Join(fixtures, "sample."+ext)), "Document context:"})
+	}
+	client := &CLI{Config: &CommandLineConfig{CLIMode: APIMode}}
+	for _, item := range commands {
+		cmd, err := NewParser(item.input).Parse(APIMode)
 		if err != nil {
-			t.Fatal(input, err)
+			t.Fatal(item.input, err)
 		}
-		result, err := client.ExecuteCommand(cmd)
+		journal.Event("reserve-stdout-pipe", map[string]any{"command": item.input})
+		reader, writer, err := os.Pipe()
 		if err != nil {
-			t.Fatal(input, err)
+			t.Fatal(err)
 		}
-		switch i {
-		case 0:
-			rows := result.(*CommonResponse).Data
-			if len(rows) != 2 || rows[1]["content"] != "二" || rows[1]["size"] != 1 {
-				t.Fatal(rows)
-			}
-		case 1:
-			if result.(*CommonDataResponse).Data["explanation"] == "" {
-				t.Fatal("empty explanation")
-			}
-		case 2:
-			if !strings.Contains(result.(*CommonDataResponse).Data["text"].(string), "Actual Office text") {
-				t.Fatal(result)
-			}
-		case 3:
-			rows := result.(*CommonResponse).Data
-			if len(rows) <= 2 || rows[len(rows)-1]["content"] != "二" {
-				t.Fatal("declared stages were not executed", rows)
-			}
+		output := make(chan []byte, 1)
+		go func() { raw, _ := io.ReadAll(reader); reader.Close(); output <- raw }()
+		previous := os.Stdout
+		os.Stdout = writer
+		result, executeErr := client.ExecuteCommand(cmd)
+		os.Stdout = previous
+		writer.Close()
+		raw := string(<-output)
+		if executeErr != nil || result == nil {
+			t.Fatal(item.input, executeErr)
 		}
-		binary := os.Getenv("MULTIRAG_M_CLI")
-		if binary != "" {
-			journal.Event("reserve-cli-subprocess", map[string]any{"binary": binary, "command": input})
-			process := exec.Command(binary, input, "-o", "json")
+		if response, ok := result.(*ExplainResponse); ok {
+			raw += response.Message
+		}
+		if !strings.Contains(raw, item.want) {
+			t.Fatalf("canonical output missing %q: %s", item.want, raw)
+		}
+		if binary := os.Getenv("MULTIRAG_M_CLI"); binary != "" {
+			journal.Event("reserve-cli-subprocess", map[string]any{"binary": binary, "command": item.input, "cwd": root})
+			process := exec.Command(binary, item.input)
+			process.Dir = root
 			out, err := process.CombinedOutput()
 			journal.Event("cli-subprocess-exit", map[string]any{"pid": process.Process.Pid, "success": err == nil})
-			if err != nil || !json.Valid(bytes.TrimSpace(out)) {
-				t.Fatalf("actual CLI invalid output: %s %v", out, err)
+			if err != nil || !strings.Contains(string(out), item.want) {
+				t.Fatalf("real CLI %v: %s", err, out)
 			}
 		}
 	}
-	for _, input := range []string{"CHUNK '" + text + "' WITH '" + bad + "';", "PARSE FILE 'missing.pdf' WITH '" + cfg + "';"} {
-		cmd, err := NewParser(input).Parse(false)
+	for _, input := range []string{fmt.Sprintf("CHUNK '%s' WITH '%s';", source, bad), "PARSE FILE 'missing.pdf';"} {
+		cmd, err := NewParser(input).Parse(APIMode)
 		if err != nil {
 			t.Fatal(err)
 		}

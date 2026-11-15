@@ -54,19 +54,19 @@ func TestReasoningFamilyProviderConsumers(t *testing.T) {
 				}
 				thinking := tt.thinking
 				config := &ChatConfig{ModelClass: tt.class, Thinking: &thinking}
-				response, err := driver.ChatWithMessages(tt.model, []Message{{Role: "user", Content: "ping"}}, &APIConfig{APIKey: stringPtr("family-key"), Context: t.Context()}, config)
+				response, err := driver.ChatWithMessages(tt.model, []Message{{Role: "user", Content: "ping"}}, &APIConfig{ApiKey: stringPtr("family-key"), Context: t.Context()}, config)
 				if err != nil {
 					t.Fatal(err)
 				}
 				wantAnswer := content
-				var wantReason *string
+				wantReason := stringPtr("")
 				if tt.structured {
 					wantReason = stringPtr("structured")
-				} else if tt.wantSplit {
+				} else if tt.wantSplit && tt.class != nil && tt.thinking {
 					wantAnswer, wantReason = "answer", stringPtr("inline")
 				}
 				assertStringPointer(t, response.Answer, &wantAnswer)
-				assertStringPointer(t, response.ReasoningContent, wantReason)
+				assertStringPointer(t, response.ReasonContent, wantReason)
 				if config.ModelClass != tt.class || *config.Thinking != tt.thinking {
 					t.Fatal("provider mutated caller configuration")
 				}
@@ -98,7 +98,7 @@ func TestReasoningFamilyProvidersStreamThinkingFalse(t *testing.T) {
 			thinking := false
 			var answer, reason strings.Builder
 			done := 0
-			err = driver.ChatStreamlyWithSender("qwen/qwen3-8b", []Message{{Role: "user", Content: "ping"}}, &APIConfig{APIKey: stringPtr("family-key"), Context: t.Context()}, &ChatConfig{Thinking: &thinking}, func(content, reasoning *string) error {
+			err = driver.ChatStreamlyWithSender("qwen/qwen3-8b", []Message{{Role: "user", Content: "ping"}}, &APIConfig{ApiKey: stringPtr("family-key"), Context: t.Context()}, &ChatConfig{Thinking: &thinking}, func(content, reasoning *string) error {
 				if content != nil {
 					if *content == "[DONE]" {
 						done++

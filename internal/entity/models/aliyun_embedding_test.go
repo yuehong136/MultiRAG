@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -17,7 +17,7 @@ import (
 
 func TestAliyunEmbeddingBatchRegionAndOrderHTTP(t *testing.T) {
 	var batches []int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/intl/compatible-mode/v1/embeddings" || r.Header.Get("Authorization") != "Bearer fixture" {
 			t.Error("embedding endpoint/auth contract")
 		}
@@ -40,18 +40,18 @@ func TestAliyunEmbeddingBatchRegionAndOrderHTTP(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
 	}))
 	defer server.Close()
-	driver := NewAliyunModel(map[string]string{"default": "http://unused.invalid", "singapore": server.URL + "/intl/"}, URLSuffix{Embedding: "/compatible-mode/v1/embeddings"})
+	driver := NewAliyunModel(map[string]string{"default": "http://unused.invalid", "singapore": server.URL + "/intl"}, URLSuffix{Embedding: "compatible-mode/v1/embeddings"})
 	key, name, region := "fixture", "text-embedding-v4", "singapore"
-	api := &APIConfig{APIKey: &key, Region: &region}
-	bound := NewEmbeddingModel(driver, &name, api)
+	api := &APIConfig{ApiKey: &key, Region: &region}
+	bound := NewEmbeddingModel(driver, &name, api, 0)
 	texts := make([]string, 33)
 	want := make([][]float64, 33)
 	for i := range texts {
 		texts[i] = fmt.Sprintf("text-%d", i)
 		want[i] = []float64{float64(i), 9}
 	}
-	got, err := embeddingVectorsForTest(bound.Embed(texts))
-	if err != nil || !reflect.DeepEqual(got, want) || !reflect.DeepEqual(batches, []int{32, 1}) || api.Context != nil {
+	got, err := embeddingVectorsForTest(bound.ModelDriver.Embed(bound.ModelName, texts, api, nil))
+	if err != nil || !reflect.DeepEqual(got, want) || !reflect.DeepEqual(batches, []int{33}) || api.Context != nil {
 		t.Fatal(got, batches, err)
 	}
 }
@@ -77,11 +77,11 @@ func TestAliyunEmbeddingRejectsInvalidResponsesHTTP(t *testing.T) {
 		{"HTTP failure", `private-body`, 429}, {"malformed", `{`, 200}, {"null", `null`, 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); fmt.Fprint(w, tc.body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); fmt.Fprint(w, tc.body) }))
 			defer server.Close()
 			driver := NewAliyunModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
 			key, name := "fixture", "text-embedding-v4"
-			got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"first", "second"}, &APIConfig{APIKey: &key}, nil))
+			got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"first", "second"}, &APIConfig{ApiKey: &key}, nil))
 			if err == nil || got != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(got, err)
 			}
@@ -91,27 +91,27 @@ func TestAliyunEmbeddingRejectsInvalidResponsesHTTP(t *testing.T) {
 
 func TestAliyunEmbeddingPreflightAndCancel(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		fmt.Fprint(w, `{"data":[{"index":0,"embedding":[1]}]}`)
 	}))
 	defer server.Close()
 	driver := NewAliyunModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
 	key, name, unknown := "fixture", "text-embedding-v4", "missing"
-	if got, err := embeddingVectorsForTest(driver.Embed(nil, nil, nil, nil)); err != nil || got == nil || len(got) != 0 {
+	if got, err := embeddingVectorsForTest(driver.Embed(nil, nil, &APIConfig{ApiKey: &key}, nil)); err != nil || got == nil || len(got) != 0 {
 		t.Fatal(got, err)
 	}
 	for _, tc := range []struct {
 		name *string
 		api  *APIConfig
-	}{{nil, &APIConfig{APIKey: &key}}, {&name, nil}, {&name, &APIConfig{}}, {&name, &APIConfig{APIKey: &key, Region: &unknown}}} {
+	}{{nil, &APIConfig{ApiKey: &key}}, {&name, nil}, {&name, &APIConfig{}}, {&name, &APIConfig{ApiKey: &key, Region: &unknown}}} {
 		if got, err := embeddingVectorsForTest(driver.Embed(tc.name, []string{"a"}, tc.api, nil)); err == nil || got != nil {
 			t.Fatal(got, err)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"a"}, &APIConfig{APIKey: &key, Context: ctx}, nil)); !errors.Is(err, context.Canceled) || got != nil {
+	if got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"a"}, &APIConfig{ApiKey: &key, Context: ctx}, nil)); !errors.Is(err, context.Canceled) || got != nil {
 		t.Fatal(got, err)
 	}
 	if calls.Load() != 0 {
@@ -121,7 +121,7 @@ func TestAliyunEmbeddingPreflightAndCancel(t *testing.T) {
 
 func TestAliyunEmbeddingCancelDuringHTTP(t *testing.T) {
 	started, stopped := make(chan struct{}), make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		r.Body.Close()
 		w.WriteHeader(http.StatusOK)
@@ -140,7 +140,7 @@ func TestAliyunEmbeddingCancelDuringHTTP(t *testing.T) {
 	go func() { <-started; cancel() }()
 	key, name := "fixture", "text-embedding-v4"
 	driver := NewAliyunModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-	got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"one"}, &APIConfig{APIKey: &key, Context: ctx}, nil))
+	got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"one"}, &APIConfig{ApiKey: &key, Context: ctx}, nil))
 	if !errors.Is(err, context.Canceled) || got != nil {
 		t.Fatal(got, err)
 	}

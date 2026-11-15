@@ -21,14 +21,14 @@ import (
 	"testing"
 )
 
-func TestGetMultiRAGVersion(t *testing.T) {
-	version := GetMultiRAGVersion()
+func TestGetRAGFlowVersion(t *testing.T) {
+	version := GetRAGFlowVersion()
 	fmt.Printf("MultiRAG Version: %s\n", version)
 	if version == "" {
-		t.Error("GetMultiRAGVersion returned empty string")
+		t.Error("GetRAGFlowVersion returned empty string")
 	}
 	if version == "unknown" {
-		t.Log("Warning: GetMultiRAGVersion returned 'unknown', VERSION file not found and git command failed")
+		t.Log("Warning: GetRAGFlowVersion returned 'unknown', VERSION file not found and git command failed")
 	}
 }
 

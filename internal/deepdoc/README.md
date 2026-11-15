@@ -2,13 +2,15 @@
 
 `NewClientWithURL(baseURL).DLA(ctx, images)` sends one multipart `request` JPEG
 part per image to `/predict` and reads `bboxes` rows shaped as
-`[left, top, right, bottom, score, class_index]`. Results retain the input image
-grouping. An empty detections array is a valid server result; network errors,
+`[left, top, right, bottom, score, class_index]`. The original interface returns
+a flat region list, with one zero-value result for an image with valid empty
+detections. Network errors,
 HTTP failures, malformed boxes and exhausted retries remain errors.
 
-The client caps batches at 32 images / 32 MiB, each image at 8 MiB and each
-response at 4 MiB. Every attempt has an 18 second deadline in addition to the
-caller's context. It retries transient failures at most three times; redirects
+The client bounds each response at 20 MiB. Its default HTTP client has an
+18 second timeout, and requests use the caller's context. The original options
+can override the HTTP client and retry count. The default retries transient
+failures at most three times; redirects
 and 4xx responses do not retry. Error messages do not echo server response bodies.
 
 `NewClient` reads `DEEPDOC_URL`, then `TENSORRT_DLA_SVR`. Configuration alone does

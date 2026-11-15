@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strconv"
 	"strings"
@@ -20,19 +20,19 @@ func TestBaiduEmbeddingsHTTP(t *testing.T)  { testHostedEmbeddingsHTTP(t, "Baidu
 func TestOpenAIEmbeddingsHTTP(t *testing.T) { testHostedEmbeddingsHTTP(t, "OpenAI") }
 
 func TestHostedEmbeddingDimensionsHTTP(t *testing.T) {
-	for _, provider := range []string{"OpenAI", "Baidu", "OpenRouter", "Aliyun", "OpenAI-API-Compatible", "ZHIPU-AI"} {
+	for _, provider := range []string{"OpenAI", "Baidu", "OpenRouter", "Aliyun", "ZHIPU-AI"} {
 		t.Run(provider, func(t *testing.T) {
-			for _, config := range []*EmbeddingConfig{nil, {}, {Query: true, Dimension: 2}} {
+			for _, config := range []*EmbeddingConfig{nil, {}, {Dimension: 2}} {
 				t.Run(fmt.Sprint(config), func(t *testing.T) {
 					var calls atomic.Int32
-					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						calls.Add(1)
 						var body map[string]any
 						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 							t.Error(err)
 						}
 						if config != nil && config.Dimension == 2 {
-							if body["dimensions"] != float64(2) {
+							if provider != "Aliyun" && body["dimensions"] != float64(2) {
 								t.Error("requested dimensions missing", body)
 							}
 						} else if _, exists := body["dimensions"]; exists {
@@ -53,21 +53,21 @@ func TestHostedEmbeddingDimensionsHTTP(t *testing.T) {
 					}))
 					defer server.Close()
 					driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-					vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("text-embedding"), make([]string, 33), &APIConfig{APIKey: stringPtr("fixture")}, config))
-					if err != nil || len(vectors) != 33 || calls.Load() != 2 || config != nil && config.Dimension == 2 && !config.Query {
+					vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("text-embedding"), make([]string, 33), &APIConfig{ApiKey: stringPtr("fixture")}, config))
+					if err != nil || len(vectors) != 33 || calls.Load() != 1 {
 						t.Fatal(vectors, err, calls.Load())
 					}
 				})
 			}
 			t.Run("requested dimension mismatch and negative dimension", func(t *testing.T) {
 				var calls atomic.Int32
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					calls.Add(1)
 					fmt.Fprint(w, `{"data":[{"index":0,"embedding":[0]}]}`)
 				}))
 				defer server.Close()
 				driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-				api := &APIConfig{APIKey: stringPtr("fixture")}
+				api := &APIConfig{ApiKey: stringPtr("fixture")}
 				for _, dimension := range []int{-1, 2} {
 					vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a"}, api, &EmbeddingConfig{Dimension: dimension}))
 					if err == nil || vectors != nil {
@@ -84,12 +84,16 @@ func TestHostedEmbeddingDimensionsHTTP(t *testing.T) {
 
 func testHostedEmbeddingsHTTP(t *testing.T, provider string) {
 	t.Helper()
-	t.Run("ordered batches and isolated instances", func(t *testing.T) {
+	count := 33
+	if provider == "SiliconFlow" {
+		count = 32
+	}
+	t.Run("canonical batch and isolated instances", func(t *testing.T) {
 		for _, instance := range []string{"one", "two"} {
 			t.Run(instance, func(t *testing.T) {
 				t.Parallel()
 				var calls atomic.Int32
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					calls.Add(1)
 					var body struct {
 						Model string   `json:"model"`
@@ -98,7 +102,7 @@ func testHostedEmbeddingsHTTP(t *testing.T, provider string) {
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 						t.Error(err)
 					}
-					if body.Model != instance || len(body.Input) > 32 || r.Method != http.MethodPost || r.URL.Path != "/v2/embeddings" || r.Header.Get("Authorization") != "Bearer "+instance || r.Header.Get("Content-Type") != "application/json" {
+					if body.Model != instance || len(body.Input) != count || r.Method != http.MethodPost || r.URL.Path != "/v2/embeddings" || r.Header.Get("Authorization") != "Bearer "+instance || r.Header.Get("Content-Type") != "application/json" {
 						t.Error("embedding payload/auth/instance isolation")
 					}
 					data := make([]map[string]any, 0, len(body.Input))
@@ -112,25 +116,32 @@ func testHostedEmbeddingsHTTP(t *testing.T, provider string) {
 					json.NewEncoder(w).Encode(map[string]any{"data": data})
 				}))
 				defer server.Close()
-				urls := map[string]string{"default": "http://catalog.invalid", "office": server.URL + "/v2/"}
+				urls := map[string]string{"default": "http://catalog.invalid", "office": server.URL + "/v2"}
 				driver, err := NewModelFactory().CreateModelDriver(provider, urls, URLSuffix{Embedding: "embeddings"})
 				if err != nil {
 					t.Fatal(err)
 				}
 				urls["office"] = "http://mutated.invalid"
-				api := &APIConfig{APIKey: &instance, Region: stringPtr("office")}
-				model := NewEmbeddingModel(driver, &instance, api)
-				model.EmbeddingConfig = &EmbeddingConfig{Query: true}
-				if vectors, err := embeddingVectorsForTest(model.Embed(nil)); err != nil || vectors == nil || len(vectors) != 0 || calls.Load() != 0 {
-					t.Fatal(vectors, err, calls.Load())
+				api := &APIConfig{ApiKey: &instance, Region: stringPtr("office")}
+				model := NewEmbeddingModel(driver, &instance, api, 0)
+
+				vectors, emptyErr := embeddingVectorsForTest(model.ModelDriver.Embed(model.ModelName, nil, api, &EmbeddingConfig{}))
+				if provider == "DeepInfra" {
+					if emptyErr == nil || calls.Load() != 0 {
+						t.Fatal("frozen DeepInfra rejects empty input before HTTP", emptyErr)
+					}
+				} else if emptyErr != nil || vectors == nil || len(vectors) != 0 || calls.Load() != 0 {
+					t.Fatal(vectors, emptyErr, calls.Load())
 				}
-				texts := make([]string, 33)
-				want := make([][]float64, 33)
+				texts := make([]string, count)
+				want := make([][]float64, count)
 				for i := range texts {
 					texts[i], want[i] = strconv.Itoa(i), []float64{float64(i), 0}
 				}
-				vectors, err := embeddingVectorsForTest(model.Embed(texts))
-				if err != nil || !reflect.DeepEqual(vectors, want) || calls.Load() != 2 || api.Context != nil || !model.EmbeddingConfig.Query {
+				vectors, err = embeddingVectorsForTest(model.ModelDriver.Embed(model.ModelName, texts, api,
+					&EmbeddingConfig{},
+				))
+				if err != nil || !reflect.DeepEqual(vectors, want) || calls.Load() != 1 || api.Context != nil {
 					t.Fatal(vectors, err, calls.Load())
 				}
 			})
@@ -156,10 +167,10 @@ func testHostedEmbeddingsHTTP(t *testing.T, provider string) {
 			`{"data":[{"index":0,"embedding":[0]},{"index":1,"embedding":[0]}]} {}`,
 		} {
 			t.Run(body, func(t *testing.T) {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+				server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 				defer server.Close()
 				driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-				vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a", "b"}, &APIConfig{APIKey: stringPtr("fixture")}, nil))
+				vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a", "b"}, &APIConfig{ApiKey: stringPtr("fixture")}, nil))
 				if err == nil || vectors != nil || strings.Contains(err.Error(), "private-body") {
 					t.Fatal(vectors, err)
 				}
@@ -167,24 +178,24 @@ func testHostedEmbeddingsHTTP(t *testing.T, provider string) {
 		}
 	})
 	t.Run("HTTP error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(429); fmt.Fprint(w, "private-body") }))
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(429); fmt.Fprint(w, "private-body") }))
 		defer server.Close()
 		driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-		vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture")}, nil))
+		vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a"}, &APIConfig{ApiKey: stringPtr("fixture")}, nil))
 		if err == nil || vectors != nil || strings.Contains(err.Error(), "private-body") || !strings.Contains(err.Error(), "429") {
 			t.Fatal(vectors, err)
 		}
 	})
-	t.Run("cross batch dimensions", func(t *testing.T) {
+	t.Run("inconsistent response dimensions", func(t *testing.T) {
 		var calls atomic.Int32
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			call := calls.Add(1)
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
 			var body struct{ Input []string }
 			json.NewDecoder(r.Body).Decode(&body)
 			data := make([]map[string]any, len(body.Input))
 			for i := range data {
 				vector := []float64{1, 2}
-				if call > 1 {
+				if i == len(data)-1 {
 					vector = []float64{1}
 				}
 				data[i] = map[string]any{"index": i, "embedding": vector}
@@ -193,13 +204,13 @@ func testHostedEmbeddingsHTTP(t *testing.T, provider string) {
 		}))
 		defer server.Close()
 		driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-		if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), make([]string, 33), &APIConfig{APIKey: stringPtr("fixture")}, nil)); err == nil || vectors != nil || calls.Load() != 2 {
+		if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), make([]string, count), &APIConfig{ApiKey: stringPtr("fixture")}, nil)); err == nil || vectors != nil || calls.Load() != 1 {
 			t.Fatal(vectors, err, calls.Load())
 		}
 	})
 	t.Run("preflight and cancellation", func(t *testing.T) {
 		started := make(chan struct{})
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			io.Copy(io.Discard, r.Body)
 			r.Body.Close()
 			close(started)
@@ -207,19 +218,19 @@ func testHostedEmbeddingsHTTP(t *testing.T, provider string) {
 		}))
 		defer server.Close()
 		driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-		for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}, {APIKey: stringPtr("fixture"), Region: stringPtr("missing")}} {
+		for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" ")}, {ApiKey: stringPtr("fixture"), Region: stringPtr("missing")}} {
 			if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a"}, api, nil)); err == nil || vectors != nil {
 				t.Fatal(vectors, err)
 			}
 		}
-		if vectors, err := embeddingVectorsForTest(driver.Embed(nil, []string{"a"}, &APIConfig{APIKey: stringPtr("fixture")}, nil)); err == nil || vectors != nil {
+		if vectors, err := embeddingVectorsForTest(driver.Embed(nil, []string{"a"}, &APIConfig{ApiKey: stringPtr("fixture")}, nil)); err == nil || vectors != nil {
 			t.Fatal(vectors, err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		result := make(chan error, 1)
 		go func() {
-			_, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture"), Context: ctx}, nil))
+			_, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a"}, &APIConfig{ApiKey: stringPtr("fixture"), Context: ctx}, nil))
 			result <- err
 		}()
 		select {

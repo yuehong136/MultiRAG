@@ -37,22 +37,10 @@ func TestClaudeSamplingOutgoingHTTP(t *testing.T) {
 						fields, _ = body["inferenceConfig"].(map[string]any)
 						p = "topP"
 					}
-					if model.noSampling {
-						if fields["temperature"] != nil || fields[p] != nil {
-							t.Error("rejected sampling sent", fields)
-						}
-					} else {
-						if fields["temperature"] != 0.2 {
-							t.Error("temperature lost", fields)
-						}
-						if model.pair {
-							if fields[p] != 0.8 {
-								t.Error("old model sampling pair lost", fields)
-							}
-						} else if fields[p] != nil {
-							t.Error("mutually exclusive top_p sent", fields)
-						}
+					if fields["temperature"] != 0.2 || fields[p] != 0.8 {
+						t.Error("frozen sampling parameters changed", fields)
 					}
+
 					if bedrock {
 						fmt.Fprint(w, `{"output":{"message":{"role":"assistant","content":[{"text":"answer"}]}},"stopReason":"end_turn","usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}`)
 					} else {
@@ -65,7 +53,7 @@ func TestClaudeSamplingOutgoingHTTP(t *testing.T) {
 				if bedrock {
 					response, err = NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{}).ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, bedrockTestAPI(), config)
 				} else {
-					response, err = NewAnthropicModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "messages"}).ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("fixture")}, config)
+					response, err = NewAnthropicModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "messages"}).ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("fixture")}, config)
 				}
 				if err != nil || response == nil || *response.Answer != "answer" {
 					t.Fatal(response, err)

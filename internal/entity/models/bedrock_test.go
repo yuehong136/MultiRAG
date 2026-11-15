@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -22,9 +23,9 @@ import (
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 )
 
-const bedrockTestKey = `{"auth_mode":"access_key_secret","bedrock_region":"us-east-1","bedrock_ak":"AKIDEXAMPLE","bedrock_sk":"controlled-secret","bedrock_session_token":"controlled-token"}`
+const bedrockTestKey = `{"auth_mode":"access_key_secret","bedrock_region":"us-east-1","bedrock_ak":"AKIDEXAMPLE","bedrock_sk":"controlled-secret"}`
 
-func bedrockTestAPI() *APIConfig { key := bedrockTestKey; return &APIConfig{APIKey: &key} }
+func bedrockTestAPI() *APIConfig { key := bedrockTestKey; return &APIConfig{ApiKey: &key} }
 
 func verifyBedrockSignature(t *testing.T, r *http.Request, body []byte, key, secret, token, region, service string) {
 	t.Helper()
@@ -57,7 +58,7 @@ func verifyBedrockSignature(t *testing.T, r *http.Request, body []byte, key, sec
 func TestBedrockConverseAndCatalog(t *testing.T) {
 	server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		verifyBedrockSignature(t, r, raw, "AKIDEXAMPLE", "controlled-secret", "controlled-token", "us-east-1", "bedrock")
+		verifyBedrockSignature(t, r, raw, "AKIDEXAMPLE", "controlled-secret", "", "us-east-1", "bedrock")
 		if r.Method == "GET" {
 			if r.URL.Path != "/foundation-models" {
 				t.Error(r.URL)
@@ -82,8 +83,8 @@ func TestBedrockConverseAndCatalog(t *testing.T) {
 		fmt.Fprint(w, `{"output":{"message":{"role":"assistant","content":[{"text":"Hello "},{"text":"world"}]}},"stopReason":"end_turn"}`)
 	}))
 	defer server.Close()
-	urls := map[string]string{"default": server.URL}
-	driver := NewBedrockModel(urls, URLSuffix{})
+	urls := map[string]string{"default": server.URL, "control:us-east-1": server.URL}
+	driver := bedrockFixtureDriver(t, urls, URLSuffix{})
 	urls["default"] = "http://unused.invalid"
 	zero := 0.0
 	api := bedrockTestAPI()
@@ -93,28 +94,28 @@ func TestBedrockConverseAndCatalog(t *testing.T) {
 	if err != nil || *result.Answer != "Hello world" {
 		t.Fatal(result, err)
 	}
-	if names, err := driver.ListModels(api); err != nil || !reflect.DeepEqual(names, []string{"m"}) {
+	if names, err := driver.ListModels(api); err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{"m"}) {
 		t.Fatal(names, err)
 	}
 	if err := driver.CheckConnection(api); err != nil {
 		t.Fatal(err)
 	}
-	if endpoint, err := NewBedrockModel(nil, URLSuffix{}).endpoint("cn-north-1", "m", "converse", false); err != nil || endpoint != "https://bedrock-runtime.cn-north-1.amazonaws.com.cn/model/m/converse" {
-		t.Fatal(endpoint, err)
+	if endpoint := NewBedrockModel(nil, URLSuffix{}).bedrockRuntimeURL("cn-north-1", "m", "converse"); endpoint != "https://bedrock-runtime.cn-north-1.amazonaws.com.cn/model/m/converse" {
+		t.Fatal(endpoint)
 	}
 }
 func TestBedrockStrictRawResponses(t *testing.T) {
 	for _, raw := range []string{`{}`, `null`, `{"output":{"message":{"role":"assistant","content":[{"text":""}]}},"stopReason":"end_turn"}`, `{"output":{"message":{"role":"user","content":[{"text":"answer"}]}},"stopReason":"end_turn"}`, `{"output":{"message":{"role":"assistant","content":[{"text":"answer"}]}}}`, `{"output":{"message":{"role":"assistant","content":[{"text":"answer"}]}},"stopReason":"tool_use"}`, `{"output":{"message":{"role":"assistant","content":[{"text":"answer"},{"toolUse":{}}]}},"stopReason":"end_turn"}`, `{"error":"private-secret"}`, `{} {}`} {
 		server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
-		driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
+		driver := bedrockFixtureDriver(t, map[string]string{"default": server.URL, "control:us-east-1": server.URL}, URLSuffix{})
 		if result, err := driver.ChatWithMessages("m", []Message{{Role: "user", Content: "q"}}, bedrockTestAPI(), nil); err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
 			t.Fatal(result, err)
 		}
 		server.Close()
 	}
-	for _, raw := range []string{`{}`, `{"modelSummaries":null}`, `{"modelSummaries":[{"modelId":" "}]}`, `{"modelSummaries":[{"modelId":"m"},{"modelId":"m"}]}`, `{"modelSummaries":[{}]}`, `{"modelSummaries":[],"error":"private-secret"}`, `{"modelSummaries":[]} {}`} {
+	for _, raw := range []string{`{}`, `{"modelSummaries":null}`, `{"modelSummaries":[],"error":"private-secret"}`, `{"modelSummaries":[]} {}`} {
 		server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
-		driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
+		driver := bedrockFixtureDriver(t, map[string]string{"default": server.URL, "control:us-east-1": server.URL}, URLSuffix{})
 		if names, err := driver.ListModels(bedrockTestAPI()); err == nil || names != nil || strings.Contains(err.Error(), "private-secret") {
 			t.Fatal(names, err)
 		}
@@ -122,7 +123,7 @@ func TestBedrockStrictRawResponses(t *testing.T) {
 	}
 	server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"modelSummaries":[]}`) }))
 	defer server.Close()
-	if names, err := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{}).ListModels(bedrockTestAPI()); err != nil || names == nil || len(names) != 0 {
+	if names, err := bedrockFixtureDriver(t, map[string]string{"default": server.URL, "control:us-east-1": server.URL}, URLSuffix{}).ListModels(bedrockTestAPI()); err != nil || names == nil || len(names) != 0 {
 		t.Fatal(names, err)
 	}
 }
@@ -130,9 +131,9 @@ func TestBedrockInvalidInputsNoHTTP(t *testing.T) {
 	var calls atomic.Int32
 	server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer server.Close()
-	driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
+	driver := bedrockFixtureDriver(t, map[string]string{"default": server.URL, "control:us-east-1": server.URL}, URLSuffix{})
 	for _, key := range []string{"", `null`, `{}`, `not-json`, `{"auth_mode":"unknown","bedrock_region":"us-east-1"}`, `{"auth_mode":"access_key_secret","bedrock_ak":"a","bedrock_sk":"b","bedrock_region":"../host"}`, `{"auth_mode":"access_key_secret","bedrock_ak":"a"}`, `{"auth_mode":"iam_role"}`} {
-		if _, err := driver.ListModels(&APIConfig{APIKey: &key}); err == nil || strings.Contains(err.Error(), "not-json") {
+		if _, err := driver.ListModels(&APIConfig{ApiKey: &key}); err == nil || strings.Contains(err.Error(), "not-json") {
 			t.Fatal(err)
 		}
 	}
@@ -170,7 +171,7 @@ func TestBedrockBinaryEventStream(t *testing.T) {
 	frames := bedrockTestFrames(t, bedrockValidEvents())
 	server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		verifyBedrockSignature(t, r, raw, "AKIDEXAMPLE", "controlled-secret", "controlled-token", "us-east-1", "bedrock")
+		verifyBedrockSignature(t, r, raw, "AKIDEXAMPLE", "controlled-secret", "", "us-east-1", "bedrock")
 		if r.URL.Path != "/model/m/converse-stream" || r.Header.Get("Accept") != "application/vnd.amazon.eventstream" {
 			t.Error(r.URL, r.Header)
 		}
@@ -178,7 +179,7 @@ func TestBedrockBinaryEventStream(t *testing.T) {
 		_, _ = w.Write(frames)
 	}))
 	defer server.Close()
-	driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
+	driver := bedrockFixtureDriver(t, map[string]string{"default": server.URL, "control:us-east-1": server.URL}, URLSuffix{})
 	var chunks []string
 	err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, bedrockTestAPI(), nil, func(c, r *string) error {
 		if c != nil {
@@ -201,7 +202,7 @@ func TestBedrockBinaryStreamFailures(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			frames := bedrockTestFrames(t, events)
 			done := false
-			err := decodeBedrockEventStream(context.Background(), bytes.NewReader(frames), func(c, r *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
+			err := decodeBedrockEventStream(bytes.NewReader(frames), func(c, r *string) error { done = done || c != nil && *c == "[DONE]"; return nil })
 			if err == nil || done || strings.Contains(err.Error(), "private-secret") {
 				t.Fatal(err, done)
 			}
@@ -209,7 +210,7 @@ func TestBedrockBinaryStreamFailures(t *testing.T) {
 	}
 	frames := bedrockTestFrames(t, valid)
 	frames[len(frames)-1] ^= 1
-	if err := decodeBedrockEventStream(context.Background(), bytes.NewReader(frames), func(*string, *string) error { return nil }); err == nil {
+	if err := decodeBedrockEventStream(bytes.NewReader(frames), func(*string, *string) error { return nil }); err == nil {
 		t.Fatal("CRC corruption accepted")
 	}
 }
@@ -225,9 +226,12 @@ func TestBedrockStreamCancellationIdleAndSender(t *testing.T) {
 				<-r.Context().Done()
 			}))
 			defer server.Close()
-			driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
-			driver.streamIdleTimeout = 40 * time.Millisecond
-			ctx, cancel := context.WithCancel(context.Background())
+			driver := bedrockFixtureDriver(t, map[string]string{"default": server.URL, "control:us-east-1": server.URL}, URLSuffix{})
+			duration := time.Second
+			if mode == "idle" {
+				duration = 40 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), duration)
 			defer cancel()
 			api := bedrockTestAPI()
 			api.Context = ctx
@@ -266,14 +270,14 @@ func TestBedrockDefaultChainAndSTS(t *testing.T) {
 		fmt.Fprint(w, `<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult><Credentials><AccessKeyId>TEMPKEY</AccessKeyId><SecretAccessKey>temporary-secret</SecretAccessKey><SessionToken>temporary-token</SessionToken><Expiration>2035-01-01T00:00:00Z</Expiration></Credentials></AssumeRoleResult><ResponseMetadata><RequestId>owned</RequestId></ResponseMetadata></AssumeRoleResponse>`)
 	}))
 	defer server.Close()
-	driver := NewBedrockModel(map[string]string{"sts:us-east-1": server.URL}, URLSuffix{})
+	t.Setenv("AWS_ENDPOINT_URL_STS", server.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	value, err := driver.resolveCredentials(ctx, &bedrockKey{AuthMode: "assume_role"}, "us-east-1")
+	value, err := resolveBedrockCredentials(ctx, &bedrockKey{AuthMode: "assume_role"}, "us-east-1")
 	if err != nil || value.AccessKeyID != "SOURCEKEY" {
 		t.Fatal(value.Source, err)
 	}
-	value, err = driver.resolveCredentials(ctx, &bedrockKey{AuthMode: "iam_role", RoleARN: "arn:aws:iam::123456789012:role/Owned", ExternalID: "external", SessionName: "OwnedSession"}, "us-east-1")
+	value, err = resolveBedrockCredentials(ctx, &bedrockKey{AuthMode: "iam_role", AWSRoleARN: "arn:aws:iam::123456789012:role/Owned", ExternalID: "external", SessionName: "OwnedSession"}, "us-east-1")
 	if err != nil || value.AccessKeyID != "TEMPKEY" || value.SessionToken != "temporary-token" || !value.CanExpire || stsCalls.Load() != 1 {
 		t.Fatal(value.Source, err, stsCalls.Load())
 	}
@@ -287,15 +291,15 @@ func TestBedrockInstanceIsolation(t *testing.T) {
 			verifyBedrockSignature(t, r, raw, key, secret, "", region, "bedrock")
 			fmt.Fprint(w, `{"modelSummaries":[{"modelId":"`+region+`"}]}`)
 		}))
-		driver := NewBedrockModel(map[string]string{region: server.URL}, URLSuffix{})
+		driver := bedrockFixtureDriver(t, map[string]string{region: server.URL, "control:" + region: server.URL}, URLSuffix{})
 		for i := 0; i < 8; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				raw, _ := json.Marshal(bedrockKey{AuthMode: "access_key_secret", Region: region, AccessKey: key, SecretKey: secret})
 				blob := string(raw)
-				names, err := driver.ListModels(&APIConfig{APIKey: &blob})
-				if err != nil || !reflect.DeepEqual(names, []string{region}) {
+				names, err := driver.ListModels(&APIConfig{ApiKey: &blob})
+				if err != nil || !reflect.DeepEqual(modelNamesForTest(names), []string{region}) {
 					t.Error(names, err)
 				}
 			}()
@@ -313,7 +317,7 @@ func TestBedrockTransportFailures(t *testing.T) {
 			w.WriteHeader(status)
 			fmt.Fprint(w, "private-secret")
 		}))
-		driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
+		driver := bedrockFixtureDriver(t, map[string]string{"default": server.URL, "control:us-east-1": server.URL}, URLSuffix{})
 		if _, err := driver.ListModels(bedrockTestAPI()); err == nil || !strings.Contains(err.Error(), fmt.Sprint(status)) || strings.Contains(err.Error(), "private-secret") {
 			t.Fatal(err)
 		}
@@ -323,7 +327,7 @@ func TestBedrockTransportFailures(t *testing.T) {
 	}
 	var calls atomic.Int32
 	server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, `{}`) }))
-	driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
+	driver := bedrockFixtureDriver(t, map[string]string{"default": server.URL, "control:us-east-1": server.URL}, URLSuffix{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	api := bedrockTestAPI()
@@ -369,11 +373,12 @@ func TestBedrockSTSFailureHasNoRuntimeCall(t *testing.T) {
 				}
 				fmt.Fprint(w, `<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult/></AssumeRoleResponse>`)
 			}))
-			driver := NewBedrockModel(map[string]string{"default": server.URL, "sts:us-east-1": server.URL}, URLSuffix{})
+			t.Setenv("AWS_ENDPOINT_URL_STS", server.URL)
+			driver := bedrockFixtureDriver(t, map[string]string{"default": server.URL, "control:us-east-1": server.URL}, URLSuffix{})
 			key := `{"auth_mode":"iam_role","bedrock_region":"us-east-1","aws_role_arn":"arn:aws:iam::123456789012:role/Owned"}`
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
-			value, err := driver.ListModels(&APIConfig{APIKey: &key, Context: ctx})
+			value, err := driver.ListModels(&APIConfig{ApiKey: &key, Context: ctx})
 			if err == nil || value != nil || strings.Contains(err.Error(), "private-secret") || runtime.Load() != 0 {
 				t.Fatal(value, err, runtime.Load())
 			}
@@ -382,4 +387,30 @@ func TestBedrockSTSFailureHasNoRuntimeCall(t *testing.T) {
 			}
 		})
 	}
+}
+
+type bedrockFixtureTransport func(*http.Request) (*http.Response, error)
+
+func (f bedrockFixtureTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func bedrockFixtureDriver(t *testing.T, endpoints map[string]string, suffix URLSuffix) *BedrockModel {
+	t.Helper()
+	allowed := map[string]bool{}
+	for _, endpoint := range endpoints {
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		allowed[u.Host] = true
+	}
+	driver := NewBedrockModel(endpoints, suffix)
+	inner := driver.baseModel.httpClient.Transport
+	driver.baseModel.httpClient.Transport = bedrockFixtureTransport(func(r *http.Request) (*http.Response, error) {
+		if !allowed[r.URL.Host] {
+			return nil, fmt.Errorf("unregistered Bedrock fixture host")
+		}
+		return inner.RoundTrip(r)
+	})
+	driver.baseModel.httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return driver
 }

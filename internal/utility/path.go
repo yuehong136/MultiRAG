@@ -25,7 +25,7 @@ import (
 // GetProjectRoot returns the project root directory by finding go.mod marker
 func GetProjectRoot() string {
 	// Try environment variable first
-	if confDir := os.Getenv("MULTIRAG_CONF_DIR"); confDir != "" {
+	if confDir := os.Getenv("RAGFLOW_CONF_DIR"); confDir != "" {
 		return confDir
 	}
 

@@ -21,39 +21,74 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
+	"multirag/internal/common"
+	"multirag/internal/engine"
+	"multirag/internal/service/nlp"
 	"strings"
+	"time"
 
-	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"multirag/internal/dao"
 	"multirag/internal/entity"
-	"multirag/internal/entity/models"
+	modelModule "multirag/internal/entity/models"
 )
+
+type chatKnowledgebaseStore interface {
+	Accessible(kbID, userID string) bool
+	GetByIDs(ids []string) ([]*entity.Knowledgebase, error)
+}
+
+type chatModelProvider interface {
+	GetChatModel(tenantID, compositeModelName string) (*modelModule.ChatModel, error)
+	GetEmbeddingModel(tenantID, compositeModelName string) (*modelModule.EmbeddingModel, error)
+	GetRerankModel(tenantID, compositeModelName string) (*modelModule.RerankModel, error)
+	GetModelConfigFromProviderInstance(tenantID string, modelType entity.ModelType, modelName string) (modelModule.ModelDriver, string, *modelModule.APIConfig, int, error)
+	GetTenantDefaultModelByType(tenantID string, modelType entity.ModelType) (modelModule.ModelDriver, string, *modelModule.APIConfig, int, error)
+}
+
+type chatMetadataService interface {
+	LabelQuestion(question string, kbs []*entity.Knowledgebase) map[string]float64
+	GetFlattedMetaByKBs(kbIDs []string) (common.MetaData, error)
+}
+
+type chatRetrievalService interface {
+	Retrieval(ctx context.Context, req *nlp.RetrievalRequest) (*nlp.RetrievalResult, error)
+}
 
 // ChatSessionService chat session (conversation) service
 type ChatSessionService struct {
-	chatSessionDAO       *dao.ChatSessionDAO
-	chatDAO              *dao.ChatDAO
-	userTenantDAO        *dao.UserTenantDAO
-	modelProviderService *ModelProviderService
-	chunks               *ChunkService
+	chatSessionDAO   *dao.ChatSessionDAO
+	chatDAO          *dao.ChatDAO
+	userTenantDAO    *dao.UserTenantDAO
+	kbDAO            chatKnowledgebaseStore
+	docEngine        engine.DocEngine
+	modelProviderSvc chatModelProvider
+	metadataSvc      chatMetadataService
+	retrievalSvc     chatRetrievalService
 }
 
 // NewChatSessionService create chat session service
 func NewChatSessionService() *ChatSessionService {
-	provider := NewModelProviderService()
-	return NewChatSessionServiceWithModels(provider, NewChunkServiceWithModels(provider))
+	docEngine := engine.Get()
+	return newChatSessionServiceWithRetrieval(docEngine, nlp.NewRetrievalService(docEngine, dao.NewDocumentDAO()))
 }
 
-// NewChatSessionServiceWithModels uses one catalog for retrieval and generation.
-func NewChatSessionServiceWithModels(provider *ModelProviderService, chunks *ChunkService) *ChatSessionService {
+// NewChatSessionServiceWithRetrieval creates a chat session service with a retrieval service.
+func NewChatSessionServiceWithRetrieval(retrievalSvc chatRetrievalService) *ChatSessionService {
+	return newChatSessionServiceWithRetrieval(engine.Get(), retrievalSvc)
+}
+
+func newChatSessionServiceWithRetrieval(docEngine engine.DocEngine, retrievalSvc chatRetrievalService) *ChatSessionService {
 	return &ChatSessionService{
-		chatSessionDAO:       dao.NewChatSessionDAO(),
-		chatDAO:              dao.NewChatDAO(),
-		userTenantDAO:        dao.NewUserTenantDAO(),
-		modelProviderService: provider,
-		chunks:               chunks,
+		chatSessionDAO:   dao.NewChatSessionDAO(),
+		chatDAO:          dao.NewChatDAO(),
+		userTenantDAO:    dao.NewUserTenantDAO(),
+		kbDAO:            dao.NewKnowledgebaseDAO(),
+		docEngine:        docEngine,
+		modelProviderSvc: NewModelProviderService(),
+		metadataSvc:      NewMetadataService(),
+		retrievalSvc:     retrievalSvc,
 	}
 }
 
@@ -109,11 +144,7 @@ func (s *ChatSessionService) SetChatSession(userID string, req *SetChatSessionRe
 	}
 
 	// Generate UUID for new chat session
-	newID := uuid.New().String()
-	newID = strings.ReplaceAll(newID, "-", "")
-	if len(newID) > 32 {
-		newID = newID[:32]
-	}
+	newID := common.GenerateUUID()
 
 	// Get prologue from dialog's prompt_config
 	prologue := "Hi! I'm your assistant. What can I do for you?"
@@ -219,19 +250,43 @@ type ListChatSessionsResponse struct {
 }
 
 // ListChatSessions lists chat sessions for a dialog
-func (s *ChatSessionService) ListChatSessions(userID string, dialogID string) (*ListChatSessionsResponse, error) {
-	// Match Python REST's tenant-owned chat contract. Membership does not
-	// grant access to another tenant's private conversations.
-	exists, err := s.chatSessionDAO.CheckDialogExists(userID, dialogID)
+func (s *ChatSessionService) ListChatSessions(userID string, chatID string) (*ListChatSessionsResponse, error) {
+	// Get user's tenants
+	tenantIDs, err := s.userTenantDAO.GetTenantIDsByUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	if !exists {
-		return nil, errors.New("Only owner of dialog authorized for this operation")
+
+	// Check if user is the owner of the dialog
+	isOwner := false
+	for _, tenantID := range tenantIDs {
+		var exists bool
+		exists, err = s.chatSessionDAO.CheckDialogExists(tenantID, chatID)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			isOwner = true
+			break
+		}
+	}
+
+	// Also check with userID as tenant
+	if !isOwner {
+		var exists bool
+		exists, err = s.chatSessionDAO.CheckDialogExists(userID, chatID)
+		if err != nil {
+			return nil, err
+		}
+		isOwner = exists
+	}
+
+	if !isOwner {
+		return nil, errors.New("only owner of dialog authorized for this operation")
 	}
 
 	// List chat sessions
-	sessions, err := s.chatSessionDAO.ListByDialogID(dialogID)
+	sessions, err := s.chatSessionDAO.ListByChatID(chatID)
 	if err != nil {
 		return nil, err
 	}
@@ -239,221 +294,215 @@ func (s *ChatSessionService) ListChatSessions(userID string, dialogID string) (*
 	return &ListChatSessionsResponse{Sessions: sessions}, nil
 }
 
-// prepareCompletion binds the actual actor to both the conversation and dialog
-// before any model resolution, retrieval, or write. No tenant fallback is used.
-func (s *ChatSessionService) prepareCompletion(ctx context.Context, actor, conversationID string, messages []map[string]interface{}, llmID string) (*entity.ChatSession, *entity.Chat, []interface{}, error) {
-	if ctx == nil || !exactVectorID(actor) || !exactVectorID(conversationID) {
-		return nil, nil, nil, ErrChatSessionAccessDenied
+// Completion performs chat completion with full RAG support
+func (s *ChatSessionService) Completion(userID string, conversationID string, messages []map[string]interface{}, llmID string, chatModelConfig map[string]interface{}, messageID string) (map[string]interface{}, error) {
+	// Validate the last message is from user
+	if len(messages) == 0 {
+		return nil, errors.New("messages cannot be empty")
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, nil, nil, err
+	lastRole, _ := messages[len(messages)-1]["role"].(string)
+	if lastRole != "user" {
+		return nil, errors.New("the last content of this conversation is not from user")
 	}
-	if len(messages) == 0 || messages[len(messages)-1]["role"] != "user" {
-		return nil, nil, nil, ErrRetrievalArgument
+
+	// Get conversation
+	session, err := s.chatSessionDAO.GetByID(conversationID)
+	if err != nil {
+		return nil, errors.New("Conversation not found")
 	}
-	if dao.DB == nil {
-		return nil, nil, nil, errors.New("chat database unavailable")
+
+	// Get dialog
+	dialog, err := s.chatSessionDAO.GetDialogByID(session.DialogID)
+	if err != nil {
+		return nil, errors.New("Dialog not found")
 	}
-	var session entity.ChatSession
-	if err := authorizedChatSessionQuery(ctx, actor).Where("id = ?", conversationID).First(&session).Error; err != nil {
-		return nil, nil, nil, chatSessionReadError(err)
+
+	tenantIDs, err := s.userTenantDAO.GetTenantIDsByUserID(userID)
+	if err != nil {
+		return nil, err
 	}
-	var dialog entity.Chat
-	if err := dao.DB.WithContext(ctx).Where("id = ? AND status = ?", session.DialogID, "1").First(&dialog).Error; err != nil {
-		return nil, nil, nil, chatSessionReadError(err)
+	allowed := false
+	for _, id := range tenantIDs {
+		if id == dialog.TenantID {
+			allowed = true
+			break
+		}
 	}
-	if err := loadExactDialogConfig(ctx, &dialog); err != nil {
-		return nil, nil, nil, err
+	var activeTenant int64
+	var activeUser int64
+	if err == nil {
+		err = dao.DB.Model(&entity.User{}).Where("id=? AND status=? AND is_active=?", userID, "1", "1").Count(&activeUser).Error
 	}
+	if allowed && err == nil {
+		err = dao.DB.Model(&entity.Tenant{}).Where("id=? AND status=?", dialog.TenantID, "1").Count(&activeTenant).Error
+	}
+	if err != nil || !allowed || activeUser != 1 || activeTenant != 1 || (session.UserID != nil && *session.UserID != userID) {
+		return nil, errors.New("conversation is not accessible")
+	}
+	originalSession := *session
+	originalSession.Message = append(json.RawMessage(nil), session.Message...)
+
+	// Deep copy messages to session
+	sessionMessages := s.buildSessionMessages(session, messages)
+
+	// Initialize reference if empty
+	reference := s.initializeReference(session)
+
+	// Check if custom LLM is specified and validate API key
+	isEmbedded := llmID != ""
 	if llmID != "" {
-		selector, err := searchbotSelector(llmID)
-		if err != nil {
-			return nil, nil, nil, err
+		hasKey, err := s.checkTenantLLMAPIKey(dialog.TenantID, llmID)
+		if err != nil || !hasKey {
+			return nil, fmt.Errorf("Cannot use specified model %s", llmID)
 		}
-		if id, err := strconv.ParseInt(selector, 10, 64); err == nil {
-			dialog.TenantLLMID = &id
-		} else {
-			dialog.LLMID = selector
-			dialog.TenantLLMID = nil
+		dialog.LLMID = llmID
+		if chatModelConfig != nil {
+			dialog.LLMSetting = chatModelConfig
 		}
 	}
-	reference, err := s.initializeReference(&session)
-	return &session, &dialog, reference, err
-}
 
-func (s *ChatSessionService) completionModel(ctx context.Context, dialog *entity.Chat) (*models.ChatModel, error) {
-	var model *models.ChatModel
-	var err error
-	if dialog.TenantLLMID != nil {
-		model, err = s.modelProviderService.GetChatModelByIDWithContext(ctx, dialog.TenantID, *dialog.TenantLLMID)
-	} else {
-		model, err = s.modelProviderService.GetChatModelWithContext(ctx, dialog.TenantID, dialog.LLMID)
-	}
+	// Perform chat completion with RAG
+	result, err := s.asyncChat(userID, dialog, session, messages, chatModelConfig, messageID, reference, false)
 	if err != nil {
 		return nil, err
 	}
-	if model == nil || model.ModelDriver == nil || model.ModelName == nil {
-		return nil, errors.New("chat model unavailable")
-	}
-	local, api := *model, models.APIConfig{}
-	if model.APIConfig != nil {
-		api = *model.APIConfig
-	}
-	api.Context, local.APIConfig = ctx, &api
-	return &local, nil
-}
 
-// Completion uses authorized retrieval, complete history and the same visible
-// answer/reference projection as streaming before committing a successful turn.
-func (s *ChatSessionService) Completion(ctx context.Context, userID string, conversationID string, messages []map[string]interface{}, llmID string, config map[string]interface{}, messageID string) (map[string]interface{}, error) {
-	session, dialog, reference, err := s.prepareCompletion(ctx, userID, conversationID, messages, llmID)
-	if err != nil {
-		return nil, err
-	}
-	messages, err = completionMessages(session, messages)
-	if err != nil {
-		return nil, err
-	}
-	knowledge, err := s.completionKnowledge(ctx, userID, dialog, messages)
-	if err != nil {
-		return nil, err
-	}
-	var answer, reasoning string
-	if knowledge.emptyAnswer != nil {
-		answer = *knowledge.emptyAnswer
-	} else {
-		model, err := s.completionModel(ctx, dialog)
-		if err != nil {
-			return nil, err
-		}
-		response, err := model.ChatWithMessages(knowledge.history, s.buildGenConf(dialog, config))
-		if err != nil {
-			return nil, err
-		}
-		var parser ThinkStreamState
-		answer, reasoning = parser.Feed(*response.Answer)
-		parser.Finish()
-		if response.ReasoningContent != nil {
-			reasoning = *response.ReasoningContent + reasoning
-		}
-		if strings.TrimSpace(answer) == "" {
-			return nil, ErrNoVisibleAnswer
-		}
-	}
-	answer, refs, err := s.finalizeCompletion(ctx, userID, knowledge, answer)
-	if err != nil {
-		return nil, err
-	}
-	reference[len(reference)-1] = refs
-	if llmID == "" {
-		if err := s.persistCompletion(ctx, userID, session, messages, answer, messageID, reference); err != nil {
+	// Update conversation if not embedded
+	if !isEmbedded {
+		answer, _ := result["answer"].(string)
+		sessionMessages = append(sessionMessages, map[string]interface{}{"role": "assistant", "content": answer, "id": messageID})
+		if err := s.updateSessionMessages(&originalSession, sessionMessages, reference); err != nil {
 			return nil, err
 		}
 	}
-	return map[string]interface{}{"answer": answer, "reasoning_content": reasoning, "reference": refs, "final": true, "id": messageID, "session_id": session.ID}, nil
+
+	return result, nil
 }
 
-// CompletionStream keeps all provider and sender calls synchronous. A failed
-// data send or cancellation before persistence leaves SQL unchanged. Once SQL
-// commits, delivery of the terminal frame cannot be atomic with that commit.
-func (s *ChatSessionService) CompletionStream(ctx context.Context, userID string, conversationID string, messages []map[string]interface{}, llmID string, config map[string]interface{}, messageID string, sender func(string) error) error {
-	if sender == nil {
-		return errors.New("completion sender is required")
+// CompletionStream performs streaming chat completion with full RAG support
+func (s *ChatSessionService) CompletionStream(ctx context.Context, userID string, conversationID string, messages []map[string]interface{}, llmID string, chatModelConfig map[string]interface{}, messageID string, streamChan chan<- string) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	session, dialog, reference, err := s.prepareCompletion(ctx, userID, conversationID, messages, llmID)
+
+	// Validate the last message is from user
+	if len(messages) == 0 {
+		return errors.New("messages cannot be empty")
+	}
+	lastRole, _ := messages[len(messages)-1]["role"].(string)
+	if lastRole != "user" {
+		return errors.New("the last content of this conversation is not from user")
+	}
+
+	// Get conversation
+	session, err := s.chatSessionDAO.GetByID(conversationID)
+	if err != nil {
+		return errors.New("Conversation not found")
+	}
+
+	// Get dialog
+	dialog, err := s.chatSessionDAO.GetDialogByID(session.DialogID)
+	if err != nil {
+		return errors.New("Dialog not found")
+	}
+
+	tenantIDs, err := s.userTenantDAO.GetTenantIDsByUserID(userID)
 	if err != nil {
 		return err
 	}
-	messages, err = completionMessages(session, messages)
+	allowed := false
+	for _, id := range tenantIDs {
+		if id == dialog.TenantID {
+			allowed = true
+			break
+		}
+	}
+	var activeTenant int64
+	var activeUser int64
+	if err == nil {
+		err = dao.DB.Model(&entity.User{}).Where("id=? AND status=? AND is_active=?", userID, "1", "1").Count(&activeUser).Error
+	}
+	if allowed && err == nil {
+		err = dao.DB.Model(&entity.Tenant{}).Where("id=? AND status=?", dialog.TenantID, "1").Count(&activeTenant).Error
+	}
+	if err != nil || !allowed || activeUser != 1 || activeTenant != 1 || (session.UserID != nil && *session.UserID != userID) {
+		return errors.New("conversation is not accessible")
+	}
+	originalSession := *session
+	originalSession.Message = append(json.RawMessage(nil), session.Message...)
+
+	// Deep copy messages to session
+	sessionMessages := s.buildSessionMessages(session, messages)
+
+	// Initialize reference if empty
+	reference := s.initializeReference(session)
+
+	// Check if custom LLM is specified and validate API key
+	isEmbedded := llmID != ""
+	if llmID != "" {
+		hasKey, err := s.checkTenantLLMAPIKey(dialog.TenantID, llmID)
+		if err != nil || !hasKey {
+			return fmt.Errorf("Cannot use specified model %s", llmID)
+		}
+		dialog.LLMID = llmID
+		if chatModelConfig != nil {
+			dialog.LLMSetting = chatModelConfig
+		}
+	}
+
+	// Perform streaming chat completion with RAG
+	resultChan, err := s.asyncChatStream(ctx, userID, dialog, session, messages, chatModelConfig, messageID, reference)
 	if err != nil {
 		return err
 	}
-	knowledge, err := s.completionKnowledge(ctx, userID, dialog, messages)
-	if err != nil {
+
+	fullAnswer := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result, ok := <-resultChan:
+			if !ok {
+				goto completed
+			}
+			if failure, ok := result["code"].(int); ok && failure != 0 {
+				message, _ := result["message"].(string)
+				return errors.New(message)
+			}
+			if answer, ok := result["answer"].(string); ok {
+				fullAnswer = answer
+			}
+			data, err := json.Marshal(map[string]interface{}{"code": 0, "message": "", "data": result})
+			if err != nil {
+				return err
+			}
+			select {
+			case streamChan <- fmt.Sprintf("data: %s\n\n", data):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+completed:
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	sendData := func(data interface{}) error {
-		if err := ctx.Err(); err != nil {
+	if strings.TrimSpace(fullAnswer) == "" {
+		return errors.New("empty chat stream")
+	}
+	if !isEmbedded {
+		sessionMessages = append(sessionMessages, map[string]interface{}{"role": "assistant", "content": fullAnswer, "id": messageID})
+		if err := s.updateSessionMessages(&originalSession, sessionMessages, reference); err != nil {
 			return err
 		}
-		raw, err := json.Marshal(map[string]interface{}{"code": 0, "message": "", "data": data})
-		if err != nil {
-			return err
-		}
-		if err := sender("data: " + string(raw) + "\n\n"); err != nil {
-			return err
-		}
+	}
+	finalData, _ := json.Marshal(map[string]interface{}{"code": 0, "message": "", "data": true})
+	select {
+	case streamChan <- fmt.Sprintf("data: %s\n\n", finalData):
+	case <-ctx.Done():
 		return ctx.Err()
 	}
-	sendFrame := func(frame AnswerFrame) error {
-		frame = withoutNoAnswerCitations(frame, knowledge.noAnswer)
-		return sendData(map[string]interface{}{"answer": frame.Answer, "reasoning_content": frame.ReasoningContent, "reference": frame.Reference, "final": frame.Final, "conversation_id": session.ID, "message_id": messageID})
-	}
-	var answer, reasoning string
-	if knowledge.emptyAnswer != nil {
-		answer = *knowledge.emptyAnswer
-	} else {
-		model, err := s.completionModel(ctx, dialog)
-		if err != nil {
-			return err
-		}
-		answer, reasoning, err = streamVisibleAnswer(ctx, model, knowledge.history, s.buildGenConf(dialog, config), knowledge.chunks, knowledge.citations, sendFrame)
-		if err != nil {
-			return err
-		}
-	}
-	answer, refs, err := s.finalizeCompletion(ctx, userID, knowledge, answer)
-	if err != nil {
-		return err
-	}
-	// Give the sender the decorated content before the SQL commit; an ordinary
-	// send failure here must not persist a successful assistant message.
-	frame := AnswerFrame{Answer: answer, ReasoningContent: reasoning, Reference: refs}
-	if err := sendFrame(frame); err != nil {
-		return err
-	}
-	reference[len(reference)-1] = refs
-	if llmID == "" {
-		if err := s.persistCompletion(ctx, userID, session, messages, answer, messageID, reference); err != nil {
-			return err
-		}
-	}
-	frame.Final = true
-	if err := sendFrame(frame); err != nil {
-		return err
-	}
-	return sendData(true)
-}
 
-func (s *ChatSessionService) persistCompletion(ctx context.Context, actor string, session *entity.ChatSession, messages []map[string]interface{}, answer, messageID string, reference []interface{}) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	stored := s.buildSessionMessages(session, messages)
-	stored = append(stored, map[string]interface{}{"role": "assistant", "content": answer, "id": messageID})
-	raw, err := json.Marshal(map[string]interface{}{"messages": stored})
-	if err != nil {
-		return err
-	}
-	refs, err := json.Marshal(reference)
-	if err != nil {
-		return err
-	}
-	// Recheck scope at the write and use the original snapshot to reject concurrent
-	// completions instead of silently losing an already committed conversation turn.
-	query := authorizedChatSessionQuery(ctx, actor).Where("id = ? AND dialog_id = ?", session.ID, session.DialogID)
-	if len(session.Message) > 0 {
-		query = query.Where("message = ?", session.Message)
-	} else {
-		query = query.Where("message IS NULL")
-	}
-	result := query.Updates(map[string]interface{}{"message": raw, "reference": refs})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return errors.New("conversation changed or access was revoked")
-	}
 	return nil
 }
 
@@ -471,12 +520,10 @@ func (s *ChatSessionService) buildSessionMessages(session *entity.ChatSession, m
 	return sessionMessages
 }
 
-func (s *ChatSessionService) initializeReference(session *entity.ChatSession) ([]interface{}, error) {
+func (s *ChatSessionService) initializeReference(session *entity.ChatSession) []interface{} {
 	var reference []interface{}
 	if len(session.Reference) > 0 {
-		if err := json.Unmarshal(session.Reference, &reference); err != nil {
-			return nil, errors.New("invalid stored references")
-		}
+		json.Unmarshal(session.Reference, &reference)
 	}
 	// Filter out nil entries and append new reference
 	var filtered []interface{}
@@ -489,7 +536,894 @@ func (s *ChatSessionService) initializeReference(session *entity.ChatSession) ([
 		"chunks":   []interface{}{},
 		"doc_aggs": []interface{}{},
 	})
-	return filtered, nil
+	return filtered
+}
+
+func (s *ChatSessionService) checkTenantLLMAPIKey(tenantID, modelName string) (bool, error) {
+	if s.modelProviderSvc == nil {
+		return false, errors.New("model provider is not configured")
+	}
+	driver, resolvedName, apiConfig, _, err := s.modelProviderSvc.GetModelConfigFromProviderInstance(tenantID, entity.ModelTypeChat, modelName)
+	if err != nil {
+		return false, err
+	}
+	return driver != nil && resolvedName != "" && apiConfig != nil, nil
+}
+
+func (s *ChatSessionService) structureAnswer(session *entity.ChatSession, answer string, messageID, conversationID string, reference []interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"answer":          answer,
+		"reference":       reference,
+		"conversation_id": conversationID,
+		"message_id":      messageID,
+	}
+}
+
+func (s *ChatSessionService) updateSessionMessages(session *entity.ChatSession, messages []map[string]interface{}, reference []interface{}) error {
+	// Update session with new messages and reference
+	messagesJSON, err := json.Marshal(map[string]interface{}{
+		"messages": messages,
+	})
+	if err != nil {
+		return fmt.Errorf("encode conversation messages: %w", err)
+	}
+	referenceJSON, err := json.Marshal(reference)
+	if err != nil {
+		return fmt.Errorf("encode conversation references: %w", err)
+	}
+
+	updates := map[string]interface{}{
+		"message":   messagesJSON,
+		"reference": referenceJSON,
+	}
+	result := dao.DB.Model(&entity.ChatSession{}).Where("id = ? AND message = ?", session.ID, []byte(session.Message)).Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("conversation changed during completion")
+	}
+	return nil
+}
+
+// asyncChat performs chat with RAG support (non-streaming)
+func (s *ChatSessionService) asyncChat(userID string, dialog *entity.Chat, session *entity.ChatSession, messages []map[string]interface{}, config map[string]interface{}, messageID string, reference []interface{}, stream bool) (map[string]interface{}, error) {
+	// Check if we need RAG (knowledge base or tavily)
+	hasKB := len(dialog.KBIDs) > 0
+	hasTavily := false
+	if dialog.PromptConfig != nil {
+		if tavilyKey, ok := dialog.PromptConfig["tavily_api_key"].(string); ok && tavilyKey != "" {
+			hasTavily = true
+		}
+	}
+
+	if !hasKB && !hasTavily {
+		// Simple chat without RAG
+		return s.asyncChatSolo(dialog, session, messages, config, messageID, reference, stream)
+	}
+
+	if hasKB {
+		return s.asyncChatWithRetrieval(context.Background(), userID, dialog, session, messages, config, messageID, reference, stream)
+	}
+
+	common.Warn("Tavily-backed chat retrieval is not implemented in Go; falling back to solo chat",
+		zap.String("dialog_id", dialog.ID))
+	return s.asyncChatSolo(dialog, session, messages, config, messageID, reference, stream)
+}
+
+// asyncChatStream performs streaming chat with RAG support
+func (s *ChatSessionService) asyncChatStream(ctx context.Context, userID string, dialog *entity.Chat, session *entity.ChatSession, messages []map[string]interface{}, config map[string]interface{}, messageID string, reference []interface{}) (<-chan map[string]interface{}, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resultChan := make(chan map[string]interface{})
+
+	go func() {
+		defer close(resultChan)
+
+		// Check if we need RAG
+		hasKB := len(dialog.KBIDs) > 0
+		hasTavily := false
+		if dialog.PromptConfig != nil {
+			if tavilyKey, ok := dialog.PromptConfig["tavily_api_key"].(string); ok && tavilyKey != "" {
+				hasTavily = true
+			}
+		}
+
+		if !hasKB && !hasTavily {
+			// Simple chat without RAG
+			s.asyncChatSoloStream(ctx, dialog, session, messages, config, messageID, reference, resultChan)
+			return
+		}
+
+		if hasKB {
+			ragMessages, ragDialog, emptyResponse, err := s.messagesWithRetrievedKnowledge(ctx, userID, dialog, messages, reference)
+			if err != nil {
+				select {
+				case resultChan <- map[string]interface{}{"code": 500, "message": err.Error()}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			if emptyResponse != nil {
+				select {
+				case resultChan <- s.structureAnswer(session, *emptyResponse, messageID, session.ID, reference):
+				case <-ctx.Done():
+				}
+				return
+			}
+			s.asyncChatSoloStream(ctx, ragDialog, session, ragMessages, config, messageID, reference, resultChan)
+			return
+		}
+
+		common.Warn("Tavily-backed streaming chat retrieval is not implemented in Go; falling back to solo chat",
+			zap.String("dialog_id", dialog.ID))
+		s.asyncChatSoloStream(ctx, dialog, session, messages, config, messageID, reference, resultChan)
+	}()
+
+	return resultChan, nil
+}
+
+func (s *ChatSessionService) asyncChatWithRetrieval(ctx context.Context, userID string, dialog *entity.Chat, session *entity.ChatSession, messages []map[string]interface{}, config map[string]interface{}, messageID string, reference []interface{}, stream bool) (map[string]interface{}, error) {
+	ragMessages, ragDialog, emptyResponse, err := s.messagesWithRetrievedKnowledge(ctx, userID, dialog, messages, reference)
+	if err != nil {
+		return nil, err
+	}
+	if emptyResponse != nil {
+		var lastRef interface{}
+		if len(reference) > 0 {
+			lastRef = reference[len(reference)-1]
+		}
+		ans := map[string]interface{}{
+			"answer":    *emptyResponse,
+			"reference": lastRef,
+			"final":     true,
+		}
+		return s.structureAnswerWithConv(session, ans, messageID, session.ID, reference), nil
+	}
+	return s.asyncChatSolo(ragDialog, session, ragMessages, config, messageID, reference, stream)
+}
+
+func (s *ChatSessionService) messagesWithRetrievedKnowledge(ctx context.Context, userID string, dialog *entity.Chat, messages []map[string]interface{}, reference []interface{}) ([]map[string]interface{}, *entity.Chat, *string, error) {
+	kbIDs := stringSliceFromJSON(dialog.KBIDs)
+	if len(kbIDs) == 0 {
+		return messages, dialog, nil, nil
+	}
+	if s.retrievalSvc == nil {
+		return nil, nil, nil, errors.New("retrieval service is not configured")
+	}
+
+	question := latestUserQuestion(messages)
+	if question == "" {
+		return messages, dialog, nil, nil
+	}
+
+	kbs, err := s.kbDAO.GetByIDs(kbIDs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to load knowledge bases: %w", err)
+	}
+	kbs, err = s.knowledgebasesForDialog(userID, dialog, kbIDs, kbs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	embeddingTenantID, embeddingModelName, err := validateKnowledgebaseEmbeddingModels(kbs, dialog.TenantID, resolveEmbeddingModelName)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	embeddingModel, err := s.modelProviderSvc.GetEmbeddingModel(embeddingTenantID, embeddingModelName)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to get embedding model: %w", err)
+	}
+	rerankModel, err := s.rerankModelForDialog(dialog)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	top := int(dialog.TopK)
+	pageSize := int(dialog.TopN)
+	if pageSize <= 0 {
+		pageSize = 6
+	}
+	similarityThreshold := dialog.SimilarityThreshold
+	vectorSimilarityWeight := dialog.VectorSimilarityWeight
+	var rankFeature map[string]float64
+	if s.metadataSvc != nil {
+		rankFeature = s.metadataSvc.LabelQuestion(question, kbs)
+	}
+	baseDocIDs := docIDsFromMessages(messages)
+	docIDs, err := s.filteredDocIDsForDialog(ctx, dialog, kbIDs, question, baseDocIDs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	tenantIDs := tenantIDsFromKnowledgebases(kbs, dialog.TenantID)
+
+	retrievalResult, err := s.retrievalSvc.Retrieval(ctx, &nlp.RetrievalRequest{
+		Question:               question,
+		TenantIDs:              tenantIDs,
+		KbIDs:                  kbIDs,
+		DocIDs:                 docIDs,
+		Page:                   1,
+		PageSize:               pageSize,
+		Top:                    &top,
+		SimilarityThreshold:    &similarityThreshold,
+		VectorSimilarityWeight: &vectorSimilarityWeight,
+		RankFeature:            &rankFeature,
+		EmbeddingModel:         embeddingModel,
+		RerankModel:            rerankModel,
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("retrieval search failed: %w", err)
+	}
+	if retrievalResult == nil {
+		retrievalResult = &nlp.RetrievalResult{}
+	}
+
+	chunks := retrievalResult.Chunks
+	if s.docEngine != nil {
+		chunks = nlp.RetrievalByChildren(chunks, tenantIDs, s.docEngine, ctx)
+	}
+	setLatestReference(reference, chunks, retrievalResult.DocAggs)
+	knowledge := buildKnowledgeBlock(chunks)
+	if knowledge == "" {
+		return messages, dialog, emptyResponseForDialog(dialog), nil
+	}
+	if ragDialog, ok := dialogWithInjectedKnowledgePrompt(dialog, knowledge); ok {
+		return copyMessages(messages), ragDialog, nil, nil
+	}
+
+	return injectKnowledge(messages, knowledge), dialog, nil, nil
+}
+
+type embeddingModelNameResolver func(tenantID string, kb *entity.Knowledgebase) (string, error)
+
+func validateKnowledgebaseEmbeddingModels(kbs []*entity.Knowledgebase, fallbackTenantID string, resolve embeddingModelNameResolver) (string, string, error) {
+	if len(kbs) == 0 {
+		return fallbackTenantID, "", nil
+	}
+
+	expected := ""
+	expectedKBID := ""
+	expectedTenantID := fallbackTenantID
+	for _, kb := range kbs {
+		if kb == nil {
+			return "", "", errors.New("knowledge base is nil")
+		}
+		tenantID := kb.TenantID
+		if tenantID == "" {
+			tenantID = fallbackTenantID
+		}
+		modelName, err := resolve(tenantID, kb)
+		if err != nil {
+			return "", "", err
+		}
+		modelName = strings.TrimSpace(modelName)
+		if modelName == "" {
+			return "", "", fmt.Errorf("knowledge base %s has no embedding model", kb.ID)
+		}
+		if expected == "" {
+			expected = modelName
+			expectedKBID = kb.ID
+			expectedTenantID = tenantID
+			continue
+		}
+		if modelName != expected {
+			return "", "", fmt.Errorf("knowledge bases must use the same embedding model: %s resolves to %q, expected %q from %s", kb.ID, modelName, expected, expectedKBID)
+		}
+	}
+	return expectedTenantID, expected, nil
+}
+
+func (s *ChatSessionService) rerankModelForDialog(dialog *entity.Chat) (*modelModule.RerankModel, error) {
+	compositeName, err := resolveRerankModelName(dialog)
+	if err != nil {
+		return nil, err
+	}
+	if compositeName == "" {
+		return nil, nil
+	}
+	rerankModel, err := s.modelProviderSvc.GetRerankModel(dialog.TenantID, compositeName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rerank model: %w", err)
+	}
+	return rerankModel, nil
+}
+
+func (s *ChatSessionService) filteredDocIDsForDialog(ctx context.Context, dialog *entity.Chat, kbIDs []string, question string, baseDocIDs []string) ([]string, error) {
+	if dialog.MetaDataFilter == nil || len(*dialog.MetaDataFilter) == 0 {
+		return baseDocIDs, nil
+	}
+	if s.metadataSvc == nil {
+		return nil, errors.New("metadata service is not configured")
+	}
+
+	filter := make(map[string]interface{}, len(*dialog.MetaDataFilter))
+	for key, value := range *dialog.MetaDataFilter {
+		filter[key] = value
+	}
+
+	metaData, err := s.metadataSvc.GetFlattedMetaByKBs(kbIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get flattened metadata for chat retrieval: %w", err)
+	}
+
+	var filterChatModel *modelModule.ChatModel
+	method, _ := filter["method"].(string)
+	if method == "auto" || method == "semi_auto" {
+		filterChatModel, err = s.modelProviderSvc.GetChatModel(dialog.TenantID, dialog.LLMID)
+		if err != nil {
+			common.Warn("Failed to get chat model for chat metadata filter", zap.Error(err))
+		}
+	}
+
+	docIDs, empty, filterErr := ApplyMetaDataFilter(ctx, filter, metaData, question, filterChatModel, baseDocIDs, kbIDs)
+	if filterErr != nil {
+		return nil, filterErr
+	}
+	if empty {
+		return []string{NoMatchDocIDSentinel}, nil
+	}
+	return docIDs, nil
+}
+
+func resolveEmbeddingModelName(tenantID string, kb *entity.Knowledgebase) (string, error) {
+	if kb.TenantEmbdID != nil && *kb.TenantEmbdID > 0 {
+		_, compositeName, err := dao.LookupTenantLLMByID(dao.NewTenantLLMDAO(), *kb.TenantEmbdID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get embedding model by tenant_embd_id: %w", err)
+		}
+		return compositeName, nil
+	}
+	if kb.EmbdID != "" {
+		if strings.Contains(kb.EmbdID, "@") {
+			return kb.EmbdID, nil
+		}
+		_, compositeName, err := dao.LookupTenantLLMByName(dao.NewTenantLLMDAO(), tenantID, kb.EmbdID, entity.ModelTypeEmbedding)
+		if err != nil {
+			return "", fmt.Errorf("failed to get embedding model by embd_id: %w", err)
+		}
+		return compositeName, nil
+	}
+
+	tenantLLM, err := dao.NewTenantLLMDAO().GetByTenantAndType(tenantID, entity.ModelTypeEmbedding)
+	if err != nil {
+		return "", fmt.Errorf("failed to get tenant default embedding model: %w", err)
+	}
+	if tenantLLM == nil || tenantLLM.LLMName == nil || *tenantLLM.LLMName == "" {
+		return "", fmt.Errorf("no default embedding model found for tenant %s", tenantID)
+	}
+	return fmt.Sprintf("%s@%s", *tenantLLM.LLMName, tenantLLM.LLMFactory), nil
+}
+
+func resolveRerankModelName(dialog *entity.Chat) (string, error) {
+	if dialog.TenantRerankID != nil && *dialog.TenantRerankID > 0 {
+		_, compositeName, err := dao.LookupTenantLLMByID(dao.NewTenantLLMDAO(), *dialog.TenantRerankID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get rerank model by tenant_rerank_id: %w", err)
+		}
+		return compositeName, nil
+	}
+	if dialog.RerankID == "" {
+		return "", nil
+	}
+	if strings.Contains(dialog.RerankID, "@") {
+		return dialog.RerankID, nil
+	}
+	_, compositeName, err := dao.LookupTenantLLMByName(dao.NewTenantLLMDAO(), dialog.TenantID, dialog.RerankID, entity.ModelTypeRerank)
+	if err != nil {
+		return "", fmt.Errorf("failed to get rerank model by rerank_id: %w", err)
+	}
+	return compositeName, nil
+}
+
+func stringSliceFromJSON(values entity.JSONSlice) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		str, ok := value.(string)
+		if !ok || str == "" {
+			continue
+		}
+		if _, exists := seen[str]; exists {
+			continue
+		}
+		seen[str] = struct{}{}
+		result = append(result, str)
+	}
+	return result
+}
+
+func tenantIDsFromKnowledgebases(kbs []*entity.Knowledgebase, fallback string) []string {
+	seen := make(map[string]struct{}, len(kbs)+1)
+	var tenantIDs []string
+	for _, kb := range kbs {
+		if kb == nil || kb.TenantID == "" {
+			continue
+		}
+		if _, exists := seen[kb.TenantID]; exists {
+			continue
+		}
+		seen[kb.TenantID] = struct{}{}
+		tenantIDs = append(tenantIDs, kb.TenantID)
+	}
+	if len(tenantIDs) == 0 && fallback != "" {
+		tenantIDs = append(tenantIDs, fallback)
+	}
+	return tenantIDs
+}
+
+func (s *ChatSessionService) knowledgebasesForDialog(userID string, dialog *entity.Chat, kbIDs []string, loaded []*entity.Knowledgebase) ([]*entity.Knowledgebase, error) {
+	byID := make(map[string]*entity.Knowledgebase, len(loaded))
+	for _, kb := range loaded {
+		if kb != nil {
+			byID[kb.ID] = kb
+		}
+	}
+
+	kbs := make([]*entity.Knowledgebase, 0, len(kbIDs))
+	for _, kbID := range kbIDs {
+		kb := byID[kbID]
+		if kb == nil {
+			return nil, fmt.Errorf("knowledge base %s not found", kbID)
+		}
+		if userID != "" && !s.kbDAO.Accessible(kbID, userID) {
+			return nil, fmt.Errorf("knowledge base %s is not authorized for user", kbID)
+		}
+		if userID == "" && kb.TenantID != dialog.TenantID {
+			return nil, fmt.Errorf("knowledge base %s is not authorized for dialog tenant", kbID)
+		}
+		kbs = append(kbs, kb)
+	}
+	if len(kbs) == 0 {
+		return nil, errors.New("no valid knowledge bases found")
+	}
+	return kbs, nil
+}
+
+func docIDsFromMessages(messages []map[string]interface{}) []string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if role, _ := messages[i]["role"].(string); role != "user" {
+			continue
+		}
+		return stringSliceFromValue(messages[i]["doc_ids"])
+	}
+	return nil
+}
+
+func latestUserQuestion(messages []map[string]interface{}) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if role, _ := messages[i]["role"].(string); role != "user" {
+			continue
+		}
+		return textFromMessageContent(messages[i]["content"])
+	}
+	return ""
+}
+
+func stringSliceFromValue(value interface{}) []string {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case []string:
+		return uniqueNonEmptyStrings(typed)
+	case []interface{}:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if str, ok := item.(string); ok {
+				values = append(values, str)
+			}
+		}
+		return uniqueNonEmptyStrings(values)
+	default:
+		return nil
+	}
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func emptyResponseForDialog(dialog *entity.Chat) *string {
+	if dialog.PromptConfig == nil {
+		return nil
+	}
+	emptyResponse, ok := dialog.PromptConfig["empty_response"].(string)
+	if !ok || emptyResponse == "" {
+		return nil
+	}
+	return &emptyResponse
+}
+
+func buildKnowledgeBlock(chunks []map[string]interface{}) string {
+	var builder strings.Builder
+	for i, chunk := range chunks {
+		content := chunkText(chunk)
+		if content == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString(fmt.Sprintf("[%d]", i+1))
+		if docName, ok := chunk["docnm_kwd"].(string); ok && docName != "" {
+			builder.WriteString(" ")
+			builder.WriteString(docName)
+		}
+		builder.WriteString("\n")
+		builder.WriteString(content)
+	}
+	return builder.String()
+}
+
+func chunkText(chunk map[string]interface{}) string {
+	for _, key := range []string{"content_with_weight", "content_ltks", "content"} {
+		if value, ok := chunk[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func injectKnowledge(messages []map[string]interface{}, knowledge string) []map[string]interface{} {
+	copied := copyMessages(messages)
+	if len(copied) == 0 {
+		return copied
+	}
+
+	knowledgePrompt := fmt.Sprintf("Use the following knowledge snippets to answer the user's question. If the snippets do not contain the answer, say that the knowledge base does not provide enough information.\n\n%s", knowledge)
+	for i := len(copied) - 1; i >= 0; i-- {
+		if role, _ := copied[i]["role"].(string); role != "user" {
+			continue
+		}
+		copied[i]["content"] = injectKnowledgeIntoContent(copied[i]["content"], knowledgePrompt)
+		return copied
+	}
+
+	copied = append(copied, map[string]interface{}{
+		"role":    "system",
+		"content": knowledgePrompt,
+	})
+	return copied
+}
+
+func injectKnowledgeIntoContent(content interface{}, knowledgePrompt string) interface{} {
+	switch typed := content.(type) {
+	case []interface{}:
+		injected := make([]interface{}, 0, len(typed)+1)
+		injected = append(injected, knowledgeTextBlock(knowledgePrompt))
+		injected = append(injected, typed...)
+		return injected
+	case []map[string]interface{}:
+		injected := make([]interface{}, 0, len(typed)+1)
+		injected = append(injected, knowledgeTextBlock(knowledgePrompt))
+		for _, block := range typed {
+			injected = append(injected, block)
+		}
+		return injected
+	default:
+		contentText := ""
+		if content != nil {
+			contentText = fmt.Sprint(content)
+		}
+		return strings.TrimSpace(knowledgePrompt + "\n\nQuestion:\n" + contentText)
+	}
+}
+
+func knowledgeTextBlock(knowledgePrompt string) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "text",
+		"text": knowledgePrompt + "\n\nQuestion:",
+	}
+}
+
+func textFromMessageContent(content interface{}) string {
+	switch typed := content.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case []interface{}:
+		return strings.TrimSpace(strings.Join(textsFromContentBlocks(typed), "\n"))
+	case []map[string]interface{}:
+		blocks := make([]interface{}, 0, len(typed))
+		for _, block := range typed {
+			blocks = append(blocks, block)
+		}
+		return strings.TrimSpace(strings.Join(textsFromContentBlocks(blocks), "\n"))
+	default:
+		if content == nil {
+			return ""
+		}
+		return strings.TrimSpace(fmt.Sprint(content))
+	}
+}
+
+func textsFromContentBlocks(blocks []interface{}) []string {
+	texts := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		switch typed := block.(type) {
+		case string:
+			if text := strings.TrimSpace(typed); text != "" {
+				texts = append(texts, text)
+			}
+		case map[string]interface{}:
+			if text, ok := typed["text"].(string); ok && strings.TrimSpace(text) != "" {
+				texts = append(texts, strings.TrimSpace(text))
+			}
+		}
+	}
+	return texts
+}
+
+func dialogWithInjectedKnowledgePrompt(dialog *entity.Chat, knowledge string) (*entity.Chat, bool) {
+	if dialog.PromptConfig == nil {
+		return dialog, false
+	}
+	systemPrompt, ok := dialog.PromptConfig["system"].(string)
+	if !ok || !strings.Contains(systemPrompt, "{knowledge}") {
+		return dialog, false
+	}
+
+	copied := cloneJSONMap(dialog.PromptConfig)
+	copied["system"] = strings.ReplaceAll(systemPrompt, "{knowledge}", knowledge)
+	dialogCopy := *dialog
+	dialogCopy.PromptConfig = copied
+	return &dialogCopy, true
+}
+
+func cloneJSONMap(values entity.JSONMap) entity.JSONMap {
+	copied := make(entity.JSONMap, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return copied
+}
+
+func copyMessages(messages []map[string]interface{}) []map[string]interface{} {
+	copied := make([]map[string]interface{}, len(messages))
+	for i, msg := range messages {
+		copied[i] = make(map[string]interface{}, len(msg))
+		for key, value := range msg {
+			copied[i][key] = value
+		}
+	}
+	return copied
+}
+
+func setLatestReference(reference []interface{}, chunks []map[string]interface{}, docAggs []map[string]interface{}) {
+	ref := map[string]interface{}{
+		"chunks":   chunksForReference(chunks),
+		"doc_aggs": mapsForReference(docAggs),
+	}
+	if len(reference) == 0 {
+		return
+	}
+	reference[len(reference)-1] = ref
+}
+
+func chunksForReference(chunks []map[string]interface{}) []interface{} {
+	result := make([]interface{}, 0, len(chunks))
+	for _, chunk := range chunks {
+		copied := make(map[string]interface{}, len(chunk))
+		for key, value := range chunk {
+			if key == "vector" {
+				continue
+			}
+			copied[key] = value
+		}
+		result = append(result, copied)
+	}
+	return result
+}
+
+func mapsForReference(values []map[string]interface{}) []interface{} {
+	result := make([]interface{}, 0, len(values))
+	for _, value := range values {
+		result = append(result, value)
+	}
+	return result
+}
+
+// asyncChatSolo performs simple chat without RAG (non-streaming)
+func (s *ChatSessionService) asyncChatSolo(dialog *entity.Chat, session *entity.ChatSession, messages []map[string]interface{}, config map[string]interface{}, messageID string, reference []interface{}, stream bool) (map[string]interface{}, error) {
+	common.Info("asyncChatSolo started",
+		zap.String("tenant_id", dialog.TenantID),
+		zap.String("llm_id", dialog.LLMID),
+		zap.String("dialog_id", dialog.ID),
+		zap.Int("message_count", len(messages)))
+
+	// Get system prompt
+	systemPrompt := s.buildSystemPrompt(dialog)
+
+	// Process messages - handle attachments and image files
+	processedMessages := s.processMessages(messages, dialog)
+
+	var (
+		driver    modelModule.ModelDriver
+		modelName string
+		apiConfig *modelModule.APIConfig
+		err       error
+	)
+	if dialog.LLMID != "" {
+		driver, modelName, apiConfig, _, err = s.modelProviderSvc.GetModelConfigFromProviderInstance(
+			dialog.TenantID, entity.ModelTypeChat, dialog.LLMID,
+		)
+	} else {
+		driver, modelName, apiConfig, _, err = s.modelProviderSvc.GetTenantDefaultModelByType(
+			dialog.TenantID, entity.ModelTypeChat,
+		)
+	}
+	if err != nil {
+		common.Error("asyncChatSolo failed to get chat model", err)
+		return nil, err
+	}
+	chatModel := modelModule.NewChatModel(driver, &modelName, apiConfig)
+
+	// Convert messages to Message format
+	var msgs []modelModule.Message
+	if systemPrompt != "" {
+		msgs = append(msgs, modelModule.Message{Role: "system", Content: systemPrompt})
+	}
+	for _, msg := range processedMessages {
+		role, _ := msg["role"].(string)
+		if role == "" || role == "system" {
+			continue
+		}
+
+		if msg["content"] != nil {
+			msgs = append(msgs, modelModule.Message{Role: role, Content: msg["content"]})
+		}
+	}
+
+	// Get ChatConfig directly from dialog and config
+	chatConfig := s.buildChatConfig(dialog, config)
+
+	// Perform chat
+	response, err := chatModel.ModelDriver.ChatWithMessages(*chatModel.ModelName, msgs, chatModel.APIConfig, chatConfig)
+	if err != nil {
+		common.Error("asyncChatSolo chat failed", err)
+		return nil, err
+	}
+
+	common.Info("asyncChatSolo completed",
+		zap.String("tenant_id", dialog.TenantID),
+		zap.String("llm_id", dialog.LLMID),
+		zap.Int("response_length", len(*response.Answer)))
+
+	// Structure the answer
+	ans := map[string]interface{}{
+		"answer":    *response.Answer,
+		"reference": reference[len(reference)-1],
+		"final":     true,
+	}
+
+	return s.structureAnswerWithConv(session, ans, messageID, session.ID, reference), nil
+}
+
+// asyncChatSoloStream performs simple streaming chat without RAG
+func (s *ChatSessionService) asyncChatSoloStream(ctx context.Context, dialog *entity.Chat, session *entity.ChatSession, messages []map[string]interface{}, config map[string]interface{}, messageID string, reference []interface{}, resultChan chan<- map[string]interface{}) {
+	common.Info("asyncChatSoloStream started",
+		zap.String("tenant_id", dialog.TenantID),
+		zap.String("llm_id", dialog.LLMID),
+		zap.String("dialog_id", dialog.ID),
+		zap.Int("message_count", len(messages)))
+
+	// Get system prompt
+	systemPrompt := s.buildSystemPrompt(dialog)
+
+	// Process messages
+	processedMessages := s.processMessages(messages, dialog)
+
+	var (
+		driver    modelModule.ModelDriver
+		modelName string
+		apiConfig *modelModule.APIConfig
+		err       error
+	)
+	if dialog.LLMID != "" {
+		driver, modelName, apiConfig, _, err = s.modelProviderSvc.GetModelConfigFromProviderInstance(
+			dialog.TenantID, entity.ModelTypeChat, dialog.LLMID,
+		)
+	} else {
+		driver, modelName, apiConfig, _, err = s.modelProviderSvc.GetTenantDefaultModelByType(
+			dialog.TenantID, entity.ModelTypeChat,
+		)
+	}
+	if err != nil {
+		common.Error("asyncChatSoloStream failed to get chat model", err)
+		select {
+		case resultChan <- map[string]interface{}{"code": 500, "message": err.Error()}:
+		case <-ctx.Done():
+		}
+		return
+	}
+	if apiConfig == nil {
+		apiConfig = &modelModule.APIConfig{}
+	} else {
+		copy := *apiConfig
+		apiConfig = &copy
+	}
+	apiConfig.Context = ctx
+	chatModel := modelModule.NewChatModel(driver, &modelName, apiConfig)
+
+	// Convert messages to []modelModule.Message for ChatStreamlyWithSender
+	var chatMessages []modelModule.Message
+	if systemPrompt != "" {
+		chatMessages = append(chatMessages, modelModule.Message{
+			Role:    "system",
+			Content: systemPrompt,
+		})
+	}
+	for _, msg := range processedMessages {
+		role, _ := msg["role"].(string)
+		content := msg["content"]
+		if role != "" && content != nil && role != "system" {
+			chatMessages = append(chatMessages, modelModule.Message{
+				Role:    role,
+				Content: content,
+			})
+		}
+	}
+
+	// Get ChatConfig directly from dialog and config
+	chatConfig := s.buildChatConfig(dialog, config)
+
+	// Perform streaming chat using ChatStreamlyWithSender
+	fullAnswer := ""
+	err = chatModel.ModelDriver.ChatStreamlyWithSender(*chatModel.ModelName, chatMessages, chatModel.APIConfig, chatConfig, func(answer *string, reason *string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if answer != nil && *answer == "[DONE]" {
+			return nil
+		}
+		if reason != nil && *reason != "" {
+			fullAnswer += *reason
+			ans := s.structureAnswer(session, fullAnswer, messageID, session.ID, reference)
+			select {
+			case resultChan <- ans:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if answer != nil && *answer != "" {
+			fullAnswer += *answer
+			fullAnswer = s.removeReasoningContent(fullAnswer)
+			ans := s.structureAnswer(session, fullAnswer, messageID, session.ID, reference)
+			select {
+			case resultChan <- ans:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		select {
+		case resultChan <- map[string]interface{}{"code": 500, "message": err.Error()}:
+		case <-ctx.Done():
+		}
+		return
+	}
+
+	common.Info("asyncChatSoloStream completed",
+		zap.String("tenant_id", dialog.TenantID),
+		zap.String("llm_id", dialog.LLMID),
+		zap.Int("response_length", len(fullAnswer)))
 }
 
 // buildSystemPrompt builds the system prompt from dialog configuration
@@ -529,52 +1463,210 @@ func (s *ChatSessionService) cleanContent(content string) string {
 	return content
 }
 
-// modelMessages retains every conversational content value for validation by the model.
-// The configured system prompt remains authoritative, as in the legacy session path.
-func (s *ChatSessionService) modelMessages(messages []map[string]interface{}, system string) ([]models.Message, error) {
-	history := []models.Message{}
-	if system != "" {
-		history = append(history, models.Message{Role: "system", Content: system})
+// removeReasoningContent removes reasoning/thinking content from answer
+func (s *ChatSessionService) removeReasoningContent(answer string) string {
+	// Remove </think> tags
+	if strings.HasSuffix(answer, "</think>") {
+		answer = answer[:len(answer)-len("</think>")]
 	}
-	for _, msg := range messages {
-		role, ok := msg["role"].(string)
-		if !ok || role == "" {
-			return nil, errors.New("message role is required")
-		}
-		if role == "system" {
-			continue
-		}
-		item := models.Message{Role: role, Content: msg["content"]}
-		if value, present := msg["reasoning_content"]; present && value != nil {
-			text, ok := value.(string)
-			if !ok {
-				return nil, errors.New("invalid reasoning_content")
-			}
-			item.ReasoningContent = &text
-		}
-		history = append(history, item)
-	}
-	if err := models.ValidateMessages(history); err != nil {
-		return nil, err
-	}
-	return history, nil
+	return answer
 }
 
-// buildGenConf builds generation config from dialog and request
-func (s *ChatSessionService) buildGenConf(dialog *entity.Chat, config map[string]interface{}) map[string]interface{} {
-	genConf := make(map[string]interface{})
+// structureAnswerWithConv structures the answer with conversation update (like Python's structure_answer)
+func (s *ChatSessionService) structureAnswerWithConv(session *entity.ChatSession, ans map[string]interface{}, messageID, conversationID string, reference []interface{}) map[string]interface{} {
+	// Extract reference from answer
+	ref, _ := ans["reference"].(map[string]interface{})
+	if ref == nil {
+		ref = map[string]interface{}{
+			"chunks":   []interface{}{},
+			"doc_aggs": []interface{}{},
+		}
+		ans["reference"] = ref
+	}
+
+	// Format chunks
+	chunkList := s.chunksFormat(ref)
+	ref["chunks"] = chunkList
+
+	// Add message ID and session ID
+	ans["id"] = messageID
+	ans["session_id"] = conversationID
+
+	// Update session message
+	content, _ := ans["answer"].(string)
+	if ans["start_to_think"] != nil {
+		content = "<think>"
+	} else if ans["end_to_think"] != nil {
+		content = "</think>"
+	}
+
+	// Parse existing messages
+	var messagesObj map[string]interface{}
+	if len(session.Message) > 0 {
+		json.Unmarshal(session.Message, &messagesObj)
+	}
+	messages, _ := messagesObj["messages"].([]interface{})
+
+	// Update or append assistant message
+	if len(messages) == 0 || s.getLastRole(messages) != "assistant" {
+		messages = append(messages, map[string]interface{}{
+			"role":       "assistant",
+			"content":    content,
+			"created_at": float64(time.Now().Unix()),
+			"id":         messageID,
+		})
+	} else {
+		lastIdx := len(messages) - 1
+		lastMsg, _ := messages[lastIdx].(map[string]interface{})
+		if lastMsg != nil {
+			if ans["final"] == true && ans["answer"] != nil {
+				lastMsg["content"] = ans["answer"]
+			} else {
+				existing, _ := lastMsg["content"].(string)
+				lastMsg["content"] = existing + content
+			}
+			lastMsg["created_at"] = float64(time.Now().Unix())
+			lastMsg["id"] = messageID
+			messages[lastIdx] = lastMsg
+		}
+	}
+
+	// Update reference
+	if len(reference) > 0 {
+		reference[len(reference)-1] = ref
+	}
+
+	return ans
+}
+
+// getLastRole gets the role of the last message
+func (s *ChatSessionService) getLastRole(messages []interface{}) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	lastMsg, _ := messages[len(messages)-1].(map[string]interface{})
+	if lastMsg != nil {
+		role, _ := lastMsg["role"].(string)
+		return role
+	}
+	return ""
+}
+
+// chunksFormat formats chunks for reference (simplified version)
+func (s *ChatSessionService) chunksFormat(reference map[string]interface{}) []interface{} {
+	chunks, _ := reference["chunks"].([]interface{})
+	if chunks == nil {
+		return []interface{}{}
+	}
+
+	// Format each chunk
+	formatted := make([]interface{}, len(chunks))
+	for i, chunk := range chunks {
+		formatted[i] = chunk
+	}
+	return formatted
+}
+
+// buildChatConfig builds ChatConfig directly from dialog.LLMSetting and config
+func (s *ChatSessionService) buildChatConfig(dialog *entity.Chat, config map[string]interface{}) *modelModule.ChatConfig {
+	cfg := &modelModule.ChatConfig{}
 
 	// Start with dialog's LLM setting
 	if dialog.LLMSetting != nil {
-		for k, v := range dialog.LLMSetting {
-			genConf[k] = v
+		if v, ok := dialog.LLMSetting["stream"].(bool); ok {
+			cfg.Stream = &v
+		}
+		if v, ok := dialog.LLMSetting["thinking"].(bool); ok {
+			cfg.Thinking = &v
+		}
+		if v, ok := dialog.LLMSetting["max_tokens"].(float64); ok {
+			intVal := int(v)
+			cfg.MaxTokens = &intVal
+		} else if v, ok := dialog.LLMSetting["max_tokens"].(json.Number); ok {
+			if value, err := v.Int64(); err == nil {
+				intVal := int(value)
+				cfg.MaxTokens = &intVal
+			}
+		}
+		if v, ok := dialog.LLMSetting["temperature"].(float64); ok {
+			cfg.Temperature = &v
+		} else if v, ok := dialog.LLMSetting["temperature"].(json.Number); ok {
+			if value, err := v.Float64(); err == nil {
+				cfg.Temperature = &value
+			}
+		}
+		if v, ok := dialog.LLMSetting["top_p"].(float64); ok {
+			cfg.TopP = &v
+		} else if v, ok := dialog.LLMSetting["top_p"].(json.Number); ok {
+			if value, err := v.Float64(); err == nil {
+				cfg.TopP = &value
+			}
+		}
+		if v, ok := dialog.LLMSetting["do_sample"].(bool); ok {
+			cfg.DoSample = &v
+		}
+		if v, ok := dialog.LLMSetting["stop"].([]interface{}); ok {
+			stopStrs := make([]string, 0, len(v))
+			for _, s := range v {
+				if str, ok := s.(string); ok {
+					stopStrs = append(stopStrs, str)
+				}
+			}
+			cfg.Stop = &stopStrs
+		}
+		if v, ok := dialog.LLMSetting["model_class"].(string); ok {
+			cfg.ModelClass = &v
+		}
+		if v, ok := dialog.LLMSetting["effort"].(string); ok {
+			cfg.Effort = &v
+		}
+		if v, ok := dialog.LLMSetting["verbosity"].(string); ok {
+			cfg.Verbosity = &v
 		}
 	}
 
 	// Override with request config
-	for k, v := range config {
-		genConf[k] = v
+	if config != nil {
+		if v, ok := config["stream"].(bool); ok {
+			cfg.Stream = &v
+		}
+		if v, ok := config["thinking"].(bool); ok {
+			cfg.Thinking = &v
+		}
+		if v, ok := config["max_tokens"].(float64); ok {
+			intVal := int(v)
+			cfg.MaxTokens = &intVal
+		} else if v, ok := config["max_tokens"].(int); ok {
+			cfg.MaxTokens = &v
+		}
+		if v, ok := config["temperature"].(float64); ok {
+			cfg.Temperature = &v
+		}
+		if v, ok := config["top_p"].(float64); ok {
+			cfg.TopP = &v
+		}
+		if v, ok := config["do_sample"].(bool); ok {
+			cfg.DoSample = &v
+		}
+		if v, ok := config["stop"].([]interface{}); ok {
+			stopStrs := make([]string, 0, len(v))
+			for _, s := range v {
+				if str, ok := s.(string); ok {
+					stopStrs = append(stopStrs, str)
+				}
+			}
+			cfg.Stop = &stopStrs
+		}
+		if v, ok := config["model_class"].(string); ok {
+			cfg.ModelClass = &v
+		}
+		if v, ok := config["effort"].(string); ok {
+			cfg.Effort = &v
+		}
+		if v, ok := config["verbosity"].(string); ok {
+			cfg.Verbosity = &v
+		}
 	}
 
-	return genConf
+	return cfg
 }

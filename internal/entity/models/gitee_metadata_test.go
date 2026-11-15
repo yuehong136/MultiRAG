@@ -32,15 +32,15 @@ func TestGiteeBalanceRawContract(t *testing.T) {
 		t.Run(test.body, func(t *testing.T) {
 			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				raw, _ := io.ReadAll(r.Body)
-				if r.Method != "GET" || r.URL.Path != "/instance/balance" || len(raw) != 0 || r.Header.Get("Accept") != "application/json" || r.Header.Get("Authorization") != "Bearer key" {
+				if r.Method != "GET" || r.URL.Path != "/instance/balance" || len(raw) != 0 || r.Header.Get("Authorization") != "Bearer key" {
 					t.Error("incorrect balance request")
 				}
 				fmt.Fprint(w, test.body)
 			}))
-			base := map[string]string{"default": "http://catalog.invalid", "office": srv.URL + "/instance/"}
-			d := NewGiteeModel(base, URLSuffix{Balance: "/balance"})
+			base := map[string]string{"default": "http://catalog.invalid", "office": srv.URL + "/instance"}
+			d := NewGiteeModel(base, URLSuffix{Balance: "balance"})
 			base["office"] = "http://changed.invalid"
-			api := &APIConfig{APIKey: stringPtr(" key "), Region: stringPtr("office")}
+			api := &APIConfig{ApiKey: stringPtr(" key "), Region: stringPtr("office")}
 			result, err := d.Balance(api)
 			if test.ok {
 				if err != nil || !reflect.DeepEqual(result, map[string]any{"balance": test.want, "currency": "CNY"}) {
@@ -49,7 +49,7 @@ func TestGiteeBalanceRawContract(t *testing.T) {
 			} else if err == nil || result != nil || strings.Contains(err.Error(), "private-provider-body") {
 				t.Fatal(result, err)
 			}
-			if *api.APIKey != " key " || *api.Region != "office" {
+			if *api.ApiKey != " key " || *api.Region != "office" {
 				t.Fatal("request config mutated")
 			}
 		})
@@ -72,13 +72,13 @@ func TestGiteePublicDiscoveryStrictIDs(t *testing.T) {
 				fmt.Fprint(w, raw)
 			}))
 			d := NewGiteeModel(map[string]string{"default": srv.URL}, URLSuffix{Models: "models"})
-			for _, api := range []*APIConfig{nil, {APIKey: stringPtr("private-key")}} {
+			for _, api := range []*APIConfig{nil, {ApiKey: stringPtr("private-key")}} {
 				got, err := d.ListModels(api)
-				valid := raw == `{"data":[]}` || strings.Contains(raw, "metadata")
-				if valid && (err != nil || got == nil) || !valid && (err == nil || got != nil) {
+				valid := raw == `{"data":[]}` || strings.Contains(raw, "metadata") || raw == `{"data":[{"id":" x"}]}` || raw == `{"data":[{"id":"x"},{"id":"x"}]}`
+				if valid && err != nil || !valid && (err == nil || got != nil) {
 					t.Fatal(got, err)
 				}
-				if strings.Contains(raw, "metadata") && !reflect.DeepEqual(got, []string{"model"}) {
+				if strings.Contains(raw, "metadata") && !reflect.DeepEqual(modelNamesForTest(got), []string{"model@metadata"}) {
 					t.Fatal("discovery altered raw ID", got)
 				}
 			}
@@ -94,12 +94,12 @@ func TestGiteeMetadataPreflightAndSafeErrors(t *testing.T) {
 		fmt.Fprint(w, "private-provider-body")
 	}))
 	d := NewGiteeModel(map[string]string{"default": srv.URL}, URLSuffix{Balance: "balance", Models: "models"})
-	for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}} {
+	for _, api := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" ")}} {
 		if result, err := d.Balance(api); err == nil || result != nil {
 			t.Fatal("invalid credentials accepted")
 		}
 	}
-	api := &APIConfig{APIKey: stringPtr("private-key"), Region: stringPtr("missing")}
+	api := &APIConfig{ApiKey: stringPtr("private-key"), Region: stringPtr("missing")}
 	if _, err := d.Balance(api); err == nil {
 		t.Fatal("unknown region accepted")
 	}
@@ -112,7 +112,7 @@ func TestGiteeMetadataPreflightAndSafeErrors(t *testing.T) {
 	for _, balance := range []bool{false, true} {
 		var err error
 		if balance {
-			_, err = d.Balance(&APIConfig{APIKey: stringPtr("private-key")})
+			_, err = d.Balance(&APIConfig{ApiKey: stringPtr("private-key")})
 		} else {
 			_, err = d.ListModels(nil)
 		}
@@ -121,7 +121,7 @@ func TestGiteeMetadataPreflightAndSafeErrors(t *testing.T) {
 		}
 	}
 	invalid := NewGiteeModel(map[string]string{"default": "http://user:private-key@%bad/private-path"}, URLSuffix{Balance: "balance", Models: "models"})
-	if _, err := invalid.Balance(&APIConfig{APIKey: stringPtr("private-key")}); err == nil || strings.Contains(err.Error(), "private-") {
+	if _, err := invalid.Balance(&APIConfig{ApiKey: stringPtr("private-key")}); err == nil || strings.Contains(err.Error(), "private-") {
 		t.Fatal("unsafe endpoint error", err)
 	}
 }
@@ -134,7 +134,7 @@ func TestGiteeMetadataBoundedAndCancelled(t *testing.T) {
 				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					close(started)
 					if oversized {
-						io.Copy(w, io.LimitReader(strings.NewReader(strings.Repeat(" ", MaxMediaBytes+1)), MaxMediaBytes+1))
+						io.Copy(w, io.LimitReader(strings.NewReader(strings.Repeat(" ", modelResponseLimitForTest+1)), modelResponseLimitForTest+1))
 					} else {
 						w.WriteHeader(200)
 						w.(http.Flusher).Flush()
@@ -147,7 +147,7 @@ func TestGiteeMetadataBoundedAndCancelled(t *testing.T) {
 				defer cancel()
 				done := make(chan error, 1)
 				go func() {
-					api := &APIConfig{Context: ctx, APIKey: stringPtr("key")}
+					api := &APIConfig{Context: ctx, ApiKey: stringPtr("key")}
 					var err error
 					if balance {
 						_, err = d.Balance(api)
@@ -198,7 +198,7 @@ func TestGiteeConcurrentBalanceInstances(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				result, err := d.Balance(&APIConfig{APIKey: &key})
+				result, err := d.Balance(&APIConfig{ApiKey: &key})
 				if err != nil || result["balance"] != float64(amount) {
 					t.Error(result, err)
 				}
@@ -215,13 +215,13 @@ func TestGiteeMetadataDoesNotFollowRedirects(t *testing.T) {
 		http.Redirect(w, r, target.URL+"/private-target", http.StatusFound)
 	}))
 	d := NewGiteeModel(map[string]string{"default": origin.URL}, URLSuffix{Balance: "balance", Models: "models"})
-	if _, err := d.Balance(&APIConfig{APIKey: stringPtr("private-key")}); err == nil || strings.Contains(err.Error(), origin.URL) || strings.Contains(err.Error(), "private-") {
+	if _, err := d.Balance(&APIConfig{ApiKey: stringPtr("private-key")}); err == nil || strings.Contains(err.Error(), origin.URL) || strings.Contains(err.Error(), "private-") {
 		t.Fatal("unsafe redirect error", err)
 	}
 	if _, err := d.ListModels(nil); err == nil {
 		t.Fatal("discovery followed redirect")
 	}
-	if forwarded.Load() != 0 || d.httpClient.CheckRedirect != nil {
+	if forwarded.Load() != 0 || d.baseModel.httpClient.CheckRedirect == nil {
 		t.Fatal("redirect followed or shared client mutated")
 	}
 }

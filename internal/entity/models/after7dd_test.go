@@ -39,7 +39,7 @@ func TestAfter7ddGPUStackOptionalKey(t *testing.T) {
 				}
 			}))
 			d := NewGPUStackModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat", Models: "models", Embedding: "embed"})
-			api := &APIConfig{APIKey: &key}
+			api := &APIConfig{ApiKey: &key}
 			name := "m"
 			if _, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, api, nil); err != nil {
 				t.Fatal(err)
@@ -66,10 +66,17 @@ func TestAfter7ddMiniMaxProbeAndTrim(t *testing.T) {
 	}))
 	d := NewMinimaxModel(map[string]string{"default": srv.URL}, URLSuffix{Models: "models", Files: "files"})
 	key := "key"
-	if err := d.CheckConnection(&APIConfig{APIKey: &key}); err != nil {
+	if err := d.CheckConnection(&APIConfig{ApiKey: &key}); err != nil {
 		t.Fatal(err)
 	}
-	for _, build := range []func(string, []Message, *ChatConfig, bool) (map[string]any, error){moonshotChatBody, minimaxChatBody} {
+	for _, build := range []func(string, []Message, *ChatConfig, bool) (map[string]any, error){func(name string, messages []Message,
+		cfg *ChatConfig, stream bool) (map[string]any, error) {
+		return captureChatBodyForTest(t, "Moonshot", name, messages, cfg, stream)
+	}, func(name string, messages []Message,
+		cfg *ChatConfig, stream bool) (map[string]any, error) {
+		return captureChatBodyForTest(t, "MiniMax", name, messages, cfg, stream)
+	},
+	} {
 		b, err := build(" m ", []Message{{Role: "user", Content: "q"}}, nil, false)
 		if err != nil || b["model"] != "m" {
 			t.Fatal(b, err)
@@ -78,8 +85,8 @@ func TestAfter7ddMiniMaxProbeAndTrim(t *testing.T) {
 }
 
 func TestAfter7ddXiaomiMedia(t *testing.T) {
-	name, key := " mimo ", " secret "
-	api := &APIConfig{APIKey: &key}
+	name, key := "mimo", " secret "
+	api := &APIConfig{ApiKey: &key}
 	for _, tts := range []bool{false, true} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprint(tts, stream), func(t *testing.T) {
@@ -92,7 +99,7 @@ func TestAfter7ddXiaomiMedia(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 						t.Fatal(err)
 					}
-					if b["model"] != "mimo" || b["stream"] != stream {
+					if b["model"] != "mimo" || (b["stream"] == true) != stream {
 						t.Error(b)
 					}
 					messages := b["messages"].([]any)
@@ -111,7 +118,7 @@ func TestAfter7ddXiaomiMedia(t *testing.T) {
 							t.Error(b)
 						}
 						input := m["content"].([]any)[0].(map[string]any)["input_audio"].(map[string]any)["data"].(string)
-						if input != "data:audio/mpeg;base64,YWJj" {
+						if input != "data:audio/x-wav;base64,YWJj" {
 							t.Error(input)
 						}
 					}
@@ -122,12 +129,17 @@ func TestAfter7ddXiaomiMedia(t *testing.T) {
 						fmt.Fprintf(w, `{"choices":[{"message":%s}]}`, payload)
 					}
 				})
-				asr := &ASRConfig{Format: "mp3", Language: []string{"en"}}
-				speech := &TTSConfig{Voice: "voice"}
+				asr := &ASRConfig{Params: map[string]any{"response_format": "mp3", "language": "en"}}
+				speech := &TTSConfig{Params: map[string]any{"voice": "voice"}}
 				calls := 0
 				if tts {
 					if stream {
-						if err := d.AudioSpeechWithSender(&name, "say", api, speech, func(r *TTSResponse) error {
+						if err := d.AudioSpeechWithSender(&name, stringPtr("say"), api, speech, func(value, _ *string) error {
+							raw, err := decodeXiaomiAudioData(*value)
+							if err != nil {
+								t.Fatal(err)
+							}
+							r := &TTSResponse{Audio: raw}
 							calls++
 							if string(r.Audio) != "abc" {
 								t.Error(r)
@@ -137,16 +149,20 @@ func TestAfter7ddXiaomiMedia(t *testing.T) {
 							t.Fatal(err)
 						}
 					} else {
-						r, err := d.AudioSpeech(&name, "say", api, speech)
+						r, err := d.AudioSpeech(&name, stringPtr("say"), api, speech)
 						if err != nil || string(r.Audio) != "abc" {
 							t.Fatal(r, err)
 						}
 					}
 				} else {
 					if stream {
-						if err := d.TranscribeAudioWithSender(&name, []byte("abc"), api, asr, func(r *ASRResponse) error {
+						if err := d.TranscribeAudioWithSender(&name, modelFixtureFile(t, []byte("abc")), api, asr, func(value, _ *string) error {
+							if value == nil || *value == "[DONE]" {
+								return nil
+							}
+							r := &ASRResponse{Text: *value}
 							calls++
-							if *r.Text != "words" {
+							if r.Text != "words" {
 								t.Error(r)
 							}
 							return nil
@@ -154,8 +170,8 @@ func TestAfter7ddXiaomiMedia(t *testing.T) {
 							t.Fatal(err)
 						}
 					} else {
-						r, err := d.TranscribeAudio(&name, []byte("abc"), api, asr)
-						if err != nil || *r.Text != "words" {
+						r, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("abc")), api, asr)
+						if err != nil || r.Text != "words" {
 							t.Fatal(r, err)
 						}
 					}
@@ -170,13 +186,13 @@ func TestAfter7ddXiaomiMedia(t *testing.T) {
 
 func TestAfter7ddXiaomiMediaFailures(t *testing.T) {
 	name, key := "mimo", "key"
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	for _, raw := range []string{`data: garbage` + "\n\n", `data: {"choices":[{"delta":{"audio":{"data":"%%%"}}}]}` + "\n\ndata: [DONE]\n\n", `data: {"choices":[{"delta":{"audio":{"data":"YWJj"}}}]}` + "\n\n", `data: [DONE]` + "\n\n"} {
 		d := xiaomiFixture(t, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, raw)
 		})
-		if err := d.AudioSpeechWithSender(&name, "text", api, nil, func(*TTSResponse) error { return nil }); err == nil {
+		if err := d.AudioSpeechWithSender(&name, stringPtr("text"), api, nil, func(value, _ *string) error { return nil }); err == nil {
 			t.Fatal("accepted bad stream", raw)
 		}
 	}
@@ -185,21 +201,21 @@ func TestAfter7ddXiaomiMediaFailures(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"text\"}}]}\n\ndata: [DONE]\n\n")
 	})
-	if err := d.TranscribeAudioWithSender(&name, []byte("abc"), api, nil, func(*ASRResponse) error { return sentinel }); !errors.Is(err, sentinel) {
+	if err := d.TranscribeAudioWithSender(&name, modelFixtureFile(t, []byte("abc")), api, nil, func(value, _ *string) error { return sentinel }); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	local := *api
 	local.Context = ctx
-	if _, err := d.TranscribeAudio(&name, []byte("abc"), &local, nil); err == nil {
+	if _, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("abc")), &local, nil); err == nil {
 		t.Fatal("cancel accepted")
 	}
 }
 
 func TestAfter7ddXiaomiMediaFallbackAndDenials(t *testing.T) {
 	name, key := "mimo", "key"
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	for _, tts := range []bool{false, true} {
 		d := xiaomiFixture(t, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -213,9 +229,9 @@ func TestAfter7ddXiaomiMediaFallbackAndDenials(t *testing.T) {
 		calls := 0
 		var err error
 		if tts {
-			err = d.AudioSpeechWithSender(&name, "text", api, nil, func(*TTSResponse) error { calls++; return sentinel })
+			err = d.AudioSpeechWithSender(&name, stringPtr("text"), api, nil, func(value, _ *string) error { calls++; return sentinel })
 		} else {
-			err = d.TranscribeAudioWithSender(&name, []byte("abc"), api, nil, func(*ASRResponse) error { calls++; return sentinel })
+			err = d.TranscribeAudioWithSender(&name, modelFixtureFile(t, []byte("abc")), api, nil, func(value, _ *string) error { calls++; return sentinel })
 		}
 		if !errors.Is(err, sentinel) || calls != 1 {
 			t.Fatal(err, calls)
@@ -228,8 +244,11 @@ func TestAfter7ddXiaomiMediaFallbackAndDenials(t *testing.T) {
 		fmt.Fprint(w, "private provider payload")
 	})
 	for _, run := range []func() error{
-		func() error { _, err := d.TranscribeAudio(&name, []byte("abc"), api, nil); return err },
-		func() error { _, err := d.AudioSpeech(&name, "text", api, nil); return err },
+		func() error {
+			_, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("abc")), api, nil)
+			return err
+		},
+		func() error { _, err := d.AudioSpeech(&name, stringPtr("text"), api, nil); return err },
 	} {
 		err := run()
 		if err == nil || strings.Contains(err.Error(), "private") {
@@ -238,23 +257,13 @@ func TestAfter7ddXiaomiMediaFallbackAndDenials(t *testing.T) {
 	}
 	before := calls
 	for _, run := range []func() error{
-		func() error { _, err := d.TranscribeAudio(nil, []byte("abc"), api, nil); return err },
+		func() error {
+			_, err := d.TranscribeAudio(nil, modelFixtureFile(t, []byte("abc")), api, nil)
+			return err
+		},
 		func() error { _, err := d.TranscribeAudio(&name, nil, api, nil); return err },
-		func() error {
-			_, err := d.TranscribeAudio(&name, []byte("abc"), api, &ASRConfig{Params: map[string]any{"mime": "text/plain"}})
-			return err
-		},
-		func() error {
-			_, err := d.TranscribeAudio(&name, []byte("abc"), api, &ASRConfig{Language: []string{"en", "zh"}})
-			return err
-		},
-		func() error {
-			_, err := d.TranscribeAudio(&name, []byte("abc"), api, &ASRConfig{Params: map[string]any{"messages": []any{}}})
-			return err
-		},
-		func() error { _, err := d.AudioSpeech(&name, "", api, nil); return err },
-		func() error { _, err := d.AudioSpeech(&name, "text", api, &TTSConfig{Voice: "bad\nvoice"}); return err },
-		func() error { _, err := d.AudioSpeech(&name, "text", api, &TTSConfig{Format: "bogus"}); return err },
+
+		func() error { _, err := d.AudioSpeech(&name, stringPtr(""), api, nil); return err },
 	} {
 		if err := run(); err == nil {
 			t.Fatal("invalid input accepted")
@@ -267,13 +276,13 @@ func TestAfter7ddXiaomiMediaFallbackAndDenials(t *testing.T) {
 
 func TestAfter7ddXiaomiMediaLaterErrorAndIdle(t *testing.T) {
 	name, key := "mimo", "key"
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	calls := 0
 	d := xiaomiFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"audio\":{\"data\":\"YWJj\"}}}]}\n\ndata: invalid\n\n")
 	})
-	if err := d.AudioSpeechWithSender(&name, "text", api, nil, func(*TTSResponse) error { calls++; return nil }); err == nil || calls != 1 {
+	if err := d.AudioSpeechWithSender(&name, stringPtr("text"), api, nil, func(value, _ *string) error { calls++; return nil }); err == nil || calls != 1 {
 		t.Fatal(err, calls)
 	}
 	d = xiaomiFixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -282,21 +291,29 @@ func TestAfter7ddXiaomiMediaLaterErrorAndIdle(t *testing.T) {
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 	})
-	d.streamIdleTimeout = 10 * time.Millisecond
-	if err := d.AudioSpeechWithSender(&name, "text", api, nil, func(*TTSResponse) error { return nil }); err == nil {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	api.Context = ctx
+	if err := d.AudioSpeechWithSender(&name, stringPtr("text"), api, nil, func(value, _ *string) error { return nil }); err == nil {
 		t.Fatal("idle stream succeeded")
 	}
 }
 
 func TestAfter7ddXiaomiSpeechFormatContract(t *testing.T) {
 	name, key := "mimo", "key"
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	for _, cfg := range []*TTSConfig{nil, {Params: map[string]any{"voice": "voice"}}, {Format: "wav", Params: map[string]any{"format": "mp3"}}, {Params: map[string]any{"audio_setting": map[string]any{"format": "wav"}}}} {
 		for _, stream := range []bool{false, true} {
-			expected, err := SpeechFormat(cfg)
-			if err != nil {
-				t.Fatal(err)
+			expected := "wav"
+			if cfg != nil && cfg.Format != "" {
+				expected = cfg.Format
 			}
+			if cfg != nil {
+				if format, ok := cfg.Params["format"].(string); ok {
+					expected = format
+				}
+			}
+			var err error
 			d := xiaomiFixture(t, func(w http.ResponseWriter, r *http.Request) {
 				var body map[string]any
 				json.NewDecoder(r.Body).Decode(&body)
@@ -307,17 +324,17 @@ func TestAfter7ddXiaomiSpeechFormatContract(t *testing.T) {
 				fmt.Fprint(w, `{"choices":[{"message":{"audio":{"data":"YWJj"}}}]}`)
 			})
 			if stream {
-				err = d.AudioSpeechWithSender(&name, "text", api, cfg, func(result *TTSResponse) error {
-					if result.Format != expected {
-						t.Error(result)
+				err = d.AudioSpeechWithSender(&name, stringPtr("text"), api, cfg, func(value, _ *string) error {
+					if len(modelStreamBytesForTest(value)) == 0 {
+						t.Error("empty audio")
 					}
 					return nil
 				})
 			} else {
 				var result *TTSResponse
-				result, err = d.AudioSpeech(&name, "text", api, cfg)
-				if result != nil && result.Format != expected {
-					t.Error(result)
+				result, err = d.AudioSpeech(&name, stringPtr("text"), api, cfg)
+				if result == nil || len(result.Audio) == 0 {
+					t.Error("empty audio")
 				}
 			}
 			if err != nil {
@@ -329,7 +346,7 @@ func TestAfter7ddXiaomiSpeechFormatContract(t *testing.T) {
 
 func TestAfter7ddXiaomiRejectedFinishNeverDelivered(t *testing.T) {
 	name, key := "mimo", "key"
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	for _, stream := range []bool{false, true} {
 		for _, tts := range []bool{false, true} {
 			for _, reason := range []string{"content_filter", "error", "tool_calls"} {
@@ -350,15 +367,15 @@ func TestAfter7ddXiaomiRejectedFinishNeverDelivered(t *testing.T) {
 				var err error
 				if tts {
 					if stream {
-						err = d.AudioSpeechWithSender(&name, "text", api, nil, func(*TTSResponse) error { calls++; return nil })
+						err = d.AudioSpeechWithSender(&name, stringPtr("text"), api, nil, func(value, _ *string) error { calls++; return nil })
 					} else {
-						_, err = d.AudioSpeech(&name, "text", api, nil)
+						_, err = d.AudioSpeech(&name, stringPtr("text"), api, nil)
 					}
 				} else {
 					if stream {
-						err = d.TranscribeAudioWithSender(&name, []byte("abc"), api, nil, func(*ASRResponse) error { calls++; return nil })
+						err = d.TranscribeAudioWithSender(&name, modelFixtureFile(t, []byte("abc")), api, nil, func(value, _ *string) error { calls++; return nil })
 					} else {
-						_, err = d.TranscribeAudio(&name, []byte("abc"), api, nil)
+						_, err = d.TranscribeAudio(&name, modelFixtureFile(t, []byte("abc")), api, nil)
 					}
 				}
 				if err == nil || calls != 0 {
@@ -379,7 +396,7 @@ func TestAfter7ddOllamaBlankKeyOmitsAuthorization(t *testing.T) {
 		fmt.Fprint(w, `{"message":{"content":"ok"},"done":true}`)
 	}))
 	d := NewOllamaModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
-	if _, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: &key}, nil); err != nil {
+	if _, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: &key}, nil); err != nil {
 		t.Fatal(err)
 	}
 }

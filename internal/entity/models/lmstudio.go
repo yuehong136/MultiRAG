@@ -417,12 +417,15 @@ func (l *LmStudioModel) Embed(modelName *string, texts []string, apiConfig *APIC
 	if err := l.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return nil, err
 	}
+	if embeddingConfig != nil && embeddingConfig.Dimension < 0 {
+		return nil, fmt.Errorf("invalid embedding dimension")
+	}
 
 	if len(texts) == 0 {
 		return []EmbeddingData{}, nil
 	}
 
-	if modelName == nil || *modelName == "" {
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
 		return nil, fmt.Errorf("model name is required")
 	}
 
@@ -522,6 +525,9 @@ func (l *LmStudioModel) Embed(modelName *string, texts []string, apiConfig *APIC
 		}
 		if len(row.Embedding) != dimension {
 			return nil, fmt.Errorf("inconsistent embedding dimension")
+		}
+		if embeddingConfig != nil && embeddingConfig.Dimension > 0 && len(row.Embedding) != embeddingConfig.Dimension {
+			return nil, fmt.Errorf("embedding dimension does not match request")
 		}
 		for _, value := range row.Embedding {
 			if math.IsNaN(value) || math.IsInf(value, 0) {

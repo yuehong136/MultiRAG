@@ -19,22 +19,46 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"math"
-	"multirag/internal/dao"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"multirag/internal/common"
+	"multirag/internal/entity"
 	"multirag/internal/service"
+)
+
+const (
+	defaultMCPServerPage     = 0
+	defaultMCPServerPageSize = 0
+	maxMCPServerPageSize     = 100
+	mcpServerDateFormat      = "2006-01-02T15:04:05"
 )
 
 // MCPHandler handles MCP server requests.
 type MCPHandler struct {
 	mcpService *service.MCPService
+}
+
+type mcpServerResponse struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	TenantID    string                 `json:"tenant_id"`
+	URL         string                 `json:"url"`
+	ServerType  string                 `json:"server_type"`
+	Description *string                `json:"description"`
+	Variables   map[string]interface{} `json:"variables"`
+	Headers     map[string]interface{} `json:"headers"`
+	CreateTime  *int64                 `json:"create_time"`
+	CreateDate  string                 `json:"create_date"`
+	UpdateTime  *int64                 `json:"update_time"`
+	UpdateDate  string                 `json:"update_date"`
 }
 
 // NewMCPHandler creates an MCP handler.
@@ -53,12 +77,12 @@ func (h *MCPHandler) CreateMCPServer(c *gin.Context) {
 	}
 
 	var req service.CreateMCPServerRequest
-	if err := bindObjectJSON(c, &req); err != nil {
-		jsonError(c, common.CodeArgumentError, "Invalid MCP payload.")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeDataError, err.Error())
 		return
 	}
 
-	result, code, err := h.mcpService.CreateMCPServer(c.Request.Context(), user.ID, req)
+	result, code, err := h.mcpService.CreateMCPServer(user.ID, req)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return
@@ -71,143 +95,380 @@ func (h *MCPHandler) CreateMCPServer(c *gin.Context) {
 	})
 }
 
-// DeleteMCPServer deletes only an owned, unreferenced configuration.
-func (h *MCPHandler) DeleteMCPServer(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
-		return
-	}
-	result, code, err := h.mcpService.DeleteMCPServer(c.Request.Context(), user.ID, c.Param("mcp_id"))
-	if err != nil {
-		jsonError(c, code, err.Error())
-		return
-	}
-	jsonResponse(c, code, result, "success")
-}
-
-func parseMCPListQuery(query url.Values) (dao.MCPListQuery, string, error) {
-	opts := dao.MCPListQuery{OrderBy: "create_time", Desc: true}
-	invalid := errors.New("Invalid MCP list query.")
-	for key, values := range query {
-		if key != "mcp_ids" && len(values) != 1 {
-			return opts, "", invalid
-		}
-	}
-	for key, target := range map[string]*int{"page": &opts.Page, "page_size": &opts.PageSize} {
-		if raw, ok := query[key]; ok {
-			if raw[0] == "" || strings.Trim(raw[0], "0123456789") != "" {
-				return opts, "", invalid
-			}
-			value, err := strconv.Atoi(raw[0])
-			if err != nil {
-				return opts, "", invalid
-			}
-			*target = value
-		}
-	}
-	if opts.PageSize > 100 || (opts.PageSize > 0 && opts.Page > math.MaxInt/opts.PageSize) {
-		return opts, "", invalid
-	}
-	if raw, ok := query["orderby"]; ok {
-		opts.OrderBy = raw[0]
-	}
-	if _, err := dao.MCPServerOrderColumn(opts.OrderBy); err != nil {
-		return opts, "", invalid
-	}
-	if raw, ok := query["desc"]; ok {
-		switch raw[0] {
-		case "true":
-			opts.Desc = true
-		case "false":
-			opts.Desc = false
-		default:
-			return opts, "", invalid
-		}
-	}
-	opts.Keywords = query.Get("keywords")
-	values, plural := query["mcp_ids"]
-	if singular, ok := query["mcp_id"]; ok {
-		if plural {
-			return opts, "", invalid
-		}
-		values = singular
-	}
-	if values != nil {
-		opts.IDs = []string{}
-		seen := map[string]bool{}
-		for _, raw := range values {
-			if raw == "null" || (raw == "[]" && len(values) != 1) {
-				return opts, "", invalid
-			}
-			var ids []string
-			if strings.HasPrefix(raw, "[") {
-				if json.Unmarshal([]byte(raw), &ids) != nil || ids == nil {
-					return opts, "", invalid
-				}
-			} else {
-				ids = strings.Split(raw, ",")
-			}
-			for _, id := range ids {
-				if id == "" || strings.TrimSpace(id) != id || strings.ContainsAny(id, "[]{}\" \t\r\n") || seen[id] {
-					return opts, "", invalid
-				}
-				seen[id] = true
-				opts.IDs = append(opts.IDs, id)
-			}
-		}
-	}
-	tenant := query.Get("tenant_id")
-	if _, ok := query["tenant_id"]; ok && (tenant == "" || strings.TrimSpace(tenant) != tenant) {
-		return opts, "", invalid
-	}
-	return opts, tenant, nil
-}
-
-// ListMCPServers lists management configuration for an authorized tenant owner.
+// ListMCPServers lists MCP servers for the current user.
 func (h *MCPHandler) ListMCPServers(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
 		return
 	}
-	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+
+	page, err := parseMCPServerPage(c.Query("page"))
 	if err != nil {
-		jsonError(c, common.CodeArgumentError, "Invalid MCP list query.")
+		jsonError(c, common.CodeDataError, err.Error())
 		return
 	}
-	opts, tenant, err := parseMCPListQuery(query)
+	pageSize, err := parseMCPServerPageSize(c.Query("page_size"))
 	if err != nil {
-		jsonError(c, common.CodeArgumentError, err.Error())
+		jsonError(c, common.CodeDataError, err.Error())
 		return
 	}
-	if tenant == "" {
-		tenant = user.ID
-	}
-	result, code, err := h.mcpService.ListMCPServers(c.Request.Context(), user.ID, tenant, opts)
+
+	orderby := c.DefaultQuery("orderby", "create_time")
+	desc := strings.ToLower(c.DefaultQuery("desc", "true")) != "false"
+	keywords := c.Query("keywords")
+	mcpIDs := getMCPIDsFromQuery(c)
+
+	result, code, err := h.mcpService.ListMCPServers(user.ID, mcpIDs, keywords, page, pageSize, orderby, desc)
 	if err != nil {
+		if code == common.CodeServerError {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    code,
+				"message": err.Error(),
+				"data":    nil,
+			})
+			return
+		}
 		jsonError(c, code, err.Error())
 		return
 	}
-	jsonResponse(c, common.CodeSuccess, result, "success")
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"message": "success",
+		"data":    result,
+	})
 }
 
-// UpdateMCPServer changes explicit settings and returns a credential-free view.
+// UpdateMCPServer updates an MCP server for the current user.
 func (h *MCPHandler) UpdateMCPServer(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
 		return
 	}
+
+	mcpID := c.Param("mcp_id")
 	var req service.UpdateMCPServerRequest
-	if bindObjectJSONNullable(c, &req, map[string]bool{"description": true}) != nil {
-		jsonError(c, common.CodeArgumentError, "Invalid MCP payload.")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeDataError, err.Error())
 		return
 	}
-	result, code, err := h.mcpService.UpdateMCPServer(c.Request.Context(), user.ID, c.Param("mcp_id"), req)
+
+	result, code, err := h.mcpService.UpdateMCPServer(user.ID, mcpID, req)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return
 	}
-	jsonResponse(c, code, result, "success")
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"message": "success",
+		"data":    newMCPServerResponse(result),
+	})
+}
+
+// DeleteMCPServer deletes an MCP server for the current user.
+func (h *MCPHandler) DeleteMCPServer(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	result, code, err := h.mcpService.DeleteMCPServer(user.ID, c.Param("mcp_id"))
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"message": "success",
+		"data":    result,
+	})
+}
+
+// mcpErrorResponse maps the import / test sentinel errors to the response
+// codes Python's mcp_api emits.
+func mcpErrorResponse(c *gin.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, service.ErrMCPInvalidType),
+		errors.Is(err, service.ErrMCPInvalidName),
+		errors.Is(err, service.ErrMCPInvalidURL),
+		errors.Is(err, service.ErrMCPTestFailed):
+		c.JSON(http.StatusOK, gin.H{"code": common.CodeDataError, "data": nil, "message": mcpErrorMessage(err)})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"code": common.CodeServerError, "data": nil, "message": err.Error()})
+	}
+	return true
+}
+
+func mcpErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	// service wraps its sentinels as "<sentinel>: <detail>" via
+	// fmt.Errorf("%w: ...", err). Surface the detail when present so the
+	// SSRF guard's per-failure message (e.g. "URL resolves to a non-public
+	// address (...).") reaches the caller verbatim, matching what Python's
+	// _assert_mcp_url_is_safe returns.
+	switch {
+	case errors.Is(err, service.ErrMCPInvalidURL):
+		if detail := unwrapDetail(err, service.ErrMCPInvalidURL); detail != "" {
+			return detail
+		}
+		return "Invalid url."
+	case errors.Is(err, service.ErrMCPInvalidType):
+		return "Unsupported MCP server type."
+	case errors.Is(err, service.ErrMCPTestFailed):
+		return "Test MCP error."
+	default:
+		return err.Error()
+	}
+}
+
+// unwrapDetail pulls the "<sentinel>: <detail>" suffix off a wrapped error
+// and returns the detail. Returns "" when the error is the bare sentinel
+// (no wrapped message) so the caller can fall back to a default.
+func unwrapDetail(err, sentinel error) string {
+	if err == nil || sentinel == nil {
+		return ""
+	}
+	prefix := sentinel.Error() + ": "
+	msg := err.Error()
+	if !strings.HasPrefix(msg, prefix) {
+		return ""
+	}
+	return strings.TrimPrefix(msg, prefix)
+}
+
+// ImportMCPRequest is the body for the bulk-import endpoint.
+type ImportMCPRequest struct {
+	MCPServers map[string]map[string]interface{} `json:"mcpServers"`
+	Timeout    float64                           `json:"timeout,omitempty"`
+}
+
+// ImportMCPServers bulk-imports MCP servers from a JSON config, fetching the
+// remote tool list for each entry and persisting it under variables.tools.
+// Mirrors Python's import_multiple, including the same distinction between
+// "mcpServers key missing" (101 ARGUMENT_ERROR) and "mcpServers key
+// present but empty" (102 DATA_ERROR).
+//
+// @Summary Import MCP Servers
+// @Tags mcp
+// @Accept json
+// @Produce json
+// @Param request body handler.ImportMCPRequest true "import config"
+// @Router /api/v1/mcp/servers/import [post]
+func (h *MCPHandler) ImportMCPServers(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	// Read the raw body so we can distinguish "key absent" from "key
+	// present but empty" — the Python @validate_request("mcpServers")
+	// decorator returns RetCode.ARGUMENT_ERROR for the former, while the
+	// handler body returns RetCode.DATA_ERROR for the latter.
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, (1<<20)+1))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid request body: " + err.Error()})
+		return
+	}
+	if len(body) > 1<<20 {
+		jsonError(c, common.CodeBadRequest, "request body exceeds limit")
+		return
+	}
+	var raw map[string]json.RawMessage
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &raw); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid request body: " + err.Error()})
+			return
+		}
+	}
+
+	rawServers, hasServers := raw["mcpServers"]
+	if !hasServers {
+		// Match Python validate_request: code 101, message includes the
+		// trailing "; " separator the Python decorator emits.
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeArgumentError,
+			"data":    nil,
+			"message": "required argument are missing: mcpServers; ",
+		})
+		return
+	}
+
+	var servers map[string]map[string]interface{}
+	if err := json.Unmarshal(rawServers, &servers); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid request body: " + err.Error()})
+		return
+	}
+	if len(servers) == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": common.CodeDataError, "data": nil, "message": "No MCP servers provided."})
+		return
+	}
+
+	var timeout float64
+	if rawTimeout, ok := raw["timeout"]; ok {
+		// Ignore parse errors for timeout to match Python's get_float
+		// default-on-failure behavior; the service applies its own
+		// 10 s fallback when timeout <= 0.
+		_ = json.Unmarshal(rawTimeout, &timeout)
+	}
+
+	if math.IsNaN(timeout) || math.IsInf(timeout, 0) || timeout < 0 || timeout > 60 {
+		jsonError(c, common.CodeArgumentError, "MCP timeout must be in [0,60] seconds")
+		return
+	}
+	results, err := h.mcpService.ImportServers(c.Request.Context(), user.ID, servers, timeout)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": common.CodeServerError, "data": nil, "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": common.CodeSuccess, "data": gin.H{"results": results}, "message": "success"})
+}
+
+// TestMCPServer opens a live MCP session and returns the tools the server
+// advertises. The mcp_id path parameter identifies the stored record the
+// user is trying to validate; the actual connection uses the request body
+// so the user can preview unsaved edits — matching Python's test_mcp.
+//
+// @Summary Test MCP Server
+// @Tags mcp
+// @Accept json
+// @Produce json
+// @Param mcp_id path string true "MCP server ID"
+// @Param request body service.TestServerRequest true "test parameters"
+// @Router /api/v1/mcp/servers/{mcp_id}/test [post]
+func (h *MCPHandler) TestMCPServer(c *gin.Context) {
+	_, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	mcpID := c.Param("mcp_id")
+	if mcpID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "mcp_id is required"})
+		return
+	}
+
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+	var req service.TestServerRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid request body: " + err.Error()})
+		return
+	}
+
+	// Mirror Python's @validate_request("url", "server_type"): missing
+	// required fields → code 101 (ARGUMENT_ERROR), not code 102.
+	var missingFields []string
+	if req.URL == "" {
+		missingFields = append(missingFields, "url")
+	}
+	if req.ServerType == "" {
+		missingFields = append(missingFields, "server_type")
+	}
+	if len(missingFields) > 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeArgumentError,
+			"data":    nil,
+			"message": "required argument are missing: " + strings.Join(missingFields, ", ") + "; ",
+		})
+		return
+	}
+
+	if math.IsNaN(req.Timeout) || math.IsInf(req.Timeout, 0) || req.Timeout < 0 || req.Timeout > 60 {
+		jsonError(c, common.CodeArgumentError, "MCP timeout must be in [0,60] seconds")
+		return
+	}
+	for _, value := range req.Headers {
+		if _, ok := value.(string); !ok {
+			jsonError(c, common.CodeArgumentError, "MCP headers must contain strings")
+			return
+		}
+	}
+	tools, err := h.mcpService.TestServer(c.Request.Context(), mcpID, &req)
+	if mcpErrorResponse(c, err) {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": common.CodeSuccess, "data": tools, "message": "success"})
+}
+
+func newMCPServerResponse(server *entity.MCPServer) *mcpServerResponse {
+	if server == nil {
+		return nil
+	}
+
+	return &mcpServerResponse{
+		ID:          server.ID,
+		Name:        server.Name,
+		TenantID:    server.TenantID,
+		URL:         server.URL,
+		ServerType:  server.ServerType,
+		Description: server.Description,
+		Variables:   map[string]interface{}(server.Variables),
+		Headers:     map[string]interface{}(server.Headers),
+		CreateTime:  server.CreateTime,
+		CreateDate:  formatMCPServerDate(server.CreateDate),
+		UpdateTime:  server.UpdateTime,
+		UpdateDate:  formatMCPServerDate(server.UpdateDate),
+	}
+}
+
+func formatMCPServerDate(date *time.Time) string {
+	if date == nil {
+		return ""
+	}
+	return date.Format(mcpServerDateFormat)
+}
+
+func parseMCPServerPage(value string) (int, error) {
+	if value == "" {
+		return defaultMCPServerPage, nil
+	}
+	page, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("page must be an integer")
+	}
+	return page, nil
+}
+
+func parseMCPServerPageSize(value string) (int, error) {
+	if value == "" {
+		return defaultMCPServerPageSize, nil
+	}
+	pageSize, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("page_size must be an integer")
+	}
+	if pageSize > maxMCPServerPageSize {
+		return 0, fmt.Errorf("page_size must be less than or equal to %d", maxMCPServerPageSize)
+	}
+	return pageSize, nil
+}
+
+func getMCPIDsFromQuery(c *gin.Context) []string {
+	rawValues := c.QueryArray("mcp_ids")
+	if len(rawValues) == 0 {
+		rawValues = []string{c.Query("mcp_id")}
+	}
+
+	ids := make([]string, 0)
+	for _, rawValue := range rawValues {
+		for _, item := range strings.Split(rawValue, ",") {
+			id := strings.TrimSpace(item)
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
 }

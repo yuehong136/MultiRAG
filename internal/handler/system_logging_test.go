@@ -9,46 +9,39 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"multirag/internal/common"
-	"multirag/internal/entity"
 )
 
 func TestSystemLogLevelHTTP(t *testing.T) {
 	defer common.SetLevel(common.GetLevel())
-	handler := &SystemHandler{}
-	router := gin.New()
-	router.Use(func(c *gin.Context) { c.Set("user", &entity.User{ID: "owned-log-user"}) })
-	router.GET("/level", handler.GetLogLevel)
-	router.PUT("/level", handler.SetLogLevel)
+	if err := common.Init("info", ""); err != nil {
+		t.Fatal(err)
+	}
+	h := &SystemHandler{}
+	app := gin.New()
+	app.GET("/level", h.GetLogLevel)
+	app.PUT("/level", h.SetLogLevel)
 	captured := common.Logger.With()
 	for _, test := range []struct {
-		body   string
-		status int
-		level  string
-	}{
-		{`{"level":"debug"}`, http.StatusOK, "debug"},
-		{`{"level":"invalid"}`, http.StatusBadRequest, "debug"},
-		{`{}`, http.StatusBadRequest, "debug"},
-		{`{"level":"error"}`, http.StatusOK, "error"},
-	} {
-		response := httptest.NewRecorder()
-		router.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/level", strings.NewReader(test.body)))
-		if response.Code != test.status || common.GetLevel() != test.level {
-			t.Fatalf("%s: %d %s", test.body, response.Code, response.Body.String())
+		body, level string
+		code        int
+	}{{`{"pkg_name":"root","level":"debug"}`, "debug", 0}, {`{"pkg_name":"root","level":"invalid"}`, "debug", 102}, {`{}`, "debug", 102}, {`{"pkg_name":"root","level":"error"}`, "error", 0}} {
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/level", strings.NewReader(test.body)))
+		var changed struct{ Code int }
+		if err := json.Unmarshal(w.Body.Bytes(), &changed); err != nil || w.Code != 200 || changed.Code != test.code || common.GetLevel() != test.level {
+			t.Fatal("canonical package log setter", test, w.Body.String(), err)
 		}
-		response = httptest.NewRecorder()
-		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/level", nil))
+		w = httptest.NewRecorder()
+		app.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/level", nil))
 		var result struct {
 			Code int
-			Data struct{ Level string }
+			Data map[string]string
 		}
-		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-			t.Fatal(err)
-		}
-		if result.Code != 0 || result.Data.Level != test.level {
-			t.Fatalf("readback: %+v", result)
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || result.Code != 0 || strings.ToLower(result.Data["root"]) != test.level {
+			t.Fatal("actual package log readback", w.Body.String(), err)
 		}
 		if captured.Core().Enabled(-1) != (test.level == "debug") {
-			t.Fatal("captured logger did not update")
+			t.Fatal("captured logger level did not update")
 		}
 	}
 }

@@ -56,7 +56,7 @@ def test_python_active_catalog_retains_old_models_and_only_supported_capabilitie
 
 
 def test_go_catalog_keeps_its_identity_and_available_asr_contract() -> None:
-    native = json.loads((ROOT / "configs/models/cohere.json").read_text())
+    native = json.loads((ROOT / "conf/models/cohere.json").read_text())
     models = {row["name"]: row for row in native["models"]}
     assert native["name"] == "CoHere" and native["class"] == "cohere"
     assert native["url_suffix"]["asr"] == "audio/transcriptions"
@@ -65,4 +65,4 @@ def test_go_catalog_keeps_its_identity_and_available_asr_contract() -> None:
         assert models[name] == {"name": name, "max_tokens": limit, "model_types": ["chat"]}
     assert models["embed-v4.0"]["max_tokens"] == 131072
     assert models["rerank-v4.0-pro"]["max_tokens"] == 32768
-    assert models["cohere-transcribe-03-2026"] == {"name": "cohere-transcribe-03-2026", "max_tokens": 8192, "model_types": ["speech2text"]}
+    assert models["cohere-transcribe-03-2026"] == {"name": "cohere-transcribe-03-2026", "max_tokens": 8192, "model_types": ["asr"]}

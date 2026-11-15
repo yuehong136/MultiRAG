@@ -31,23 +31,23 @@ func TestDeepInfraNativeRerank(t *testing.T) {
 	defer server.Close()
 	driver := NewDeepInfraModel(map[string]string{"default": server.URL}, URLSuffix{Rerank: "v1/inference"})
 	key, name := "key", "Qwen/Qwen3-Reranker-4B"
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	for _, top := range []int{0, 1, 2, 99} {
 		result, err := driver.Rerank(&name, "query", []string{"a", "b", "c"}, api, &RerankConfig{TopN: top})
-		want := []RerankResult{{Index: 1, RelevanceScore: 0.9}, {Index: 2, RelevanceScore: 0.9}, {Index: 0, RelevanceScore: 0}}
+		want := []RerankResult{{Index: 0, RelevanceScore: 0}, {Index: 1, RelevanceScore: 0.9}, {Index: 2, RelevanceScore: 0.9}}
 		if top > 0 && top < 3 {
-			want = want[:top]
+			want = []RerankResult{{Index: 1, RelevanceScore: 0.9}, {Index: 2, RelevanceScore: 0.9}}[:top]
 		}
 		if err != nil || !reflect.DeepEqual(result.Data, want) {
 			t.Fatal(result, err)
 		}
 	}
-	scores, err := NewRerankModel(driver, &name, api).Rerank("query", []string{"a", "b", "c"})
+	scores, err := rerankScoresForTest(NewRerankModel(driver, &name, api), "query", []string{"a", "b", "c"}, api, &RerankConfig{})
 	if err != nil || !reflect.DeepEqual(scores, []float64{0, 0.9, 0.9}) {
 		t.Fatal("bound consumer index reconstruction", scores, err)
 	}
 	before := calls.Load()
-	if result, err := driver.Rerank(nil, "", nil, nil, nil); err != nil || result.Data == nil {
+	if result, err := driver.Rerank(nil, "", nil, api, nil); err != nil || result == nil || len(result.Data) != 0 {
 		t.Fatal(result, err)
 	}
 	for _, bad := range []string{"", " ", "../x", "a/../x", "x?key=secret", "x#y", "x%2fy"} {
@@ -70,7 +70,7 @@ func TestDeepInfraRerankRawAndCancellation(t *testing.T) {
 		server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 		driver := NewDeepInfraModel(map[string]string{"default": server.URL}, URLSuffix{Rerank: "v1/inference"})
 		key, name := "key", "ns/m"
-		if result, err := driver.Rerank(&name, "q", []string{"a"}, &APIConfig{APIKey: &key}, nil); err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
+		if result, err := driver.Rerank(&name, "q", []string{"a"}, &APIConfig{ApiKey: &key}, nil); err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
 			t.Fatal(result, err)
 		}
 		server.Close()
@@ -81,7 +81,7 @@ func TestDeepInfraRerankRawAndCancellation(t *testing.T) {
 	key, name := "key", "ns/m"
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := driver.Rerank(&name, "q", []string{"a"}, &APIConfig{APIKey: &key, Context: ctx}, nil); !errors.Is(err, context.Canceled) {
+	if _, err := driver.Rerank(&name, "q", []string{"a"}, &APIConfig{ApiKey: &key, Context: ctx}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 }

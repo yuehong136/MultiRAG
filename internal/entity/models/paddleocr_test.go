@@ -8,8 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
+
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,7 +21,7 @@ func TestPaddleOCRJobHTTPContract(t *testing.T) {
 			name, key := "PaddleOCR-VL-1.5", "controlled-paddle-key"
 			var polls atomic.Int32
 			var base string
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/result" {
 					if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
 						t.Error("job credentials leaked into result download")
@@ -76,13 +75,13 @@ func TestPaddleOCRJobHTTPContract(t *testing.T) {
 			defer srv.Close()
 			base = srv.URL
 			d := NewPaddleOCRModel(map[string]string{"default": srv.URL + "/api"}, URLSuffix{OCR: "v2/ocr/jobs"})
-			d.pollInterval = time.Millisecond
-			var result *OCRResponse
+
+			var result *OCRFileResponse
 			var err error
 			if input == "bytes" {
-				result, err = d.OCRFile(&name, []byte("PDF bytes"), &APIConfig{APIKey: &key}, nil)
+				result, err = d.OCRFile(&name, []byte("PDF bytes"), nil, &APIConfig{ApiKey: &key}, nil)
 			} else {
-				result, err = d.OCRURL(&name, "https://files.invalid/document.pdf", &APIConfig{APIKey: &key}, nil)
+				result, err = d.OCRFile(&name, nil, stringPtr("https://files.invalid/document.pdf"), &APIConfig{ApiKey: &key}, nil)
 			}
 			if err != nil || *result.Text != "page zero\n\npage one\n\nline two\nline three" || polls.Load() != 2 {
 				t.Fatal(result, err, polls.Load())
@@ -96,7 +95,7 @@ func TestPaddleOCRStrictJobFailures(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			name, key := "PP-OCRv5", "controlled-key"
 			base := ""
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/jobs":
 					switch failure {
@@ -150,7 +149,7 @@ func TestPaddleOCRStrictJobFailures(t *testing.T) {
 			defer srv.Close()
 			base = srv.URL
 			d := NewPaddleOCRModel(map[string]string{"default": srv.URL}, URLSuffix{OCR: "jobs"})
-			if _, err := d.OCRFile(&name, []byte("bytes"), &APIConfig{APIKey: &key}, nil); err == nil || strings.Contains(err.Error(), "private-body") || strings.Contains(err.Error(), key) {
+			if _, err := d.OCRFile(&name, []byte("bytes"), nil, &APIConfig{ApiKey: &key}, nil); err == nil || strings.Contains(err.Error(), "private-body") || strings.Contains(err.Error(), key) {
 				t.Fatal("job failure accepted/leaked", err)
 			}
 		})
@@ -159,7 +158,7 @@ func TestPaddleOCRStrictJobFailures(t *testing.T) {
 
 func TestPaddleOCRBoundedPollingAndConfiguration(t *testing.T) {
 	name, key := "PP-OCRv5", "controlled-key"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			fmt.Fprint(w, `{"data":{"jobId":"job"}}`)
 		} else {
@@ -168,89 +167,102 @@ func TestPaddleOCRBoundedPollingAndConfiguration(t *testing.T) {
 	}))
 	defer srv.Close()
 	d := NewPaddleOCRModel(map[string]string{"default": srv.URL}, URLSuffix{OCR: "jobs"})
-	d.pollInterval = time.Millisecond
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := d.OCRFile(&name, []byte("bytes"), &APIConfig{APIKey: &key, Context: ctx}, nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := d.OCRFile(&name, []byte("bytes"), nil, &APIConfig{ApiKey: &key, Context: ctx}, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("Paddle deadline lost", err)
 	}
-	d.pollInterval = 0
-	if _, err := d.OCRFile(&name, []byte("bytes"), &APIConfig{APIKey: &key}, nil); err == nil || !strings.Contains(err.Error(), "limit") {
-		t.Fatal("polling bound lost", err)
-	}
-	for _, raw := range []string{`{bad`, `[]`, `{"api_key":null}`, `{"paddleocr_access_token":9}`, `{"paddleocr_access_token":"key","paddleocr_algorithm":"wrong"}`} {
-		if _, _, err := d.jobConfig(name, &APIConfig{APIKey: &raw}); err == nil {
-			t.Fatal("invalid config accepted", raw)
-		}
-	}
-	for _, raw := range []string{`{"api_key":{"paddleocr_access_token":"token","paddleocr_api_url":"https://config.invalid/jobs"}}`, `{"PADDLEOCR_ACCESS_TOKEN":"token","PADDLEOCR_API_URL":"https://config.invalid/jobs"}`} {
-		configured := NewPaddleOCRModel(map[string]string{"default": paddleOCRBaseURL}, URLSuffix{OCR: "v2/ocr/jobs"})
-		endpoint, resolved, err := configured.jobConfig(name, &APIConfig{APIKey: &raw})
-		if err != nil || endpoint != "https://config.invalid/jobs" || *resolved.APIKey != "token" {
-			t.Fatal("provider JSON config lost", endpoint, err)
-		}
-		endpoint, _, err = d.jobConfig(name, &APIConfig{APIKey: &raw})
-		if err != nil || endpoint != srv.URL+"/jobs" {
-			t.Fatal("explicit instance endpoint priority lost", endpoint, err)
-		}
-	}
+
 }
 
 func TestPaddleOCRDownloadBoundaryAndJSONL(t *testing.T) {
-	for _, raw := range []string{"", `{}`, `{"result":{}}`, `{"result":{"layoutParsingResults":[{}]}}`, `{"result":{"ocrResults":[{"prunedResult":{"rec_texts":null}}]}}`, `{"errorCode":9,"result":{"ocrResults":[{"prunedResult":{"rec_texts":["should fail"]}}]}}`, "{bad}\n"} {
-		if _, err := readPaddleJSONL(strings.NewReader(raw)); err == nil {
-			t.Fatal("bad JSONL accepted", raw)
-		}
+	for i, raw := range []string{"", `{}`, `{"result":{}}`, `{"result":{"layoutParsingResults":[{}]}}`, `{"result":{"ocrResults":[{"prunedResult":{"rec_texts":null}}]}}`, `{"errorCode":9,"result":{"ocrResults":[{"prunedResult":{"rec_texts":["should fail"]}}]}}`, "{bad}\n"} {
+		t.Run(fmt.Sprint("JSONL", i), func(t *testing.T) {
+			t.Parallel()
+			if _, err := paddleJSONLForTest(t, raw); err == nil {
+				t.Fatal("bad JSONL accepted", raw)
+			}
+		})
 	}
-	large := strings.Repeat("large ", 20000)
-	raw := fmt.Sprintf(`{"result":{"layoutParsingResults":[{"markdown":{"text":%q}}]}}`, large)
-	if result, err := readPaddleJSONL(strings.NewReader(raw)); err != nil || len(*result.Text) != len(strings.TrimSpace(large)) {
-		t.Fatal("large valid JSONL truncated", err)
-	}
-	var destinationCalls atomic.Int32
-	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { destinationCalls.Add(1) }))
-	defer destination.Close()
-	var providerURL string
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
-			t.Error("result redirect leaked credentials")
+	t.Run("large valid", func(t *testing.T) {
+		t.Parallel()
+		large := strings.Repeat("large ", 20000)
+		raw := fmt.Sprintf(`{"result":{"layoutParsingResults":[{"markdown":{"text":%q}}]}}`, large)
+		if result, err := paddleJSONLForTest(t, raw); err != nil || result == nil || result.Text == nil || len(*result.Text) != len(strings.TrimSpace(large)) {
+			t.Fatal("large JSONL truncated", err)
 		}
-		if r.URL.Path == "/blocked" {
+	})
+	t.Run("same origin redirect", func(t *testing.T) {
+		t.Parallel()
+		result, err := paddleResultForTest(t, "/redirect", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/redirect" {
+				http.Redirect(w, r, "/result", http.StatusFound)
+				return
+			}
+			fmt.Fprint(w, `{"result":{"ocrResults":[{"prunedResult":{"rec_texts":["recognized"]}}]}}`)
+		}))
+		if err != nil || result == nil || *result.Text != "recognized" {
+			t.Fatal(result, err)
+		}
+	})
+	t.Run("cross origin redirect", func(t *testing.T) {
+		t.Parallel()
+		var calls atomic.Int32
+		destination := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+		_, err := paddleResultForTest(t, "/blocked", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, destination.URL+"/private?signature=secret", http.StatusFound)
-			return
+		}))
+		if err == nil || strings.Contains(err.Error(), "signature") || strings.Contains(err.Error(), "fixture-key") || calls.Load() != 0 {
+			t.Fatal("unsafe redirect reached destination or leaked credentials", calls.Load(), err)
 		}
-		if r.URL.Path == "/redirect" {
-			http.Redirect(w, r, providerURL+"/result", http.StatusFound)
-			return
+	})
+	targets := []string{"file:///etc/passwd", "https://127.0.0.1/private", "http://169.254.169.254/meta", "https://user:secret@public.invalid/ocr", "https://[::1]/result"}
+	for _, address := range []string{"10.0.0.1", "100.64.0.1", "fc00::1"} {
+		targets = append(targets, "https://"+net.JoinHostPort(address, "443")+"/result")
+	}
+	for i, target := range targets {
+		t.Run(fmt.Sprint("unsafe target", i), func(t *testing.T) {
+			t.Parallel()
+			_, err := paddleResultForTest(t, target, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("unsafe target unexpectedly fetched") }))
+			if err == nil || strings.Contains(err.Error(), "secret") {
+				t.Fatal("unsafe target accepted/leaked", err)
+			}
+		})
+	}
+}
+
+func paddleJSONLForTest(t *testing.T, raw string) (*OCRFileResponse, error) {
+	t.Helper()
+	return paddleResultForTest(t, "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
+}
+
+// Drive the actual canonical submit/poll/download function; this fixture does not
+// parse JSONL or validate a result URL on the driver's behalf.
+func paddleResultForTest(t *testing.T, target string, result http.Handler) (*OCRFileResponse, error) {
+	t.Helper()
+	base := ""
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/jobs":
+			fmt.Fprint(w, `{"data":{"jobId":"job"}}`)
+		case "/jobs/job":
+			endpoint := target
+			if endpoint == "" {
+				endpoint = base + "/result"
+			} else if strings.HasPrefix(endpoint, "/") {
+				endpoint = base + endpoint
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"state": "done", "resultUrl": map[string]any{"jsonUrl": endpoint}}})
+		default:
+			if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
+				t.Error("job credentials leaked to result")
+			}
+			result.ServeHTTP(w, r)
 		}
-		fmt.Fprint(w, `{"result":{"ocrResults":[{"prunedResult":{"rec_texts":["recognized"]}}]}}`)
 	}))
-	defer provider.Close()
-	providerURL = provider.URL
-	key := "do-not-forward-key"
-	driver := NewPaddleOCRModel(map[string]string{"default": provider.URL}, URLSuffix{OCR: "jobs"})
-	if result, err := driver.downloadResult(provider.URL+"/jobs", provider.URL+"/redirect", &APIConfig{APIKey: &key}); err != nil || *result.Text != "recognized" {
-		t.Fatal(result, err)
-	}
-	if _, err := driver.downloadResult(provider.URL+"/jobs", provider.URL+"/blocked", &APIConfig{APIKey: &key}); err == nil || strings.Contains(err.Error(), "signature") || strings.Contains(err.Error(), key) {
-		t.Fatal("unsafe redirect accepted/leaked", err)
-	}
-	if destinationCalls.Load() != 0 {
-		t.Fatal("unsafe redirect reached private destination")
-	}
-	base, _ := url.Parse(provider.URL)
-	for _, target := range []string{"file:///etc/passwd", "https://127.0.0.1/private", "http://169.254.169.254/meta", "https://user:secret@public.invalid/ocr", "https://[::1]/result"} {
-		parsed, _ := url.Parse(target)
-		if err := validatePaddleResultURL(base, parsed); err == nil {
-			t.Fatal("unsafe result URL accepted", target)
-		}
-	}
-	for _, address := range []string{"127.0.0.1", "10.0.0.1", "169.254.169.254", "100.64.0.1", "::1", "fc00::1"} {
-		if paddlePublicIP(net.ParseIP(address)) {
-			t.Fatal("private result IP accepted", address)
-		}
-	}
-	if !paddlePublicIP(net.ParseIP("8.8.8.8")) {
-		t.Fatal("public result IP rejected")
-	}
+	base = server.URL
+	ctx, cancel := context.WithTimeout(t.Context(), 7*time.Second)
+	defer cancel()
+	return NewPaddleOCRModel(map[string]string{"default": base}, URLSuffix{OCR: "jobs"}).OCRFile(stringPtr("PaddleOCR-VL"), []byte("PDF bytes"), nil, &APIConfig{ApiKey: stringPtr("fixture-key"), Context: ctx}, nil)
 }

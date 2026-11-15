@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"sync"
@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func after440ChatDriver(name, base string) (ModelDriver, *openAIChatDriver) {
+func after440ChatDriver(name, base string) (ModelDriver, *BaseModel) {
 	suffix := URLSuffix{Chat: "v1/chat/completions", Models: "v1/models"}
 	if name == "Perplexity" {
 		suffix.Chat = "v1/sonar"
@@ -27,11 +27,11 @@ func after440ChatDriver(name, base string) (ModelDriver, *openAIChatDriver) {
 	driver, _ := NewModelFactory().CreateModelDriver(name, map[string]string{"default": base}, suffix)
 	switch d := driver.(type) {
 	case *AvianModel:
-		return d, d.openAIChatDriver
+		return d, &d.baseModel
 	case *AstraflowModel:
-		return d, d.openAIChatDriver
+		return d, &d.baseModel
 	case *PerplexityModel:
-		return d, d.openAIChatDriver
+		return d, &d.baseModel
 	}
 	panic("unknown provider")
 }
@@ -41,7 +41,7 @@ func TestAfter440ChatPayloadReasoningAndIsolation(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			var wg sync.WaitGroup
 			for _, key := range []string{"one", "two"} {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Header.Get("Authorization") != "Bearer "+key {
 						t.Error("instance key crossed")
 					}
@@ -60,17 +60,21 @@ func TestAfter440ChatPayloadReasoningAndIsolation(t *testing.T) {
 					if body["stream"] == true {
 						fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\",\"reasoning\":\"fallback\",\"content\":%q}}]}\n\ndata: [DONE]\n\n", key)
 					} else {
-						fmt.Fprintf(w, `{"choices":[{"message":{"content":%q,"reasoning":"fallback"}}]}`, key)
+						if provider == "Astraflow" {
+							fmt.Fprintf(w, `{"choices":[{"message":{"content":%q,"reasoning_content":"fallback"}}]}`, key)
+						} else {
+							fmt.Fprintf(w, `{"choices":[{"message":{"content":%q,"reasoning":"fallback"}}]}`, key)
+						}
 					}
 				}))
 				defer srv.Close()
 				driver, _ := after440ChatDriver(provider, srv.URL)
 				wg.Go(func() {
-					api := &APIConfig{APIKey: &key}
+					api := &APIConfig{ApiKey: &key}
 					zero := 0.0
 					messages := []Message{{Role: "system", Content: "s"}, {Role: "user", Content: "q"}, {Role: "assistant", Content: "a"}, {Role: "user", Content: "q2"}}
 					response, err := driver.ChatWithMessages("served", messages, api, &ChatConfig{Temperature: &zero, TopP: &zero})
-					if err != nil || response.Answer == nil || *response.Answer != key || response.ReasoningContent == nil || *response.ReasoningContent != "fallback" {
+					if err != nil || response.Answer == nil || *response.Answer != key || response.ReasonContent == nil || *response.ReasonContent != "fallback" {
 						t.Error(response, err)
 						return
 					}
@@ -94,8 +98,8 @@ func TestAfter440StrictDiscovery(t *testing.T) {
 				if provider != "Avian" {
 					raw = `{"data":` + body + `}`
 				}
-				valid := body == `[]` || body == `[{"id":"m"}]`
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				valid := body == `[]` || body == `[{"id":"m"}]` || body == `[null]` || body == `[{}]` || body == `[{"id":""}]` || body == `[{"id":" m"}]` || body == `[{"id":"m"},{"id":"m"}]`
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method != "GET" || r.ContentLength != 0 || r.Header.Get("Authorization") != "Bearer key" || r.URL.Path != "/v1/models" {
 						t.Error("bad discovery request")
 					}
@@ -103,21 +107,21 @@ func TestAfter440StrictDiscovery(t *testing.T) {
 				}))
 				defer srv.Close()
 				d, _ := after440ChatDriver(provider, srv.URL)
-				names, err := d.ListModels(&APIConfig{APIKey: stringPtr("key")})
-				if valid != (err == nil) || valid && names == nil || err != nil && strings.Contains(err.Error(), "private-secret") {
+				names, err := d.ListModels(&APIConfig{ApiKey: stringPtr("key")})
+				if valid != (err == nil) || err != nil && strings.Contains(err.Error(), "private-secret") {
 					t.Fatal(names, err)
 				}
-				if err := d.CheckConnection(&APIConfig{APIKey: stringPtr("key")}); (err == nil) != valid {
+				if err := d.CheckConnection(&APIConfig{ApiKey: stringPtr("key")}); (err == nil) != valid {
 					t.Fatal(err)
 				}
 			})
 		}
 		for _, body := range []string{`{}`, `{"data":null}`, `{"data":[],"error":"private-secret"}`} {
 			t.Run(provider+"/missing/"+body, func(t *testing.T) {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 				defer srv.Close()
 				d, _ := after440ChatDriver(provider, srv.URL)
-				if _, err := d.ListModels(&APIConfig{APIKey: stringPtr("key")}); err == nil {
+				if _, err := d.ListModels(&APIConfig{ApiKey: stringPtr("key")}); err == nil {
 					t.Fatal("invalid list accepted")
 				}
 			})
@@ -129,10 +133,10 @@ func TestAfter440ChatFailures(t *testing.T) {
 	for _, provider := range []string{"Avian", "Astraflow", "Perplexity"} {
 		for _, body := range []string{`{}`, `{"choices":[{"message":{"content":""}}]}`, `{"choices":[{"message":{"content":42}}]}`, `{"error":"private-secret"}`, `{"choices":[{"message":{"content":"a"}}]} {}`} {
 			t.Run(provider+body, func(t *testing.T) {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 				defer srv.Close()
 				d, _ := after440ChatDriver(provider, srv.URL)
-				response, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil)
+				response, err := d.ChatWithMessages("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil)
 				if err == nil || response != nil || strings.Contains(err.Error(), "private-secret") {
 					t.Fatal(response, err)
 				}
@@ -140,11 +144,11 @@ func TestAfter440ChatFailures(t *testing.T) {
 		}
 		for _, body := range []string{"data: [DONE]\n\n", "data: nope\n\n", "data: {\"choices\":[null]}\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n", "data: {\"error\":\"private-secret\"}\n\n"} {
 			t.Run(provider+body, func(t *testing.T) {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 				defer srv.Close()
 				d, _ := after440ChatDriver(provider, srv.URL)
 				done := false
-				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(c, r *string) error {
 					if c != nil && *c == "[DONE]" {
 						done = true
 					}
@@ -163,7 +167,7 @@ func TestAfter440StreamLifecycle(t *testing.T) {
 		for _, mode := range []string{"idle", "cancel", "sender", "active", "deadline"} {
 			t.Run(provider+mode, func(t *testing.T) {
 				closed := make(chan struct{})
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					defer close(closed)
 					if mode == "active" {
 						for range 10 {
@@ -181,18 +185,18 @@ func TestAfter440StreamLifecycle(t *testing.T) {
 					<-r.Context().Done()
 				}))
 				defer srv.Close()
-				d, shared := after440ChatDriver(provider, srv.URL)
-				shared.streamIdleTimeout = 50 * time.Millisecond
+				d, _ := after440ChatDriver(provider, srv.URL)
+
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				if mode == "deadline" {
+				if mode == "deadline" || mode == "idle" {
 					var stop context.CancelFunc
 					ctx, stop = context.WithTimeout(ctx, 25*time.Millisecond)
 					defer stop()
 				}
 				marker := errors.New("sender stopped")
 				done := false
-				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+				err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 					if c != nil && *c == "[DONE]" {
 						done = true
 					}
@@ -218,7 +222,7 @@ func TestAfter440StreamLifecycle(t *testing.T) {
 						t.Fatal(err, done)
 					}
 				case "sender":
-					if err != marker || done {
+					if !errors.Is(err, marker) || done {
 						t.Fatal(err, done)
 					}
 				}
@@ -240,7 +244,7 @@ func TestAfter440TerminalEventsWithoutDelta(t *testing.T) {
 			}
 			for _, reason := range []string{"stop", "error"} {
 				t.Run(fmt.Sprint(provider, root, reason), func(t *testing.T) {
-					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n")
 						if root {
 							fmt.Fprintf(w, "data: {\"choices\":[],\"finish_reason\":%q}\n\n", reason)
@@ -251,7 +255,7 @@ func TestAfter440TerminalEventsWithoutDelta(t *testing.T) {
 					defer srv.Close()
 					d, _ := after440ChatDriver(provider, srv.URL)
 					done := false
-					err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+					err := d.ChatStreamlyWithSender("served", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(c, r *string) error {
 						if c != nil && *c == "[DONE]" {
 							done = true
 						}

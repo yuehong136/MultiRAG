@@ -1,3 +1,21 @@
+//go:build ignore
+
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package main
 
 import (
@@ -5,16 +23,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"multirag/internal/common"
-	"multirag/internal/server"
-	"multirag/internal/server/local"
-	"multirag/internal/skills"
-	"multirag/internal/storage"
-	"multirag/internal/utility"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"multirag/internal/common"
+	"multirag/internal/engine/redis"
+	"multirag/internal/server"
+	"multirag/internal/server/local"
+	"multirag/internal/storage"
+	"multirag/internal/utility"
 	"strings"
 	"syscall"
 	"time"
@@ -22,20 +39,20 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"multirag/internal/agent/runtime"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
-	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/handler"
 	"multirag/internal/router"
 	"multirag/internal/service"
-	"multirag/internal/service/kg"
+	"multirag/internal/service/chunk"
 	"multirag/internal/service/nlp"
 	"multirag/internal/tokenizer"
 )
 
 func printHelp() {
 	fmt.Fprintf(os.Stderr, "Usage: %s [OPTIONS]\n\n", os.Args[0])
-	fmt.Fprintf(os.Stderr, "MultiRAG Server - Enterprise-grade RAG engine based on deep document understanding\n\n")
+	fmt.Fprintf(os.Stderr, "RAGFlow Server - Open-source RAG engine based on deep document understanding\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
 	fmt.Fprintf(os.Stderr, "  -p, --port int\tServer port (overrides config file)\n")
 	fmt.Fprintf(os.Stderr, "  -h, --help   \tShow this help message and exit\n")
@@ -57,12 +74,10 @@ func main() {
 	flag.Parse()
 
 	// Initialize logger with default level
-	if err := common.Init("info"); err != nil {
+	// logger.Init("info"); // set debug log level
+	if err := common.Init("info", "server_main.log"); err != nil {
 		panic(fmt.Sprintf("Failed to initialize logger: %v", err))
 	}
-
-	defer common.Sync()
-	server.SetLogger(common.Logger)
 
 	// Initialize configuration
 	if err := server.Init(""); err != nil {
@@ -80,14 +95,15 @@ func main() {
 		common.Fatal("Server port is not configured. Please specify via --port flag or config file.")
 	}
 
-	// Update the shared level without replacing captured loggers
-	if config.Log.Level != "" && config.Log.Level != "info" {
-		if err := common.Init(config.Log.Level); err != nil {
-			common.Error("Failed to apply configured log level", err)
-		}
+	// Reinitialize logger with configured level if different
+	level := config.Log.Level
+	if level == "" {
+		level = "info"
 	}
-	// Seed the log level from the active logger so `list configs` reports a value
-	// even when it is omitted from the config file.
+	if err := common.Init(level, "server_main.log"); err != nil {
+		common.Error("Failed to reinitialize logger", err)
+	}
+	server.SetLogger(common.Logger)
 	if config.Log.Level == "" {
 		config.Log.Level = common.GetLevel()
 	}
@@ -102,10 +118,6 @@ func main() {
 		common.Fatal("Failed to initialize database", zap.Error(err))
 	}
 
-	if err := dao.GetModelProviderManager().LoadAllModels(filepath.Join(utility.GetProjectBaseDirectory(), "configs", "all_models.json")); err != nil {
-		common.Fatal("Failed to load global model catalog", zap.Error(err))
-	}
-
 	// Initialize doc engine
 	if err := engine.Init(&config.DocEngine); err != nil {
 		common.Fatal("Failed to initialize doc engine", zap.Error(err))
@@ -113,18 +125,22 @@ func main() {
 	defer engine.Close()
 
 	// Initialize Redis cache
-	if err := redisengine.Init(&config.Redis); err != nil {
+	if err := redis.Init(&config.Redis); err != nil {
 		common.Fatal("Failed to initialize Redis", zap.Error(err))
 	}
-	defer redisengine.Close()
+	defer redis.Close()
 
 	if err := storage.InitStorageFactory(); err != nil {
 		common.Fatal("Failed to initialize storage factory", zap.Error(err))
 	}
 
+	if err := engine.InitMessageQueueEngine(config.TaskExecutor.MessageQueueType); err != nil {
+		common.Fatal("Failed to initialize message queue engine", zap.Error(err))
+	}
+
 	// Initialize server variables (runtime variables that can change during operation)
 	// This must be done after Cache is initialized
-	if err := server.InitVariables(redisengine.Get()); err != nil {
+	if err := server.InitVariables(redis.Get()); err != nil {
 		common.Warn("Failed to initialize server variables from Redis, using defaults", zap.String("error", err.Error()))
 	}
 
@@ -132,14 +148,20 @@ func main() {
 	local.InitAdminStatus(1, "admin server not connected")
 
 	// Initialize tokenizer (rag_analyzer)
-	// DictPath is auto-detected: RAG_DICT_PATH env > ./resource > /usr/share/infinity/resource
-	tokenizerCfg := &tokenizer.PoolConfig{}
+	dictPath := os.Getenv("RAGFLOW_DICT_PATH")
+	if dictPath == "" {
+		dictPath = "/usr/share/infinity/resource"
+	}
+	tokenizerCfg := &tokenizer.PoolConfig{
+		DictPath: dictPath,
+	}
 	if err := tokenizer.Init(tokenizerCfg); err != nil {
 		common.Fatal("Failed to initialize tokenizer", zap.Error(err))
 	}
 	defer tokenizer.Close()
 
 	// Initialize global QueryBuilder using tokenizer's DictPath
+	// This ensures the Synonym uses the same wordnet directory as tokenizer
 	if err := nlp.InitQueryBuilderFromTokenizer(tokenizerCfg.DictPath); err != nil {
 		common.Fatal("Failed to initialize query builder", zap.Error(err))
 	}
@@ -161,58 +183,88 @@ func startServer(config *server.Config) {
 	// Initialize service layer
 	userService := service.NewUserService()
 	documentService := service.NewDocumentService()
-	datasetsService := service.NewDatasetsService()
-	kbService := service.NewKnowledgebaseService()
-	modelProviderService := service.NewModelProviderService()
-	chunkService := service.NewChunkServiceWithModels(modelProviderService)
-	askService := service.NewAskService(chunkService, modelProviderService)
-	tenantService := service.NewTenantServiceWithModels(modelProviderService)
+	datasetsService := service.NewDatasetService()
+	knowledgebaseService := service.NewKnowledgebaseService()
+	metadataService := service.NewMetadataService()
+	chunkService := chunk.NewChunkService()
+	llmService := service.NewLLMService()
+	tenantService := service.NewTenantService()
 	chatService := service.NewChatService()
-	chatSessionService := service.NewChatSessionServiceWithModels(modelProviderService, chunkService)
+	chatSessionService := service.NewChatSessionService()
 	systemService := service.NewSystemService()
 	connectorService := service.NewConnectorService()
 	searchService := service.NewSearchService()
 	fileService := service.NewFileService()
 	memoryService := service.NewMemoryService()
-	taskService := service.NewTaskService(dao.DB, redisengine.Get().GetClient())
-	documentService.SetDocumentStopService(service.NewDocumentStopService(dao.DB, redisengine.Get().GetClient()))
+	mcpService := service.NewMCPService()
+	modelProviderService := service.NewModelProviderService()
+
+	// Initialize doc engine for skill search
+	docEngine := engine.Get()
 
 	// Initialize handler layer
 	authHandler := handler.NewAuthHandler()
 	userHandler := handler.NewUserHandler(userService)
-	tenantHandler := handler.NewTenantHandler(tenantService, userService)
-	documentHandler := handler.NewDocumentHandler(documentService)
-	datasetsHandler := handler.NewDatasetsHandler(datasetsService)
+	tenantHandler := handler.NewTenantHandler(tenantService, userService, knowledgebaseService)
+	documentHandler := handler.NewDocumentHandler(documentService, datasetsService)
+	datasetsHandler := handler.NewDatasetsHandler(datasetsService, metadataService)
 	systemHandler := handler.NewSystemHandler(systemService)
-	kbHandler := handler.NewKnowledgebaseHandler(kbService, userService, documentService)
+	knowledgebaseHandler := handler.NewKnowledgebaseHandler(knowledgebaseService, userService, documentService)
 	chunkHandler := handler.NewChunkHandler(chunkService, userService)
+	llmHandler := handler.NewLLMHandler(llmService, userService)
 	chatHandler := handler.NewChatHandler(chatService, userService)
 	chatSessionHandler := handler.NewChatSessionHandler(chatSessionService, userService)
 	connectorHandler := handler.NewConnectorHandler(connectorService, userService)
 	searchHandler := handler.NewSearchHandler(searchService, userService)
 	fileHandler := handler.NewFileHandler(fileService, userService)
 	memoryHandler := handler.NewMemoryHandler(memoryService)
+	mcpHandler := handler.NewMCPHandler(mcpService)
+	skillSearchHandler := handler.NewSkillSearchHandler(docEngine)
 	providerHandler := handler.NewProviderHandler(userService, modelProviderService)
-	taskHandler := handler.NewTaskHandler(taskService)
-	searchbotHandler := handler.NewSearchbotHandlerWithAsk(service.NewSearchbotService(modelProviderService), chunkService, askService)
+	agentHandler := handler.NewAgentHandler(service.NewAgentService(), fileService)
+	searchBotLLM := &handler.SearchBotRealLLM{Svc: modelProviderService}
+	searchBotHandler := handler.NewSearchBotHandler(
+		searchService,
+		tenantService,
+		searchBotLLM,
+		chunkService,
+	)
+	searchBotHandler.SetStreamLLM(searchBotLLM)
+	searchBotHandler.SetAskService(service.NewAskService(chunkService, nil, 0, 0))
 	pluginHandler := handler.NewPluginHandler(service.NewPluginService())
-	store := engine.Get()
-	difyHandler := handler.NewDifyRetrievalHandler(handler.DifyRetrievalDependencies{
-		Datasets: dao.NewKnowledgebaseDAO(), Models: service.NewDifyModelBindings(modelProviderService),
-		Metadata: service.NewMetadataService(), Retrieval: nlp.NewRetrievalService(store), Documents: dao.NewDocumentDAO(),
-		Children: func(ctx context.Context, chunks []map[string]interface{}, owner string) ([]map[string]interface{}, error) {
-			return nlp.RetrievalByChildrenChecked(ctx, chunks, []string{owner}, store)
-		},
-		KG: kg.NewPipeline(store),
-	})
+	modelHandler := handler.NewModelHandler(service.NewModelProviderService())
+	fileCommitHandler := handler.NewFileCommitHandler(service.NewFileCommitService())
+
+	// Dify retrieval handler
+	docDAO := dao.NewDocumentDAO()
+	retrievalService := nlp.NewRetrievalService(docEngine, docDAO)
+	difyRetrievalHandler := handler.NewDifyRetrievalHandler(
+		knowledgebaseService,
+		modelProviderService,
+		metadataService,
+		retrievalService,
+		docDAO,
+		docEngine,
+	)
+
+	// Phase 6 per-tenant canvas-runtime override. The selector is backed by
+	// the existing Redis client and the global logger. The handler is
+	// ALWAYS constructed, even when Redis is briefly unavailable at startup,
+	// so the POST /api/v1/admin/canvas-runtime/:tenant_id endpoint stays
+	// registered and returns the explicit ErrSelectorNotConfigured (HTTP 500)
+	// path until Redis recovers. The previous behaviour — skipping handler
+	// construction when rdb == nil — silently removed the route until the
+	// next process restart, so a transient Redis blip at boot stranded
+	// canary operators with a 404 they could not diagnose from the client
+	// side. Review follow-up: keep the route hot.
+	var adminRuntimeSelector *runtime.Selector
+	if rdb := redis.Get().GetClient(); rdb != nil {
+		adminRuntimeSelector = runtime.NewSelector(rdb, common.Logger)
+	}
+	adminRuntimeHandler := handler.NewAdminRuntimeHandler(adminRuntimeSelector)
 
 	// Initialize router
-	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, kbHandler, chunkHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, providerHandler, taskHandler)
-	r.SetSearchbotHandler(searchbotHandler)
-	r.SetModelHandler(handler.NewModelHandler(modelProviderService))
-	r.SetFileCommitHandler(handler.NewFileCommitHandler(service.NewFileCommitService()))
-	r.SetPluginHandler(pluginHandler)
-	r.SetDifyRetrievalHandler(difyHandler)
+	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, knowledgebaseHandler, chunkHandler, llmHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, mcpHandler, skillSearchHandler, providerHandler, agentHandler, searchBotHandler, difyRetrievalHandler, pluginHandler, modelHandler, fileCommitHandler, adminRuntimeHandler)
 
 	// Create Gin engine
 	ginEngine := gin.New()
@@ -225,41 +277,28 @@ func startServer(config *server.Config) {
 
 	// Setup routes
 	r.Setup(ginEngine)
-	coreBlobs, blobErr := skills.NewObjectStore(config.StorageEngine.Minio)
-	if blobErr != nil {
-		coreBlobs = nil
-	}
-	var coreStore service.SkillBlobStore
-	if coreBlobs != nil {
-		coreStore = coreBlobs
-	}
-	stopCore, coreErr := handler.AttachSkillCore(ginEngine, config, skills.New(dao.DB, nil, nil, nil).Authenticate, func(ctx context.Context, tenant string) (any, error) {
-		return (&skills.LegacyModels{DB: dao.DB, Providers: dao.GetModelProviderManager()}).List(ctx, tenant)
-	}, coreStore)
-	if coreErr != nil {
-		panic(coreErr)
-	}
-	defer stopCore()
-	stopSkills := skills.Attach(ginEngine, config)
-	defer stopSkills()
 
-	// Create HTTP server
+	// Create HTTP server with timeouts to prevent slow clients from blocking shutdown
 	addr := fmt.Sprintf(":%d", config.Server.Port)
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: ginEngine,
+		Addr:              addr,
+		Handler:           ginEngine,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Start server in a goroutine
 	go func() {
 		common.Info(
-			"\n     __  ___      ____  _ ____  ___   ______\n" +
-				"    /  |/  /_  __/ / /_(_) __ \\/   | / ____/\n" +
-				"   / /|_/ / / / / / __/ / /_/ / /| |/ / __  \n" +
-				"  / /  / / /_/ / / /_/ / _, _/ ___ / /_/ /  \n" +
-				" /_/  /_/\\__,_/_/\\__/_/_/ |_/_/  |_\\____/   \n",
+			"\n        ____   ___    ______ ______ __\n" +
+				"       / __ \\ /   |  / ____// ____// /____  _      __\n" +
+				"      / /_/ // /| | / / __ / /_   / // __ \\| | /| / /\n" +
+				"     / _, _// ___ |/ /_/ // __/  / // /_/ /| |/ |/ /\n" +
+				"    /_/ |_|/_/  |_|\\____//_/    /_/ \\____/ |__/|__/\n",
 		)
-		common.Info(fmt.Sprintf("MultiRAG Go Version: %s", utility.GetMultiRAGVersion()))
+		common.Info(fmt.Sprintf("RAGFlow Go Version: %s", utility.GetRAGFlowVersion()))
 		common.Info(fmt.Sprintf("Server starting on port: %d", config.Server.Port))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			common.Fatal("Failed to start server", zap.Error(err))
@@ -269,26 +308,27 @@ func startServer(config *server.Config) {
 	// Get local IP address for heartbeat reporting
 	localIP, err := utility.GetLocalIP()
 	if err != nil {
-		common.Warn("Unable to resolve heartbeat IPv4 address; using loopback", zap.Error(err))
-		localIP = "127.0.0.1"
+		common.Fatal("fail to get local ip address")
 	}
 
 	// Initialize and start heartbeat reporter to admin server
-	heartbeatService := service.NewHeartbeatSender(
+	service.AdminServiceClient = service.NewAdminClient(
 		common.Logger,
 		common.ServerTypeAPI,
 		fmt.Sprintf("multirag-server-%d", config.Server.Port),
 		localIP,
 		config.Server.Port,
 	)
-	if err := heartbeatService.InitHTTPClient(); err != nil {
+	if err = service.AdminServiceClient.InitHTTPClient(); err != nil {
 		common.Warn("Failed to initialize heartbeat service", zap.Error(err))
 	} else {
+		// Start heartbeat reporter with 30 seconds interval
 		heartbeatReporter := utility.NewScheduledTask("Heartbeat reporter", 3*time.Second, func() {
-			if err = heartbeatService.SendHeartbeat(); err == nil {
+			if err = service.AdminServiceClient.SendHeartbeat(); err == nil {
 				local.SetAdminStatus(0, "")
 			} else {
 				local.SetAdminStatus(1, err.Error())
+				//logger.Warn(fmt.Sprintf(err.Error()))
 			}
 		})
 		heartbeatReporter.Start()
@@ -308,7 +348,7 @@ func startServer(config *server.Config) {
 	defer cancel()
 
 	// Shutdown server
-	if err := srv.Shutdown(ctx); err != nil {
+	if err = srv.Shutdown(ctx); err != nil {
 		common.Fatal("Server forced to shutdown", zap.Error(err))
 	}
 }

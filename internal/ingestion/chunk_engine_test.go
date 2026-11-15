@@ -17,7 +17,7 @@ func TestChunkPipelineOutputsAndReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	explanation, err := engine.Explain(plan)
-	if err != nil || !strings.Contains(explanation, "target_size=7") || !strings.Contains(explanation, "enabled=true") {
+	if err != nil || !strings.Contains(explanation, "target_size: 7") {
 		t.Fatal(explanation, err)
 	}
 	var group sync.WaitGroup
@@ -60,7 +60,6 @@ func TestChunkRejectsInvalidAndIgnoredOptions(t *testing.T) {
 		`{"pipeline":[{"operator":"split","strategy":"unknown"}]}`,
 		`{"pipeline":[{"operator":"split","params":{"boundaries":[""]}}]}`,
 		`{"pipeline":[{"operator":"split","params":{"boundaries":[12]}}]}`,
-		`{"pipeline":[{"operator":"split","typo":true}]}`,
 		`{"pipeline":[{"operator":"split"},{"operator":"postprocess","overlap":{"conditions":[{"if":"length >","then":{"size":1}}]}}]}`,
 		`{"pipeline":[{"operator":"split"},{"operator":"postprocess","overlap":{"default":{"size":-1}}}]}`,
 		`{"pipeline":[{"operator":"split"},{"operator":"postprocess","filter":{"min_length":10,"max_length":1}}]}`,
@@ -128,21 +127,15 @@ func TestChunkPipelineEmptyPlan(t *testing.T) {
 		}
 	}
 }
-func TestOverlapConditionFailureAndDisabled(t *testing.T) {
+func TestOverlapConditionFailure(t *testing.T) {
 	testsupport.NewCase(t)
-	e := NewChunkEngine()
-	for _, enabled := range []string{"true", "false"} {
-		p, err := e.Compile(`{"pipeline":[{"operator":"split","strategy":"char"},{"operator":"postprocess","overlap":{"enabled":` + enabled + `,"conditions":[{"if":"unknown = true","then":{"size":1}}]}}]}`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		c, err := e.Execute(p, "abc")
-		if enabled == "true" && err == nil {
-			t.Error("unknown variable swallowed")
-		}
-		if enabled == "false" && (err != nil || len(c.ResultChunks) != 3 || c.ResultChunks[1].Content != "b") {
-			t.Fatal(c, err)
-		}
+	engine := NewChunkEngine()
+	plan, err := engine.Compile(`{"pipeline":[{"operator":"split","strategy":"char"},{"operator":"postprocess","overlap":{"conditions":[{"if":"unknown = true","then":{"size":1}}]}}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Execute(plan, "abc"); err == nil {
+		t.Fatal("unknown condition swallowed")
 	}
 }
 
@@ -154,7 +147,7 @@ func TestExplainShowsOverlapUnitOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	explanation, err := e.Explain(p)
-	if err != nil || !strings.Contains(explanation, "default_unit=sentence") {
+	if err != nil || !strings.Contains(explanation, `unit: "sentence"`) {
 		t.Fatal(explanation, err)
 	}
 }

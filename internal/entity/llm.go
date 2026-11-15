@@ -19,7 +19,7 @@ package entity
 // LLMFactories LLM factory model
 type LLMFactories struct {
 	Name   string  `gorm:"column:name;primaryKey;size:128" json:"name"`
-	Logo   *string `gorm:"column:logo;type:text" json:"logo,omitempty"`
+	Logo   *string `gorm:"column:logo;type:longtext" json:"logo,omitempty"`
 	Tags   string  `gorm:"column:tags;size:255;not null;index" json:"tags"`
 	Rank   int64   `gorm:"column:rank;default:0" json:"rank"`
 	Status *string `gorm:"column:status;size:1;index" json:"status,omitempty"`
@@ -28,14 +28,13 @@ type LLMFactories struct {
 
 // TableName specify table name
 func (LLMFactories) TableName() string {
-	return "t_ai_llm_factories"
+	return "llm_factories"
 }
 
 // LLM LLM model
 type LLM struct {
-	ID        string  `gorm:"column:id;not null;index" json:"id"`
 	LLMName   string  `gorm:"column:llm_name;size:128;not null;primaryKey" json:"llm_name"`
-	ModelType string  `gorm:"column:mdl_type;size:128;not null;index" json:"model_type"`
+	ModelType string  `gorm:"column:model_type;size:128;not null;index" json:"model_type"`
 	FID       string  `gorm:"column:fid;size:128;not null;primaryKey" json:"fid"`
 	MaxTokens int64   `gorm:"column:max_tokens;default:0" json:"max_tokens"`
 	Tags      string  `gorm:"column:tags;size:255;not null;index" json:"tags"`
@@ -46,7 +45,7 @@ type LLM struct {
 
 // TableName specify table name
 func (LLM) TableName() string {
-	return "t_ai_llms"
+	return "llm"
 }
 
 // TenantLangfuse tenant langfuse model
@@ -60,7 +59,7 @@ type TenantLangfuse struct {
 
 // TableName specify table name
 func (TenantLangfuse) TableName() string {
-	return "t_ai_tenant_langfuse"
+	return "tenant_langfuse"
 }
 
 // MyLLM represents LLM information for a tenant with factory details
@@ -69,7 +68,7 @@ type MyLLM struct {
 	LLMFactory string  `gorm:"column:llm_factory" json:"llm_factory"`
 	Logo       *string `gorm:"column:logo" json:"logo,omitempty"`
 	Tags       *string `gorm:"column:tags" json:"tags"`
-	ModelType  *string `gorm:"column:mdl_type" json:"model_type"`
+	ModelType  *string `gorm:"column:model_type" json:"model_type"`
 	LLMName    *string `gorm:"column:llm_name" json:"llm_name"`
 	UsedTokens *int64  `gorm:"column:used_tokens" json:"used_tokens"`
 	Status     *string `gorm:"column:status" json:"status"`

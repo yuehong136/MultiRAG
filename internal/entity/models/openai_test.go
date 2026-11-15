@@ -106,8 +106,8 @@ func testHostedChatHTTP(t *testing.T, provider string, extra func(*testing.T, ma
 				}
 			}))
 			defer server.Close()
-			urls := map[string]string{"default": server.URL + "/v1/", "office": server.URL + "/v1/"}
-			driver, err := NewModelFactory().CreateModelDriver(provider, urls, URLSuffix{Chat: "/chat/completions", Models: "models"})
+			urls := map[string]string{"default": server.URL + "/v1", "office": server.URL + "/v1"}
+			driver, err := NewModelFactory().CreateModelDriver(provider, urls, URLSuffix{Chat: "chat/completions", Models: "models"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -118,7 +118,11 @@ func testHostedChatHTTP(t *testing.T, provider string, extra func(*testing.T, ma
 			stop := []string{"stop"}
 			config := &ChatConfig{Stream: nil, Thinking: &off, Temperature: &zero, TopP: &zero, MaxTokens: &max, Stop: &stop, DoSample: &off}
 			response, err := driver.ChatWithMessages(instance, history, api, config)
-			if err != nil || response == nil || *response.Answer != instance || *response.ReasonContent != "reason" {
+			expectedReason := "reason"
+			if strings.EqualFold(provider, "HuggingFace") || strings.EqualFold(provider, "NVIDIA") || strings.EqualFold(provider, "Baidu") {
+				expectedReason = ""
+			}
+			if err != nil || response == nil || *response.Answer != instance || *response.ReasonContent != expectedReason {
 				t.Fatal(response, err)
 			}
 			config.Stream = &on
@@ -156,6 +160,54 @@ func testHostedChatHTTP(t *testing.T, provider string, extra func(*testing.T, ma
 	}
 }
 
+func TestOpenAIHostedFamilyURLSeparators(t *testing.T) {
+	for _, provider := range []string{"OpenAI", "DeepSeek", "Moonshot", "Minimax", "OpenRouter", "XAI", "LMStudio", "Anthropic"} {
+		t.Run(provider, func(t *testing.T) {
+			var calls atomic.Int32
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.URL.Path != "/v1/chat/completions" || r.Method != http.MethodPost {
+					t.Error("base URL and suffix separators changed the endpoint", r.URL.Path)
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					return
+				}
+				if provider == "Anthropic" {
+					fmt.Fprint(w, `{"content":[{"type":"text","text":"answer"}]}`)
+				} else if body["stream"] == true {
+					fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n")
+				} else {
+					fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
+				}
+			}))
+			defer server.Close()
+			driver, err := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL + "/v1/"}, URLSuffix{Chat: "/chat/completions"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := "fixture"
+			api := &APIConfig{ApiKey: &key}
+			history := []Message{{Role: "user", Content: "question"}}
+			answer, err := driver.ChatWithMessages("model", history, api, nil)
+			if err != nil || answer == nil || answer.Answer == nil || *answer.Answer != "answer" {
+				t.Fatal(answer, err)
+			}
+			expectedCalls := int32(1)
+			if provider != "Anthropic" {
+				expectedCalls++
+				if err := driver.ChatStreamlyWithSender("model", history, api, nil, func(*string, *string) error { return nil }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if calls.Load() != expectedCalls {
+				t.Fatal("missing supplier request", calls.Load())
+			}
+		})
+	}
+}
+
 func TestOpenAIFailuresHTTP(t *testing.T) { testHostedChatFailures(t, "OpenAI", true) }
 func testHostedChatFailures(t *testing.T, provider string, discovery bool) {
 	t.Helper()
@@ -178,6 +230,10 @@ func testHostedChatFailures(t *testing.T, provider string, discovery bool) {
 		}...)
 	}
 	for _, test := range cases {
+		// The frozen typed Baidu projection filters empty model identities.
+		if provider == "Baidu" && (test.name == "null model" || test.name == "missing ID") {
+			test.valid = true
+		}
 		t.Run(test.name, func(t *testing.T) {
 			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(test.status); fmt.Fprint(w, test.body) }))
 			defer server.Close()
@@ -344,5 +400,52 @@ func TestOpenAIInputAndLocalEmbedding(t *testing.T) {
 	// The existing shared Embed contract suite exercises reordered and validated vectors through factory.
 	if vectors, err := embeddingVectorsForTest(driver.Embed(&name, nil, &APIConfig{ApiKey: &key}, nil)); err != nil || len(vectors) != 0 {
 		t.Fatal(vectors, err)
+	}
+}
+
+func TestOpenAIMediaStreamTargetValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, payload string
+		want                bool
+	}{
+		{"ASR-complete", "asr", "data: {\"type\":\"transcript.text.delta\",\"delta\":\"ab\"}\n\ndata: {\"type\":\"transcript.text.done\",\"text\":\"ab\"}\n\n", true},
+		{"ASR-unterminated", "asr", "data: {\"type\":\"transcript.text.delta\",\"delta\":\"ab\"}\n\n", false},
+		{"ASR-wrong-type", "asr", "data: {\"type\":\"transcript.text.done\",\"text\":42}\n\n", false},
+		{"TTS-complete", "tts", "data: {\"type\":\"speech.audio.delta\",\"audio\":\"YWI=\"}\n\ndata: {\"type\":\"speech.audio.done\"}\n\n", true},
+		{"TTS-unterminated", "tts", "data: {\"type\":\"speech.audio.delta\",\"audio\":\"YWI=\"}\n\n", false},
+		{"TTS-invalid-base64", "tts", "data: {\"type\":\"speech.audio.delta\",\"audio\":\"%%\"}\n\ndata: {\"type\":\"speech.audio.done\"}\n\n", false},
+		{"TTS-binary-unrepresentable", "tts", "data: {\"type\":\"speech.audio.delta\",\"audio\":\"AP8=\"}\n\ndata: {\"type\":\"speech.audio.done\"}\n\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, tc.payload)
+			}))
+			d := NewOpenAIModel(map[string]string{"default": srv.URL}, URLSuffix{ASR: "asr", TTS: "tts"})
+			name, text, key := "model", "hello", "key"
+			done := 0
+			var chunks strings.Builder
+			sender := func(v, _ *string) error {
+				if *v == "[DONE]" {
+					done++
+				} else {
+					chunks.WriteString(*v)
+				}
+				return nil
+			}
+			var err error
+			if tc.kind == "asr" {
+				err = d.TranscribeAudioWithSender(&name, modelFixtureFile(t, []byte("audio")), &APIConfig{ApiKey: &key}, nil, sender)
+			} else {
+				err = d.AudioSpeechWithSender(&name, &text, &APIConfig{ApiKey: &key}, &TTSConfig{Params: map[string]any{"voice": "fixture", "stream_format": "sse"}}, sender)
+			}
+			if tc.want {
+				if err != nil || done != 1 || chunks.String() != "ab" {
+					t.Fatal("valid target media stream changed", err, done)
+				}
+			} else if err == nil || done != 0 {
+				t.Fatal("invalid media fabricated terminal", err, done)
+			}
+		})
 	}
 }

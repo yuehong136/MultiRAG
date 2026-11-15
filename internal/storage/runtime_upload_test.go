@@ -1,8 +1,6 @@
 package storage
 
 import (
-	"context"
-	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -12,8 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-
-	"multirag/internal/server"
 )
 
 func TestRuntimeUploadAdapterRetainsActorForEntireObjectLifecycle(t *testing.T) {
@@ -22,10 +18,8 @@ func TestRuntimeUploadAdapterRetainsActorForEntireObjectLifecycle(t *testing.T) 
 			t.Run(kind+"/"+prefix, func(t *testing.T) {
 				objects := map[string]bool{}
 				calls := map[string]int{}
-				requestCount := 0
 				const content = "runtime"
 				transport := objectProbeTransport(func(request *http.Request) (*http.Response, error) {
-					requestCount++
 					path := request.URL.Path
 					calls[request.Method+" "+path]++
 					status, body := http.StatusOK, ""
@@ -76,13 +70,7 @@ func TestRuntimeUploadAdapterRetainsActorForEntireObjectLifecycle(t *testing.T) 
 				} else {
 					original = &OSSStorage{client: client, bucket: "physical", prefixPath: prefix}
 				}
-				store := ForRuntimeUploads(original)
-				probe := store.(interface {
-					ObjectExistsContext(context.Context, string, string) (bool, error)
-				})
-				remover := store.(interface {
-					RemoveContext(context.Context, string, string, ...string) error
-				})
+				store := original
 				for _, actor := range []string{"alice-downloads", "bob-downloads"} {
 					if err := store.Put(actor, "same-id", []byte(content)); err != nil {
 						t.Fatal(err)
@@ -91,39 +79,27 @@ func TestRuntimeUploadAdapterRetainsActorForEntireObjectLifecycle(t *testing.T) 
 					if err != nil || string(data) != content {
 						t.Fatalf("runtime Get failed: %s %v", data, err)
 					}
-					if exists, err := probe.ObjectExistsContext(t.Context(), actor, "same-id"); !exists || err != nil {
-						t.Fatalf("runtime HEAD failed: %t %v", exists, err)
+					if !store.ObjExist(actor, "same-id") {
+						t.Fatal("mapped object missing")
 					}
 				}
 				if len(objects) != 2 {
 					t.Fatal("same upload ID overwrote another actor's object")
 				}
-				if err := remover.RemoveContext(t.Context(), "alice-downloads", "same-id"); err != nil {
+				if err := store.Remove("alice-downloads", "same-id"); err != nil {
 					t.Fatal(err)
 				}
-				if exists, err := probe.ObjectExistsContext(t.Context(), "alice-downloads", "same-id"); exists || err != nil {
-					t.Fatalf("alice cleanup was not confirmed: %t %v", exists, err)
+				if store.ObjExist("alice-downloads", "same-id") {
+					t.Fatal("deleted object still exists")
 				}
-				if exists, err := probe.ObjectExistsContext(t.Context(), "bob-downloads", "same-id"); !exists || err != nil {
-					t.Fatalf("alice cleanup removed bob's object: %t %v", exists, err)
+				if !store.ObjExist("bob-downloads", "same-id") {
+					t.Fatal("mapped object missing")
 				}
 				if err := store.Remove("bob-downloads", "same-id"); err != nil {
 					t.Fatal(err)
 				}
 				if len(objects) != 0 {
 					t.Fatal("runtime Remove used a different key mapping")
-				}
-				ctx, cancel := context.WithCancel(t.Context())
-				cancel()
-				before := requestCount
-				if err := remover.RemoveContext(ctx, "alice-downloads", "same-id"); !errors.Is(err, context.Canceled) {
-					t.Fatalf("cancelled remove succeeded: %v", err)
-				}
-				if _, err := probe.ObjectExistsContext(ctx, "alice-downloads", "same-id"); !errors.Is(err, context.Canceled) {
-					t.Fatalf("cancelled probe succeeded: %v", err)
-				}
-				if requestCount != before {
-					t.Fatal("cancelled operation reached storage")
 				}
 				for _, actor := range []string{"alice-downloads", "bob-downloads"} {
 					path := "/physical/"
@@ -139,62 +115,5 @@ func TestRuntimeUploadAdapterRetainsActorForEntireObjectLifecycle(t *testing.T) 
 				}
 			})
 		}
-	}
-}
-
-func TestRuntimeUploadAdapterLeavesNamespacePreservingStoresUnchanged(t *testing.T) {
-	for name, store := range map[string]Storage{
-		"nil": nil, "minio": &MinioStorage{bucket: "physical"}, "s3-bucket-per-actor": &S3Storage{},
-		"s3-prefix": &S3Storage{bucket: "physical", prefixPath: "prefix"}, "oss-bucket-per-actor": &OSSStorage{},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if ForRuntimeUploads(store) != store {
-				t.Fatal("namespace-preserving store was wrapped")
-			}
-		})
-	}
-	s3Store := &S3Storage{bucket: "physical"}
-	ossStore := &OSSStorage{bucket: "physical", prefixPath: "prefix"}
-	ForRuntimeUploads(s3Store)
-	ForRuntimeUploads(ossStore)
-	if bucket, key := s3Store.resolveBucketAndPath("ordinary-files", "object"); bucket != "physical" || key != "object" {
-		t.Fatal("runtime adapter changed ordinary S3 resolution", bucket, key)
-	}
-	if bucket, key := ossStore.resolveBucketAndPath("ordinary-files", "object"); bucket != "physical" || key != "prefix/object" {
-		t.Fatal("runtime adapter changed ordinary OSS resolution", bucket, key)
-	}
-}
-
-func TestRuntimeUploadAdapterS3ConfigurationSnapshotHonorsExplicitEmptyValues(t *testing.T) {
-	for _, entry := range []struct {
-		name, bucket, prefix string
-	}{
-		{"configured-bucket", "physical", ""},
-		{"configured-prefix", "physical", "prefix"},
-		{"empty-bucket", "", "prefix"},
-		{"empty-prefix", "physical", ""},
-		{"both-empty", "", ""},
-	} {
-		t.Run(entry.name, func(t *testing.T) {
-			configuration := server.S3Config{Bucket: entry.bucket, PrefixPath: entry.prefix}
-			original := &S3Storage{bucket: "cached-bucket", prefixPath: "cached-prefix", config: &configuration}
-			runtime := ForRuntimeUploads(original)
-			var snapshot *S3Storage
-			if wrapped, ok := runtime.(*runtimeUploadStorage); ok {
-				snapshot = wrapped.Storage.(*S3Storage)
-			} else {
-				snapshot = runtime.(*S3Storage)
-			}
-			if snapshot == original || snapshot.config == original.config || snapshot.bucket != entry.bucket || snapshot.prefixPath != entry.prefix {
-				t.Fatal("runtime resolver did not snapshot authoritative S3 configuration")
-			}
-			configuration.Bucket, configuration.PrefixPath = "later-bucket", "later-prefix"
-			if snapshot.config.Bucket != entry.bucket || snapshot.config.PrefixPath != entry.prefix || snapshot.bucket != entry.bucket || snapshot.prefixPath != entry.prefix {
-				t.Fatal("caller configuration mutation changed the runtime snapshot")
-			}
-			if original.bucket != "cached-bucket" || original.prefixPath != "cached-prefix" || original.config != &configuration {
-				t.Fatal("runtime snapshot changed the ordinary storage instance")
-			}
-		})
 	}
 }

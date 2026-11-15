@@ -19,71 +19,253 @@ package common
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 var (
+	Logger      *zap.Logger
+	Sugar       *zap.SugaredLogger
+	levelMu     sync.RWMutex
 	atomicLevel = zap.NewAtomicLevelAt(zapcore.InfoLevel)
-	// Logger is ready during package initialization. Treat this pointer as read-only;
-	// Init and SetLevel update its shared atomic level without replacing the core.
-	Logger = newLogger(zapcore.Lock(zapcore.AddSync(os.Stdout)), atomicLevel)
-	Sugar  = Logger.Sugar()
+	pkgLevels   map[string]string
 )
 
-func newLogger(output zapcore.WriteSyncer, level zap.AtomicLevel) *zap.Logger {
-	encoder := zapcore.EncoderConfig{
-		TimeKey: "timestamp", LevelKey: "level", NameKey: "logger", MessageKey: "msg",
-		StacktraceKey: "stacktrace", LineEnding: zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.LowercaseLevelEncoder,
-		EncodeTime:     zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05"),
-		EncodeDuration: zapcore.SecondsDurationEncoder,
+func parseZapLevel(level string) (zapcore.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		return zapcore.DebugLevel, nil
+	case "info":
+		return zapcore.InfoLevel, nil
+	case "warn", "warning":
+		return zapcore.WarnLevel, nil
+	case "error":
+		return zapcore.ErrorLevel, nil
+	case "fatal":
+		return zapcore.FatalLevel, nil
+	case "panic":
+		return zapcore.PanicLevel, nil
+	default:
+		return zapcore.InfoLevel, fmt.Errorf("unknown log level: %s", level)
 	}
-	return zap.New(zapcore.NewCore(zapcore.NewConsoleEncoder(encoder), output, level), zap.AddStacktrace(zapcore.ErrorLevel))
 }
 
-// Init configures the already available logger. Invalid levels leave it unchanged.
-func Init(level string) error { return SetLevel(level) }
+func logLevelName(level zapcore.Level) string {
+	if level == zapcore.WarnLevel {
+		return "WARNING"
+	}
+	return strings.ToUpper(level.String())
+}
 
-// Sync flushes the output. Console descriptors may not support fsync.
-func Sync() { _ = Logger.Sync() }
+func initPackageLogLevels(rootLevel zapcore.Level) {
+	levels := make(map[string]string)
+	for _, item := range strings.Split(os.Getenv("LOG_LEVELS"), ",") {
+		terms := strings.SplitN(item, "=", 2)
+		if len(terms) != 2 {
+			continue
+		}
+		pkgName := strings.TrimSpace(terms[0])
+		if pkgName == "" {
+			continue
+		}
+		level, err := parseZapLevel(terms[1])
+		if err != nil {
+			level = zapcore.InfoLevel
+		}
+		levels[pkgName] = logLevelName(level)
+	}
+	// I set it to align with python for now, we shall change it later before ragflow 1.0
+	if _, ok := levels["peewee"]; !ok {
+		levels["peewee"] = logLevelName(zapcore.WarnLevel)
+	}
+	if _, ok := levels["pdfminer"]; !ok {
+		levels["pdfminer"] = logLevelName(zapcore.WarnLevel)
+	}
+	if _, ok := levels["root"]; !ok {
+		levels["root"] = logLevelName(rootLevel)
+	}
+	pkgLevels = levels
+}
 
-// Fatal records the caller and flushes through zap before exiting with status 1.
+// Init initializes the global logger
+// Note: This requires zap to be installed: go get go.uber.org/zap
+func Init(level string, logFile string) error {
+	zapLevel, err := parseZapLevel(level)
+	if err != nil {
+		zapLevel = zapcore.InfoLevel
+	}
+
+	// Create atomic level for dynamic updates
+	atomicLevel.SetLevel(zapLevel)
+
+	// Custom encoder config to control output format
+	encoderConfig := zapcore.EncoderConfig{
+		TimeKey:        "timestamp",
+		LevelKey:       "level",
+		NameKey:        "logger",
+		CallerKey:      "", // Disable caller/line number
+		FunctionKey:    "",
+		MessageKey:     "msg",
+		StacktraceKey:  "stacktrace",
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.LowercaseLevelEncoder,
+		EncodeTime:     zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05"), // Human-readable time format
+		EncodeDuration: zapcore.SecondsDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder, // Not used since CallerKey is empty
+	}
+
+	// Determine output paths
+	outputPaths := []string{"stdout"}
+	errorPaths := []string{"stderr"}
+	if logFile != "" {
+		logFile = filepath.Join("logs", logFile)
+		if err := os.MkdirAll(filepath.Dir(logFile), 0700); err != nil {
+			return fmt.Errorf("create log directory: %w", err)
+		}
+		outputPaths = append(outputPaths, logFile)
+		errorPaths = append(errorPaths, logFile)
+	}
+
+	// Configure zap
+	config := zap.Config{
+		Level:            atomicLevel,
+		Development:      false,
+		Encoding:         "console",
+		EncoderConfig:    encoderConfig,
+		OutputPaths:      outputPaths,
+		ErrorOutputPaths: errorPaths,
+	}
+
+	// Build logger
+	logger, err := config.Build(zap.AddCallerSkip(1))
+	if err != nil {
+		return err
+	}
+
+	Logger = logger
+	Sugar = logger.Sugar()
+
+	levelMu.Lock()
+	initPackageLogLevels(zapLevel)
+	levelMu.Unlock()
+
+	return nil
+}
+
+// Sync flushes any buffered log entries
+func Sync() {
+	if Logger != nil {
+		_ = Logger.Sync()
+	}
+}
+
+// Fatal logs a fatal message using zap with caller info
 func Fatal(msg string, fields ...zap.Field) {
-	if _, file, line, ok := runtime.Caller(1); ok {
+	if Logger == nil {
+		panic("logger not initialized")
+	}
+	// Get caller info (skip this function to get the actual caller)
+	_, file, line, ok := runtime.Caller(1)
+	if ok {
 		fields = append(fields, zap.String("caller", fmt.Sprintf("%s:%d", file, line)))
 	}
 	Logger.Fatal(msg, fields...)
 }
 
-func Info(msg string, fields ...zap.Field)  { Logger.Info(msg, fields...) }
-func Error(msg string, err error)           { Logger.Error(msg, zap.Error(err)) }
-func Debug(msg string, fields ...zap.Field) { Logger.Debug(msg, fields...) }
-func Warn(msg string, fields ...zap.Field)  { Logger.Warn(msg, fields...) }
-func IsDebugEnabled() bool                  { return atomicLevel.Enabled(zapcore.DebugLevel) }
-func GetLevel() string                      { return atomicLevel.String() }
-
-// SetLevel is safe concurrently with logging and other level updates.
-func SetLevel(level string) error {
-	var parsed zapcore.Level
-	switch level {
-	case "debug":
-		parsed = zapcore.DebugLevel
-	case "info":
-		parsed = zapcore.InfoLevel
-	case "warn", "warning":
-		parsed = zapcore.WarnLevel
-	case "error":
-		parsed = zapcore.ErrorLevel
-	case "fatal":
-		parsed = zapcore.FatalLevel
-	case "panic":
-		parsed = zapcore.PanicLevel
-	default:
-		return fmt.Errorf("unknown log level: %s", level)
+// Info logs an info message using zap or standard logger
+func Info(msg string, fields ...zap.Field) {
+	if Logger == nil {
+		return
 	}
-	atomicLevel.SetLevel(parsed)
+	Logger.Info(msg, fields...)
+}
+
+// Error logs an error message using zap or standard logger
+func Error(msg string, err error) {
+	if Logger == nil {
+		return
+	}
+	Logger.Error(msg, zap.Error(err))
+}
+
+// Debug logs a debug message using zap or standard logger
+func Debug(msg string, fields ...zap.Field) {
+	if Logger == nil {
+		return
+	}
+	Logger.Debug(msg, fields...)
+}
+
+// Warn logs a warning message using zap or standard logger
+func Warn(msg string, fields ...zap.Field) {
+	if Logger == nil {
+		return
+	}
+	Logger.Warn(msg, fields...)
+}
+
+// IsDebugEnabled returns true if debug logging is enabled
+func IsDebugEnabled() bool {
+	return atomicLevel.Enabled(zapcore.DebugLevel)
+}
+
+// GetLevel returns the current log level
+func GetLevel() string {
+	levelMu.RLock()
+	defer levelMu.RUnlock()
+	return atomicLevel.String()
+}
+
+// GetLogLevels returns Python-compatible package log levels.
+func GetLogLevels() map[string]string {
+	levelMu.RLock()
+	defer levelMu.RUnlock()
+
+	levels := make(map[string]string, len(pkgLevels))
+	for pkgName, level := range pkgLevels {
+		levels[pkgName] = level
+	}
+	return levels
+}
+
+// SetLevel sets the log level at runtime
+func SetLevel(level string) error {
+	levelMu.Lock()
+	defer levelMu.Unlock()
+
+	zapLevel, err := parseZapLevel(level)
+	if err != nil {
+		return err
+	}
+	atomicLevel.SetLevel(zapLevel)
+	if pkgLevels == nil {
+		pkgLevels = make(map[string]string)
+	}
+	pkgLevels["root"] = logLevelName(zapLevel)
+	return nil
+}
+
+// SetPackageLogLevel sets a Python-compatible package log level at runtime.
+func SetPackageLogLevel(pkgName, level string) error {
+	zapLevel, err := parseZapLevel(level)
+	if err != nil {
+		return err
+	}
+
+	levelMu.Lock()
+	defer levelMu.Unlock()
+
+	if pkgLevels == nil {
+		pkgLevels = make(map[string]string)
+	}
+	pkgLevels[pkgName] = logLevelName(zapLevel)
+	if pkgName == "root" {
+		atomicLevel.SetLevel(zapLevel)
+	}
 	return nil
 }

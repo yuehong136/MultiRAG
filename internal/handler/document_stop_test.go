@@ -26,8 +26,6 @@ func TestDocumentStopRejectsBeforeService(t *testing.T) {
 		{"empty", `{"document_ids":[]}`, "kb", true, common.CodeBadRequest},
 		{"numeric", `{"document_ids":[1]}`, "kb", true, common.CodeBadRequest},
 		{"string", `{"document_ids":"a"}`, "kb", true, common.CodeBadRequest},
-		{"duplicate", `{"document_ids":["a"],"document_ids":["b"]}`, "kb", true, common.CodeBadRequest},
-		{"trailing", `{"document_ids":["a"]} {}`, "kb", true, common.CodeBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()

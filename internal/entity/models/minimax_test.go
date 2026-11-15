@@ -1,6 +1,7 @@
 package models
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -403,6 +404,64 @@ func TestMinimaxListModels(t *testing.T) {
 			}
 			if valid && strings.Contains(body, "minimax-m2.7") && !reflect.DeepEqual(modelNamesForTest(names), []string{"minimax-m2.7"}) {
 				t.Fatal(names)
+			}
+		})
+	}
+}
+
+func TestMinimaxSpeechTargetValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"binary-sync", `{"base_resp":{"status_code":0},"data":{"status":2,"audio":"00ff018009"}}`, true},
+		{"missing-business", `{"data":{"status":2,"audio":"61"}}`, false},
+		{"missing-terminal", `{"base_resp":{"status_code":0},"data":{"audio":"61"}}`, false},
+		{"non-terminal", `{"base_resp":{"status_code":0},"data":{"status":1,"audio":"61"}}`, false},
+		{"empty", `{"base_resp":{"status_code":0},"data":{"status":2,"audio":""}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, tc.body) }))
+			d := NewMinimaxModel(map[string]string{"default": srv.URL}, URLSuffix{TTS: "speech"})
+			name, text, key := "model", "hello", "key"
+			result, err := d.AudioSpeech(&name, &text, &APIConfig{ApiKey: &key}, nil)
+			if tc.want {
+				if err != nil || !bytes.Equal(result.Audio, []byte{0, 255, 1, 128, 9}) {
+					t.Fatal("binary sync changed", err)
+				}
+			} else if err == nil || result != nil {
+				t.Fatal("malformed speech accepted")
+			}
+		})
+	}
+	good := "data: {\"base_resp\":{\"status_code\":0},\"data\":{\"status\":1,\"audio\":\"6162\"}}\n\n"
+	final := "data: {\"base_resp\":{\"status_code\":0},\"data\":{\"status\":2,\"audio\":\"6162\"}}\n\n"
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"valid", good + final, true}, {"unterminated", good, false}, {"empty", "", false}, {"no-business", "data: {\"data\":{\"status\":2,\"audio\":\"61\"}}\n\n", false}, {"invalid-hex", strings.Replace(final, "6162", "odd", 1), false}, {"binary-text-unrepresentable", strings.Replace(final, "6162", "00ff", 1), false}, {"after-terminal", good + final + good, false}, {"inconsistent-final", good + strings.Replace(final, "6162", "6163", 1), false},
+	} {
+		t.Run("stream/"+tc.name, func(t *testing.T) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, tc.body) }))
+			d := NewMinimaxModel(map[string]string{"default": srv.URL}, URLSuffix{TTS: "speech"})
+			name, text, key := "model", "hello", "key"
+			var audio strings.Builder
+			done := 0
+			err := d.AudioSpeechWithSender(&name, &text, &APIConfig{ApiKey: &key}, nil, func(v, _ *string) error {
+				if *v == "[DONE]" {
+					done++
+				} else {
+					audio.WriteString(*v)
+				}
+				return nil
+			})
+			if tc.want {
+				if err != nil || done != 1 || audio.String() != "ab" {
+					t.Fatal("valid native stream lost", err, done)
+				}
+			} else if err == nil || done != 0 {
+				t.Fatal("false speech terminal", err, done)
 			}
 		})
 	}

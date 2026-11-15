@@ -17,7 +17,6 @@
 package models
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -31,6 +30,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // OpenAIModel implements ModelDriver for OpenAI (GPT models).
@@ -395,6 +395,9 @@ type openaiUsage struct {
 }
 
 func (o *OpenAIModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	if embeddingConfig != nil && embeddingConfig.Dimension < 0 {
+		return nil, fmt.Errorf("embedding dimension must be nonnegative")
+	}
 	if err := o.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return nil, err
 	}
@@ -502,6 +505,9 @@ func (o *OpenAIModel) Embed(modelName *string, texts []string, apiConfig *APICon
 		}
 	}
 
+	if embeddingConfig != nil && embeddingConfig.Dimension > 0 && dimension != embeddingConfig.Dimension {
+		return nil, fmt.Errorf("embedding dimension does not match request")
+	}
 	var embeddings []EmbeddingData
 	for _, dataElem := range parsed.Data {
 		var embeddingData EmbeddingData
@@ -679,54 +685,94 @@ func (o *OpenAIModel) TranscribeAudioWithSender(modelName *string, file *string,
 	}
 
 	sentDelta := false
-	if _, err = ParseSSEStream[struct {
-		Type  string `json:"type"`
-		Delta string `json:"delta"`
-		Text  string `json:"text"`
-	}](resp.Body, func(event struct {
-		Type  string `json:"type"`
-		Delta string `json:"delta"`
-		Text  string `json:"text"`
-	}) error {
-		switch {
-		case event.Delta != "":
-			if err = sender(&event.Delta, nil); err != nil {
-				return err
-			}
-			sentDelta = true
-		case event.Type == "transcript.text.segment" && event.Text != "":
-			if err = sender(&event.Text, nil); err != nil {
-				return err
-			}
-			sentDelta = true
-		case event.Type == "transcript.text.done" && !sentDelta && event.Text != "":
-			if err = sender(&event.Text, nil); err != nil {
-				return err
-			}
+	terminal := false
+	var fullText strings.Builder
+	done, err := ParseSSEStream[map[string]json.RawMessage](resp.Body, func(event map[string]json.RawMessage) error {
+		if err := apiConfig.RequestContext().Err(); err != nil {
+			return err
 		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("error reading OpenAI ASR stream: %w", err)
+		if event == nil || terminal {
+			return fmt.Errorf("invalid ASR stream event")
+		}
+		if raw := event["error"]; len(raw) > 0 && string(raw) != "null" {
+			return fmt.Errorf("upstream ASR error")
+		}
+		var kind string
+		if json.Unmarshal(event["type"], &kind) != nil {
+			return fmt.Errorf("ASR event type is required")
+		}
+		var text string
+		switch kind {
+		case "transcript.text.delta":
+			if raw := event["delta"]; raw == nil || string(raw) == "null" || json.Unmarshal(raw, &text) != nil {
+				return fmt.Errorf("invalid transcript delta")
+			}
+		case "transcript.text.segment":
+			if raw := event["text"]; raw == nil || string(raw) == "null" || json.Unmarshal(raw, &text) != nil {
+				return fmt.Errorf("invalid transcript segment")
+			}
+		case "transcript.text.done":
+			if raw := event["text"]; raw == nil || string(raw) == "null" || json.Unmarshal(raw, &text) != nil {
+				return fmt.Errorf("invalid transcript completion")
+			}
+			terminal = true
+			if sentDelta {
+				if fullText.String() != text {
+					return fmt.Errorf("inconsistent transcript completion")
+				}
+				return nil
+			}
+		default:
+			return fmt.Errorf("unsupported ASR event type")
+		}
+		if text != "" {
+			if err := sender(&text, nil); err != nil {
+				return err
+			}
+			fullText.WriteString(text)
+			sentDelta = true
+		}
+		return apiConfig.RequestContext().Err()
+	})
+	if err := apiConfig.RequestContext().Err(); err != nil {
+		return err
 	}
-
-	done := "[DONE]"
-	return sender(&done, nil)
+	if err != nil {
+		return err
+	}
+	if !terminal && !(done && sentDelta) {
+		return fmt.Errorf("incomplete ASR stream")
+	}
+	end := "[DONE]"
+	return sender(&end, nil)
 }
 
 func decodeOpenAIASRResponse(respBody []byte, responseFormat string) (*ASRResponse, error) {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(respBody, &envelope) == nil && envelope != nil {
+		if raw := envelope["error"]; len(raw) > 0 && string(raw) != "null" {
+			return nil, fmt.Errorf("upstream ASR error")
+		}
+		if raw := envelope["code"]; len(raw) > 0 && string(raw) != "0" {
+			return nil, fmt.Errorf("upstream ASR error")
+		}
+	}
 	switch responseFormat {
 	case "text", "srt", "vtt":
 		return &ASRResponse{Text: string(respBody)}, nil
 	}
 
 	var result struct {
-		Text string `json:"text"`
+		Text *string `json:"text"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("invalid ASR response")
 	}
 
-	return &ASRResponse{Text: result.Text}, nil
+	if result.Text == nil {
+		return nil, fmt.Errorf("ASR response text is required")
+	}
+	return &ASRResponse{Text: *result.Text}, nil
 }
 
 // AudioSpeech convert text to audio
@@ -757,6 +803,9 @@ func (o *OpenAIModel) AudioSpeech(modelName *string, audioContent *string, apiCo
 		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
 	}
 
+	if len(body) == 0 || strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "json") {
+		return nil, fmt.Errorf("provider did not return audio")
+	}
 	return &TTSResponse{Audio: body}, nil
 }
 
@@ -784,10 +833,31 @@ func (o *OpenAIModel) AudioSpeechWithSender(modelName *string, audioContent *str
 		return fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
 	}
 
-	if streamFormat == "sse" || strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return readOpenAITTSSSEStream(resp.Body, sender)
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "json") {
+		return fmt.Errorf("provider did not return audio")
 	}
-	return readOpenAITTSRawStream(resp.Body, sender)
+	checkedSender := func(audio, reason *string) error {
+		if err := apiConfig.RequestContext().Err(); err != nil {
+			return err
+		}
+		if err := sender(audio, reason); err != nil {
+			return err
+		}
+		return apiConfig.RequestContext().Err()
+	}
+	if streamFormat == "sse" || strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		err = readOpenAITTSSSEStream(resp.Body, checkedSender)
+	} else {
+		err = readOpenAITTSRawStream(resp.Body, checkedSender)
+	}
+	if err != nil {
+		return err
+	}
+	if err := apiConfig.RequestContext().Err(); err != nil {
+		return err
+	}
+	end := "[DONE]"
+	return sender(&end, nil)
 }
 
 func (o *OpenAIModel) newOpenAIASRRequest(ctx context.Context, modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, stream bool) (*http.Request, string, error) {
@@ -935,63 +1005,82 @@ func (o *OpenAIModel) newOpenAITTSRequest(ctx context.Context, modelName *string
 }
 
 func readOpenAITTSSSEStream(body io.Reader, sender func(*string, *string) error) error {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
+	complete := false
+	sawAudio := false
+	_, err := ParseSSEStream[map[string]json.RawMessage](body, func(event map[string]json.RawMessage) error {
+		if event == nil || complete {
+			return fmt.Errorf("invalid speech stream event")
 		}
-
-		dataStr := strings.TrimSpace(line[6:])
-		if dataStr == "" || dataStr == "[DONE]" {
-			continue
+		if raw := event["error"]; len(raw) > 0 && string(raw) != "null" {
+			return fmt.Errorf("upstream speech error")
 		}
-
-		var event struct {
-			Type  string `json:"type"`
-			Audio string `json:"audio"`
+		var kind string
+		if json.Unmarshal(event["type"], &kind) != nil {
+			return fmt.Errorf("speech event type is required")
 		}
-		if err := json.Unmarshal([]byte(dataStr), &event); err != nil {
-			continue
-		}
-
-		if event.Type == "speech.audio.delta" && event.Audio != "" {
-			audioBytes, err := base64.StdEncoding.DecodeString(event.Audio)
-			if err == nil && len(audioBytes) > 0 {
-				chunk := string(audioBytes)
-				if errSend := sender(&chunk, nil); errSend != nil {
-					return errSend
-				}
+		switch kind {
+		case "speech.audio.delta":
+			var audio string
+			if json.Unmarshal(event["audio"], &audio) != nil || audio == "" {
+				return fmt.Errorf("speech audio is required")
 			}
+			decoded, err := base64.StdEncoding.Strict().DecodeString(audio)
+			if err != nil || len(decoded) == 0 {
+				return fmt.Errorf("invalid speech base64")
+			}
+			if !utf8.Valid(decoded) {
+				return fmt.Errorf("binary speech cannot be represented by the text stream sender")
+			}
+			sawAudio = true
+			chunk := string(decoded)
+			return sender(&chunk, nil)
+		case "speech.audio.done":
+			complete = true
+			return nil
+		default:
+			return fmt.Errorf("unsupported speech event type")
 		}
-		if event.Type == "speech.audio.done" {
-			break
-		}
+	})
+	if err != nil {
+		return err
 	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading OpenAI TTS stream: %w", err)
+	if !complete || !sawAudio {
+		return fmt.Errorf("incomplete speech stream")
 	}
 	return nil
 }
 
 func readOpenAITTSRawStream(body io.Reader, sender func(*string, *string) error) error {
 	buf := make([]byte, 32*1024)
+	pending := []byte{}
+	sawAudio := false
 	for {
-		n, err := body.Read(buf)
-		if n > 0 {
-			chunk := string(buf[:n])
-			if errSend := sender(&chunk, nil); errSend != nil {
-				return errSend
+		n, readErr := body.Read(buf)
+		pending = append(pending, buf[:n]...)
+		valid := 0
+		for valid < len(pending) && utf8.FullRune(pending[valid:]) {
+			r, size := utf8.DecodeRune(pending[valid:])
+			if r == utf8.RuneError && size == 1 {
+				return fmt.Errorf("binary speech cannot be represented by the text stream sender")
 			}
+			valid += size
 		}
-		if err == io.EOF {
+		if valid > 0 {
+			chunk := string(pending[:valid])
+			if err := sender(&chunk, nil); err != nil {
+				return err
+			}
+			sawAudio = true
+			pending = append(pending[:0], pending[valid:]...)
+		}
+		if readErr == io.EOF {
+			if !sawAudio || len(pending) > 0 {
+				return fmt.Errorf("empty or incomplete speech audio")
+			}
 			return nil
 		}
-		if err != nil {
-			return fmt.Errorf("error reading OpenAI TTS stream: %w", err)
+		if readErr != nil {
+			return fmt.Errorf("error reading OpenAI TTS stream: %w", readErr)
 		}
 	}
 }

@@ -1,138 +1,205 @@
+// Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package nlp
 
 import (
-	"context"
-	"errors"
 	"math"
-	"reflect"
 	"testing"
-
-	"multirag/internal/entity/models"
 )
 
-func TestNormalizeRerankScoresContract(t *testing.T) {
+// TestNormalizeRerankScores_OutOfRange_Rescaled covers the central bug fix:
+// uncalibrated reranker output (e.g. NVIDIA logits) is min-max rescaled
+// onto [0, 1] so a negative logit weighted by vtWeight=0.7 cannot sink a
+// relevant chunk below pure keyword matches.
+func TestNormalizeRerankScores_OutOfRange_Rescaled(t *testing.T) {
 	cases := []struct {
-		name     string
-		in, want []float64
+		name string
+		in   []float64
+		want []float64
 	}{
-		{"nil", nil, nil},
-		{"empty", []float64{}, []float64{}},
-		{"calibrated", []float64{0, .8, .2, 1}, []float64{0, .8, .2, 1}},
-		{"flat calibrated", []float64{.8, .8}, []float64{.8, .8}},
-		{"mixed logits", []float64{10, -3, 0}, []float64{1, 0, 3.0 / 13}},
-		{"negative logits", []float64{-1, -5, -3}, []float64{1, 0, .5}},
-		{"single high", []float64{5}, []float64{1}},
-		{"single low", []float64{-3}, []float64{0}},
-		{"near constant", []float64{5, 5.0001}, []float64{1, 1}},
-		{"finite extremes", []float64{-math.MaxFloat64, 0, math.MaxFloat64}, []float64{0, .5, 1}},
+		{"unbounded mixed-sign logits", []float64{10.0, -3.0, 0.0}, []float64{1.0, 0.0, 3.0 / 13.0}},
+		{"large positive logits", []float64{100.0, 50.0, 75.0}, []float64{1.0, 0.0, 0.5}},
+		{"negative-only logits", []float64{-1.0, -5.0, -3.0}, []float64{1.0, 0.0, 0.5}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := NormalizeRerankScores(tc.in)
-			if err != nil || (got == nil) != (tc.want == nil) || len(got) != len(tc.want) {
-				t.Fatalf("%v %v", got, err)
+			got := NormalizeRerankScores(tc.in)
+			if !floatsClose(got, tc.want, 1e-9) {
+				t.Errorf("got %v, want %v", got, tc.want)
 			}
-			for i := range got {
-				if math.Abs(got[i]-tc.want[i]) > 1e-12 {
-					t.Fatalf("%v, want %v", got, tc.want)
-				}
-			}
-			if len(got) > 0 && &got[0] != &tc.in[0] {
-				t.Fatal("normalization allocated new backing array")
+			if minOf(got) < 0.0 || maxOf(got) > 1.0 {
+				t.Errorf("scores escaped [0, 1]: %v", got)
 			}
 		})
 	}
-	for _, bad := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
-		in := []float64{3, bad, -2}
-		if got, err := NormalizeRerankScores(in); err == nil || got != nil || in[0] != 3 || in[2] != -2 {
-			t.Fatal("invalid input mutated or accepted", got, err)
+}
+
+// TestNormalizeRerankScores_InRange_Preserved pins the calibrated-provider
+// guarantee: Cohere/Jina/Voyage-style scores in [0, 1] are returned verbatim,
+// so similarity_threshold semantics and the reported vector_similarity keep
+// their absolute magnitudes.
+func TestNormalizeRerankScores_InRange_Preserved(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []float64
+	}{
+		{"spread relevance", []float64{0.9, 0.1, 0.5}},
+		{"all-equal but valid", []float64{0.8, 0.8, 0.8}},
+		{"single candidate", []float64{1.0}},
+		{"already spanning the full range", []float64{0.0, 1.0, 0.42}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeRerankScores(tc.in)
+			if !floatsClose(got, tc.in, 1e-9) {
+				t.Errorf("got %v, want %v (must be preserved)", got, tc.in)
+			}
+		})
+	}
+}
+
+// TestNormalizeRerankScores_PreservesOrdering ensures rescaling does not
+// scramble the relative ranking; this is the property downstream code relies
+// on when sorting by rerank score.
+func TestNormalizeRerankScores_PreservesOrdering(t *testing.T) {
+	in := []float64{-5.0, 12.0, 3.0, -1.0}
+	got := NormalizeRerankScores(in)
+	wantOrder := argsortDesc(in)
+	gotOrder := argsortDesc(got)
+	if !intsEqual(wantOrder, gotOrder) {
+		t.Errorf("ordering changed: want %v, got %v", wantOrder, gotOrder)
+	}
+}
+
+// TestNormalizeRerankScores_SpreadlessOutOfRange_Clamped covers the
+// degenerate but realistic case of a single rerank candidate or a flat
+// batch of out-of-range values: clamped per element, never zeroed, never
+// NaN. A lone high logit would otherwise be silently dropped and
+// contaminate the blend with NaN if divided by ~0.
+func TestNormalizeRerankScores_SpreadlessOutOfRange_Clamped(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []float64
+		want []float64
+	}{
+		{"single out-of-range high", []float64{5.0}, []float64{1.0}},
+		{"single out-of-range negative", []float64{-3.0}, []float64{0.0}},
+		{"flat out-of-range high batch", []float64{5.0, 5.0, 5.0}, []float64{1.0, 1.0, 1.0}},
+		{"flat out-of-range low batch", []float64{-2.0, -2.0, -2.0}, []float64{0.0, 0.0, 0.0}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeRerankScores(tc.in)
+			if !floatsClose(got, tc.want, 1e-9) {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+			for _, s := range got {
+				if math.IsNaN(s) {
+					t.Fatalf("NaN leaked into normalized scores: %v", got)
+				}
+			}
+		})
+	}
+}
+
+// TestNormalizeRerankScores_Empty covers the empty-input contract: returned
+// verbatim, no allocation, no panic.
+func TestNormalizeRerankScores_Empty(t *testing.T) {
+	got := NormalizeRerankScores(nil)
+	if len(got) != 0 {
+		t.Errorf("nil in -> expected empty out, got %v", got)
+	}
+	got = NormalizeRerankScores([]float64{})
+	if len(got) != 0 {
+		t.Errorf("[] in -> expected empty out, got %v", got)
+	}
+}
+
+// TestNormalizeRerankScores_InPlace pins the in-place guarantee: the input
+// slice's backing array is what gets returned, so the RerankByModel call
+// site stays allocation-free.
+func TestNormalizeRerankScores_InPlace(t *testing.T) {
+	in := []float64{10.0, -3.0, 0.0}
+	got := NormalizeRerankScores(in)
+	if &got[0] != &in[0] {
+		t.Errorf("NormalizeRerankScores must mutate in place; got a new backing array")
+	}
+}
+
+func floatsClose(a, b []float64, tol float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if math.Abs(a[i]-b[i]) > tol {
+			return false
 		}
 	}
+	return true
 }
 
-type capturedReranker struct {
-	models.ModelDriver
-	texts  []string
-	scores []float64
-	err    error
-	cancel context.CancelFunc
-}
-
-func (d *capturedReranker) Rerank(_ *string, _ string, texts []string, _ *models.APIConfig, _ *models.RerankConfig) (*models.RerankResponse, error) {
-	d.texts = append([]string(nil), texts...)
-	if d.cancel != nil {
-		d.cancel()
+func intsEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	response := &models.RerankResponse{Data: make([]models.RerankResult, len(d.scores))}
-	for i, score := range d.scores {
-		response.Data[i] = models.RerankResult{Index: i, RelevanceScore: score}
-	}
-	return response, d.err
-}
-
-func TestRerankUsesNaturalTextAndNormalizedBlend(t *testing.T) {
-	driver := &capturedReranker{scores: []float64{-5, 10}}
-	chunks := []map[string]interface{}{
-		{"content_with_weight": "自然 文本 ABC 中文", "content_ltks": "token 一 token", "title_tks": "title"},
-		{"content_with_weight": "Keep Spaces Between Words", "content_ltks": "second", "question_tks": "extra"},
-	}
-	sim, term, vector, err := RerankByModel(context.Background(), models.NewRerankModel(driver, nil, nil), chunks, "q", .3, .7, "content_ltks", nil, nil)
-	if err != nil || !reflect.DeepEqual(driver.texts, []string{"自然 文本 ABC 中文", "Keep Spaces Between Words"}) || !reflect.DeepEqual(vector, []float64{0, 1}) || !reflect.DeepEqual(sim, []float64{0, .7}) || !reflect.DeepEqual(term, []float64{0, 0}) {
-		t.Fatalf("%v %v %v %v %v", driver.texts, sim, term, vector, err)
-	}
-	for _, weight := range []float64{-1, math.NaN(), math.Inf(1), 1.01} {
-		driver.texts = nil
-		if _, _, _, err = RerankByModel(context.Background(), models.NewRerankModel(driver, nil, nil), chunks, "q", 1-weight, weight, "content_ltks", nil, nil); err == nil || driver.texts != nil {
-			t.Fatal("invalid weight reached provider")
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	driver.cancel = cancel
-	if _, _, _, err = RerankByModel(ctx, models.NewRerankModel(driver, nil, nil), chunks, "q", 0, 1, "content_ltks", nil, nil); !errors.Is(err, context.Canceled) {
-		t.Fatal("cancellation lost", err)
-	}
+	return true
 }
 
-func TestRerankTokensAndRankFeaturesRemainDeterministic(t *testing.T) {
-	if got := extractContentTokens(map[string]interface{}{"content_ltks": "中 文 重复 重复"}, "content_ltks"); !reflect.DeepEqual(got, []string{"中", "文", "重复", "重复"}) {
-		t.Fatal(got)
+func minOf(s []float64) float64 {
+	if len(s) == 0 {
+		return 0
 	}
-	if got := extractTitleTokens(map[string]interface{}{"title_tks": "中 文"}); !reflect.DeepEqual(got, []string{"中", "文"}) {
-		t.Fatal(got)
-	}
-	chunks := []map[string]interface{}{{"pagerank_fea": .1, "tag_feas": `{"x":1}`}}
-	got := applyRankFeatureScores(chunks, []float64{.2}, map[string]float64{"pagerank_fea": 10})
-	if math.Abs(got[0]-.3) > 1e-12 {
-		t.Fatal("pagerank-only query produced invalid score", got)
-	}
-	if got := ArgsortDescending([]float64{1, 1, 0, 1}); !reflect.DeepEqual(got, []int{0, 1, 3, 2}) {
-		t.Fatal("ties reordered", got)
-	}
-}
-
-func TestInfinityFallbackRejectsMissingAndInvalidScores(t *testing.T) {
-	for _, chunk := range []map[string]interface{}{
-		{}, {"_score": nil}, {"SCORE": "0.8"}, {"score": math.NaN()}, {"similarity": math.Inf(1)},
-	} {
-		if sim, term, vector, err := RerankInfinityFallback([]map[string]interface{}{chunk}); err == nil || sim != nil || term != nil || vector != nil {
-			t.Fatal("missing/invalid score became success", sim, term, vector, err)
+	m := s[0]
+	for _, v := range s[1:] {
+		if v < m {
+			m = v
 		}
 	}
-	for _, value := range []interface{}{0.0, 0, float32(.5), .8} {
-		sim, term, vector, err := RerankInfinityFallback([]map[string]interface{}{{"_score": value}})
-		if err != nil || len(sim) != 1 || !reflect.DeepEqual(sim, term) || !reflect.DeepEqual(sim, vector) {
-			t.Fatal("valid fused score rejected", sim, err)
-		}
-	}
+	return m
 }
 
-func TestRetrievalVectorZeroTopUsesExplicitCandidateDefault(t *testing.T) {
-	model := models.NewEmbeddingModel(&retrievalEmbeddingDriver{vectors: [][]float64{{1, 0}}}, nil, nil)
-	expression, err := NewRetrievalService(nil).GetVector("question", model, 0, 0)
-	if err != nil || expression.TopN != 1024 || expression.ExtraOptions["similarity"] != 0.0 {
-		t.Fatal("legal zero top/threshold lost", expression, err)
+func maxOf(s []float64) float64 {
+	if len(s) == 0 {
+		return 0
 	}
-	if expression, err := NewRetrievalService(nil).GetVector("question", model, -1, 0); err == nil || expression != nil {
-		t.Fatal("negative top accepted", expression, err)
+	m := s[0]
+	for _, v := range s[1:] {
+		if v > m {
+			m = v
+		}
 	}
+	return m
+}
+
+// argsortDesc returns the indices of s sorted by value in descending order,
+// matching how a downstream consumer would compare rerank scores.
+func argsortDesc(s []float64) []int {
+	idx := make([]int, len(s))
+	for i := range idx {
+		idx[i] = i
+	}
+	// Insertion sort keeps it dependency-free; len is small (batch size).
+	for i := 1; i < len(idx); i++ {
+		for j := i; j > 0 && s[idx[j]] > s[idx[j-1]]; j-- {
+			idx[j], idx[j-1] = idx[j-1], idx[j]
+		}
+	}
+	return idx
 }

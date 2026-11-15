@@ -60,6 +60,10 @@ func (d *DeepSeekModel) Name() string {
 }
 
 func (d *DeepSeekModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	if chatModelConfig != nil {
+		snapshot := *chatModelConfig
+		chatModelConfig = &snapshot
+	}
 	if chatModelConfig != nil && chatModelConfig.Stream != nil && *chatModelConfig.Stream {
 		return nil, fmt.Errorf("stream must be false in ChatWithMessages")
 	}
@@ -225,6 +229,18 @@ func (d *DeepSeekModel) ChatWithMessages(modelName string, messages []Message, a
 		return nil, fmt.Errorf("invalid choice format")
 	}
 
+	if raw, exists := firstChoice["finish_reason"]; exists && raw != nil {
+		finish, ok := raw.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid finish reason")
+		}
+		switch finish {
+		case "", "stop", "length", "tool_calls", "function_call", "content_filter", "insufficient_system_resource":
+		default:
+			return nil, fmt.Errorf("invalid finish reason")
+		}
+	}
+
 	messageMap, ok := firstChoice["message"].(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("invalid message format")
@@ -257,6 +273,10 @@ func (d *DeepSeekModel) ChatWithMessages(modelName string, messages []Message, a
 
 // ChatStreamlyWithSender sends messages and streams response via sender function (best performance, no channel)
 func (d *DeepSeekModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
+	if chatModelConfig != nil {
+		snapshot := *chatModelConfig
+		chatModelConfig = &snapshot
+	}
 	if sender == nil {
 		return fmt.Errorf("sender is required")
 	}
@@ -275,7 +295,7 @@ func (d *DeepSeekModel) ChatStreamlyWithSender(modelName string, messages []Mess
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("%s/chat/completions", resolvedBaseURL)
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(resolvedBaseURL, "/"), strings.TrimLeft(d.baseModel.URLSuffix.Chat, "/"))
 
 	// Convert messages to API format
 	apiMessages := make([]map[string]interface{}, len(messages))
@@ -398,7 +418,10 @@ func (d *DeepSeekModel) ChatStreamlyWithSender(modelName string, messages []Mess
 			return fmt.Errorf("provider stream error")
 		}
 		choices, ok := event["choices"].([]interface{})
-		if !ok || len(choices) == 0 {
+		if !ok {
+			return fmt.Errorf("invalid stream choices")
+		}
+		if len(choices) == 0 {
 			if event["usage"] != nil {
 				return nil
 			}
@@ -415,9 +438,30 @@ func (d *DeepSeekModel) ChatStreamlyWithSender(modelName string, messages []Mess
 			return fmt.Errorf("invalid stream delta")
 		}
 
+		for _, key := range []string{"content", "reasoning_content"} {
+			if raw, exists := delta[key]; exists && raw != nil {
+				if _, ok := raw.(string); !ok {
+					return fmt.Errorf("invalid stream delta content")
+				}
+			}
+		}
+		if raw, exists := firstChoice["finish_reason"]; exists && raw != nil {
+			finish, ok := raw.(string)
+			if !ok {
+				return fmt.Errorf("invalid stream finish reason")
+			}
+			switch finish {
+			case "", "stop", "length", "tool_calls", "function_call", "content_filter", "insufficient_system_resource":
+			default:
+				return fmt.Errorf("invalid stream finish reason")
+			}
+		}
+
 		content, ok := delta["content"].(string)
 		if ok && content != "" {
-			sawAnswer = true
+			if strings.TrimSpace(content) != "" {
+				sawAnswer = true
+			}
 			if err := sender(&content, nil); err != nil {
 				return err
 			}

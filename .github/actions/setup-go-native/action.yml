@@ -20,6 +20,19 @@ runs:
         sudo apt-get install -y --no-install-recommends build-essential libpcre2-dev libsimde-dev
         uv tool install cmake==4.0.3
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    - name: Prepare the default Office parser
+      shell: bash
+      run: |
+        set -euo pipefail
+        prefix="$RUNNER_TEMP/office-oxide-0.1.2"
+        mkdir -p "$prefix"
+        curl -fsSL https://github.com/yfedoseev/office_oxide/releases/download/v0.1.2/native-linux-x86_64.tar.gz -o "$RUNNER_TEMP/office-oxide.tar.gz"
+        tar -xzf "$RUNNER_TEMP/office-oxide.tar.gz" -C "$prefix"
+        test -s "$prefix/lib/liboffice_oxide.so"
+        test -s "$prefix/include/office_oxide_c/office_oxide.h"
+        echo "OFFICE_OXIDE_PREFIX=$prefix" >> "$GITHUB_ENV"
+        echo "CGO_CFLAGS=-I$prefix/include/office_oxide_c" >> "$GITHUB_ENV"
+        echo "CGO_LDFLAGS=-L$prefix/lib -loffice_oxide -Wl,-rpath,$prefix/lib" >> "$GITHUB_ENV"
     - name: Check OpenCC input boundaries with sanitizers
       shell: bash
       run: |
@@ -52,3 +65,4 @@ runs:
         test -d resource/opencc
         test -s resource/wordnet/data.noun
         echo "RAG_DICT_PATH=$GITHUB_WORKSPACE/resource" >> "$GITHUB_ENV"
+        echo "RAGFLOW_DICT_PATH=$GITHUB_WORKSPACE/resource" >> "$GITHUB_ENV"

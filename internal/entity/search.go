@@ -19,17 +19,17 @@ package entity
 // Search search model
 type Search struct {
 	ID           string  `gorm:"column:id;primaryKey;size:32" json:"id"`
-	Avatar       *string `gorm:"column:avatar;type:text" json:"avatar,omitempty"`
+	Avatar       *string `gorm:"column:avatar;type:longtext" json:"avatar,omitempty"`
 	TenantID     string  `gorm:"column:tenant_id;size:32;not null;index" json:"tenant_id"`
 	Name         string  `gorm:"column:name;size:128;not null;index" json:"name"`
-	Description  *string `gorm:"column:description;type:text" json:"description,omitempty"`
+	Description  *string `gorm:"column:description;type:longtext" json:"description,omitempty"`
 	CreatedBy    string  `gorm:"column:created_by;size:32;not null;index" json:"created_by"`
-	SearchConfig JSONMap `gorm:"column:search_config;type:jsonb;not null" json:"search_config"`
+	SearchConfig JSONMap `gorm:"column:search_config;type:longtext;not null" json:"search_config"`
 	Status       *string `gorm:"column:status;size:1;index" json:"status,omitempty"`
 	BaseModel
 }
 
 // TableName specify table name
 func (Search) TableName() string {
-	return "t_ai_search"
+	return "search"
 }

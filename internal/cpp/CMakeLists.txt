@@ -3,16 +3,34 @@ project(rag_tokenizer)
 
 set(CMAKE_CXX_STANDARD 23)
 
-# Homebrew dependencies are outside the default Apple compiler search path.
-# Keep Linux's existing static library resolution for the CI builder image.
+# macOS dependency discovery — Homebrew installs headers and libs under a
+# prefix that is NOT on the compiler's default search path (Apple Silicon:
+# /opt/homebrew, Intel: /usr/local). Linux is left completely untouched:
+# the infinity_builder image already ships pcre2 + simde where the
+# toolchain finds them, so adding paths there risks shadowing them.
 if(APPLE)
-    execute_process(COMMAND brew --prefix
-            OUTPUT_VARIABLE HOMEBREW_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE
-            RESULT_VARIABLE BREW_RC)
+    execute_process(
+        COMMAND brew --prefix
+        OUTPUT_VARIABLE HOMEBREW_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE BREW_RC
+    )
     if(BREW_RC EQUAL 0 AND HOMEBREW_PREFIX)
-        list(APPEND CMAKE_PREFIX_PATH "${HOMEBREW_PREFIX}")
+        message(STATUS "macOS detected; Homebrew prefix: ${HOMEBREW_PREFIX}")
         include_directories(SYSTEM "${HOMEBREW_PREFIX}/include")
+        link_directories("${HOMEBREW_PREFIX}/lib")
     endif()
+endif()
+
+# Resolve libpcre2-8.
+#   - Linux: keep upstream's bare `libpcre2-8.a` token verbatim. The linker
+#     resolves it from its own default search path, which the
+#     infinity_builder image populates. find_library() does NOT see that
+#     path (pcre2 is built from source there), so calling it here would
+#     break the CI build that worked before.
+#   - macOS: the bare token fails (libpcre2-8.a is under the Homebrew
+#     prefix, off the default path), so resolve the full path explicitly.
+if(APPLE)
     find_file(PCRE2_LIB NAMES libpcre2-8.a PATH_SUFFIXES lib REQUIRED)
     set(TOKENIZER_CXX_LIB c++)
     set(TOKENIZER_MATH_LIB m)
@@ -21,7 +39,7 @@ else()
     set(TOKENIZER_CXX_LIB stdc++)
     set(TOKENIZER_MATH_LIB libm.a)
 endif()
-message(STATUS "PCRE2 static library: ${PCRE2_LIB}")
+message(STATUS "PCRE2 library: ${PCRE2_LIB}")
 
 # Option to enable AddressSanitizer
 option(ENABLE_ASAN "Enable AddressSanitizer" OFF)

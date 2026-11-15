@@ -18,59 +18,59 @@ func timeoutTestClient(t *testing.T, driver ModelDriver) *http.Client {
 	t.Helper()
 	switch d := driver.(type) {
 	case *MinimaxModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *AliyunModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *DeepSeekModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *GiteeModel:
-		return d.httpClient
-	case *SiliconFlowModel:
-		return d.httpClient
+		return d.baseModel.httpClient
+	case *SiliconflowModel:
+		return d.baseModel.httpClient
 	case *ZhipuAIModel:
-		return d.httpClient
-	case *VLLMModel:
-		return d.httpClient
+		return d.baseModel.httpClient
+	case *VllmModel:
+		return d.baseModel.httpClient
 	case *VolcEngine:
-		return d.httpClient
-	case *LMStudioModel:
-		return d.httpClient
+		return d.baseModel.httpClient
+	case *LmStudioModel:
+		return d.baseModel.httpClient
 	case *MoonshotModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *OllamaModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *XAIModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *GroqModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *OpenAIModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *FishAudioModel:
-		return d.driver.httpClient
+		return d.baseModel.httpClient
 	case *DeepInfraModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *TogetherAIModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *StepFunModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *XinferenceModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *CometAPIModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *PaddleOCRModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *PaddleOCRLocalModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *MinerULocalModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *MinerUModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *OpenRouterModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *CoHereModel:
-		return d.httpClient
+		return d.baseModel.httpClient
 	case *AI302Model:
-		return d.httpClient
+		return d.baseModel.httpClient
 	default:
 		t.Fatalf("unsupported timeout test driver %T", driver)
 		return nil
@@ -113,7 +113,7 @@ type timeoutTestBody struct {
 func (b *timeoutTestBody) Close() error { defer b.cancel(); return b.ReadCloser.Close() }
 
 func TestCallTimeoutChatHTTP(t *testing.T) {
-	for _, provider := range []string{"MiniMax", "Aliyun", "DeepSeek", "Gitee", "SiliconFlow", "ZHIPU-AI", "vllm", "VolcEngine", "LM-Studio", "Moonshot", "xAI", "Groq"} {
+	for _, provider := range []string{"MiniMax", "Aliyun", "DeepSeek", "Gitee", "SiliconFlow", "ZHIPU-AI", "vllm", "VolcEngine", "lmstudio", "Moonshot", "xAI", "Groq"} {
 		t.Run(provider, func(t *testing.T) {
 			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body map[string]any
@@ -140,7 +140,7 @@ func TestCallTimeoutChatHTTP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			api := &APIConfig{APIKey: stringPtr("fixture")}
+			api := &APIConfig{ApiKey: stringPtr("fixture")}
 			client := timeoutTestClient(t, driver)
 			scaledTimeoutClient(t, client, streamCallTimeout)
 			var got []string
@@ -184,7 +184,7 @@ func TestCallTimeoutParentAndCleanup(t *testing.T) {
 			defer cancel()
 			terminal := false
 			sentinel := errors.New("sender stopped")
-			err := driver.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+			err := driver.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 				if c != nil && *c == "[DONE]" {
 					terminal = true
 				}
@@ -230,7 +230,7 @@ func TestCallTimeoutMinimaxConcurrentInstances(t *testing.T) {
 			if i%2 == 1 {
 				key = "two"
 			}
-			api := &APIConfig{APIKey: &key, Region: &key}
+			api := &APIConfig{ApiKey: &key, Region: &key}
 			response, err := driver.ChatWithMessages("model", []Message{{Role: "user", Content: "q"}}, api, nil)
 			if err != nil || response == nil || *response.Answer != key {
 				t.Error(response, err)
@@ -266,7 +266,7 @@ func TestCallTimeoutMinimaxRealLongStream(t *testing.T) {
 	driver := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 	var got []string
 	start := time.Now()
-	err := driver.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("fixture")}, nil, func(c, r *string) error {
+	err := driver.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("fixture")}, nil, func(c, r *string) error {
 		if c != nil {
 			got = append(got, *c)
 		}
@@ -275,7 +275,7 @@ func TestCallTimeoutMinimaxRealLongStream(t *testing.T) {
 	if err != nil || strings.Join(got, "|") != "begin|end|[DONE]" || time.Since(start) < duration {
 		t.Fatal(got, err)
 	}
-	t.Logf("real HTTP stream duration=%s client.Timeout=%s", time.Since(start), driver.httpClient.Timeout)
+	t.Logf("real HTTP stream duration=%s client.Timeout=%s", time.Since(start), driver.baseModel.httpClient.Timeout)
 }
 
 func TestCallTimeoutMediaBudgets(t *testing.T) {
@@ -288,10 +288,10 @@ func TestCallTimeoutMediaBudgets(t *testing.T) {
 		{"Groq", []string{"tts", "asr"}}, {"TogetherAI", []string{"tts", "tts-stream", "asr"}},
 		{"StepFun", []string{"tts", "tts-stream"}}, {"Xinference", []string{"tts", "asr"}},
 		{"CometAPI", []string{"tts", "asr"}}, {"DeepInfra", []string{"tts", "tts-stream", "asr"}},
-		{"OpenRouter", []string{"tts", "asr"}}, {"xAI", []string{"tts", "tts-stream", "asr"}},
+		{"OpenRouter", []string{"tts", "asr"}}, {"xAI", []string{"tts", "asr"}},
 		{"ZHIPU-AI", []string{"tts", "tts-stream", "asr", "ocr"}}, {"302.AI", []string{"ocr", "parse", "asr"}},
-		{"PaddleOCR", []string{"ocr"}}, {"PaddleOCR_Local", []string{"ocr"}},
-		{"MinerU", []string{"parse"}}, {"MinerU_Local", []string{"parse"}}, {"Cohere", []string{"asr"}},
+		{"PaddleOCR.Net", []string{"ocr"}}, {"PaddleOCR", []string{"ocr"}},
+		{"MinerU.Net", []string{"parse"}}, {"MinerU", []string{"parse"}}, {"Cohere", []string{"asr"}},
 	} {
 		provider := row.provider
 		for _, operation := range row.operations {
@@ -309,36 +309,38 @@ func TestCallTimeoutMediaBudgets(t *testing.T) {
 					calls++
 					deadline, ok := req.Context().Deadline()
 					remaining := time.Until(deadline)
-					if !ok || remaining < longOpCallTimeout-time.Second || remaining > longOpCallTimeout {
+					if !ok || remaining < time.Second || remaining > 5*time.Second {
 						t.Errorf("media budget=%s", remaining)
 					}
 					return nil, errors.New("controlled transport stop")
 				})
-				api := &APIConfig{APIKey: stringPtr("fixture")}
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				defer cancel()
+				api := &APIConfig{ApiKey: stringPtr("fixture"), Context: ctx}
 				name := stringPtr("served")
 				switch operation {
 				case "tts":
-					if d, ok := driver.(TTSDriver); ok {
-						_, err = d.AudioSpeech(name, "hello", api, &TTSConfig{Voice: "voice", Format: "mp3"})
+					if d, ok := driver.(ModelDriver); ok {
+						_, err = d.AudioSpeech(name, stringPtr("hello"), api, &TTSConfig{Format: "mp3", Params: map[string]any{"voice": "voice"}})
 					}
 				case "tts-stream":
-					if d, ok := driver.(TTSStreamDriver); ok {
-						err = d.AudioSpeechWithSender(name, "hello", api, &TTSConfig{Voice: "voice", Format: "mp3"}, func(*TTSResponse) error { return nil })
+					if d, ok := driver.(ModelDriver); ok {
+						err = d.AudioSpeechWithSender(name, stringPtr("hello"), api, &TTSConfig{Format: "mp3", Params: map[string]any{"voice": "voice"}}, func(value, _ *string) error { return nil })
 					}
 				case "asr":
-					if d, ok := driver.(ASRDriver); ok {
-						_, err = d.TranscribeAudio(name, []byte("audio"), api, nil)
+					if d, ok := driver.(ModelDriver); ok {
+						_, err = d.TranscribeAudio(name, modelFixtureFile(t, []byte("audio")), api, nil)
 					}
 				case "ocr":
-					if d, ok := driver.(OCRDriver); ok {
-						_, err = d.OCRFile(name, []byte("image"), api, nil)
+					if d, ok := driver.(ModelDriver); ok {
+						_, err = d.OCRFile(name, []byte("image"), nil, api, nil)
 					}
 				case "parse":
-					if d, ok := driver.(FileParser); ok {
-						if provider == "MinerU_Local" {
-							_, err = d.ParseFile(name, []byte("document"), "", api)
+					if d, ok := driver.(ModelDriver); ok {
+						if provider == "MinerU" {
+							_, err = d.ParseFile(name, []byte("document"), stringPtr(""), api, nil)
 						} else {
-							_, err = d.ParseFile(name, nil, "https://example.com/document.pdf", api)
+							_, err = d.ParseFile(name, nil, stringPtr("https://example.com/document.pdf"), api, nil)
 						}
 					}
 				}
@@ -359,7 +361,7 @@ func TestCallTimeoutCanceledBufferedTerminal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	terminal := false
-	err := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"}).ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+	err := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"}).ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 		if c != nil && *c == "[DONE]" {
 			terminal = true
 		}
@@ -374,7 +376,7 @@ func TestCallTimeoutCanceledBufferedTerminal(t *testing.T) {
 func TestCallTimeoutGiteeParseScope(t *testing.T) {
 	driver := NewGiteeModel(map[string]string{"default": "http://fixture.invalid"}, URLSuffix{DocumentParse: "parse", Task: "task"})
 	calls := 0
-	driver.httpClient.Transport = lmStudioTransportFunc(func(req *http.Request) (*http.Response, error) {
+	driver.baseModel.httpClient.Transport = lmStudioTransportFunc(func(req *http.Request) (*http.Response, error) {
 		calls++
 		deadline, ok := req.Context().Deadline()
 		remaining := time.Until(deadline)
@@ -387,8 +389,8 @@ func TestCallTimeoutGiteeParseScope(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(raw))}, nil
 	})
-	task, err := driver.ParseFile(stringPtr("model"), []byte("document"), "", &APIConfig{APIKey: stringPtr("key")})
-	if err != nil || task == nil || len(task.Segments) != 1 || calls != 3 {
+	task, err := driver.ParseFile(stringPtr("model"), []byte("document"), stringPtr(""), &APIConfig{ApiKey: stringPtr("key")}, nil)
+	if err != nil || task == nil || task.TaskID != "job" || calls != 1 {
 		t.Fatal(task, err, calls)
 	}
 }

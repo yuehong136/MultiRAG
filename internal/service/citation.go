@@ -1,233 +1,262 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package service
 
 import (
-	"context"
-	"fmt"
 	"math"
 	"regexp"
 	"strings"
-	"unicode/utf8"
-
-	"multirag/internal/entity/models"
 )
 
-var answerCitationRE = regexp.MustCompile(`\[ID:([^\]\r\n]+)\]`)
+// sentenceSplitRE splits text on Chinese / English / Arabic sentence-ending
+// punctuation.  Matches the Python regex in rag/nlp/search.py:insert_citations.
+var sentenceSplitRE = regexp.MustCompile(`([^\|][；。？!！,؛؟.\n]|[a-z؀-ۿ][.?;!،؛؟][ \n])`)
 
-type citationSpan struct{ start, end int }
+const minSentenceLen = 5
 
-// citationSpans preserves every original byte and excludes fenced code. Both
-// closed and unfinished fences stay untouched; no reconstruction normalizes them.
-func citationSpans(answer string) []citationSpan {
-	spans := []citationSpan{}
-	start, inCode := 0, false
-	add := func(end int) {
-		if utf8.RuneCountInString(strings.TrimSpace(answer[start:end])) >= 5 {
-			spans = append(spans, citationSpan{start, end})
-		}
-		start = end
-	}
-	for i := 0; i < len(answer); {
-		if strings.HasPrefix(answer[i:], "```") {
-			if !inCode {
-				add(i)
-			}
-			inCode = !inCode
-			i += 3
-			start = i
-			continue
-		}
-		r, n := utf8.DecodeRuneInString(answer[i:])
-		i += n
-		if inCode {
-			start = i
-			continue
-		}
-		if strings.ContainsRune("。！？；.?!;\n", r) {
-			add(i)
-		}
-	}
-	if !inCode {
-		add(len(answer))
-	}
-	return spans
+// Embedder abstracts embedding-model access so InsertCitations is testable.
+type Embedder interface {
+	Encode(texts []string) ([][]float64, error)
 }
 
-// cleanAnswerCitations retains only IDs actually present in the prompt. Pending
-// prefixes are held back from cumulative stream snapshots until complete.
-func cleanAnswerCitations(answer string, chunks []SourcedChunk, enabled bool) (string, []SourcedChunk) {
-	allowed := map[string]bool{}
-	used := map[string]bool{}
-	for _, chunk := range chunks {
-		allowed[chunk.ID] = true
+// InsertCitations decorates answer with [ID:n] citation markers.
+//
+// Algorithm mirrors Python Dealer.insert_citations:
+//  1. Split into sentences, preserving ``` code blocks.
+//  2. Drop sentences shorter than minSentenceLen.
+//  3. Encode sentences → sentence vectors.
+//  4. Compute cosine similarity between each sentence and each chunk vector.
+//  5. Threshold descent (0.63 → 0.3, ×0.8 per round): find chunks where
+//     similarity > max*0.99.  Up to 4 chunks per sentence.
+//  6. Rebuild answer text with [ID:n] markers inserted after cited sentences.
+//
+// Returns the decorated answer and the set of cited chunk indices.
+func InsertCitations(answer string, chunks []SourcedChunk, embedder Embedder, chunkVectors [][]float64) (string, []int) {
+	sentences, sentenceIdx := splitAnswer(answer)
+	if len(sentences) == 0 || len(chunks) == 0 || len(chunkVectors) == 0 {
+		return answer, nil
 	}
-	answer = answerCitationRE.ReplaceAllStringFunc(answer, func(marker string) string {
-		id := answerCitationRE.FindStringSubmatch(marker)[1]
-		if enabled && allowed[id] {
-			used[id] = true
-			return marker
-		}
-		return ""
-	})
-	if pos := strings.LastIndex(answer, "["); pos >= 0 {
-		tail := answer[pos:]
-		if strings.HasPrefix("[ID:", tail) || strings.HasPrefix(tail, "[ID:") && !strings.Contains(tail, "]") {
-			answer = answer[:pos]
-		}
+
+	sentenceVecs, err := embedder.Encode(sentences)
+	if err != nil || len(sentenceVecs) == 0 {
+		return answer, nil
 	}
-	referenced := []SourcedChunk{}
-	for _, chunk := range chunks {
-		if used[chunk.ID] {
-			referenced = append(referenced, chunk)
-		}
-	}
-	return answer, referenced
+
+	return InsertCitationsWithVectors(answer, chunks, sentenceVecs, chunkVectors, sentences, sentenceIdx)
 }
 
-// finalizeCitations uses the exact owner-bound embedder from retrieval and
-// scoped vector hydration. Missing/zero stored vectors never create evidence.
-func (s *ChunkService) finalizeCitations(ctx context.Context, actor, answer string, chunks []SourcedChunk, result *RetrievalTestResponse, enabled bool) (string, map[string]interface{}, error) {
-	answer, referenced := cleanAnswerCitations(answer, chunks, enabled)
-	if strings.TrimSpace(answer) == "" || !enabled || len(chunks) == 0 {
-		return answer, answerReference(nil), ctx.Err()
-	}
-	if len(referenced) > 0 {
-		return answer, answerReference(referenced), ctx.Err()
-	}
-	spans := citationSpans(answer)
-	if len(spans) == 0 {
-		return answer, answerReference(nil), ctx.Err()
-	}
-	if result == nil || result.embedding == nil {
-		return "", nil, fmt.Errorf("citation embedding unavailable")
-	}
-	texts := make([]string, len(spans))
-	for i, span := range spans {
-		texts[i] = answer[span.start:span.end]
-	}
-	data, err := result.embedding.Embed(texts)
-	if err != nil {
-		return "", nil, err
-	}
-	sentenceVectors, err := models.EmbeddingVectors(data, len(texts))
-	if err != nil {
-		return "", nil, err
-	}
-	dim := len(sentenceVectors[0])
-	vectors := make([][]float64, len(chunks))
-	groups := map[string][]int{}
-	for i, chunk := range chunks {
-		if chunk.DatasetID != "" && chunk.DocID != "" {
-			groups[chunk.DatasetID] = append(groups[chunk.DatasetID], i)
+// InsertCitationsWithVectors is the pure core: pre-split sentences, pre-encoded
+// vectors.  Separated from the encoding step for testability.
+func InsertCitationsWithVectors(
+	answer string,
+	chunks []SourcedChunk,
+	sentenceVecs, chunkVectors [][]float64,
+	sentences []string,
+	sentenceIdx []int,
+) (string, []int) {
+	if len(sentences) != len(sentenceVecs) {
+		n := len(sentenceVecs)
+		if n < len(sentences) {
+			sentences = sentences[:n]
+			sentenceIdx = sentenceIdx[:n]
 		}
 	}
-	// Iterate prompt order for deterministic requests and stable failure evidence.
-	seen := map[string]bool{}
-	for _, chunk := range chunks {
-		kb := chunk.DatasetID
-		if seen[kb] || len(groups[kb]) == 0 {
-			continue
-		}
-		seen[kb] = true
-		ids, docs := []string{}, []string{}
-		for _, i := range groups[kb] {
-			ids = append(ids, chunks[i].ID)
-			docs = append(docs, chunks[i].DocID)
-		}
-		hydrated, err := s.FetchChunkVectors(ctx, &ChunkVectorRequest{DatasetID: kb, DocumentIDs: docs, ChunkIDs: ids, Dimension: dim}, actor)
-		if err != nil {
-			return "", nil, err
-		}
-		for _, i := range groups[kb] {
-			vectors[i] = hydrated.Vectors[chunks[i].ID]
-		}
-	}
-	decorated, used, err := insertCitationsWithVectors(answer, spans, chunks, sentenceVectors, vectors)
-	if err != nil {
-		return "", nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", nil, err
-	}
-	referenced = []SourcedChunk{}
-	for i, chunk := range chunks {
-		if used[i] {
-			referenced = append(referenced, chunk)
-		}
-	}
-	return decorated, answerReference(referenced), nil
+
+	sim := cosineSimMatrix(sentenceVecs, chunkVectors)
+	cites := findCitations(sim)
+
+	return applyCitations(answer, sentences, sentenceIdx, cites, chunks)
 }
 
-func insertCitationsWithVectors(answer string, spans []citationSpan, chunks []SourcedChunk, sentences, vectors [][]float64) (string, map[int]bool, error) {
-	if len(spans) != len(sentences) || len(chunks) != len(vectors) {
-		return "", nil, fmt.Errorf("citation vector count mismatch")
-	}
-	if err := models.ValidateEmbeddings(sentences, len(spans)); err != nil {
-		return "", nil, err
-	}
-	used := map[int]bool{}
-	matches := map[int][]int{}
-	dim := 0
-	if len(sentences) > 0 {
-		dim = len(sentences[0])
-	}
-	for _, v := range vectors {
-		if v == nil {
-			continue
-		}
-		if _, err := parseChunkVector(v, dim); err != nil {
-			return "", nil, err
+// splitAnswer splits answer text into sentences, preserving ``` code blocks.
+func splitAnswer(answer string) ([]string, []int) {
+	blocks := strings.Split(answer, "```")
+	var rawPieces []string
+	for i, block := range blocks {
+		if i%2 == 1 {
+			// Code block — keep intact, won't receive citations.
+			rawPieces = append(rawPieces, "```"+block+"```\n")
+		} else {
+			// Regular text — split on sentence boundaries.
+			rawPieces = append(rawPieces, sentenceSplit(block)...)
 		}
 	}
-	for threshold := 0.63; threshold > 0.3 && len(matches) == 0; threshold *= 0.8 {
-		for i, sv := range sentences {
-			scores := make([]float64, len(vectors))
-			best := 0.0
-			for j, cv := range vectors {
-				if cv == nil {
-					continue
+	// Rejoin the trailing punctuation that the regex captured as a separate piece.
+	for i := 1; i < len(rawPieces); i++ {
+		if sentenceSplitRE.MatchString(rawPieces[i]) {
+			r := []rune(rawPieces[i])
+			rawPieces[i-1] += string(r[0])
+			rawPieces[i] = string(r[1:])
+		}
+	}
+	// Filter out short pieces.
+	var sentences []string
+	var sentenceIdx []int
+	for i, t := range rawPieces {
+		if len(strings.TrimSpace(t)) >= minSentenceLen {
+			sentences = append(sentences, t)
+			sentenceIdx = append(sentenceIdx, i)
+		}
+	}
+	return sentences, sentenceIdx
+}
+
+func sentenceSplit(text string) []string {
+	indices := sentenceSplitRE.FindAllStringIndex(text, -1)
+	if len(indices) == 0 {
+		return []string{text}
+	}
+	var result []string
+	prev := 0
+	for _, idx := range indices {
+		result = append(result, text[prev:idx[1]])
+		prev = idx[1]
+	}
+	if prev < len(text) {
+		result = append(result, text[prev:])
+	}
+	return result
+}
+
+// applyCitations rebuilds the answer text with [ID:n] markers inserted after
+// each cited sentence position.
+func applyCitations(answer string, sentences []string, sentenceIdx []int, cites map[int][]int, chunks []SourcedChunk) (string, []int) {
+	blocks := strings.Split(answer, "```")
+	var rawPieces []string
+	for i, block := range blocks {
+		if i%2 == 1 {
+			rawPieces = append(rawPieces, "```"+block+"```\n")
+		} else {
+			rawPieces = append(rawPieces, sentenceSplit(block)...)
+		}
+	}
+	for i := 1; i < len(rawPieces); i++ {
+		if sentenceSplitRE.MatchString(rawPieces[i]) {
+			r := []rune(rawPieces[i])
+			rawPieces[i-1] += string(r[0])
+			rawPieces[i] = string(r[1:])
+		}
+	}
+
+	// Map sentence position → chunk IDs to insert.
+	citedChunks := make(map[int]string)
+	seenChunks := make(map[int]bool)
+	var citedIndices []int
+	for i, rawIdx := range sentenceIdx {
+		if chunkIdxs, ok := cites[i]; ok {
+			var markers []string
+			for _, ci := range chunkIdxs {
+				if ci < len(chunks) && !seenChunks[ci] {
+					seenChunks[ci] = true
+					markers = append(markers, " [ID:"+chunks[ci].ID+"]")
+					citedIndices = append(citedIndices, ci)
 				}
-				scores[j] = citationCosine(sv, cv)
-				best = math.Max(best, scores[j])
 			}
-			if best*0.99 < threshold {
+			citedChunks[rawIdx] = strings.Join(markers, "")
+		}
+	}
+
+	var b strings.Builder
+	for i, p := range rawPieces {
+		b.WriteString(p)
+		if markers, ok := citedChunks[i]; ok {
+			b.WriteString(markers)
+		}
+	}
+	return b.String(), citedIndices
+}
+
+// ---- Pure computation helpers ----
+
+func cosineSimMatrix(a, b [][]float64) [][]float64 {
+	m := make([][]float64, len(a))
+	for i := range a {
+		m[i] = make([]float64, len(b))
+		na := vecNorm(a[i])
+		if na == 0 {
+			continue
+		}
+		for j := range b {
+			nb := vecNorm(b[j])
+			if nb == 0 {
 				continue
 			}
-			for j, score := range scores {
-				if score > best*0.99 && len(matches[i]) < 4 {
-					matches[i] = append(matches[i], j)
-				}
-			}
+			m[i][j] = dot(a[i], b[j]) / (na * nb)
 		}
 	}
-	var out strings.Builder
-	position := 0
-	for i, span := range spans {
-		if span.start < position || span.end < span.start || span.end > len(answer) {
-			return "", nil, fmt.Errorf("invalid citation span")
-		}
-		out.WriteString(answer[position:span.end])
-		position = span.end
-		for _, j := range matches[i] {
-			out.WriteString(" [ID:" + chunks[j].ID + "]")
-			used[j] = true
-		}
-	}
-	out.WriteString(answer[position:])
-	return out.String(), used, nil
+	return m
 }
 
-func citationCosine(a, b []float64) float64 {
-	na, nb := 0.0, 0.0
-	for i := range a {
-		na = math.Hypot(na, a[i])
-		nb = math.Hypot(nb, b[i])
+func vecNorm(v []float64) float64 {
+	var s float64
+	for _, x := range v {
+		s += x * x
 	}
-	if na == 0 || nb == 0 {
+	return math.Sqrt(s)
+}
+
+func dot(a, b []float64) float64 {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	var s float64
+	for i := 0; i < n; i++ {
+		s += a[i] * b[i]
+	}
+	return s
+}
+
+func findCitations(sim [][]float64) map[int][]int {
+	cites := make(map[int][]int)
+	thr := 0.63
+	for thr > 0.3 && len(cites) == 0 {
+		for i := range sim {
+			mx := maxRow(sim[i]) * 0.99
+			if mx < thr {
+				continue
+			}
+			var matches []int
+			for j, s := range sim[i] {
+				if s > mx {
+					matches = append(matches, j)
+				}
+			}
+			if len(matches) > 4 {
+				matches = matches[:4]
+			}
+			if len(matches) > 0 {
+				cites[i] = matches
+			}
+		}
+		thr *= 0.8
+	}
+	return cites
+}
+
+func maxRow(row []float64) float64 {
+	if len(row) == 0 {
 		return 0
 	}
-	score := 0.0
-	for i := range a {
-		score += (a[i] / na) * (b[i] / nb)
+	mx := row[0]
+	for _, v := range row[1:] {
+		if v > mx {
+			mx = v
+		}
 	}
-	return score
+	return mx
 }

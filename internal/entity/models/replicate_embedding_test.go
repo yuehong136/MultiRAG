@@ -72,7 +72,7 @@ func TestReplicateEmbeddingPredictionContract(t *testing.T) {
 						}
 					}))
 					defer srv.Close()
-					result, err := newReplicateTestModel(srv.URL).Embed(&name, texts, &APIConfig{APIKey: stringPtr("key")}, &EmbeddingConfig{Dimension: 2})
+					result, err := newReplicateTestModel(srv.URL).Embed(&name, texts, &APIConfig{ApiKey: stringPtr("key")}, &EmbeddingConfig{Dimension: 2})
 					if err != nil || len(result) != count || calls != 2 {
 						t.Fatal(result, err, calls)
 					}
@@ -95,7 +95,7 @@ func TestReplicateEmbeddingRejectsInvalidRawOutput(t *testing.T) {
 			}))
 			defer srv.Close()
 			name := "owner/model"
-			result, err := newReplicateTestModel(srv.URL).Embed(&name, []string{"q"}, &APIConfig{APIKey: stringPtr("key")}, &EmbeddingConfig{Dimension: 2})
+			result, err := newReplicateTestModel(srv.URL).Embed(&name, []string{"q"}, &APIConfig{ApiKey: stringPtr("key")}, &EmbeddingConfig{Dimension: 2})
 			if err == nil || result != nil {
 				t.Fatal(result, err)
 			}
@@ -107,14 +107,14 @@ func TestReplicateEmbeddingRejectsInvalidRawOutput(t *testing.T) {
 	}))
 	defer srv.Close()
 	name := "owner/model"
-	if data, err := newReplicateTestModel(srv.URL).Embed(&name, []string{"q", "r"}, &APIConfig{APIKey: stringPtr("key")}, nil); err == nil || data != nil {
+	if data, err := newReplicateTestModel(srv.URL).Embed(&name, []string{"q", "r"}, &APIConfig{ApiKey: stringPtr("key")}, nil); err == nil || data != nil {
 		t.Fatal(data, err)
 	}
 }
 
 func TestReplicateEmbeddingCancellationAndEmpty(t *testing.T) {
 	m := newReplicateTestModel("http://127.0.0.1:1")
-	if data, err := m.Embed(nil, nil, nil, nil); err != nil || data == nil || len(data) != 0 {
+	if data, err := m.Embed(nil, nil, &APIConfig{ApiKey: stringPtr("key")}, nil); err != nil || data == nil || len(data) != 0 {
 		t.Fatal(data, err)
 	}
 	started, closed := make(chan struct{}), make(chan struct{})
@@ -133,7 +133,7 @@ func TestReplicateEmbeddingCancellationAndEmpty(t *testing.T) {
 	name := "owner/model"
 	done := make(chan error, 1)
 	go func() {
-		data, err := newReplicateTestModel(srv.URL).Embed(&name, []string{"q"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)
+		data, err := newReplicateTestModel(srv.URL).Embed(&name, []string{"q"}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil)
 		if data != nil {
 			t.Error("partial result")
 		}
@@ -141,7 +141,7 @@ func TestReplicateEmbeddingCancellationAndEmpty(t *testing.T) {
 	}()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("poll not started")
 	}
 	cancel()

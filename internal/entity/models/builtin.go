@@ -4,127 +4,220 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
 	"net/http"
-	"net/url"
+	"os"
 	"strings"
 	"time"
 )
 
-// BuiltinModel calls the explicitly configured TEI embedding endpoint. It has
-// no provider credentials and does not accept a different model per request.
+// builtinHTTPClient is a shared client with timeouts for all Builtin model
+// requests. http.DefaultClient has no timeout, so a hung or slow TEI server
+// would otherwise block goroutines indefinitely.
+var builtinHTTPClient = &http.Client{
+	Timeout:       30 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	Transport: &http.Transport{
+		MaxIdleConnsPerHost:   10,
+		ResponseHeaderTimeout: 10 * time.Second,
+	},
+}
+
+// BuiltinModel implements ModelDriver for Builtin (local embedding models via TEI)
 type BuiltinModel struct {
-	*DummyModel
-	endpoint   string
-	model      string
-	httpClient *http.Client
+	baseURL string
+	model   string
 }
 
-func NewBuiltinModel(baseURL, model string) (*BuiltinModel, error) {
-	baseURL, model = strings.TrimSpace(baseURL), strings.TrimSpace(model)
-	parsed, err := url.Parse(baseURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || model == "" {
-		return nil, fmt.Errorf("builtin requires an explicit HTTP(S) endpoint and model")
-	}
-	endpoint := strings.TrimRight(baseURL, "/")
-	if !strings.HasSuffix(endpoint, "/embed") {
-		endpoint += "/embed"
-	}
+// NewBuiltinModel creates a new Builtin model instance
+func NewBuiltinModel(baseURL, model string) *BuiltinModel {
 	return &BuiltinModel{
-		DummyModel: NewDummyModel(nil, URLSuffix{}), endpoint: endpoint, model: model,
-		httpClient: &http.Client{Transport: providerModelTransport, Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }},
-	}, nil
+		baseURL: baseURL,
+		model:   model,
+	}
 }
 
-func (b *BuiltinModel) Name() string { return "Builtin" }
+func (b *BuiltinModel) Name() string {
+	return "builtin"
+}
 
-func (b *BuiltinModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
-	if name == nil || *name != b.model {
-		return nil, fmt.Errorf("builtin model does not match the configured TEI model")
+func (b *BuiltinModel) NewInstance(baseURL map[string]string) ModelDriver {
+	return &BuiltinModel{
+		baseURL: b.baseURL,
+		model:   b.model,
 	}
-	if config != nil && config.Dimension < 0 {
-		return nil, fmt.Errorf("embedding dimension must be non-negative")
-	}
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
+}
+
+func (b *BuiltinModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	return nil, fmt.Errorf("builtin model does not support chat")
+}
+
+func (b *BuiltinModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("builtin model does not support chat")
+}
+
+// Embed sends texts to a TEI (Text Embeddings Inference) server and returns embeddings
+func (b *BuiltinModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	if embeddingConfig != nil && embeddingConfig.Dimension < 0 {
+		return nil, fmt.Errorf("embedding dimension must be nonnegative")
 	}
 	if len(texts) == 0 {
 		return []EmbeddingData{}, nil
 	}
+
+	baseURL := b.baseURL
+	if baseURL == "" {
+		baseURL = "http://localhost:6380"
+	}
+
+	url := fmt.Sprintf("%s/embed", baseURL)
+
+	reqBody := map[string]interface{}{
+		"inputs": texts,
+	}
+
+	// Add dimension if specified
+	if embeddingConfig != nil && embeddingConfig.Dimension > 0 {
+		reqBody["dimensions"] = embeddingConfig.Dimension
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(apiConfig.RequestContext(), "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	// Note: TEI server typically doesn't require auth for local deployments
+
+	resp, err := builtinHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Builtin embeddings API error: status %d, body: %s", resp.StatusCode, "[redacted]")
+	}
+
+	// TEI returns a plain numeric matrix; validate nulls before float conversion.
+	var values [][]*float64
+	if err = json.Unmarshal(body, &values); err != nil || len(values) != len(texts) {
+		return nil, fmt.Errorf("invalid TEI embedding response")
+	}
+	embeddings := make([][]float64, len(values))
 	dimension := 0
-	if config != nil {
-		dimension = config.Dimension
-	}
-	vectors := make([][]float64, 0, len(texts))
-	for start := 0; start < len(texts); start += 32 {
-		end := min(start+32, len(texts))
-		payload := map[string]any{"inputs": texts[start:end]}
-		if config != nil && config.Dimension > 0 {
-			payload["dimensions"] = config.Dimension
+	for i, row := range values {
+		if len(row) == 0 {
+			return nil, fmt.Errorf("empty TEI embedding")
 		}
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return nil, err
+		if dimension == 0 {
+			dimension = len(row)
+		} else if dimension != len(row) {
+			return nil, fmt.Errorf("inconsistent TEI dimension")
 		}
-		req, err := http.NewRequestWithContext(requestContext(local), http.MethodPost, b.endpoint, bytes.NewReader(body))
-		if err != nil {
-			return nil, err
+		if embeddingConfig != nil && embeddingConfig.Dimension > 0 && len(row) != embeddingConfig.Dimension {
+			return nil, fmt.Errorf("unexpected TEI dimension")
 		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := b.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("builtin embedding request: %w", err)
-		}
-		// Decode pointers so null cannot silently become a valid numeric zero.
-		var raw [][]*float64
-		decodeErr := decodeBoundedModelJSON(resp.Body, &raw)
-		resp.Body.Close()
-		if err := requestContext(local).Err(); err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("builtin embedding request failed (HTTP %d)", resp.StatusCode)
-		}
-		if decodeErr != nil {
-			return nil, fmt.Errorf("invalid builtin embedding response")
-		}
-		if len(raw) != end-start {
-			return nil, fmt.Errorf("builtin embedding count does not match inputs")
-		}
-		for _, values := range raw {
-			if dimension == 0 {
-				dimension = len(values)
+		embeddings[i] = make([]float64, len(row))
+		for j, value := range row {
+			if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) {
+				return nil, fmt.Errorf("invalid TEI coordinate")
 			}
-			if dimension == 0 || len(values) != dimension {
-				return nil, fmt.Errorf("builtin embedding dimensions do not match")
-			}
-			vector := make([]float64, len(values))
-			for index, value := range values {
-				if value == nil {
-					return nil, fmt.Errorf("builtin returned a null embedding value")
-				}
-				vector[index] = *value
-			}
-			vectors = append(vectors, vector)
+			embeddings[i][j] = *value
 		}
 	}
-	if err := ValidateEmbeddings(vectors, len(texts)); err != nil {
-		return nil, err
+
+	result := make([]EmbeddingData, len(embeddings))
+	for i, emb := range embeddings {
+		result[i] = EmbeddingData{
+			Embedding: emb,
+			Index:     i,
+		}
 	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
-	}
-	return embeddingData(vectors), nil
+
+	return result, nil
 }
 
-func (b *BuiltinModel) ListModels(_ *APIConfig) ([]string, error) {
-	return []string{b.model}, nil
+func (b *BuiltinModel) Rerank(modelName *string, query string, documents []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return nil, fmt.Errorf("builtin model does not support rerank")
 }
 
-func (b *BuiltinModel) CheckConnection(api *APIConfig) error {
-	_, err := b.Embed(&b.model, []string{"test"}, api, nil)
+func (b *BuiltinModel) TranscribeAudio(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig) (*ASRResponse, error) {
+	return nil, fmt.Errorf("builtin model does not support transcription")
+}
+
+func (b *BuiltinModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("builtin model does not support transcription")
+}
+
+func (b *BuiltinModel) AudioSpeech(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig) (*TTSResponse, error) {
+	return nil, fmt.Errorf("builtin model does not support TTS")
+}
+
+func (b *BuiltinModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("builtin model does not support TTS")
+}
+
+func (b *BuiltinModel) OCRFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, ocrConfig *OCRConfig) (*OCRFileResponse, error) {
+	return nil, fmt.Errorf("builtin model does not support OCR")
+}
+
+func (b *BuiltinModel) ParseFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, parseFileConfig *ParseFileConfig) (*ParseFileResponse, error) {
+	return nil, fmt.Errorf("builtin model does not support parse file")
+}
+
+func (b *BuiltinModel) ListModels(apiConfig *APIConfig) ([]ListModelResponse, error) {
+	return []ListModelResponse{
+		{
+			Name: b.model,
+		},
+	}, nil
+}
+
+func (b *BuiltinModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("builtin model does not support balance")
+}
+
+func (b *BuiltinModel) CheckConnection(apiConfig *APIConfig) error {
+	// Try to get model info to verify connection
+	_, err := b.Embed(nil, []string{"test"}, apiConfig, nil)
 	return err
 }
 
-var _ ModelDriver = (*BuiltinModel)(nil)
+func (b *BuiltinModel) ListTasks(apiConfig *APIConfig) ([]ListTaskStatus, error) {
+	return nil, fmt.Errorf("builtin model does not support tasks")
+}
+
+func (b *BuiltinModel) ShowTask(taskID string, apiConfig *APIConfig) (*TaskResponse, error) {
+	return nil, fmt.Errorf("builtin model does not support tasks")
+}
+
+// GetBuiltinEmbeddingModel returns a Builtin model driver for the given model name
+func GetBuiltinEmbeddingModel(modelName string) ModelDriver {
+	// Get TEI base URL from environment or config
+	// Default to port 6380 where docker-tei-cpu-1 maps internal port 80
+	teiBaseURL := getEnv("TEI_BASE_URL", "http://localhost:6380")
+
+	// Create a builtin model instance with TEI endpoint
+	driver := NewBuiltinModel(teiBaseURL, modelName)
+	return driver
+}
+
+// getEnv is a helper to get environment variable with default
+func getEnv(key, defaultValue string) string {
+	if value := strings.TrimSpace(strings.Replace(os.Getenv(key), "\\", "/", -1)); value != "" {
+		return value
+	}
+	return defaultValue
+}

@@ -1,3 +1,21 @@
+//go:build ignore
+
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package main
 
 import (
@@ -5,10 +23,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"multirag/internal/common"
+	"multirag/internal/engine"
+	"multirag/internal/engine/redis"
+	"multirag/internal/utility"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -16,12 +37,8 @@ import (
 	"go.uber.org/zap"
 
 	"multirag/internal/admin"
-	"multirag/internal/common"
 	"multirag/internal/dao"
-	"multirag/internal/engine"
-	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/server"
-	"multirag/internal/utility"
 )
 
 func main() {
@@ -30,28 +47,27 @@ func main() {
 	flag.Parse()
 
 	// Initialize logger
-	if err := common.Init("info"); err != nil {
+	if err := common.Init("info", "admin_server.log"); err != nil {
 		panic("failed to initialize logger: " + err.Error())
 	}
-
-	defer common.Sync()
-	server.SetLogger(common.Logger)
 
 	// Initialize configuration
 	if err := server.Init(configPath); err != nil {
 		common.Error("Failed to initialize configuration", err)
-		common.Sync()
 		os.Exit(1)
 	}
 
 	cfg := server.GetConfig()
 
-	// Update the shared level without replacing captured loggers
+	// Reinitialize logger with configured level if different
 	if cfg.Log.Level != "" && cfg.Log.Level != "info" {
-		if err := common.Init(cfg.Log.Level); err != nil {
-			common.Error("Failed to apply configured log level", err)
+		if err := common.Init(cfg.Log.Level, "admin_server.log"); err != nil {
+			common.Error("Failed to reinitialize logger with configured level", err)
 		}
 	}
+
+	// Set logger for server package
+	server.SetLogger(common.Logger)
 
 	common.Info("Server mode", zap.String("mode", cfg.Server.Mode))
 
@@ -65,12 +81,7 @@ func main() {
 	// Initialize database
 	if err := dao.InitDB(); err != nil {
 		common.Error("Failed to initialize database", err)
-		common.Sync()
 		os.Exit(1)
-	}
-
-	if err := dao.GetModelProviderManager().LoadAllModels(filepath.Join(utility.GetProjectBaseDirectory(), "configs", "all_models.json")); err != nil {
-		common.Fatal("Failed to load global model catalog", zap.Error(err))
 	}
 
 	// Initialize doc engine
@@ -80,14 +91,18 @@ func main() {
 	defer engine.Close()
 
 	// Initialize Redis cache
-	if err := redisengine.Init(&cfg.Redis); err != nil {
+	if err := redis.Init(&cfg.Redis); err != nil {
 		common.Fatal("Failed to initialize Redis", zap.Error(err))
 	}
-	defer redisengine.Close()
+	defer redis.Close()
+
+	if err := engine.InitMessageQueueEngine(cfg.TaskExecutor.MessageQueueType); err != nil {
+		common.Fatal("Failed to initialize message queue engine", zap.Error(err))
+	}
 
 	// Initialize server variables (runtime variables that can change during operation)
 	// This must be done after Cache is initialized
-	if err := server.InitVariables(redisengine.Get()); err != nil {
+	if err := server.InitVariables(redis.Get()); err != nil {
 		common.Warn("Failed to initialize server variables from Redis, using defaults", zap.String("error", err.Error()))
 	}
 
@@ -126,24 +141,23 @@ func main() {
 		Handler: ginEngine,
 	}
 
-	// Print version
-	common.Info("MultiRAG version", zap.String("version", utility.GetMultiRAGVersion()))
-
 	// Print all configuration settings
 	server.PrintAll()
 
-	// Print MultiRAG Admin logo
+	// Print RAGFlow Admin logo
 	common.Info("" +
-		"\n     __  ___      ____  _ ____  ___   ______   ___       __          _     \n" +
-		"    /  |/  /_  __/ / /_(_) __ \\/   | / ____/  /   | ____/ /___ ___  (_)___ \n" +
-		"   / /|_/ / / / / / __/ / /_/ / /| |/ / __   / /| |/ __  / __ `__ \\/ / __ \\\n" +
-		"  / /  / / /_/ / / /_/ / _, _/ ___ / /_/ /  / ___ / /_/ / / / / / / / / / /\n" +
-		" /_/  /_/\\__,_/_/\\__/_/_/ |_/_/  |_\\____/  /_/  |_\\__,_/_/ /_/ /_/_/_/ /_/ \n")
+		"\n        ____  ___   ______________                 ___       __          _     \n" +
+		"       / __ \\/   | / ____/ ____/ /___ _      __   /   | ____/ /___ ___  (_)___ \n" +
+		"      / /_/ / /| |/ / __/ /_  / / __ \\ | /| / /  / /| |/ __  / __ `__ \\/ / __ \\ \n" +
+		"     / _, _/ ___ / /_/ / __/ / / /_/ / |/ |/ /  / ___ / /_/ / / / / / / / / / /\n" +
+		"    /_/ |_/_/  |_\\____/_/   /_/\\____/|__/|__/  /_/  |_\\__,_/_/ /_/ /_/_/_/ /_/ \n")
 
-	// Start server in a goroutine
+	// Print RAGFlow version
+	common.Info(fmt.Sprintf("RAGFlow admin version: %s", utility.GetRAGFlowVersion()))
+
+	// Start HTTP server in a goroutine
 	go func() {
-		common.Info(fmt.Sprintf("Admin Go Version: %s", utility.GetMultiRAGVersion()))
-		common.Info(fmt.Sprintf("Starting MultiRAG admin server on port: %d", cfg.Admin.Port))
+		common.Info(fmt.Sprintf("Starting RAGFlow admin HTTP server on port: %d", cfg.Admin.Port))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			common.Fatal("Failed to start server", zap.Error(err))
 		}
@@ -155,16 +169,16 @@ func main() {
 	sig := <-quit
 
 	common.Info("Received signal", zap.String("signal", sig.String()))
-	common.Info("Shutting down server...")
+	common.Info("Shutting down RAGFlow HTTP server...")
 
 	// Create context with timeout for graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Shutdown server
+	// Shutdown HTTP server
 	if err := srv.Shutdown(ctx); err != nil {
 		common.Fatal("Server forced to shutdown", zap.Error(err))
 	}
 
-	common.Info("Server exited")
+	common.Info("Admin HTTP server exited")
 }

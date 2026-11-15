@@ -19,11 +19,9 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"math"
+	"net/http"
 	"multirag/internal/engine"
 	"multirag/internal/engine/types"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,8 +34,8 @@ import (
 
 // DatasetsHandler handles the RESTful dataset endpoints.
 type DatasetsHandler struct {
-	datasetsService *service.DatasetsService
-	documentEngine  func() engine.DocEngine
+	datasetsService *service.DatasetService
+	metadataService *service.MetadataService
 }
 
 type listDatasetsExt struct {
@@ -47,12 +45,11 @@ type listDatasetsExt struct {
 }
 
 // NewDatasetsHandler creates a new datasets handler.
-func NewDatasetsHandler(datasetsService *service.DatasetsService, documentEngines ...engine.DocEngine) *DatasetsHandler {
-	getter := engine.Get
-	if len(documentEngines) > 0 {
-		getter = func() engine.DocEngine { return documentEngines[0] }
+func NewDatasetsHandler(datasetsService *service.DatasetService, metadataService *service.MetadataService) *DatasetsHandler {
+	return &DatasetsHandler{
+		datasetsService: datasetsService,
+		metadataService: metadataService,
 	}
-	return &DatasetsHandler{datasetsService: datasetsService, documentEngine: getter}
 }
 
 // ListDatasets handles GET /api/v1/datasets.
@@ -153,6 +150,158 @@ func (h *DatasetsHandler) CreateDataset(c *gin.Context) {
 	})
 }
 
+// GetDataset handles GET /api/v1/datasets/:dataset_id.
+func (h *DatasetsHandler) GetDataset(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	datasetID := c.Param("dataset_id")
+	result, code, err := h.datasetsService.GetDataset(datasetID, user.ID)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": common.CodeSuccess,
+		"data": result,
+	})
+}
+
+func (h *DatasetsHandler) GetMetadataConfig(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	datasetID := c.Param("dataset_id")
+	result, code, err := h.datasetsService.GetMetadataConfig(datasetID, user.ID)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": common.CodeSuccess,
+		"data": result,
+	})
+}
+
+func (h *DatasetsHandler) UpdateMetadataConfig(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	datasetID := c.Param("dataset_id")
+	var req service.MetadataConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeDataError, err.Error())
+		return
+	}
+
+	result, code, err := h.datasetsService.UpdateMetadataConfig(datasetID, user.ID, &req)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": common.CodeSuccess,
+		"data": result,
+	})
+}
+
+// GetIngestionSummary handles GET /api/v1/datasets/:dataset_id/ingestions/summary.
+func (h *DatasetsHandler) GetIngestionSummary(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	datasetID := c.Param("dataset_id")
+	result, code, err := h.datasetsService.GetIngestionSummary(datasetID, user.ID)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	jsonResponse(c, common.CodeSuccess, result, "success")
+}
+
+// ListIngestionLogs handles GET /api/v1/datasets/:dataset_id/ingestions.
+func (h *DatasetsHandler) ListIngestionLogs(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	datasetID := c.Param("dataset_id")
+
+	page := 0
+	if pageStr := c.Query("page"); pageStr != "" {
+		p, err := strconv.Atoi(pageStr)
+		if err != nil {
+			jsonError(c, common.CodeArgumentError, "page must be an integer")
+			return
+		}
+		page = p
+	}
+
+	pageSize := 0
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		ps, err := strconv.Atoi(pageSizeStr)
+		if err != nil {
+			jsonError(c, common.CodeArgumentError, "page_size must be an integer")
+			return
+		}
+		pageSize = ps
+	}
+
+	orderby := c.DefaultQuery("orderby", "create_time")
+	// desc defaults to true and is only disabled by the literal value "false".
+	desc := strings.ToLower(c.DefaultQuery("desc", "true")) != "false"
+	operationStatus := c.QueryArray("operation_status")
+	createDateFrom := c.Query("create_date_from")
+	createDateTo := c.Query("create_date_to")
+	logType := c.DefaultQuery("log_type", "dataset")
+	keywords := c.Query("keywords")
+
+	result, code, err := h.datasetsService.ListIngestionLogs(datasetID, user.ID, page, pageSize, orderby, desc, operationStatus, createDateFrom, createDateTo, logType, keywords)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	jsonResponse(c, common.CodeSuccess, result, "success")
+}
+
+// GetIngestionLog handles GET /api/v1/datasets/:dataset_id/ingestions/:log_id.
+func (h *DatasetsHandler) GetIngestionLog(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	datasetID := c.Param("dataset_id")
+	logID := c.Param("log_id")
+	result, code, err := h.datasetsService.GetIngestionLog(datasetID, user.ID, logID)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	jsonResponse(c, common.CodeSuccess, result, "success")
+}
+
 // DeleteDatasets handles DELETE /api/v1/datasets.
 func (h *DatasetsHandler) DeleteDatasets(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
@@ -189,21 +338,6 @@ func (h *DatasetsHandler) DeleteDatasets(c *gin.Context) {
 	})
 }
 
-// GetDataset handles GET /api/v1/datasets/:dataset_id.
-func (h *DatasetsHandler) GetDataset(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
-		return
-	}
-	data, code, err := h.datasetsService.GetDataset(c.Request.Context(), c.Param("dataset_id"), user.ID)
-	if err != nil {
-		jsonError(c, code, err.Error())
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": common.CodeSuccess, "data": data})
-}
-
 // GetKnowledgeGraph handles GET /api/v1/datasets/:dataset_id/graph.
 func (h *DatasetsHandler) GetKnowledgeGraph(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
@@ -218,29 +352,19 @@ func (h *DatasetsHandler) GetKnowledgeGraph(c *gin.Context) {
 		return
 	}
 
-	dataset, code, err := h.datasetsService.GetDataset(c.Request.Context(), datasetID, user.ID)
+	dataset, code, err := h.datasetsService.GetDataset(datasetID, user.ID)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return
 	}
 
-	canonicalID, _ := dataset["id"].(string)
-	if canonicalID == "" {
-		jsonError(c, common.CodeServerError, "authorized dataset identity is missing")
-		return
-	}
-	datasetID = canonicalID
 	tenantID, _ := dataset["tenant_id"].(string)
 	if tenantID == "" {
 		jsonError(c, common.CodeDataError, "tenant_id is required")
 		return
 	}
 
-	if strings.TrimSpace(c.Query("doc_id")) != "" {
-		jsonError(c, common.CodeBadRequest, "document subgraphs are unavailable in this Go engine")
-		return
-	}
-	docEngine := h.documentEngine()
+	docEngine := engine.Get()
 	if docEngine == nil {
 		jsonError(c, common.CodeServerError, "Document engine is not initialized")
 		return
@@ -266,8 +390,8 @@ func (h *DatasetsHandler) GetKnowledgeGraph(c *gin.Context) {
 		IndexNames:   []string{indexName},
 		KbIDs:        []string{datasetID},
 		Offset:       0,
-		Limit:        2,
-		SelectFields: []string{"content_with_weight", "knowledge_graph_kwd", "kb_id"},
+		Limit:        1,
+		SelectFields: []string{"content_with_weight", "knowledge_graph_kwd"},
 		Filter: map[string]interface{}{
 			"kb_id":               []string{datasetID},
 			"knowledge_graph_kwd": []string{"graph"},
@@ -277,47 +401,38 @@ func (h *DatasetsHandler) GetKnowledgeGraph(c *gin.Context) {
 		jsonInternalError(c, err)
 		return
 	}
-	if searchResult == nil {
-		jsonError(c, common.CodeServerError, "invalid graph search response")
-		return
-	}
-	if len(searchResult.Chunks) == 0 {
+	if searchResult == nil || len(searchResult.Chunks) == 0 {
 		jsonResponse(c, common.CodeSuccess, result, "success")
 		return
 	}
 
-	if len(searchResult.Chunks) != 1 {
-		jsonError(c, common.CodeServerError, "duplicate dataset graph records")
-		return
-	}
 	chunk := searchResult.Chunks[0]
-	if !graphChunkBelongs(chunk["kb_id"], datasetID) || firstStringValue(chunk["knowledge_graph_kwd"]) != "graph" {
-		jsonError(c, common.CodeServerError, "graph query returned an invalid scope")
-		return
-	}
 	graphType := firstStringValue(chunk["knowledge_graph_kwd"])
 	contentWithWeight, _ := chunk["content_with_weight"].(string)
 	if strings.TrimSpace(contentWithWeight) == "" {
-		jsonError(c, common.CodeServerError, "stored graph content is empty")
+		jsonResponse(c, common.CodeSuccess, result, "success")
 		return
 	}
+
 	var graphData map[string]interface{}
-	decoder := json.NewDecoder(strings.NewReader(contentWithWeight))
-	decoder.UseNumber()
-	if err := decoder.Decode(&graphData); err != nil || graphData == nil {
-		jsonError(c, common.CodeServerError, "stored graph must be a JSON object")
+	if err := json.Unmarshal([]byte(contentWithWeight), &graphData); err != nil {
+		jsonResponse(c, common.CodeSuccess, result, "success")
 		return
 	}
-	var trailing interface{}
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		jsonError(c, common.CodeServerError, "stored graph has trailing data")
+	if len(graphData) == 0 {
+		jsonResponse(c, common.CodeSuccess, result, "success")
 		return
 	}
-	if err := sortKnowledgeGraph(graphData); err != nil {
-		jsonInternalError(c, err)
-		return
+
+	if graphType == "" {
+		graphType = "graph"
 	}
-	result[graphType] = graphData
+	if graphType == "graph" {
+		sortKnowledgeGraph(graphData)
+		result["graph"] = graphData
+	} else {
+		result[graphType] = graphData
+	}
 
 	jsonResponse(c, common.CodeSuccess, result, "success")
 }
@@ -336,29 +451,19 @@ func (h *DatasetsHandler) DeleteKnowledgeGraph(c *gin.Context) {
 		return
 	}
 
-	dataset, code, err := h.datasetsService.GetDataset(c.Request.Context(), datasetID, user.ID)
+	dataset, code, err := h.datasetsService.GetDataset(datasetID, user.ID)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return
 	}
 
-	canonicalID, _ := dataset["id"].(string)
-	if canonicalID == "" {
-		jsonError(c, common.CodeServerError, "authorized dataset identity is missing")
-		return
-	}
-	datasetID = canonicalID
 	tenantID, _ := dataset["tenant_id"].(string)
 	if tenantID == "" {
 		jsonError(c, common.CodeDataError, "tenant_id is required")
 		return
 	}
 
-	if strings.TrimSpace(c.Query("doc_id")) != "" {
-		jsonError(c, common.CodeBadRequest, "document subgraphs are unavailable in this Go engine")
-		return
-	}
-	docEngine := h.documentEngine()
+	docEngine := engine.Get()
 	if docEngine == nil {
 		jsonError(c, common.CodeServerError, "Document engine is not initialized")
 		return
@@ -373,6 +478,250 @@ func (h *DatasetsHandler) DeleteKnowledgeGraph(c *gin.Context) {
 	}
 
 	jsonResponse(c, common.CodeSuccess, true, "success")
+}
+
+// RemoveTags handles DELETE /api/v1/datasets/:dataset_id/tags.
+// @Summary Remove Tags
+// @Description Remove tags from a dataset
+// @Tags datasets
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param dataset_id path string true "Dataset ID"
+// @Param request body object{tags []string} true "tags to remove"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/v1/datasets/{dataset_id}/tags [delete]
+func (h *DatasetsHandler) RemoveTags(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	datasetID := strings.TrimSpace(c.Param("dataset_id"))
+	if datasetID == "" {
+		jsonError(c, common.CodeDataError, "dataset_id is required")
+		return
+	}
+
+	dataset, code, err := h.datasetsService.GetDataset(datasetID, user.ID)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	tenantID, _ := dataset["tenant_id"].(string)
+	if tenantID == "" {
+		jsonError(c, common.CodeDataError, "tenant_id is required")
+		return
+	}
+
+	var req struct {
+		Tags []string `json:"tags" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeDataError, err.Error())
+		return
+	}
+
+	indexName := fmt.Sprintf("multirag_%s", tenantID)
+	docEngine := engine.Get()
+	if docEngine == nil {
+		jsonError(c, common.CodeServerError, "Document engine is not initialized")
+		return
+	}
+
+	for _, tag := range req.Tags {
+		condition := map[string]interface{}{
+			"tag_kwd": tag,
+			"kb_id":   datasetID,
+		}
+		newValue := map[string]interface{}{
+			"remove": map[string]interface{}{
+				"tag_kwd": tag,
+			},
+		}
+		if err := docEngine.UpdateChunks(c.Request.Context(), condition, newValue, indexName, datasetID); err != nil {
+			jsonError(c, common.CodeServerError, "Failed to remove tag: "+err.Error())
+			return
+		}
+	}
+
+	jsonResponse(c, common.CodeSuccess, true, "success")
+}
+
+// ListMetadataFlattened handles GET /api/v1/datasets/metadata/flattened.
+// @Summary List flattened metadata for datasets
+// @Description Get flattened metadata for multiple datasets
+// @Tags datasets
+// @Produce json
+// @Security ApiKeyAuth
+// @Param dataset_ids query string true "Comma-separated dataset IDs"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/v1/datasets/metadata/flattened [get]
+func (h *DatasetsHandler) ListMetadataFlattened(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	datasetIDsStr := c.Query("dataset_ids")
+	if datasetIDsStr == "" {
+		jsonError(c, common.CodeDataError, "dataset_ids is required")
+		return
+	}
+
+	rawIDs := strings.Split(datasetIDsStr, ",")
+	datasetIDs := make([]string, 0, len(rawIDs))
+	for _, id := range rawIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			datasetIDs = append(datasetIDs, id)
+		}
+	}
+	if len(datasetIDs) == 0 {
+		jsonError(c, common.CodeDataError, "dataset_ids is required")
+		return
+	}
+
+	// Check access for each dataset
+	for _, datasetID := range datasetIDs {
+		if !h.datasetsService.Accessible(datasetID, user.ID) {
+			jsonError(c, common.CodeAuthenticationError, "No authorization for dataset: "+datasetID)
+			return
+		}
+	}
+
+	flattenedMeta, err := h.metadataService.GetFlattedMetaByKBs(datasetIDs)
+	if err != nil {
+		jsonError(c, common.CodeServerError, "Failed to get metadata: "+err.Error())
+		return
+	}
+
+	jsonResponse(c, common.CodeSuccess, flattenedMeta, "success")
+}
+
+func (h *DatasetsHandler) UpdateDocumentMetadataConfig(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	datasetID := strings.TrimSpace(c.Param("dataset_id"))
+	if datasetID == "" {
+		jsonError(c, common.CodeArgumentError, "dataset_id is required")
+		return
+	}
+	documentID := strings.TrimSpace(c.Param("document_id"))
+	if documentID == "" {
+		jsonError(c, common.CodeArgumentError, "document_id is required")
+		return
+	}
+	userID := strings.TrimSpace(user.ID)
+	if userID == "" {
+		jsonError(c, common.CodeArgumentError, "user_id is required")
+		return
+	}
+
+	var req map[string]interface{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeDataError, err.Error())
+		return
+	}
+
+	data, code, err := h.datasetsService.UpdateDocumentMetadataConfig(userID, datasetID, documentID, req)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    code,
+		"data":    data,
+		"message": "success",
+	})
+}
+
+// SearchDatasets searches chunks across datasets based on a question
+// @Summary Search Datasets
+// @Description Search for relevant chunks across one or more datasets based on a question
+// @Tags datasets
+// @Accept json
+// @Produce json
+// @Param request body service.SearchDatasetsRequest true "search parameters"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/v1/datasets/search [post]
+func (h *DatasetsHandler) SearchDatasets(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var req service.SearchDatasetsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	if req.Page == nil {
+		defaultPage := 1
+		req.Page = &defaultPage
+	}
+	if req.Size == nil {
+		defaultSize := 30
+		req.Size = &defaultSize
+	}
+	if req.TopK == nil {
+		defaultTopK := 1024
+		req.TopK = &defaultTopK
+	}
+	if req.UseKG == nil {
+		defaultUseKG := false
+		req.UseKG = &defaultUseKG
+	}
+
+	if req.Question == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "question is required",
+		})
+		return
+	}
+	if req.DatasetIDs == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "kb_id is required",
+		})
+		return
+	}
+
+	if len(req.DatasetIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "kb_id array cannot be empty",
+		})
+		return
+	}
+
+	resp, err := h.datasetsService.SearchDatasets(&req, user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": resp,
+	})
 }
 
 func firstStringValue(value interface{}) string {
@@ -396,121 +745,79 @@ func firstStringValue(value interface{}) string {
 	return ""
 }
 
-func sortKnowledgeGraph(graphData map[string]interface{}) error {
-	nodes, err := graphMapSlice(graphData["nodes"])
-	if err != nil {
-		return err
-	}
-	ids := map[string]bool{}
-	for _, node := range nodes {
-		id, ok := node["id"].(string)
-		if !ok || id == "" || ids[id] {
-			return fmt.Errorf("graph contains an invalid or duplicate node id")
+func sortKnowledgeGraph(graphData map[string]interface{}) {
+	nodes := mapSlice(graphData["nodes"])
+	if len(nodes) > 0 {
+		sort.Slice(nodes, func(i, j int) bool {
+			return numericValue(nodes[i]["pagerank"]) > numericValue(nodes[j]["pagerank"])
+		})
+		if len(nodes) > 256 {
+			nodes = nodes[:256]
 		}
-		ids[id] = true
-		if _, err := graphNumber(node["pagerank"]); err != nil {
-			return err
+		graphData["nodes"] = nodes
+	}
+
+	edges := mapSlice(graphData["edges"])
+	if len(edges) > 0 {
+		nodeIDSet := make(map[string]struct{}, len(nodes))
+		for _, node := range nodes {
+			if id, ok := node["id"].(string); ok {
+				nodeIDSet[id] = struct{}{}
+			}
 		}
-	}
-	sort.SliceStable(nodes, func(i, j int) bool {
-		a, _ := graphNumber(nodes[i]["pagerank"])
-		b, _ := graphNumber(nodes[j]["pagerank"])
-		return a > b
-	})
-	if len(nodes) > 256 {
-		nodes = nodes[:256]
-	}
-	graphData["nodes"] = nodes
-	kept := map[string]bool{}
-	for _, node := range nodes {
-		kept[node["id"].(string)] = true
-	}
-	edges, err := graphMapSlice(graphData["edges"])
-	if err != nil {
-		return err
-	}
-	filtered := make([]map[string]interface{}, 0, len(edges))
-	for _, edge := range edges {
-		source, _ := edge["source"].(string)
-		target, _ := edge["target"].(string)
-		if source == target || !kept[source] || !kept[target] {
-			continue
+		filteredEdges := make([]map[string]interface{}, 0, len(edges))
+		for _, edge := range edges {
+			source, _ := edge["source"].(string)
+			target, _ := edge["target"].(string)
+			if source == "" || target == "" || source == target {
+				continue
+			}
+			if _, ok := nodeIDSet[source]; !ok {
+				continue
+			}
+			if _, ok := nodeIDSet[target]; !ok {
+				continue
+			}
+			filteredEdges = append(filteredEdges, edge)
 		}
-		if _, err := graphNumber(edge["weight"]); err != nil {
-			return err
+		sort.Slice(filteredEdges, func(i, j int) bool {
+			return numericValue(filteredEdges[i]["weight"]) > numericValue(filteredEdges[j]["weight"])
+		})
+		if len(filteredEdges) > 128 {
+			filteredEdges = filteredEdges[:128]
 		}
-		filtered = append(filtered, edge)
+		graphData["edges"] = filteredEdges
 	}
-	sort.SliceStable(filtered, func(i, j int) bool {
-		a, _ := graphNumber(filtered[i]["weight"])
-		b, _ := graphNumber(filtered[j]["weight"])
-		return a > b
-	})
-	if len(filtered) > 128 {
-		filtered = filtered[:128]
-	}
-	graphData["edges"] = filtered
-	return nil
 }
-func graphMapSlice(value interface{}) ([]map[string]interface{}, error) {
-	if value == nil {
-		return []map[string]interface{}{}, nil
-	}
-	if typed, ok := value.([]map[string]interface{}); ok {
-		return append([]map[string]interface{}(nil), typed...), nil
-	}
+
+func mapSlice(value interface{}) []map[string]interface{} {
 	raw, ok := value.([]interface{})
 	if !ok {
-		return nil, fmt.Errorf("graph nodes and edges must be arrays")
+		return nil
 	}
 	result := make([]map[string]interface{}, 0, len(raw))
 	for _, item := range raw {
-		m, ok := item.(map[string]interface{})
-		if !ok || m == nil {
-			return nil, fmt.Errorf("graph entries must be objects")
+		if m, ok := item.(map[string]interface{}); ok {
+			result = append(result, m)
 		}
-		result = append(result, m)
 	}
-	return result, nil
-}
-func graphNumber(value interface{}) (float64, error) {
-	if value == nil {
-		return 0, nil
-	}
-	var number float64
-	switch v := value.(type) {
-	case float64:
-		number = v
-	case float32:
-		number = float64(v)
-	case int:
-		number = float64(v)
-	case int64:
-		number = float64(v)
-	case json.Number:
-		var err error
-		number, err = v.Float64()
-		if err != nil {
-			return 0, fmt.Errorf("invalid graph weight")
-		}
-	default:
-		return 0, fmt.Errorf("graph weights must be numeric")
-	}
-	if math.IsNaN(number) || math.IsInf(number, 0) {
-		return 0, fmt.Errorf("graph weight is not finite")
-	}
-	return number, nil
+	return result
 }
 
-func graphChunkBelongs(value interface{}, datasetID string) bool {
+func numericValue(value interface{}) float64 {
 	switch v := value.(type) {
-	case string:
-		return v == datasetID
-	case []string:
-		return len(v) == 1 && v[0] == datasetID
-	case []interface{}:
-		return len(v) == 1 && v[0] == datasetID
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		f, _ := v.Float64()
+		return f
 	default:
-		return false
+		return 0
 	}
 }

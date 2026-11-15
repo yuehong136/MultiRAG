@@ -23,11 +23,11 @@ import (
 // License time record model
 type License struct {
 	ID        string    `gorm:"column:id;size:128;not null;primaryKey" json:"id"`
-	License   string    `gorm:"column:encrypted_data;type:text;not null" json:"encrypted_data"`
+	License   string    `gorm:"column:encrypted_data;type:longtext;not null" json:"encrypted_data"`
 	CreatedAt time.Time `gorm:"column:created_at;type:timestamp;default:CURRENT_TIMESTAMP" json:"created_at"`
 }
 
 // TableName specify table name
 func (License) TableName() string {
-	return "t_ai_license"
+	return "license"
 }

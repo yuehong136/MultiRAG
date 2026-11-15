@@ -14,15 +14,66 @@ PROJECT_ROOT="$SCRIPT_DIR"
 # Build directories
 CPP_DIR="$PROJECT_ROOT/internal/cpp"
 BUILD_DIR="$CPP_DIR/cmake-build-release"
-MultiRAG_SERVER_BINARY="$PROJECT_ROOT/bin/server_main"
+MULTIRAG_SERVER_BINARY="$PROJECT_ROOT/bin/multirag_server"
 ADMIN_SERVER_BINARY="$PROJECT_ROOT/bin/admin_server"
 MULTIRAG_CLI_BINARY="$PROJECT_ROOT/bin/multirag_cli"
+INGESTOR_BINARY="$PROJECT_ROOT/bin/ingestor"
+
+# office_oxide native library settings
+OFFICE_OXIDE_PREFIX="${OFFICE_OXIDE_PREFIX:-${HOME}/.office_oxide}"
+OFFICE_OXIDE_VERSION="0.1.2"
 
 echo -e "${GREEN}=== MultiRAG Go Server Build Script ===${NC}"
 
 # Function to print section headers
 print_section() {
     echo -e "\n${YELLOW}>>> $1${NC}"
+}
+
+# Detect the package-install command for pcre2 development files.
+# Outputs the command on stdout; empty string if no supported manager is found.
+detect_pcre2_install_cmd() {
+    if [ "$(uname)" = "Darwin" ]; then
+        echo "brew install pcre2"
+    elif command -v apt-get >/dev/null 2>&1; then
+        echo "sudo apt-get install -y libpcre2-dev"
+    elif command -v zypper >/dev/null 2>&1; then
+        echo "sudo zypper install -y pcre2-devel"
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "sudo dnf install -y pcre2-devel"
+    elif command -v pacman >/dev/null 2>&1; then
+        echo "sudo pacman -S --noconfirm pcre2"
+    else
+        echo ""
+    fi
+}
+
+# Check whether libpcre2-8 is available (static or shared).
+check_pcre2() {
+    # Prefer pkg-config when available — works across distros.
+    if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libpcre2-8; then
+        return 0
+    fi
+    # Fall back to known library paths:
+    #   Debian/Ubuntu  -> /usr/lib/x86_64-linux-gnu
+    #   openSUSE/RHEL  -> /usr/lib64
+    #   generic Linux  -> /usr/lib, /usr/local/lib
+    #   macOS Homebrew -> /opt/homebrew/lib (Apple Silicon), /usr/local/lib (Intel)
+    for p in \
+        /usr/lib/x86_64-linux-gnu/libpcre2-8.a \
+        /usr/lib/x86_64-linux-gnu/libpcre2-8.so \
+        /usr/lib64/libpcre2-8.a \
+        /usr/lib64/libpcre2-8.so \
+        /usr/lib/libpcre2-8.a \
+        /usr/lib/libpcre2-8.so \
+        /usr/local/lib/libpcre2-8.a \
+        /usr/local/lib/libpcre2-8.so \
+        /usr/local/lib/libpcre2-8.dylib \
+        /opt/homebrew/lib/libpcre2-8.a \
+        /opt/homebrew/lib/libpcre2-8.dylib; do
+        [ -f "$p" ] && return 0
+    done
+    return 1
 }
 
 # Check dependencies
@@ -32,14 +83,16 @@ check_cpp_deps() {
     command -v cmake >/dev/null 2>&1 || { echo -e "${RED}Error: cmake is required but not installed.${NC}"; exit 1; }
     command -v g++ >/dev/null 2>&1 || { echo -e "${RED}Error: g++ is required but not installed.${NC}"; exit 1; }
 
-    # Check for pcre2 library
-    if [ -f "/usr/lib/x86_64-linux-gnu/libpcre2-8.a" ] \
-       || [ -f "/usr/local/lib/libpcre2-8.a" ] \
-       || [ -f "/opt/homebrew/lib/libpcre2-8.a" ]; then
+    if check_pcre2; then
         echo "✓ pcre2 library found"
     else
-        echo -e "${YELLOW}Warning: libpcre2-8.a not found. You may need to install libpcre2-dev:${NC}"
-        echo "  sudo apt-get install libpcre2-dev"
+        install_cmd="$(detect_pcre2_install_cmd)"
+        echo -e "${YELLOW}Warning: libpcre2-8 not found. You may need to install it:${NC}"
+        if [ -n "$install_cmd" ]; then
+            echo "  $install_cmd"
+        else
+            echo "  (No supported package manager detected — install pcre2 development files manually)"
+        fi
     fi
 
     echo "✓ Required tools are available"
@@ -53,29 +106,77 @@ check_go_deps() {
     echo "✓ Required tools are available"
 }
 
-configure_office_oxide() {
-    case ",${MULTIRAG_GO_BUILD_TAGS// /,}," in
-        *,office_oxide,*) ;;
-        *) return 0 ;;
-    esac
-    local prefix="${OFFICE_OXIDE_PREFIX:-}"
-    local library
-    case "$(uname -s)" in
-        Darwin) library="liboffice_oxide.a" ;;
-        Linux) library="liboffice_oxide.so" ;;
-        *) echo "office_oxide is not supported on this platform" >&2; return 1 ;;
-    esac
-    if [ -z "$prefix" ] || [ ! -f "$prefix/include/office_oxide_c/office_oxide.h" ] || [ ! -f "$prefix/lib/$library" ]; then
-        echo "Set OFFICE_OXIDE_PREFIX to a prepared office_oxide 0.1.2 installation for the office_oxide build tag." >&2
-        return 1
-    fi
-    export CGO_CFLAGS="${CGO_CFLAGS:+$CGO_CFLAGS }-I$prefix/include/office_oxide_c"
-    if [ "$(uname -s)" = "Darwin" ]; then
-        # The 0.1.2 dylib records its release runner's absolute install_name.
-        export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }$prefix/lib/$library -framework Security -framework CoreFoundation -liconv -lpthread -lm"
+# Download and extract a tar.gz from a URL to a target directory
+_download_and_extract() {
+    local url="$1" target_dir="$2"
+    echo "Downloading ${url} ..."
+    local tmpfile
+    tmpfile="$(mktemp)"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$tmpfile"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$url" -O "$tmpfile"
     else
-        export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-L$prefix/lib -loffice_oxide -Wl,-rpath,$prefix/lib"
+        echo -e "${RED}Error: need curl or wget to download office_oxide${NC}"
+        exit 1
     fi
+    tar xzf "$tmpfile" -C "$target_dir"
+    rm -f "$tmpfile"
+}
+
+# Check / install office_oxide native library (Rust → C FFI library)
+check_office_oxide_deps() {
+    print_section "Checking office_oxide native library"
+
+    local lib_file header_path
+    case "$(uname -s)" in
+        Linux)  lib_file="liboffice_oxide.so" ;;
+        Darwin) lib_file="liboffice_oxide.a" ;;
+        *)      echo -e "${RED}Unsupported OS for office_oxide${NC}"; exit 1 ;;
+    esac
+
+    local lib_path="${OFFICE_OXIDE_PREFIX}/lib/${lib_file}"
+    local header_path="${OFFICE_OXIDE_PREFIX}/include/office_oxide_c/office_oxide.h"
+
+    if [ -f "$lib_path" ] && [ -f "$header_path" ]; then
+        echo "✓ office_oxide native library found at ${OFFICE_OXIDE_PREFIX}"
+        return 0
+    fi
+
+    echo "office_oxide native library not found. Installing..."
+
+    # Map platform to the release asset name. Note: the GitHub release archives
+    # omit the version number from the native-* asset filenames.
+    local asset_name
+    case "$(uname -s)" in
+        Linux)
+            case "$(uname -m)" in
+                x86_64)  asset_name="native-linux-x86_64" ;;
+                aarch64|arm64) asset_name="native-linux-aarch64" ;;
+                *) echo -e "${RED}Unsupported arch: $(uname -m)${NC}"; exit 1 ;;
+            esac
+            ;;
+        Darwin)
+            case "$(uname -m)" in
+                x86_64)  asset_name="native-macos-x86_64" ;;
+                aarch64|arm64) asset_name="native-macos-aarch64" ;;
+                *) echo -e "${RED}Unsupported arch: $(uname -m)${NC}"; exit 1 ;;
+            esac
+            ;;
+    esac
+
+    local release_url="https://github.com/yfedoseev/office_oxide/releases/download/v${OFFICE_OXIDE_VERSION}/${asset_name}.tar.gz"
+
+    mkdir -p "${OFFICE_OXIDE_PREFIX}"
+    _download_and_extract "$release_url" "${OFFICE_OXIDE_PREFIX}"
+
+    if [ ! -f "$lib_path" ]; then
+        echo -e "${RED}Error: Failed to install office_oxide native library (missing ${lib_path})${NC}"
+        echo "  Try: curl -fsSL ${release_url} | tar xzf - -C ${OFFICE_OXIDE_PREFIX}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ office_oxide native library installed${NC}"
 }
 
 # Build C++ static library
@@ -89,7 +190,7 @@ build_cpp() {
     cmake .. -DCMAKE_BUILD_TYPE=Release
     
     echo "Building librag_tokenizer_c_api.a..."
-    cmake --build . --target rag_tokenizer_c_api --parallel
+    make rag_tokenizer_c_api -j$(nproc)
     
     if [ ! -f "$BUILD_DIR/librag_tokenizer_c_api.a" ]; then
         echo -e "${RED}Error: Failed to build C++ static library${NC}"
@@ -99,14 +200,11 @@ build_cpp() {
     echo -e "${GREEN}✓ C++ static library built successfully${NC}"
 }
 
-# Build Go services and CLI
+# Build Go server
 build_go() {
-    print_section "Building Go services and CLI"
+    print_section "Building MultiRAG go"
     
     cd "$PROJECT_ROOT"
-
-    MULTIRAG_GO_BUILD_TAGS="${MULTIRAG_GO_BUILD_TAGS:-}"
-    configure_office_oxide
     
     # Check if C++ library exists
     if [ ! -f "$BUILD_DIR/librag_tokenizer_c_api.a" ]; then
@@ -114,23 +212,52 @@ build_go() {
         exit 1
     fi
 
-    # Match the static PCRE2 paths used by internal/binding/rag_analyzer.go.
-    if [ -f "/usr/lib/x86_64-linux-gnu/libpcre2-8.a" ] \
-       || [ -f "/usr/local/lib/libpcre2-8.a" ] \
-       || [ -f "/opt/homebrew/lib/libpcre2-8.a" ]; then
+    if check_pcre2; then
         echo "✓ pcre2 library found"
     else
-        echo -e "${RED}Error: libpcre2-8.a not found. Install PCRE2 development files before building.${NC}"
-        exit 1
+        install_cmd="$(detect_pcre2_install_cmd)"
+        if [ -z "$install_cmd" ]; then
+            echo -e "${RED}Error: libpcre2-8 not found and no supported package manager detected.${NC}"
+            echo "Please install pcre2 development files manually."
+            exit 1
+        fi
+        if [ "$(uname)" = "Darwin" ]; then
+            echo -e "${RED}Error: libpcre2-8 not found. Install with: $install_cmd${NC}"
+            exit 1
+        fi
+        echo -e "${YELLOW}Warning: libpcre2-8 not found. Installing with: $install_cmd${NC}"
+        eval "$install_cmd"
     fi
-    
-    mkdir -p "$PROJECT_ROOT/bin"
-    echo "Building Go binaries: $MultiRAG_SERVER_BINARY, $ADMIN_SERVER_BINARY, and $MULTIRAG_CLI_BINARY"
-    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -tags "$MULTIRAG_GO_BUILD_TAGS" -o "$MultiRAG_SERVER_BINARY" ./cmd/server_main.go
-    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -tags "$MULTIRAG_GO_BUILD_TAGS" -o "$ADMIN_SERVER_BINARY" ./cmd/admin_server.go
-    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -tags "$MULTIRAG_GO_BUILD_TAGS" -o "$MULTIRAG_CLI_BINARY" ./cmd/multirag_cli.go
 
-    if [ ! -f "$MultiRAG_SERVER_BINARY" ]; then
+    # Check / install office_oxide native library
+    check_office_oxide_deps
+
+    # Export CGO flags so go build can find office_oxide headers and library
+    export CGO_CFLAGS="-I${OFFICE_OXIDE_PREFIX}/include/office_oxide_c${CGO_CFLAGS:+ $CGO_CFLAGS}"
+    echo "Exporting CGO_CFLAGS: $CGO_CFLAGS"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        export CGO_LDFLAGS="${OFFICE_OXIDE_PREFIX}/lib/liboffice_oxide.a -framework Security -framework CoreFoundation -framework SystemConfiguration${CGO_LDFLAGS:+ $CGO_LDFLAGS}"
+    else
+        export CGO_LDFLAGS="-L${OFFICE_OXIDE_PREFIX}/lib -loffice_oxide -Wl,-rpath,${OFFICE_OXIDE_PREFIX}/lib${CGO_LDFLAGS:+ $CGO_LDFLAGS}"
+    fi
+    echo "Exporting CGO_LDFLAGS: $CGO_LDFLAGS"
+
+    echo "Building MultiRAG binary: $MULTIRAG_SERVER_BINARY, $ADMIN_SERVER_BINARY, $MULTIRAG_CLI_BINARY, and $INGESTOR_BINARY"
+    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 \
+        CGO_CFLAGS="$CGO_CFLAGS" CGO_LDFLAGS="$CGO_LDFLAGS" \
+        go build -o "$MULTIRAG_SERVER_BINARY" cmd/server_main.go
+    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 \
+        CGO_CFLAGS="$CGO_CFLAGS" CGO_LDFLAGS="$CGO_LDFLAGS" \
+        go build -o "$ADMIN_SERVER_BINARY" cmd/admin_server.go
+    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 \
+        CGO_CFLAGS="$CGO_CFLAGS" CGO_LDFLAGS="$CGO_LDFLAGS" \
+        go build -o "$MULTIRAG_CLI_BINARY" cmd/multirag_cli.go
+
+    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 \
+        CGO_CFLAGS="$CGO_CFLAGS" CGO_LDFLAGS="$CGO_LDFLAGS" \
+        go build -o "$INGESTOR_BINARY" cmd/ingestor.go
+
+    if [ ! -f "$MULTIRAG_SERVER_BINARY" ]; then
         echo -e "${RED}Error: Failed to build MultiRAG server binary${NC}"
         exit 1
     fi
@@ -139,15 +266,13 @@ build_go() {
         echo -e "${RED}Error: Failed to build Admin server binary${NC}"
         exit 1
     fi
+    test -f "$MULTIRAG_CLI_BINARY"
+    test -f "$INGESTOR_BINARY"
 
-    if [ ! -f "$MULTIRAG_CLI_BINARY" ]; then
-        echo -e "${RED}Error: Failed to build MultiRAG CLI binary${NC}"
-        exit 1
-    fi
-
-    echo -e "${GREEN}✓ Go server_main built successfully: $MultiRAG_SERVER_BINARY${NC}"
+    echo -e "${GREEN}✓ Go multirag_server built successfully: $MULTIRAG_SERVER_BINARY${NC}"
     echo -e "${GREEN}✓ Go admin_server built successfully: $ADMIN_SERVER_BINARY${NC}"
     echo -e "${GREEN}✓ Go multirag_cli built successfully: $MULTIRAG_CLI_BINARY${NC}"
+    echo -e "${GREEN}✓ Go ingestor built successfully: $INGESTOR_BINARY${NC}"
 }
 
 # Clean build artifacts
@@ -155,46 +280,53 @@ clean() {
     print_section "Cleaning build artifacts"
     
     rm -rf "$BUILD_DIR"
-    rm -f "$MultiRAG_SERVER_BINARY"
+    rm -f "$MULTIRAG_SERVER_BINARY"
     rm -f "$ADMIN_SERVER_BINARY"
     rm -f "$MULTIRAG_CLI_BINARY"
+    rm -f "$INGESTOR_BINARY"
 
     echo -e "${GREEN}✓ Build artifacts cleaned${NC}"
 }
 
 # Run the server
 run() {
-    if [ ! -x "$ADMIN_SERVER_BINARY" ] || [ ! -x "$MultiRAG_SERVER_BINARY" ]; then
-        echo -e "${RED}Error: Binary not found. Build first with --all or --go${NC}"
+    if [ ! -f "$ADMIN_SERVER_BINARY" ]; then
+        echo -e "${RED}Error: $ADMIN_SERVER_BINARY not found. Build first with --all or --go${NC}"
+        exit 1
+    fi
+    if [ ! -f "$MULTIRAG_SERVER_BINARY" ]; then
+        echo -e "${RED}Error: $MULTIRAG_SERVER_BINARY not found. Build first with --all or --go${NC}"
         exit 1
     fi
 
     cd "$PROJECT_ROOT"
-    local admin_pid api_pid ended status=0
-    cleanup_servers() {
-        kill "$admin_pid" "$api_pid" 2>/dev/null || true
-        wait "$admin_pid" 2>/dev/null || true
-        wait "$api_pid" 2>/dev/null || true
-    }
-    print_section "Starting ADMIN server"
+
+    # The API reports heartbeats to the admin server.
+    print_section "Starting admin server (background)"
     "$ADMIN_SERVER_BINARY" &
-    admin_pid=$!
-    print_section "Starting server"
-    "$MultiRAG_SERVER_BINARY" &
-    api_pid=$!
-    trap cleanup_servers EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    while kill -0 "$admin_pid" 2>/dev/null && kill -0 "$api_pid" 2>/dev/null; do
-        sleep 0.1
+    ADMIN_PID=$!
+    trap 'kill "$ADMIN_PID" 2>/dev/null || true; wait "$ADMIN_PID" 2>/dev/null || true' EXIT
+    trap 'kill "$ADMIN_PID" "$API_PID" 2>/dev/null || true' INT TERM
+
+    # Give admin_server a moment to bind its listening port (9383) before
+    # multirag_server starts sending heartbeats to it.
+    sleep 1
+
+    print_section "Starting MultiRAG server"
+    "$MULTIRAG_SERVER_BINARY" &
+    API_PID=$!
+    local status=0
+    # Bash 3.2 on macOS has no wait -n; monitor just these two owned children.
+    while kill -0 "$ADMIN_PID" 2>/dev/null && kill -0 "$API_PID" 2>/dev/null; do
+        sleep 0.2
     done
-    ended="$api_pid"
-    if ! kill -0 "$admin_pid" 2>/dev/null; then
-        ended="$admin_pid"
+    if ! kill -0 "$ADMIN_PID" 2>/dev/null; then
+        wait "$ADMIN_PID" || status=$?
+        kill "$API_PID" 2>/dev/null || true
+        wait "$API_PID" 2>/dev/null || true
+    else
+        wait "$API_PID" || status=$?
     fi
-    wait "$ended" || status=$?
-    cleanup_servers
-    trap - EXIT INT TERM
     return "$status"
 }
 
@@ -203,12 +335,12 @@ show_help() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
-Build script for MultiRAG Go services and CLI with C++ bindings.
+Build script for MultiRAG Go server with C++ bindings.
 
 OPTIONS:
-    --all, -a       Build everything (C++ library + Go services + CLI) [default]
+    --all, -a       Build everything (C++ library + Go server) [default]
     --cpp, -c       Build only C++ static library
-    --go, -g        Build Go services and CLI (requires C++ library to be built)
+    --go, -g        Build only Go server (requires C++ library to be built)
     --clean, -C     Clean all build artifacts
     --run, -r       Build and run the server
     --help, -h      Show this help message
@@ -216,16 +348,19 @@ OPTIONS:
 EXAMPLES:
     $0              # Build everything
     $0 --cpp        # Build only C++ library
-    $0 --go         # Build Go services and CLI
+    $0 --go         # Build only Go server
     $0 --run        # Build and run
     $0 --clean      # Clean build artifacts
 
 DEPENDENCIES:
     - cmake >= 4.0
-    - go >= 1.25 (see go.mod and the pinned CI toolchain)
+    - go as declared in go.mod
     - g++ with C++17/23 support
-    - libpcre2-dev
-    - optional office_oxide 0.1.2: MULTIRAG_GO_BUILD_TAGS=office_oxide and OFFICE_OXIDE_PREFIX
+    - office_oxide native library (auto-downloaded on first build)
+    - pcre2 development files
+        - Debian/Ubuntu: libpcre2-dev
+        - openSUSE/RHEL/Fedora: pcre2-devel
+        - macOS (Homebrew): pcre2
 EOF
 }
 
@@ -259,7 +394,7 @@ main() {
             build_cpp
             build_go
             echo -e "\n${GREEN}=== Build completed successfully! ===${NC}"
-            echo "Binaries: $MultiRAG_SERVER_BINARY, $ADMIN_SERVER_BINARY, $MULTIRAG_CLI_BINARY"
+            echo "Binary: $MULTIRAG_SERVER_BINARY, $ADMIN_SERVER_BINARY, $MULTIRAG_CLI_BINARY, $INGESTOR_BINARY"
             ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
@@ -269,6 +404,4 @@ main() {
     esac
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    main "$@"
-fi
+main "$@"

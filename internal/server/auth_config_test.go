@@ -2,8 +2,6 @@ package server
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -17,44 +15,23 @@ func (lostSecretStore) SetNX(string, string, time.Duration) bool { return false 
 type failedSecretStore struct{ lostSecretStore }
 
 func (failedSecretStore) Get(string) (string, error) { return "", errors.New("unavailable") }
-
-func TestAuthConfigurationAndSecretFailure(t *testing.T) {
-	previousConfig, previousVariables := globalConfig, globalVariables
-	t.Cleanup(func() { globalConfig = previousConfig; globalVariables = previousVariables })
-	config := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(config, []byte("multirag:\n  secret_key: 'owned-test-key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'\nauthentication:\n  enable_register: false\n  disable_password_login: true\n"), 0600); err != nil {
-		t.Fatal(err)
+func TestSecretKeyRequiresPersistedCandidate(t *testing.T) {
+	previous := globalConfig
+	t.Cleanup(func() { globalConfig = previous })
+	key := "owned-test-key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+	globalConfig = &Config{Server: ServerConfig{SecretKey: &key}}
+	if got, err := GetSecretKey(nil); err != nil || got != key {
+		t.Fatal(got, err)
 	}
-	t.Setenv("DISABLE_PASSWORD_LOGIN", "false")
-	if err := FromConfigFile(config); err != nil {
-		t.Fatal(err)
+	globalConfig.Server.SecretKey = nil
+	for _, store := range []VariableStore{nil, lostSecretStore{}, failedSecretStore{}} {
+		if got, err := GetSecretKey(store); err == nil || got != "" {
+			t.Fatal("unpersisted signing key", got, err)
+		}
 	}
-	if globalConfig.RegisterEnabled != 0 || globalConfig.Authentication.DisablePasswordLogin {
-		t.Fatal("auth switch precedence")
-	}
-	globalVariables = nil
-	if err := InitVariables(nil); err != nil {
-		t.Fatal("fixed key must not use Redis", err)
-	}
-	if GetSecretKey() != globalConfig.Server.SecretKey {
-		t.Fatal("configured key not used")
-	}
-	globalVariables = nil
-	globalConfig.Server.SecretKey = ""
-	if err := InitVariables(failedSecretStore{}); err == nil {
-		t.Fatal("Redis failure accepted")
-	}
-	if GetSecretKey() != "" {
-		t.Fatal("uninitialized fallback key")
-	}
-	if _, err := GetOrCreateKey(lostSecretStore{}, "owned", "candidate"); err == nil {
-		t.Fatal("unpersisted losing candidate accepted")
-	}
-	if _, err := GetOrCreateKey(lostSecretStore{}, "owned", ""); err == nil {
-		t.Fatal("empty candidate accepted")
-	}
-	t.Setenv("REGISTER_ENABLED", "invalid")
-	if err := FromConfigFile(config); err == nil {
-		t.Fatal("malformed authentication flag accepted")
+	for _, candidate := range []string{"", "candidate"} {
+		if _, err := GetOrCreateKey(lostSecretStore{}, "owned", candidate); err == nil {
+			t.Fatal("unpersisted value accepted")
+		}
 	}
 }

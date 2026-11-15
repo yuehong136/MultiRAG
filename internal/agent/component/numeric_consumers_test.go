@@ -39,6 +39,10 @@ func TestNumericAssignerJSONExactArithmetic(t *testing.T) {
 		{"0.1", "*=", "0.2", "0.02"},
 		{"0.3", "/=", "0.1", "3"},
 		{"1", "/=", "8", "0.125"},
+		{"1", "/=", "3", "0.3333333333333333"},
+		{"0.1", "/=", "0.3", "0.33333333333333337"},
+		{"9007199254740993", "/=", "3", "3002399751580331"},
+		{"9007199254740993", "/=", "2", "4503599627370496.5"},
 		{"9", "clear", "null", "0"},
 	} {
 		t.Run(tc.initial+tc.operator+tc.parameter, func(t *testing.T) {
@@ -64,9 +68,56 @@ func TestNumericAssignerJSONExactArithmetic(t *testing.T) {
 	}
 }
 
+func TestNumericAssignerFiniteFloatArithmetic(t *testing.T) {
+	for _, tc := range []struct {
+		name, operator     string
+		initial, parameter any
+		left, right        float64
+	}{
+		{"integer_third", "/=", 1, 3, 1, 3},
+		{"decimal_third", "/=", 0.1, 0.3, 0.1, 0.3},
+		{"decimal_finite_quotient", "/=", 0.3, 0.1, 0.3, 0.1},
+		{"decimal_sum", "+=", 0.1, 0.2, 0.1, 0.2},
+		{"decimal_product", "*=", 0.1, 0.2, 0.1, 0.2},
+		{"decimal_subtract", "-=", 0.3, 0.1, 0.3, 0.1},
+		{"negative_third", "/=", -1.0, 3.0, -1, 3},
+		{"float32_third", "/=", float32(0.1), float32(0.3), float64(float32(0.1)), float64(float32(0.3))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := 0.0
+			switch tc.operator {
+			case "+=":
+				want = tc.left + tc.right
+			case "-=":
+				want = tc.left - tc.right
+			case "*=":
+				want = tc.left * tc.right
+			case "/=":
+				want = tc.left / tc.right
+			}
+			for _, override := range []bool{false, true} {
+				state := canvas.NewCanvasState("numeric", "numeric")
+				state.Sys["n"] = tc.initial
+				params := map[string]any{"variables": []any{map[string]any{"variable": "sys.n", "operator": tc.operator, "parameter": tc.parameter}}}
+				component, err := NewVariableAssignerComponent(params)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var input map[string]any
+				if override {
+					input = params
+				}
+				out, err := component.Invoke(canvas.WithState(context.Background(), state), input)
+				if err != nil || out["errors"] != nil || state.Sys["n"] != want {
+					t.Fatalf("override=%v original=%0.17g current=%#v out=%v err=%v", override, want, state.Sys["n"], out, err)
+				}
+			}
+		})
+	}
+}
+
 func TestNumericAssignerRejectsLossWithoutMutation(t *testing.T) {
 	for _, tc := range []struct{ initial, operator, parameter, marker string }{
-		{"1", "/=", "3", "NUMERIC_PRECISION_OR_RANGE"},
 		{"1e308", "*=", "10", "NUMERIC_PRECISION_OR_RANGE"},
 		{"1e-323", "/=", "100", "NUMERIC_PRECISION_OR_RANGE"},
 		{"1", "+=", "1e1000", "INVALID_NUMBER"},

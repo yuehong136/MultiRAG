@@ -32,7 +32,7 @@ type File struct {
 
 // TableName specify table name
 func (File) TableName() string {
-	return "t_ai_files"
+	return "file"
 }
 
 // File2Document file to document mapping model
@@ -45,5 +45,5 @@ type File2Document struct {
 
 // TableName specify table name
 func (File2Document) TableName() string {
-	return "t_ai_file2documents"
+	return "file2document"
 }

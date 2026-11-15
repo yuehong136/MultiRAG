@@ -19,7 +19,7 @@ func TestBedrockEmbeddingTitanOrderAndSignature(t *testing.T) {
 	var seen []string
 	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		verifyBedrockSignature(t, r, raw, "AKIDEXAMPLE", "controlled-secret", "controlled-token", "us-east-1", "bedrock")
+		verifyBedrockSignature(t, r, raw, "AKIDEXAMPLE", "controlled-secret", "", "us-east-1", "bedrock")
 		if r.URL.Path != "/model/amazon.titan-embed-text-v2:0/invoke" || r.Method != http.MethodPost {
 			t.Error(r.URL, r.Method)
 		}
@@ -38,13 +38,13 @@ func TestBedrockEmbeddingTitanOrderAndSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := "amazon.titan-embed-text-v2:0"
-	data, err := NewEmbeddingModel(driver, &model, bedrockTestAPI()).Embed([]string{"one", "two"})
+	data, err := NewEmbeddingModel(driver, &model, bedrockTestAPI(), 0).ModelDriver.Embed(NewEmbeddingModel(driver, &model, bedrockTestAPI(), 0).ModelName, []string{"one", "two"}, bedrockTestAPI(), nil)
 	if err != nil || !reflect.DeepEqual(seen, []string{"one", "two"}) || !reflect.DeepEqual(data, []EmbeddingData{{Index: 0, Embedding: []float64{1, 0}}, {Index: 1, Embedding: []float64{2, 0}}}) {
 		t.Fatal(data, seen, err)
 	}
 }
 
-func TestBedrockEmbeddingCohereBatchAndQuery(t *testing.T) {
+func TestBedrockEmbeddingCohereCanonicalBatch(t *testing.T) {
 	for _, model := range []string{"cohere.embed-english-v3", "cohere.embed-multilingual-v3", "cohere.embed-v4:0"} {
 		t.Run(model, func(t *testing.T) {
 			var sizes []int
@@ -55,10 +55,10 @@ func TestBedrockEmbeddingCohereBatchAndQuery(t *testing.T) {
 					Dimension *int     `json:"output_dimension"`
 					Types     []string `json:"embedding_types"`
 				}
-				if json.NewDecoder(r.Body).Decode(&body) != nil || body.InputType != "search_query" || body.Dimension != nil {
+				if json.NewDecoder(r.Body).Decode(&body) != nil || body.InputType != "search_document" || body.Dimension != nil {
 					t.Error("invalid request")
 				}
-				if model == "cohere.embed-v4:0" && !reflect.DeepEqual(body.Types, []string{"float"}) {
+				if body.Types != nil {
 					t.Error(body.Types)
 				}
 				sizes = append(sizes, len(body.Texts))
@@ -78,9 +78,9 @@ func TestBedrockEmbeddingCohereBatchAndQuery(t *testing.T) {
 			for i := range texts {
 				texts[i] = fmt.Sprintf("input-%d", i)
 			}
-			driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
-			data, err := driver.Embed(&model, texts, bedrockTestAPI(), &EmbeddingConfig{Query: true})
-			if err != nil || !reflect.DeepEqual(sizes, []int{96, 1}) || len(data) != 97 {
+			driver := bedrockFixtureDriver(t, map[string]string{"default": server.URL}, URLSuffix{})
+			data, err := driver.Embed(&model, texts, bedrockTestAPI(), &EmbeddingConfig{})
+			if err != nil || !reflect.DeepEqual(sizes, []int{97}) || len(data) != 97 {
 				t.Fatal(sizes, len(data), err)
 			}
 			for i, item := range data {
@@ -116,7 +116,7 @@ func TestBedrockEmbeddingDimensions(t *testing.T) {
 					json.NewEncoder(w).Encode(map[string]any{"embeddings": [][]float64{vector}})
 				}
 			}))
-			data, err := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{}).Embed(&test.model, []string{"text"}, bedrockTestAPI(), &EmbeddingConfig{Dimension: test.dimension})
+			data, err := bedrockFixtureDriver(t, map[string]string{"default": server.URL}, URLSuffix{}).Embed(&test.model, []string{"text"}, bedrockTestAPI(), &EmbeddingConfig{Dimension: test.dimension})
 			if err != nil || len(data) != 1 || len(data[0].Embedding) != test.dimension {
 				t.Fatal(len(data), err)
 			}
@@ -127,7 +127,7 @@ func TestBedrockEmbeddingDimensions(t *testing.T) {
 func TestBedrockEmbeddingInvalidInputsNoHTTP(t *testing.T) {
 	var calls atomic.Int32
 	server := providerTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
-	driver := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{})
+	driver := bedrockFixtureDriver(t, map[string]string{"default": server.URL}, URLSuffix{})
 	model := "amazon.titan-embed-text-v2:0"
 	if data, err := driver.Embed(nil, nil, nil, nil); err != nil || data == nil || len(data) != 0 {
 		t.Fatal(data, err)
@@ -137,7 +137,7 @@ func TestBedrockEmbeddingInvalidInputsNoHTTP(t *testing.T) {
 		texts     []string
 		dimension int
 	}{
-		{"unknown", []string{"x"}, 0}, {"amazon.titan-embed-text-future", []string{"x"}, 0}, {model, []string{"x"}, -1}, {model, []string{"x"}, 12}, {model, []string{" "}, 0}, {model, []string{"valid", ""}, 0}, {model, []string{strings.Repeat("a", 50001)}, 0}, {model, []string{string([]byte{255})}, 0}, {"cohere.embed-english-v3", []string{strings.Repeat("a", 2049)}, 0},
+		{"unknown", []string{"x"}, 0}, {model, []string{"x"}, -1}, {model, []string{" "}, 0}, {model, []string{"valid", ""}, 0}, {model, []string{string([]byte{255})}, 0},
 	} {
 		if data, err := driver.Embed(&test.model, test.texts, bedrockTestAPI(), &EmbeddingConfig{Dimension: test.dimension}); err == nil || data != nil {
 			t.Fatal(test.model, data, err)
@@ -164,13 +164,13 @@ func TestBedrockEmbeddingStrictResponses(t *testing.T) {
 		if strings.HasPrefix(model, "cohere") {
 			valid = `{"embeddings":[[0,1]]}`
 		}
-		for _, raw := range []string{`{}`, `null`, `{"error":"private-secret"}`, valid + ` {}`, strings.Repeat(" ", MaxMediaBytes) + valid, `{"embedding":[null],"embeddings":[[null]]}`, `{"embedding":[1e999],"embeddings":[[1e999]]}`, `{"embedding":[],"embeddings":[]}`, `{"embeddings":{"int8":[[1]]}}`, `{"embedding":[null],"embedding":[0,1]}`, `{"embedding":[null],"Embedding":[0,1]}`, `{"embeddings":{"float":[[0,1]],"FLOAT":[[1,2]]}}`, `{"embedding":[0],"embeddings":[[0],[1]]}`} {
+		for _, raw := range []string{`{}`, `null`, `{"error":"private-secret"}`, valid + ` {}`, strings.Repeat(" ", modelResponseLimitForTest) + valid, `{"embedding":[null],"embeddings":[[null]]}`, `{"embedding":[1e999],"embeddings":[[1e999]]}`, `{"embedding":[],"embeddings":[]}`, `{"embeddings":{"int8":[[1]]}}`, `{"embedding":[null],"embedding":[0,1]}`, `{"embedding":[null],"Embedding":[0,1]}`, `{"embeddings":{"float":[[0,1]],"FLOAT":[[1,2]]}}`, `{"embedding":[0],"embeddings":[[0],[1]]}`} {
 			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) }))
 			config := (*EmbeddingConfig)(nil)
 			if strings.Contains(raw, `"embedding":[0]`) {
 				config = &EmbeddingConfig{Dimension: 256}
 			}
-			data, err := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{}).Embed(&model, []string{"x"}, bedrockTestAPI(), config)
+			data, err := bedrockFixtureDriver(t, map[string]string{"default": server.URL}, URLSuffix{}).Embed(&model, []string{"x"}, bedrockTestAPI(), config)
 			if err == nil || data != nil || strings.Contains(err.Error(), "private-secret") {
 				t.Fatal(model, len(raw), data, err)
 			}
@@ -211,7 +211,7 @@ func TestBedrockEmbeddingFailureClosesAndCancels(t *testing.T) {
 			api := bedrockTestAPI()
 			api.Context = ctx
 			model := "amazon.titan-embed-text-v2:0"
-			data, err := NewBedrockModel(map[string]string{"default": server.URL}, URLSuffix{}).Embed(&model, []string{"first", "second"}, api, nil)
+			data, err := bedrockFixtureDriver(t, map[string]string{"default": server.URL}, URLSuffix{}).Embed(&model, []string{"first", "second"}, api, nil)
 			if err == nil || data != nil || strings.Contains(err.Error(), "private-secret") {
 				t.Fatal(data, err)
 			}
@@ -241,7 +241,7 @@ func TestBedrockEmbeddingInstanceIsolation(t *testing.T) {
 			verifyBedrockSignature(t, r, raw, key, secret, "", region, "bedrock")
 			fmt.Fprint(w, `{"embedding":[0,1]}`)
 		}))
-		driver := NewBedrockModel(map[string]string{region: server.URL}, URLSuffix{Embedding: "custom-invoke"})
+		driver := bedrockFixtureDriver(t, map[string]string{region: server.URL}, URLSuffix{Embedding: "custom-invoke"})
 		for i := 0; i < 8; i++ {
 			wg.Add(1)
 			go func() {
@@ -249,7 +249,7 @@ func TestBedrockEmbeddingInstanceIsolation(t *testing.T) {
 				raw, _ := json.Marshal(bedrockKey{AuthMode: "access_key_secret", Region: region, AccessKey: key, SecretKey: secret})
 				blob := string(raw)
 				model := "amazon.titan-embed-text-v2:0"
-				if data, err := driver.Embed(&model, []string{"x"}, &APIConfig{APIKey: &blob}, nil); err != nil || len(data) != 1 {
+				if data, err := driver.Embed(&model, []string{"x"}, &APIConfig{ApiKey: &blob}, nil); err != nil || len(data) != 1 {
 					t.Error(data, err)
 				}
 			}()

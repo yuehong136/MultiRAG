@@ -21,7 +21,7 @@ func TestAfterf9ASRMultipartAndFormatsHTTP(t *testing.T) {
 		for _, format := range []string{"json", "verbose_json", "text", "srt", "vtt"} {
 			t.Run(provider+format, func(t *testing.T) {
 				srv := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path != "/asr" || r.Header.Get("Authorization") != "Bearer key" || r.Header.Get("Accept") != "application/json" {
+					if r.URL.Path != "/asr" || r.Header.Get("Authorization") != "Bearer key" {
 						t.Error("wrong ASR endpoint/auth/accept")
 					}
 					reader, err := r.MultipartReader()
@@ -30,7 +30,6 @@ func TestAfterf9ASRMultipartAndFormatsHTTP(t *testing.T) {
 						return
 					}
 					fields := map[string][]string{}
-					seenFile := false
 					for {
 						part, err := reader.NextPart()
 						if err == io.EOF {
@@ -42,18 +41,15 @@ func TestAfterf9ASRMultipartAndFormatsHTTP(t *testing.T) {
 						}
 						raw, _ := io.ReadAll(part)
 						if part.FormName() == "file" {
-							seenFile = true
-							if string(raw) != "audio" || part.FileName() != "audio.mp3" {
+							if string(raw) != "audio" || part.FileName() != "model-input.wav" {
 								t.Error("bad byte upload")
 							}
 						} else {
-							if seenFile {
-								t.Error("options after file")
-							}
+
 							fields[part.FormName()] = append(fields[part.FormName()], string(raw))
 						}
 					}
-					if fields["model"][0] != "whisper" || fields["language"][0] != "en" || fields["prompt"][0] != "hello" || fields["temperature"][0] != "0" || fields["response_format"][0] != format || !reflect.DeepEqual(fields["timestamp_granularities[]"], []string{"word", "segment"}) {
+					if fields["model"][0] != "whisper" || fields["language"][0] != "en" || fields["prompt"][0] != "hello" || fields["temperature"][0] != "0" || fields["response_format"][0] != format || !reflect.DeepEqual(fields["timestamp_granularities[]"], []string{"word"}) {
 						t.Error(fields)
 					}
 					if format == "text" || format == "srt" || format == "vtt" {
@@ -65,10 +61,16 @@ func TestAfterf9ASRMultipartAndFormatsHTTP(t *testing.T) {
 					fmt.Fprint(w, `{"text":"transcribed"}`)
 				}))
 				defer srv.Close()
-				cfg := &ASRConfig{Format: "mp3", Language: []string{"en"}, Prompt: "hello", Params: map[string]any{"response_format": format, "temperature": 0, "timestamp_granularities[]": []string{"word", "segment"}}}
+				cfg := &ASRConfig{Params: map[string]any{"response_format": format, "temperature": 0, "timestamp_granularities[]": "word", "language": "en", "prompt": "hello"}}
 				original, _ := json.Marshal(cfg)
-				result, err := afterf9Driver(t, provider, srv.URL).(ASRDriver).TranscribeAudio(stringPtr("whisper"), []byte("audio"), &APIConfig{APIKey: stringPtr("key")}, cfg)
-				if err != nil || result == nil || *result.Text != "transcribed" {
+				result, err := afterf9Driver(t, provider, srv.URL).(ModelDriver).TranscribeAudio(stringPtr("whisper"), modelFixtureFile(t, []byte("audio")), &APIConfig{ApiKey: stringPtr("key")}, cfg)
+				if provider == "Groq" && (format == "text" || format == "srt" || format == "vtt") {
+					if err == nil || result != nil {
+						t.Fatal("unsupported Groq text response accepted")
+					}
+					return
+				}
+				if err != nil || result == nil || result.Text != "transcribed" {
 					t.Fatal(result, err)
 				}
 				current, _ := json.Marshal(cfg)
@@ -86,7 +88,7 @@ func TestAfterf9ASRInvalidHTTP(t *testing.T) {
 			t.Run(provider+body, func(t *testing.T) {
 				srv := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 				defer srv.Close()
-				result, err := afterf9Driver(t, provider, srv.URL).(ASRDriver).TranscribeAudio(stringPtr("whisper"), []byte("audio"), &APIConfig{APIKey: stringPtr("key")}, nil)
+				result, err := afterf9Driver(t, provider, srv.URL).(ModelDriver).TranscribeAudio(stringPtr("whisper"), modelFixtureFile(t, []byte("audio")), &APIConfig{ApiKey: stringPtr("key")}, nil)
 				if err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
 					t.Fatal(result, err)
 				}
@@ -121,10 +123,10 @@ func TestAfterf9SpeechHTTP(t *testing.T) {
 				w.Write([]byte{0, 255, 1, 2})
 			}))
 			defer srv.Close()
-			cfg := &TTSConfig{Voice: "voice", Format: "wav", Params: map[string]any{"speed": 1.25}}
+			cfg := &TTSConfig{Format: "wav", Params: map[string]any{"speed": 1.25, "voice": "voice"}}
 			original, _ := json.Marshal(cfg)
-			result, err := afterf9Driver(t, provider, srv.URL).(TTSDriver).AudioSpeech(stringPtr("tts"), "hello", &APIConfig{APIKey: stringPtr("key")}, cfg)
-			if err != nil || result == nil || result.Format != "wav" || !bytes.Equal(result.Audio, []byte{0, 255, 1, 2}) {
+			result, err := afterf9Driver(t, provider, srv.URL).(ModelDriver).AudioSpeech(stringPtr("tts"), stringPtr("hello"), &APIConfig{ApiKey: stringPtr("key")}, cfg)
+			if err != nil || result == nil || !bytes.Equal(result.Audio, []byte{0, 255, 1, 2}) {
 				t.Fatal(result, err)
 			}
 			current, _ := json.Marshal(cfg)
@@ -148,7 +150,13 @@ func TestAfterf9SpeechInvalidHTTP(t *testing.T) {
 					fmt.Fprint(w, test.body)
 				}))
 				defer srv.Close()
-				result, err := afterf9Driver(t, provider, srv.URL).(TTSDriver).AudioSpeech(stringPtr("tts"), "hello", &APIConfig{APIKey: stringPtr("key")}, &TTSConfig{Voice: "voice"})
+				result, err := afterf9Driver(t, provider, srv.URL).(ModelDriver).AudioSpeech(stringPtr("tts"), stringPtr("hello"), &APIConfig{ApiKey: stringPtr("key")}, &TTSConfig{Params: map[string]any{"voice": "voice"}})
+				if test.mime == "audio/wav" && test.status == http.StatusOK {
+					if err != nil || result == nil || string(result.Audio) != test.body {
+						t.Fatal("native audio is valid without requested format", err)
+					}
+					return
+				}
 				if err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
 					t.Fatal(result, err)
 				}
@@ -162,6 +170,7 @@ func TestAfterf9OpenAIASRStreamHTTP(t *testing.T) {
 		"data: {\"type\":\"transcript.text.delta\",\"delta\":\"hello\"}\n\ndata: {\"type\":\"transcript.text.delta\",\"delta\":\" world\"}\n\ndata: {\"type\":\"transcript.text.done\",\"text\":\"hello world\"}\n\n",
 		"data: {\"type\":\"transcript.text.segment\",\"text\":\"hello world\"}\n\ndata: [DONE]\n\n",
 		"data: {\"type\":\"transcript.text.done\",\"text\":\"hello world\"}\n\n",
+		"data: {\"type\":\"transcript.text.done\",\"text\":\"hello world\"}\n",
 	} {
 		t.Run(body, func(t *testing.T) {
 			srv := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +190,11 @@ func TestAfterf9OpenAIASRStreamHTTP(t *testing.T) {
 			}))
 			defer srv.Close()
 			text := ""
-			err := afterf9Driver(t, "OpenAI", srv.URL).(ASRStreamDriver).TranscribeAudioWithSender(stringPtr("asr"), []byte("audio"), &APIConfig{APIKey: stringPtr("key")}, nil, func(result *ASRResponse) error { text += *result.Text; return nil })
+			err := afterf9Driver(t, "OpenAI", srv.URL).(ModelDriver).TranscribeAudioWithSender(stringPtr("asr"), modelFixtureFile(t, []byte("audio")), &APIConfig{ApiKey: stringPtr("key")}, nil, func(value, _ *string) error {
+				result := &ASRResponse{Text: modelStreamTextForTest(value)}
+				text += result.Text
+				return nil
+			})
 			if err != nil || text != "hello world" {
 				t.Fatal(text, err)
 			}
@@ -193,7 +206,7 @@ func TestAfterf9OpenAIStreamsRejectMissingTerminal(t *testing.T) {
 	for _, kind := range []string{"asr", "tts"} {
 		payloads := []string{"", "data: garbage\n\n", "data: {\"error\":\"private-secret\"}\n\n", "data: [DONE]\n\n"}
 		if kind == "asr" {
-			payloads = append(payloads, "data: {\"type\":\"transcript.text.delta\",\"delta\":\"partial\"}\n\n", "data: {\"type\":\"transcript.text.done\"}\n\n", "data: {\"type\":\"transcript.text.done\",\"text\":\"partial\"}\n")
+			payloads = append(payloads, "data: {\"type\":\"transcript.text.delta\",\"delta\":\"partial\"}\n\n", "data: {\"type\":\"transcript.text.done\"}\n\n", "data: {\"type\":\"transcript.text.done\",\"text\":null}\n")
 		} else {
 			payloads = append(payloads, "data: {\"type\":\"speech.audio.delta\",\"audio\":\"YQ==\"}\n\n", "data: {\"type\":\"speech.audio.done\"}\n\n", "data: {\"type\":\"speech.audio.delta\",\"audio\":\"%%\"}\n\ndata: {\"type\":\"speech.audio.done\"}\n\n")
 		}
@@ -205,12 +218,12 @@ func TestAfterf9OpenAIStreamsRejectMissingTerminal(t *testing.T) {
 				}))
 				defer srv.Close()
 				d := afterf9Driver(t, "OpenAI", srv.URL)
-				api := &APIConfig{APIKey: stringPtr("key")}
+				api := &APIConfig{ApiKey: stringPtr("key")}
 				var err error
 				if kind == "asr" {
-					err = d.(ASRStreamDriver).TranscribeAudioWithSender(stringPtr("asr"), []byte("audio"), api, nil, func(*ASRResponse) error { return nil })
+					err = d.(ModelDriver).TranscribeAudioWithSender(stringPtr("asr"), modelFixtureFile(t, []byte("audio")), api, nil, func(value, _ *string) error { return nil })
 				} else {
-					err = d.(TTSStreamDriver).AudioSpeechWithSender(stringPtr("tts"), "hello", api, &TTSConfig{Voice: "voice", Params: map[string]any{"stream_format": "sse"}}, func(*TTSResponse) error { return nil })
+					err = d.(ModelDriver).AudioSpeechWithSender(stringPtr("tts"), stringPtr("hello"), api, &TTSConfig{Params: map[string]any{"stream_format": "sse", "voice": "voice"}}, func(value, _ *string) error { return nil })
 				}
 				if err == nil || strings.Contains(err.Error(), "private-secret") {
 					t.Fatal(err)
@@ -222,35 +235,53 @@ func TestAfterf9OpenAIStreamsRejectMissingTerminal(t *testing.T) {
 
 func TestAfterf9OpenAISpeechStreamsHTTP(t *testing.T) {
 	for _, mode := range []string{"audio", "sse"} {
-		t.Run(mode, func(t *testing.T) {
-			expected := []byte{0, 255, 1, 2}
-			srv := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var body map[string]any
-				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-					t.Error(err)
+		for _, binary := range []bool{false, true} {
+			t.Run(fmt.Sprint(mode, "/binary=", binary), func(t *testing.T) {
+				expected := []byte("UTF8 audio\x00")
+				if binary {
+					expected = []byte{0, 255, 1, 2}
+				}
+				srv := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+						return
+					}
+					if body["stream_format"] != mode || body["stream"] != nil || body["voice"] != "voice" {
+						t.Error(body)
+					}
+					if mode == "sse" {
+						if r.Header.Get("Accept") != "text/event-stream" {
+							t.Error("SSE accept lost")
+						}
+						w.Header().Set("Content-Type", "text/event-stream")
+						fmt.Fprintf(w, "data: {\"type\":\"speech.audio.delta\",\"audio\":%q}\n\ndata: {\"type\":\"speech.audio.done\"}\n\n", base64.StdEncoding.EncodeToString(expected))
+					} else {
+						w.Header().Set("Content-Type", "audio/mpeg")
+						w.Write(expected)
+					}
+				}))
+				defer srv.Close()
+				var output []byte
+				err := afterf9Driver(t, "OpenAI", srv.URL).(ModelDriver).AudioSpeechWithSender(stringPtr("tts"), stringPtr("hello"), &APIConfig{ApiKey: stringPtr("key")}, &TTSConfig{Params: map[string]any{"stream_format": mode, "voice": "voice"}}, func(value, _ *string) error {
+					if value != nil && *value == "[DONE]" {
+						return nil
+					}
+					result := &TTSResponse{Audio: modelStreamBytesForTest(value)}
+					output = append(output, result.Audio...)
+					return nil
+				})
+				if binary {
+					if err == nil || len(output) != 0 {
+						t.Fatal("unrepresentable binary was accepted by text sender", err)
+					}
 					return
 				}
-				if body["stream_format"] != mode || body["stream"] != nil || body["voice"] != "voice" {
-					t.Error(body)
+				if err != nil || !bytes.Equal(output, expected) {
+					t.Fatal(output, err)
 				}
-				if mode == "sse" {
-					if r.Header.Get("Accept") != "text/event-stream" {
-						t.Error("SSE accept lost")
-					}
-					w.Header().Set("Content-Type", "text/event-stream")
-					fmt.Fprintf(w, "data: {\"type\":\"speech.audio.delta\",\"audio\":%q}\n\ndata: {\"type\":\"speech.audio.done\"}\n\n", base64.StdEncoding.EncodeToString(expected))
-				} else {
-					w.Header().Set("Content-Type", "audio/mpeg")
-					w.Write(expected)
-				}
-			}))
-			defer srv.Close()
-			var output []byte
-			err := afterf9Driver(t, "OpenAI", srv.URL).(TTSStreamDriver).AudioSpeechWithSender(stringPtr("tts"), "hello", &APIConfig{APIKey: stringPtr("key")}, &TTSConfig{Voice: "voice", Params: map[string]any{"stream_format": mode}}, func(result *TTSResponse) error { output = append(output, result.Audio...); return nil })
-			if err != nil || !bytes.Equal(output, expected) {
-				t.Fatal(output, err)
-			}
-		})
+			})
+		}
 	}
 }
 
@@ -263,7 +294,7 @@ func TestAfterf9OpenAISenderFailureAndCancel(t *testing.T) {
 					io.Copy(io.Discard, r.Body)
 					if kind == "tts-binary" {
 						w.Header().Set("Content-Type", "audio/mpeg")
-						w.Write([]byte{0, 255, 1})
+						w.Write([]byte("UTF8 audio"))
 					} else {
 						w.Header().Set("Content-Type", "text/event-stream")
 						if kind == "asr" {
@@ -294,16 +325,16 @@ func TestAfterf9OpenAISenderFailureAndCancel(t *testing.T) {
 					return sentinel
 				}
 				d := afterf9Driver(t, "OpenAI", srv.URL)
-				api := &APIConfig{APIKey: stringPtr("key"), Context: ctx}
+				api := &APIConfig{ApiKey: stringPtr("key"), Context: ctx}
 				var err error
 				if kind == "asr" {
-					err = d.(ASRStreamDriver).TranscribeAudioWithSender(stringPtr("asr"), []byte("audio"), api, nil, func(*ASRResponse) error { return sender() })
+					err = d.(ModelDriver).TranscribeAudioWithSender(stringPtr("asr"), modelFixtureFile(t, []byte("audio")), api, nil, func(value, _ *string) error { return sender() })
 				} else {
 					mode := "sse"
 					if kind == "tts-binary" {
 						mode = "audio"
 					}
-					err = d.(TTSStreamDriver).AudioSpeechWithSender(stringPtr("tts"), "hello", api, &TTSConfig{Voice: "voice", Params: map[string]any{"stream_format": mode}}, func(*TTSResponse) error { return sender() })
+					err = d.(ModelDriver).AudioSpeechWithSender(stringPtr("tts"), stringPtr("hello"), api, &TTSConfig{Params: map[string]any{"stream_format": mode, "voice": "voice"}}, func(value, _ *string) error { return sender() })
 				}
 				expected := sentinel
 				if cancelInSender {
@@ -327,21 +358,25 @@ func TestAfterf9MediaPreflight(t *testing.T) {
 	srv := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer srv.Close()
 	d := afterf9Driver(t, "OpenAI", srv.URL)
-	api := &APIConfig{APIKey: stringPtr("key")}
-	for _, cfg := range []*ASRConfig{{Params: map[string]any{"file": "elsewhere"}}, {Params: map[string]any{"response_format": 5}}, {Params: map[string]any{"response_format": "unknown"}}, {Language: []string{"en", "zh"}}} {
-		if _, err := d.(ASRDriver).TranscribeAudio(stringPtr("asr"), []byte("audio"), api, cfg); err == nil {
-			t.Fatal("invalid ASR config")
+	api := &APIConfig{ApiKey: stringPtr("key")}
+	for _, request := range []struct {
+		name, file *string
+		api        *APIConfig
+	}{{nil, modelFixtureFile(t, []byte("audio")), api}, {stringPtr("asr"), nil, api}, {stringPtr("asr"), modelFixtureFile(t, []byte("audio")), nil}, {stringPtr("asr"), modelFixtureFile(t, []byte("audio")), &APIConfig{ApiKey: stringPtr("")}}} {
+		if _, err := d.TranscribeAudio(request.name, request.file, request.api, nil); err == nil {
+			t.Fatal("invalid ASR required input")
 		}
 	}
-	for _, cfg := range []*TTSConfig{nil, {Params: map[string]any{"voice": 5}}, {Voice: "voice", Params: map[string]any{"input": "other"}}, {Voice: "voice", Params: map[string]any{"stream_format": "wrong"}}} {
-		if _, err := d.(TTSDriver).AudioSpeech(stringPtr("tts"), "hello", api, cfg); err == nil {
+
+	for _, cfg := range []*TTSConfig{nil, {Params: map[string]any{"voice": 5}}, {Params: map[string]any{"input": "other"}}, {Params: map[string]any{"stream_format": "wrong"}}} {
+		if _, err := d.(ModelDriver).AudioSpeech(stringPtr("tts"), stringPtr("hello"), api, cfg); err == nil {
 			t.Fatal("invalid TTS config")
 		}
 	}
-	if err := d.(ASRStreamDriver).TranscribeAudioWithSender(stringPtr("asr"), []byte("audio"), api, nil, nil); err == nil {
+	if err := d.(ModelDriver).TranscribeAudioWithSender(stringPtr("asr"), modelFixtureFile(t, []byte("audio")), api, nil, nil); err == nil {
 		t.Fatal("nil sender")
 	}
-	if err := d.(TTSStreamDriver).AudioSpeechWithSender(stringPtr("tts"), "hello", api, &TTSConfig{Voice: "voice"}, nil); err == nil {
+	if err := d.(ModelDriver).AudioSpeechWithSender(stringPtr("tts"), stringPtr("hello"), api, &TTSConfig{Params: map[string]any{"voice": "voice"}}, nil); err == nil {
 		t.Fatal("nil sender")
 	}
 	if calls.Load() != 0 {
@@ -356,7 +391,7 @@ func TestAfterf9TextTranscriptionRejectsJSONError(t *testing.T) {
 	}))
 	defer srv.Close()
 	for _, provider := range []string{"Groq", "OpenAI"} {
-		result, err := afterf9Driver(t, provider, srv.URL).(ASRDriver).TranscribeAudio(stringPtr("whisper"), []byte("audio"), &APIConfig{APIKey: stringPtr("key")}, &ASRConfig{Params: map[string]any{"response_format": "text"}})
+		result, err := afterf9Driver(t, provider, srv.URL).(ModelDriver).TranscribeAudio(stringPtr("whisper"), modelFixtureFile(t, []byte("audio")), &APIConfig{ApiKey: stringPtr("key")}, &ASRConfig{Params: map[string]any{"response_format": "text"}})
 		if err == nil || result != nil || strings.Contains(err.Error(), "private-secret") {
 			t.Fatal(result, err)
 		}

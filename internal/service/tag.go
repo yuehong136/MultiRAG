@@ -20,15 +20,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"multirag/internal/common"
+	"multirag/internal/engine/redis"
 	"sort"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
-	"multirag/internal/common"
 	"multirag/internal/dao"
-	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/engine/types"
 	"multirag/internal/entity"
 	"multirag/internal/service/nlp"
@@ -61,7 +61,7 @@ func GetTagsFromCache(kbIDs []string) (map[string]float64, error) {
 		return nil, nil
 	}
 
-	redisClient := redisengine.Get()
+	redisClient := redis.Get()
 	if redisClient == nil {
 		common.Warn("Redis client not available, skipping cache lookup")
 		return nil, nil
@@ -89,7 +89,7 @@ func SetTagsToCache(kbIDs []string, tags map[string]float64) error {
 		return nil
 	}
 
-	redisClient := redisengine.Get()
+	redisClient := redis.Get()
 	if redisClient == nil {
 		common.Warn("Redis client not available, skipping cache store")
 		return nil
@@ -162,10 +162,16 @@ func (s *MetadataService) GetAllTagsInPortion(tenantID string, kbIDs []string) (
 
 // TagQuery returns weighted tag features for a question
 func (s *MetadataService) TagQuery(question string, tenantIDs []string, kbIDs []string, allTags map[string]float64, topnTags int) (map[string]float64, error) {
-	if len(kbIDs) == 0 || len(allTags) == 0 || len(tenantIDs) == 0 {
+	if topnTags == 0 || len(kbIDs) == 0 || len(allTags) == 0 || len(tenantIDs) == 0 {
 		return make(map[string]float64), nil
 	}
 
+	if topnTags < 0 {
+		return nil, fmt.Errorf("tag limit must not be negative")
+	}
+	if s.docEngine == nil {
+		return nil, fmt.Errorf("document engine is not initialized")
+	}
 	// Build index names for all tenant IDs
 	indexNames := make([]string, len(tenantIDs))
 	for i, tenantID := range tenantIDs {

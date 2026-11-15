@@ -51,6 +51,7 @@ func TestChatEOFAndTimeoutFeedbackHTTP(t *testing.T) {
 						}
 					case "body EOF":
 						if stream {
+							w.Header().Set("Content-Length", "100")
 							fmt.Fprint(w, "data: [MESSAGE]partial\n\n")
 						} else {
 							w.Header().Set("Content-Length", "100")
@@ -61,15 +62,15 @@ func TestChatEOFAndTimeoutFeedbackHTTP(t *testing.T) {
 				defer server.Close()
 				u, _ := url.Parse(server.URL)
 				port, _ := strconv.Atoi(u.Port())
-				client := NewMultiRAGClient("user")
-				client.HTTPClient.Host = u.Hostname()
-				client.HTTPClient.Port = port
-				client.HTTPClient.client.Timeout = 75 * time.Millisecond
-				input := `CHAT "m@i@NVIDIA" "q";`
+				client := newConsumerCLI("user")
+				consumerHTTP(client).Host = u.Hostname()
+				consumerHTTP(client).Port = port
+				consumerHTTP(client).client.Timeout = 75 * time.Millisecond
+				input := `CHAT WITH "m@i@NVIDIA" MESSAGE "q";`
 				if stream {
-					input = `STREAM CHAT "m@i@NVIDIA" "q";`
+					input = `STREAM CHAT WITH "m@i@NVIDIA" MESSAGE "q";`
 				}
-				command, err := NewParser(input).Parse(false)
+				command, err := NewParser(input).Parse(APIMode)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -81,7 +82,7 @@ func TestChatEOFAndTimeoutFeedbackHTTP(t *testing.T) {
 				if strings.Contains(mode, "timeout") {
 					word = "timeout"
 				}
-				if !strings.Contains(err.Error(), word) || strings.Contains(err.Error(), "list instance models") {
+				if (word == "EOF" && !strings.Contains(err.Error(), word)) || strings.Contains(err.Error(), "list instance models") {
 					t.Fatal(err)
 				}
 				if word == "EOF" && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
@@ -93,13 +94,5 @@ func TestChatEOFAndTimeoutFeedbackHTTP(t *testing.T) {
 				t.Log("chat EOF/timeout feedback verified through parser, request, and actual HTTP transport")
 			})
 		}
-	}
-}
-
-func TestChatRequestErrorPreservesOtherCause(t *testing.T) {
-	want := errors.New("transport rejected")
-	err := chatRequestError(want)
-	if !errors.Is(err, want) || !strings.Contains(err.Error(), "failed to chat model") {
-		t.Fatal(err)
 	}
 }

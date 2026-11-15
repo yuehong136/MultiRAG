@@ -1,64 +1,81 @@
+//go:build ignore
+
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package main
 
 import (
 	"fmt"
+	"multirag/internal/common"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"multirag/internal/cli"
-	"multirag/internal/common"
 )
 
-func main() { os.Exit(runCLI()) }
+func main() {
 
-func runCLI() int {
-	defer common.Sync()
-	if err := common.Init("error"); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	// Parse command line arguments (skip program name).
-	args, err := cli.ParseConnectionArgs(os.Args[1:])
+	parseArgs, err := cli.ParseArgs(os.Args[1:])
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return 1
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
 
-	// Show help and exit.
-	if args.ShowHelp {
+	if parseArgs.ShowHelp {
 		cli.PrintUsage()
-		return 0
+		return
 	}
 
-	// Create CLI instance with parsed arguments.
-	cliApp, err := cli.NewCLIWithArgs(args)
+	//parseArgs.Print()
+	logLevel := "warn" // Default to warn (quiet mode)
+	if parseArgs.Verbose {
+		logLevel = "info"
+	}
+
+	if err = common.Init(logLevel, ""); err != nil {
+		fmt.Printf("Warning: Failed to initialize logger: %v\n", err)
+	}
+
+	client, err := cli.NewCLIWithConfig(parseArgs)
 	if err != nil {
 		fmt.Printf("Failed to create CLI: %v\n", err)
-		return 1
+		os.Exit(1)
 	}
 
-	// Handle interrupt signal.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		cliApp.Cleanup()
-		common.Sync()
+		client.Cleanup()
 		os.Exit(0)
 	}()
 
-	// Single command mode when a command was supplied, otherwise interactive.
-	if args.Command != "" {
-		if err = cliApp.RunSingleCommand(args.Command); err != nil {
-			fmt.Printf("Error: %v\n", err)
-			return 1
+	if parseArgs.Command != nil {
+		if err = client.RunSingleCommand(parseArgs.Command); err != nil {
+			fmt.Printf("Command execution failed: %v\n", err)
+			os.Exit(1)
 		}
 	} else {
-		if err = cliApp.Run(); err != nil {
+		if err = client.NewRun(); err != nil {
 			fmt.Printf("CLI error: %v\n", err)
-			return 1
+			os.Exit(1)
 		}
 	}
-	return 0
+
+	return
 }

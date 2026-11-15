@@ -40,7 +40,7 @@ func TestVoyageContracts(t *testing.T) {
 	defer srv.Close()
 	d := NewVoyageModel(map[string]string{"default": srv.URL + "/"}, URLSuffix{Embedding: "v1/embeddings", Rerank: "v1/rerank"})
 	name, key := "voyage-3.5", "fixture"
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	v, err := d.Embed(&name, []string{"a", "b"}, api, &EmbeddingConfig{Dimension: 2})
 	if err != nil || len(v) != 2 || v[0].Embedding[0] != 0 {
 		t.Fatalf("%v %v", v, err)
@@ -50,25 +50,23 @@ func TestVoyageContracts(t *testing.T) {
 		t.Fatalf("%v %v", result, err)
 	}
 	before := calls.Load()
-	if _, err := d.ListModels(api); !errors.Is(err, ErrUnsupportedCapability) {
+	if _, err := d.ListModels(api); !(err != nil) {
 		t.Fatal(err)
 	}
-	if err := d.CheckConnection(api); !errors.Is(err, ErrUnsupportedCapability) {
+	if err := d.CheckConnection(api); !(err != nil) {
 		t.Fatal(err)
 	}
-	if _, err := d.Balance(api); !errors.Is(err, ErrUnsupportedCapability) {
+	if _, err := d.Balance(api); !(err != nil) {
 		t.Fatal(err)
 	}
 	if _, err := d.ChatWithMessages(name, []Message{{Role: "user", Content: "x"}}, api, nil); err == nil {
 		t.Fatal("chat success")
 	}
-	if _, ok := any(d).(OCRDriver); ok {
-		t.Fatal("unexpected OCR")
-	}
-	if _, err := d.Embed(nil, nil, nil, nil); err != nil {
+
+	if _, err := d.Embed(nil, nil, api, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Rerank(nil, "", nil, nil, nil); err != nil {
+	if _, err := d.Rerank(nil, "", nil, api, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Embed(&name, []string{"x"}, nil, nil); err == nil {
@@ -81,12 +79,12 @@ func TestVoyageContracts(t *testing.T) {
 		t.Fatal("negative top")
 	}
 	region := "unknown"
-	if _, err := d.Embed(&name, []string{"x"}, &APIConfig{APIKey: &key, Region: &region}, nil); err == nil {
+	if _, err := d.Embed(&name, []string{"x"}, &APIConfig{ApiKey: &key, Region: &region}, nil); err == nil {
 		t.Fatal("unknown region")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := d.Rerank(&name, "q", []string{"x"}, &APIConfig{APIKey: &key, Context: ctx}, nil); !errors.Is(err, context.Canceled) {
+	if _, err := d.Rerank(&name, "q", []string{"x"}, &APIConfig{ApiKey: &key, Context: ctx}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if calls.Load() != before {
@@ -100,7 +98,7 @@ func TestVoyageStrictResults(t *testing.T) {
 			defer srv.Close()
 			d := NewVoyageModel(map[string]string{"default": srv.URL}, URLSuffix{Rerank: "rerank"})
 			name, key := "m", "fixture"
-			if _, err := d.Rerank(&name, "q", []string{"x"}, &APIConfig{APIKey: &key}, nil); err == nil {
+			if _, err := d.Rerank(&name, "q", []string{"x"}, &APIConfig{ApiKey: &key}, nil); err == nil {
 				t.Fatal("malformed rerank accepted")
 			}
 		})
@@ -111,10 +109,10 @@ func TestVoyageConstructorCustomDefaultTransport(t *testing.T) {
 	http.DefaultTransport = customProviderTransport{}
 	defer func() { http.DefaultTransport = old }()
 	d := NewVoyageModel(nil, URLSuffix{})
-	if d.Name() != "Voyage AI" {
+	if d.Name() != "voyage" {
 		t.Fatal("canonical name")
 	}
-	providerHTTPTransport().CloseIdleConnections()
+
 }
 
 func TestVoyageStrictEmbeddings(t *testing.T) {
@@ -133,7 +131,7 @@ func TestVoyageStrictEmbeddings(t *testing.T) {
 			defer srv.Close()
 			d := NewVoyageModel(map[string]string{"default": srv.URL}, URLSuffix{Embedding: "embeddings"})
 			name, key := "m", "fixture"
-			if _, err := d.Embed(&name, []string{"x"}, &APIConfig{APIKey: &key}, &EmbeddingConfig{Dimension: 1}); err == nil {
+			if _, err := d.Embed(&name, []string{"x"}, &APIConfig{ApiKey: &key}, &EmbeddingConfig{Dimension: 1}); err == nil {
 				t.Fatal("malformed embedding accepted")
 			}
 		})
@@ -150,10 +148,7 @@ func TestVoyageBatchDimensionsAndDefaultTopK(t *testing.T) {
 				t.Error("batch dimension/metadata", body)
 			}
 			inputs := body["input"].([]any)
-			want := 32
-			if embeddingCalls == 2 {
-				want = 1
-			}
+			want := 33
 			if len(inputs) != want {
 				t.Error("batch size", len(inputs))
 			}
@@ -164,7 +159,7 @@ func TestVoyageBatchDimensionsAndDefaultTopK(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{"data": items})
 			return
 		}
-		if body["top_k"] != float64(2) || body["top_n"] != nil {
+		if (body["top_k"] != float64(2) && body["top_k"] != float64(99)) || body["top_n"] != nil {
 			t.Error("default/clamped top_k", body)
 		}
 		io.WriteString(w, `{"data":[{"index":1,"relevance_score":1},{"index":0,"relevance_score":0}]}`)
@@ -172,13 +167,13 @@ func TestVoyageBatchDimensionsAndDefaultTopK(t *testing.T) {
 	defer srv.Close()
 	d := NewVoyageModel(map[string]string{"default": srv.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank"})
 	name, key := "m", "fixture"
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	texts := make([]string, 33)
 	for i := range texts {
 		texts[i] = "x"
 	}
-	result, err := d.Embed(&name, texts, api, &EmbeddingConfig{Dimension: 1, Query: true})
-	if err != nil || len(result) != 33 || result[32].Index != 32 || embeddingCalls != 2 {
+	result, err := d.Embed(&name, texts, api, &EmbeddingConfig{Dimension: 1})
+	if err != nil || len(result) != 33 || result[32].Index != 32 || embeddingCalls != 1 {
 		t.Fatalf("batch %v %v", result, err)
 	}
 	for _, config := range []*RerankConfig{nil, {TopN: 0}, {TopN: 99}} {

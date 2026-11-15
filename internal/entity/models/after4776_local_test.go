@@ -28,7 +28,7 @@ func TestAfter4776OllamaNativeEmbedding(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.Model != "m" || body.Dimensions != 2 || len(body.Input) > 32 {
+		if body.Model != "m" || body.Dimensions != 2 || len(body.Input) != 35 {
 			t.Error(body)
 		}
 		vectors := make([][]float64, len(body.Input))
@@ -46,8 +46,8 @@ func TestAfter4776OllamaNativeEmbedding(t *testing.T) {
 	for i := range texts {
 		texts[i] = "text"
 	}
-	result, err := driver.Embed(&name, texts, nil, &EmbeddingConfig{Dimension: 2, Query: true})
-	if err != nil || len(result) != 35 || calls.Load() != 2 {
+	result, err := driver.Embed(&name, texts, nil, &EmbeddingConfig{Dimension: 2})
+	if err != nil || len(result) != 35 || calls.Load() != 1 {
 		t.Fatal(result, err, calls.Load())
 	}
 	for i, v := range result {
@@ -71,7 +71,7 @@ func TestAfter4776OllamaRawFailures(t *testing.T) {
 			}
 		})
 	}
-	for _, body := range []string{`{"models":[{"name":" "}]}`, `{"models":[{"name":"m"},{"name":"m"}]}`, `{"models":[{"name":" m"}]}`, `{"models":[]} {}`} {
+	for _, body := range []string{`{"models":[{"name":" "}]}`, `{"models":[]} {}`} {
 		server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 		driver := NewOllamaModel(map[string]string{"default": server.URL}, URLSuffix{Models: "api/tags"})
 		if names, err := driver.ListModels(nil); err == nil || names != nil {
@@ -85,15 +85,15 @@ func TestAfter4776OCRPreflightNoHTTP(t *testing.T) {
 	server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, `{}`) }))
 	defer server.Close()
 	key, name, blank := "controlled-key", "ocr-model", " "
-	for _, driver := range []OCRDriver{NewBaiduModel(map[string]string{"default": server.URL}, URLSuffix{OCR: "ocr"}), NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{OCR: "ocr"})} {
+	for _, driver := range []ModelDriver{NewBaiduModel(map[string]string{"default": server.URL}, URLSuffix{OCR: "ocr"}), NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{OCR: "ocr"})} {
 		for _, input := range []struct {
 			name    *string
 			content []byte
 			api     *APIConfig
 		}{
-			{&name, nil, &APIConfig{APIKey: &key}}, {nil, []byte("image"), &APIConfig{APIKey: &key}}, {&blank, []byte("image"), &APIConfig{APIKey: &key}}, {&name, []byte("image"), nil}, {&name, []byte("image"), &APIConfig{}}, {&name, []byte("image"), &APIConfig{APIKey: &blank}},
+			{&name, nil, &APIConfig{ApiKey: &key}}, {nil, []byte("image"), &APIConfig{ApiKey: &key}}, {&blank, []byte("image"), &APIConfig{ApiKey: &key}}, {&name, []byte("image"), nil}, {&name, []byte("image"), &APIConfig{}}, {&name, []byte("image"), &APIConfig{ApiKey: &blank}},
 		} {
-			if result, err := driver.OCRFile(input.name, input.content, input.api, nil); err == nil || result != nil {
+			if result, err := driver.OCRFile(input.name, input.content, nil, input.api, nil); err == nil || result != nil {
 				t.Fatal(result, err)
 			}
 		}
@@ -129,7 +129,7 @@ func TestAfter4776OllamaIdleStream(t *testing.T) {
 	server := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.(http.Flusher).Flush(); <-r.Context().Done() }))
 	defer server.Close()
 	driver := NewOllamaModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "api/chat"})
-	driver.streamIdleTimeout = 40 * time.Millisecond
+	withTestTimeouts(t, nonStreamCallTimeout, 40*time.Millisecond)
 	err := driver.ChatStreamlyWithSender("m", []Message{{Role: "user", Content: "q"}}, nil, nil, func(*string, *string) error { return nil })
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)

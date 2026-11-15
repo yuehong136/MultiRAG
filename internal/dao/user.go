@@ -43,6 +43,15 @@ func (dao *UserDAO) GetByID(id uint) (*entity.User, error) {
 	return &user, nil
 }
 
+func (dao *UserDAO) GetByTenantID(tenantID string) (*entity.User, error) {
+	var user entity.User
+	err := DB.Where("id = ? AND is_active = ? AND (status IS NULL OR status <> ?)", tenantID, "1", "0").First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 // GetByEmail get user by email
 func (dao *UserDAO) GetByEmail(email string) (*entity.User, error) {
 	var user entity.User
@@ -57,17 +66,7 @@ func (dao *UserDAO) GetByEmail(email string) (*entity.User, error) {
 // GetByAccessToken get user by access token
 func (dao *UserDAO) GetByAccessToken(token string) (*entity.User, error) {
 	var user entity.User
-	err := DB.Where("access_token = ?", token).First(&user).Error
-	if err != nil {
-		return nil, err
-	}
-	return &user, nil
-}
-
-// GetByTenantID get user by tenant ID (tenant_id equals the owner user's id)
-func (dao *UserDAO) GetByTenantID(tenantID string) (*entity.User, error) {
-	var user entity.User
-	err := DB.Where("id = ?", tenantID).First(&user).Error
+	err := DB.Where("access_token = ? AND is_active = ? AND (status IS NULL OR status <> ?)", token, "1", "0").First(&user).Error
 	if err != nil {
 		return nil, err
 	}

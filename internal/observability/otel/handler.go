@@ -18,7 +18,6 @@ package otel
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -35,7 +34,7 @@ import (
 // TracerName is the instrumentation scope used for every span created by
 // [OtelHandler]. The constant is exported so other components can refer to
 // the same scope if they need to look up the tracer.
-const TracerName = "multirag/internal/observability/otel"
+const TracerName = "github.com/infiniflow/ragflow/internal/observability/otel"
 
 // Context-key types. These are unexported (the value is exported via the
 // constructor helpers below) so that external packages cannot collide
@@ -244,9 +243,8 @@ func (h *OtelHandler) OnError(ctx context.Context, info *callbacks.RunInfo, err 
 	if !ok || v == nil {
 		return ctx
 	}
-	safeErr := errors.New("component execution failed")
-	v.span.RecordError(safeErr, trace.WithTimestamp(time.Now()))
-	v.span.SetStatus(codes.Error, safeErr.Error())
+	v.span.RecordError(err, trace.WithTimestamp(time.Now()))
+	v.span.SetStatus(codes.Error, err.Error())
 	v.span.End(trace.WithTimestamp(time.Now()))
 	return context.WithValue(ctx, spanContextKey, (*spanContextValue)(nil))
 }

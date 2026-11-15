@@ -598,14 +598,18 @@ func (x *XAIModel) TranscribeAudio(modelName *string, file *string, apiConfig *A
 
 	// xAI response parsing (assuming standard format matching OpenAI)
 	var result struct {
-		Text string `json:"text"`
+		Text *string `json:"text"`
 	}
 
 	if err = json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("invalid transcription response")
+	}
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(respBody, &envelope) != nil || result.Text == nil || (envelope["error"] != nil && string(envelope["error"]) != "null") {
+		return nil, fmt.Errorf("invalid transcription response")
 	}
 
-	return &ASRResponse{Text: result.Text}, nil
+	return &ASRResponse{Text: *result.Text}, nil
 }
 
 func (x *XAIModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
@@ -617,8 +621,11 @@ func (x *XAIModel) AudioSpeech(modelName *string, audioContent *string, apiConfi
 	if err := x.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return nil, err
 	}
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return nil, fmt.Errorf("voice is required")
+	}
 
-	if audioContent == nil || *audioContent == "" {
+	if audioContent == nil || strings.TrimSpace(*audioContent) == "" {
 		return nil, fmt.Errorf("text content is missing")
 	}
 
@@ -673,6 +680,10 @@ func (x *XAIModel) AudioSpeech(modelName *string, audioContent *string, apiConfi
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if len(body) == 0 || strings.Contains(contentType, "json") || strings.Contains(contentType, "text/") || json.Valid(body) {
+		return nil, fmt.Errorf("speech response contains no audio")
 	}
 
 	return &TTSResponse{Audio: body}, nil

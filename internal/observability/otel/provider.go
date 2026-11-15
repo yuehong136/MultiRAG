@@ -28,9 +28,9 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"net/url"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -40,9 +40,9 @@ import (
 
 // Default values applied when ProviderConfig fields are left zero.
 const (
-	defaultServiceName    = "multirag"
+	defaultServiceName    = "ragflow"
 	defaultServiceVersion = "0.0.0"
-	defaultServiceNS      = "multirag"
+	defaultServiceNS      = "ragflow"
 	defaultExportTimeout  = 30 * time.Second
 )
 
@@ -52,20 +52,21 @@ const (
 // is not attached when OTLPEndpoint is empty or SampleRatio is 0.
 type ProviderConfig struct {
 	// ServiceName populates the "service.name" resource attribute. Defaults
-	// to "multirag" when empty.
+	// to "ragflow" when empty.
 	ServiceName string
 	// ServiceVersion populates the "service.version" resource attribute.
 	// Defaults to "0.0.0" when empty.
 	ServiceVersion string
-	// OTLPEndpoint is the OTLP/HTTP collector endpoint (e.g.
-	// "http://otel-collector:4318"). When empty, the returned provider
+	// OTLPEndpoint is the OTLP/HTTP collector host and port (e.g.
+	// "otel-collector:4318"), as accepted by the original WithEndpoint option.
+	// Insecure selects HTTP rather than HTTPS. When empty, the returned provider
 	// has no exporter and effectively no-ops.
 	OTLPEndpoint string
-	// Insecure explicitly permits plaintext OTLP/HTTP. TLS is the default.
+	// Insecure disables TLS for the OTLP exporter. Defaults to true.
 	Insecure bool
 	// SampleRatio is the probability an in-process trace is sampled,
 	// in the [0, 1] range. 0 disables the provider (no exporter, no
-	// sampler wiring). The zero value disables tracing.
+	// sampler wiring). Defaults to 1.0 (sample everything).
 	SampleRatio float64
 }
 
@@ -79,13 +80,13 @@ type ProviderConfig struct {
 //     [trace.NeverSample] and no exporter, so even a single manual span
 //     is dropped.
 //
-// Invalid ratios and endpoint URLs are reported through the returned error.
-// Collector delivery errors are reported asynchronously by the OTel exporter. The caller is expected to log
+// All other misconfigurations (unparseable ratio, collector unreachability)
+// are reported through the returned error. The caller is expected to log
 // the error and fall back to a no-op provider so that the agent runtime
 // remains operational.
 func NewTracerProvider(ctx context.Context, cfg ProviderConfig) (*sdktrace.TracerProvider, error) {
-	if math.IsNaN(cfg.SampleRatio) || math.IsInf(cfg.SampleRatio, 0) || cfg.SampleRatio < 0 || cfg.SampleRatio > 1 {
-		return nil, fmt.Errorf("otel: sample ratio must be in [0,1]")
+	if math.IsNaN(cfg.SampleRatio) || math.IsInf(cfg.SampleRatio, 0) || cfg.SampleRatio > 1 {
+		return nil, fmt.Errorf("otel: sample ratio must be finite and at most one")
 	}
 	cfg = withDefaults(cfg)
 
@@ -118,6 +119,10 @@ func NewTracerProvider(ctx context.Context, cfg ProviderConfig) (*sdktrace.Trace
 		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(cfg.SampleRatio)),
 	)
 
+	// Register as the global tracer provider so that any code that calls
+	// otel.Tracer("...") also routes through this provider.
+	otel.SetTracerProvider(tp)
+
 	return tp, nil
 }
 
@@ -143,13 +148,12 @@ func withDefaults(cfg ProviderConfig) ProviderConfig {
 // every span emitted by the provider. The resource uses semconv v1.26.0
 // attribute keys.
 func buildResource(ctx context.Context, cfg ProviderConfig) (*resource.Resource, error) {
-	schemaURL := semconv.SchemaURL
-
-	// service.namespace is set to "multirag" regardless of cfg so that the
+	// service.namespace is set to "ragflow" regardless of cfg so that the
 	// Go runtime and the Python RAGFlow share a single namespace in any
 	// shared OTel backend (see plan §2.10.8).
-	attrs := resource.NewWithAttributes(
-		schemaURL,
+	// These service attribute keys are stable across the default resource's
+	// schema version. A second fixed schema URL conflicts with the pinned SDK.
+	attrs := resource.NewSchemaless(
 		semconv.ServiceName(cfg.ServiceName),
 		semconv.ServiceVersion(cfg.ServiceVersion),
 		semconv.ServiceNamespace(defaultServiceNS),
@@ -164,17 +168,12 @@ func buildResource(ctx context.Context, cfg ProviderConfig) (*resource.Resource,
 	return detected, nil
 }
 
-// buildExporter constructs an explicitly configured OTLP/HTTP exporter.
+// buildExporter constructs an OTLP/HTTP span exporter pointed at the
+// configured collector endpoint. Insecure defaults to true; callers that
+// need TLS should set cfg.Insecure=false.
 func buildExporter(ctx context.Context, cfg ProviderConfig) (*otlptrace.Exporter, error) {
-	parsed, err := url.Parse(cfg.OTLPEndpoint)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
-		return nil, fmt.Errorf("otel: endpoint must be an HTTP(S) URL without credentials")
-	}
-	if parsed.Scheme == "http" && !cfg.Insecure {
-		return nil, fmt.Errorf("otel: HTTP endpoint requires explicit insecure option")
-	}
 	opts := []otlptracehttp.Option{
-		otlptracehttp.WithEndpointURL(cfg.OTLPEndpoint),
+		otlptracehttp.WithEndpoint(cfg.OTLPEndpoint),
 		otlptracehttp.WithTimeout(defaultExportTimeout),
 	}
 	if cfg.Insecure {

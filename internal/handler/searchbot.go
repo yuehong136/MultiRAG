@@ -1,39 +1,126 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"multirag/internal/common"
+	"multirag/internal/entity"
+	modelModule "multirag/internal/entity/models"
 	"multirag/internal/service"
+
+	"go.uber.org/zap"
 )
 
-type relatedQuestionsService interface {
-	RelatedQuestions(context.Context, string, string, string) ([]string, error)
+// searchbotLLM is the interface for LLM calls used by SearchBotHandler.
+type searchbotLLM interface {
+	Chat(tenantID, modelID string, messages []modelModule.Message, config *modelModule.ChatConfig) (*modelModule.ChatResponse, error)
 }
 
-// SearchbotRequest contains the caller's question and optional saved search.
-type SearchbotRequest struct {
-	Question string `json:"question"`
-	SearchID string `json:"search_id,omitempty"`
+// ChunkRetriever abstracts chunk retrieval for the searchbots handler.
+type ChunkRetriever interface {
+	RetrievalTest(req *service.RetrievalTestRequest, userID string) (*service.RetrievalTestResponse, error)
 }
 
-type chunkRetriever interface {
-	RetrievalTest(context.Context, *service.RetrievalTestRequest, string) (*service.RetrievalTestResponse, error)
+// streamingLLM abstracts streaming chat for the Ask endpoint.
+// The returned channel delivers raw text deltas from the LLM.
+// Implementations should respect ctx cancellation to prevent goroutine leaks.
+type streamingLLM interface {
+	ChatStream(ctx context.Context, tenantID, modelID string, messages []modelModule.Message, config *modelModule.ChatConfig) (<-chan service.AskDelta, error)
 }
 
-// SearchbotRetrievalTestRequest keeps kb_id separate from the array-only
-// datasets/search contract. Numeric model IDs and metadata numbers stay exact.
-type SearchbotRetrievalTestRequest struct {
-	KBIDs                  common.StringSlice     `json:"kb_id"`
-	Question               string                 `json:"question"`
+// SearchBotAskRequest is the request body for POST /api/v1/searchbots/ask.
+type SearchBotAskRequest struct {
+	Question string             `json:"question" binding:"required"`
+	KbIDs    common.StringSlice `json:"kb_ids" binding:"required"`
+	SearchID string             `json:"search_id,omitempty"`
+}
+
+// SearchBotRealLLM wraps ModelProviderService to implement searchbotLLM.
+type SearchBotRealLLM struct {
+	Svc *service.ModelProviderService
+}
+
+func (r *SearchBotRealLLM) Chat(tenantID, modelID string, messages []modelModule.Message, config *modelModule.ChatConfig) (*modelModule.ChatResponse, error) {
+	chatModel, err := r.Svc.GetChatModel(tenantID, modelID)
+	if err != nil {
+		return nil, err
+	}
+	return chatModel.ModelDriver.ChatWithMessages(*chatModel.ModelName, messages, chatModel.APIConfig, config)
+}
+
+// ChatStream implements streamingLLM.
+func (r *SearchBotRealLLM) ChatStream(ctx context.Context, tenantID, modelID string, messages []modelModule.Message, config *modelModule.ChatConfig) (<-chan service.AskDelta, error) {
+	chatModel, err := r.Svc.GetChatModel(tenantID, modelID)
+	if err != nil {
+		return nil, err
+	}
+	return chatStreamWithContext(ctx, chatModel, messages, config), nil
+}
+
+// chatStreamWithContext creates a streaming LLM channel that stops sending
+// when ctx is cancelled, preventing goroutine leaks on client disconnect.
+func chatStreamWithContext(ctx context.Context, chatModel *modelModule.ChatModel, messages []modelModule.Message, config *modelModule.ChatConfig) <-chan service.AskDelta {
+	ch := make(chan service.AskDelta, 256)
+	apiConfig := modelModule.APIConfig{}
+	if chatModel.APIConfig != nil {
+		apiConfig = *chatModel.APIConfig
+	}
+	apiConfig.Context = ctx
+	go func() {
+		defer close(ch)
+		if err := chatModel.ModelDriver.ChatStreamlyWithSender(*chatModel.ModelName, messages, &apiConfig, config,
+			func(delta *string, _ *string) error {
+				if delta == nil || *delta == "[DONE]" {
+					return nil
+				}
+				select {
+				case ch <- service.AskDelta{Kind: service.AskDeltaAnswer, Value: *delta}:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}); err != nil {
+			if err == context.Canceled || err == context.DeadlineExceeded {
+				return
+			}
+			common.Warn("ChatStreamlyWithSender returned error", zap.Error(err))
+			select {
+			case ch <- service.AskDelta{Kind: service.AskDeltaError, Value: "LLM stream failed"}:
+			case <-ctx.Done():
+			}
+		}
+	}()
+	return ch
+}
+
+// SearchBotRetrievalTestRequest is the request body for POST /api/v1/searchbots/retrieval_test.
+type SearchBotRetrievalTestRequest struct {
+	KbIDs                  common.StringSlice     `json:"kb_ids" binding:"required"`
+	Question               string                 `json:"question" binding:"required"`
 	Page                   *int                   `json:"page,omitempty"`
 	Size                   *int                   `json:"size,omitempty"`
 	DocIDs                 []string               `json:"doc_ids,omitempty"`
@@ -41,236 +128,532 @@ type SearchbotRetrievalTestRequest struct {
 	TopK                   *int                   `json:"top_k,omitempty"`
 	CrossLanguages         []string               `json:"cross_languages,omitempty"`
 	SearchID               *string                `json:"search_id,omitempty"`
-	Filter                 map[string]interface{} `json:"meta_data_filter,omitempty"`
-	TenantRerankID         *int64                 `json:"tenant_rerank_id,omitempty"`
+	MetaDataFilter         map[string]interface{} `json:"meta_data_filter,omitempty"`
+	TenantRerankID         *string                `json:"tenant_rerank_id,omitempty"`
 	RerankID               *string                `json:"rerank_id,omitempty"`
 	Keyword                *bool                  `json:"keyword,omitempty"`
 	SimilarityThreshold    *float64               `json:"similarity_threshold,omitempty"`
 	VectorSimilarityWeight *float64               `json:"vector_similarity_weight,omitempty"`
-	Highlight              *bool                  `json:"highlight,omitempty"`
+	// TODO: wire highlight to nlp Retrieval when engine supports highlightFields
+	// Python: bot_api.py → retrieval(highlight=req.get("highlight"))
+	//        → search.py highlightFields → ES get_highlight()
+	// Issue: https://github.com/infiniflow/ragflow/issues/15712
+	// Highlight           *bool                   `json:"highlight,omitempty"`
 }
 
-func (r *SearchbotRetrievalTestRequest) UnmarshalJSON(raw []byte) error {
-	type requestJSON SearchbotRetrievalTestRequest
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	decoder.DisallowUnknownFields()
-	return decoder.Decode((*requestJSON)(r))
+// SearchBotRequest is the request body for POST /api/v1/searchbots/related_questions.
+type SearchBotRequest struct {
+	Question string `json:"question" binding:"required"`
+	SearchID string `json:"search_id,omitempty"`
 }
 
-// SearchbotHandler serves retrieval and related questions for authenticated users.
-type SearchbotHandler struct {
-	service   relatedQuestionsService
-	retriever chunkRetriever
-	asker     askService
+// SearchBotHandler handles searchbot endpoints:
+//
+//	POST /api/v1/searchbots/related_questions
+//	POST /api/v1/searchbots/retrieval_test
+//	POST /api/v1/searchbots/ask
+type SearchBotHandler struct {
+	searchSvc *service.SearchService
+	tenantSvc *service.TenantService
+	llm       searchbotLLM
+	streamLLM streamingLLM
+	chunkSvc  ChunkRetriever
+	askSvc    *service.AskService
+	sseWriter SSEWriter
 }
 
-type askService interface {
-	Stream(context.Context, string, *service.AskRequest, func(service.AnswerFrame) error) error
+// NewSearchBotHandler creates a new SearchBotHandler.
+func NewSearchBotHandler(searchSvc *service.SearchService, tenantSvc *service.TenantService, llm searchbotLLM, chunkSvc ChunkRetriever) *SearchBotHandler {
+	return &SearchBotHandler{searchSvc: searchSvc, tenantSvc: tenantSvc, llm: llm, chunkSvc: chunkSvc, sseWriter: &ginSSEWriter{}}
 }
 
-// NewSearchbotHandlerWithAsk uses one authorized retrieval/model stack for all
-// searchbot consumers. The router supplies authentication for every route.
-func NewSearchbotHandlerWithAsk(svc relatedQuestionsService, retriever chunkRetriever, asker askService) *SearchbotHandler {
-	return &SearchbotHandler{service: svc, retriever: retriever, asker: asker}
+// SetStreamLLM sets the streaming LLM for the Ask endpoint.
+func (h *SearchBotHandler) SetStreamLLM(llm streamingLLM) { h.streamLLM = llm }
+
+// SetAskService sets the AskService used by the Ask endpoint.
+func (h *SearchBotHandler) SetAskService(svc *service.AskService) { h.askSvc = svc }
+
+// askStreamAdapter adapts handler.streamingLLM to service.StreamingLLM.
+type askStreamAdapter struct {
+	llm      streamingLLM
+	tenantID string
+	modelID  string
 }
 
-func NewSearchbotHandler(svc relatedQuestionsService, retrievers ...chunkRetriever) *SearchbotHandler {
-	h := &SearchbotHandler{service: svc}
-	if len(retrievers) > 0 {
-		h.retriever = retrievers[0]
+func (a *askStreamAdapter) ChatStream(ctx context.Context, messages []modelModule.Message, config *modelModule.ChatConfig) (<-chan service.AskDelta, error) {
+	if a.llm == nil {
+		return nil, fmt.Errorf("streaming LLM not configured")
 	}
-	return h
+	return a.llm.ChatStream(ctx, a.tenantID, a.modelID, messages, config)
 }
 
-func (h *SearchbotHandler) Handle(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+// Handle generates related search questions based on a user query.
+// @Summary Generate Related Questions
+// @Description Generates 5-10 related search questions to expand the search scope.
+// @Tags searchbots
+// @Accept json
+// @Produce json
+// @Param request body SearchBotRequest true "Request body"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/v1/searchbots/related_questions [post]
+func (h *SearchBotHandler) Handle(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
 		return
 	}
-	if user == nil || strings.TrimSpace(user.ID) == "" {
-		jsonError(c, common.CodeUnauthorized, "User not found")
-		return
-	}
-	var req SearchbotRequest
-	if err := bindObjectJSON(c, &req); err != nil || strings.TrimSpace(req.Question) == "" || req.SearchID != strings.TrimSpace(req.SearchID) {
-		jsonError(c, common.CodeArgumentError, "Invalid related questions request")
-		return
-	}
-	if h.service == nil {
-		jsonError(c, common.CodeOperatingError, "Related questions are unavailable")
-		return
-	}
-	questions, err := h.service.RelatedQuestions(c.Request.Context(), user.ID, req.Question, req.SearchID)
-	if err != nil {
-		switch {
-		case errors.Is(err, service.ErrSearchbotArgument):
-			jsonError(c, common.CodeArgumentError, "Invalid related questions request")
-		case errors.Is(err, service.ErrSearchbotAccessDenied):
-			jsonError(c, common.CodeAuthenticationError, "No authorization for the selected search")
-		default:
-			jsonError(c, common.CodeOperatingError, "Related questions are unavailable")
-		}
-		return
-	}
-	if questions == nil {
-		questions = []string{}
-	}
-	jsonResponse(c, common.CodeSuccess, questions, "")
-}
 
-// RetrievalTest handles POST /api/v1/searchbots/retrieval_test through the same
-// authorized service as datasets/search. Authentication is supplied by Router.
-func (h *SearchbotHandler) RetrievalTest(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+	var req SearchBotRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeArgumentError,
+			"data":    nil,
+			"message": "question is required",
+		})
 		return
 	}
-	if user == nil || strings.TrimSpace(user.ID) == "" {
-		jsonError(c, common.CodeUnauthorized, "User not found")
-		return
-	}
-	var req SearchbotRetrievalTestRequest
-	if err := bindObjectJSONNullable(c, &req, map[string]bool{"doc_ids": true, "cross_languages": true, "search_id": true, "meta_data_filter": true, "tenant_rerank_id": true, "rerank_id": true}); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid retrieval request"})
-		return
-	}
-	invalid := len(req.KBIDs) == 0
-	for _, id := range req.KBIDs {
-		if strings.TrimSpace(id) == "" || id != strings.TrimSpace(id) {
-			invalid = true
-		}
-	}
-	if req.SearchID != nil && *req.SearchID != strings.TrimSpace(*req.SearchID) {
-		invalid = true
-	}
-	for _, id := range req.DocIDs {
-		if strings.TrimSpace(id) == "" || id != strings.TrimSpace(id) {
-			invalid = true
-		}
-	}
-	mapped := &service.RetrievalTestRequest{
-		DatasetIDs: []string(req.KBIDs), Question: req.Question, Page: req.Page, Size: req.Size,
-		DocIDs: req.DocIDs, UseKG: req.UseKG, TopK: req.TopK, CrossLanguages: req.CrossLanguages,
-		SearchID: req.SearchID, Filter: req.Filter, TenantRerankID: req.TenantRerankID,
-		RerankID: req.RerankID, Keyword: req.Keyword, SimilarityThreshold: req.SimilarityThreshold,
-		VectorSimilarityWeight: req.VectorSimilarityWeight, Highlight: req.Highlight,
-	}
-	if invalid || service.ValidateDatasetSearchRequest(mapped) != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid retrieval request"})
-		return
-	}
-	// Defaults apply only when absent; saved settings may subsequently override
-	// them, including explicit zero/false/[] controls.
-	if mapped.Page == nil {
-		value := 1
-		mapped.Page = &value
-	}
-	if mapped.Size == nil {
-		value := 30
-		mapped.Size = &value
-	}
-	if mapped.TopK == nil {
-		value := 1024
-		mapped.TopK = &value
-	}
-	if mapped.UseKG == nil {
-		value := false
-		mapped.UseKG = &value
-	}
-	if mapped.Keyword == nil {
-		value := false
-		mapped.Keyword = &value
-	}
-	if mapped.SimilarityThreshold == nil {
-		value := 0.0
-		mapped.SimilarityThreshold = &value
-	}
-	if mapped.VectorSimilarityWeight == nil {
-		value := 0.3
-		mapped.VectorSimilarityWeight = &value
-	}
-	if h.retriever == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": common.CodeOperatingError, "data": nil, "message": "Retrieval is unavailable"})
-		return
-	}
-	result, err := h.retriever.RetrievalTest(c.Request.Context(), mapped, user.ID)
-	switch {
-	case errors.Is(err, service.ErrRetrievalArgument), errors.Is(err, service.ErrSearchbotArgument):
-		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid retrieval request"})
-	case errors.Is(err, service.ErrDatasetAccessDenied), errors.Is(err, service.ErrSearchbotAccessDenied):
-		jsonError(c, common.CodeForbidden, "No authorization for the selected resources")
-	case err != nil || result == nil:
-		c.JSON(http.StatusInternalServerError, gin.H{"code": common.CodeServerError, "data": nil, "message": "Retrieval failed"})
-	default:
-		jsonResponse(c, common.CodeSuccess, result, "success")
-	}
-}
 
-// Ask streams cumulative visible answers and their actual citations. The first
-// write is delayed until preparation succeeds, preserving normal auth errors.
-func (h *SearchbotHandler) Ask(c *gin.Context) {
-	user, code, message := GetUser(c)
-	if code != common.CodeSuccess {
-		jsonError(c, code, message)
+	if req.Question == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeArgumentError,
+			"data":    nil,
+			"message": "question is required",
+		})
 		return
 	}
-	if user == nil || !validActor(user.ID) {
-		jsonError(c, common.CodeUnauthorized, "User not found")
-		return
-	}
-	var req service.AskRequest
-	if err := bindObjectJSON(c, &req); err != nil || service.ValidateAskRequest(&req) != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid ask request"})
-		return
-	}
-	if h.asker == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": common.CodeOperatingError, "data": nil, "message": "Ask is unavailable"})
-		return
-	}
-	disableWriteDeadlineForSSE(c)
-	ctx := c.Request.Context()
-	write := func(value any, code common.ErrorCode, message string) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		raw, err := json.Marshal(gin.H{"code": code, "message": message, "data": value})
-		if err != nil {
-			return err
-		}
-		c.Header("Content-Type", "text/event-stream")
-		c.Header("Cache-Control", "no-cache")
-		c.Header("X-Accel-Buffering", "no")
-		if _, err := io.WriteString(c.Writer, "data: "+string(raw)+"\n\n"); err != nil {
-			return err
-		}
-		c.Writer.Flush()
-		return ctx.Err()
-	}
-	err := h.asker.Stream(ctx, user.ID, &req, func(frame service.AnswerFrame) error {
-		return write(frame, common.CodeSuccess, "")
-	})
-	if err != nil {
-		if ctx.Err() != nil {
+
+	// Resolve model ID from search config if provided
+	modelID := ""
+	if req.SearchID != "" {
+		if h.searchSvc == nil {
+			jsonError(c, common.CodeServerError, "search service is not configured")
 			return
 		}
-		if !c.Writer.Written() {
-			switch {
-			case errors.Is(err, service.ErrSearchbotAccessDenied), errors.Is(err, service.ErrDatasetAccessDenied):
-				jsonError(c, common.CodeForbidden, "No authorization for the selected resources")
-			case errors.Is(err, service.ErrSearchbotArgument), errors.Is(err, service.ErrRetrievalArgument):
-				c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid ask request"})
-			default:
-				c.JSON(http.StatusInternalServerError, gin.H{"code": common.CodeServerError, "data": nil, "message": "Ask failed"})
-			}
-		} else {
-			_ = write(service.AnswerFrame{Reference: map[string]interface{}{"chunks": []any{}, "doc_aggs": []any{}}}, common.CodeServerError, "Ask failed")
+		detail, err := h.searchSvc.GetSearchDetail(user.ID, req.SearchID)
+		if err != nil {
+			jsonError(c, common.CodeAuthenticationError, "search app is not accessible")
+			return
 		}
+		if cid, ok := detail.SearchConfig["chat_id"].(string); ok && cid != "" {
+			modelID = cid
+		}
+	}
+	if modelID == "" && h.tenantSvc != nil {
+		defaultModel, err := h.tenantSvc.GetDefaultModelName(user.ID, entity.ModelTypeChat)
+		if err == nil && defaultModel != "" {
+			modelID = defaultModel
+		}
+	}
+
+	messages := []modelModule.Message{
+		{Role: "system", Content: relatedQuestionPrompt},
+		{Role: "user", Content: "Keywords: " + req.Question + "\nRelated search terms:\n"},
+	}
+
+	genConf := &modelModule.ChatConfig{
+		Temperature: ptrFloat64(0.9),
+	}
+
+	response, err := h.llm.Chat(user.ID, modelID, messages, genConf)
+	if err != nil {
+		common.Warn("searchbot LLM call failed", zap.String("error", err.Error()))
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeOperatingError,
+			"data":    nil,
+			"message": "LLM call failed",
+		})
 		return
 	}
-	_ = write(true, common.CodeSuccess, "")
+
+	var questions []string
+	if response != nil && response.Answer != nil {
+		questions = parseRelatedQuestions(*response.Answer)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"data":    questions,
+		"message": "success",
+	})
 }
 
-func validActor(id string) bool { return strings.TrimSpace(id) != "" && id == strings.TrimSpace(id) }
+// RetrievalTest performs a retrieval test against specified knowledge bases.
+// @Summary Retrieval Test
+// @Description Test document retrieval across knowledge bases with optional filters, reranking, and KG search.
+// @Tags searchbots
+// @Accept json
+// @Produce json
+// @Param request body SearchBotRetrievalTestRequest true "Retrieval test parameters"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/v1/searchbots/retrieval_test [post]
+func (h *SearchBotHandler) RetrievalTest(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": errorCode, "data": nil, "message": errorMessage})
+		return
+	}
+
+	var req SearchBotRetrievalTestRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeArgumentError, "data": nil, "message": err.Error()})
+		return
+	}
+
+	// Filter out empty strings from KbIDs before validation.
+	filtered := make(common.StringSlice, 0, len(req.KbIDs))
+	for _, id := range req.KbIDs {
+		if strings.TrimSpace(id) != "" {
+			filtered = append(filtered, id)
+		}
+	}
+	req.KbIDs = filtered
+
+	if len(req.KbIDs) == 0 || req.Question == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeArgumentError, "data": nil, "message": "kb_id and question are required"})
+		return
+	}
+
+	applyRetrievalDefaults(&req)
+
+	if req.TopK != nil && *req.TopK <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeArgumentError, "data": nil, "message": "top_k must be greater than 0"})
+		return
+	}
+
+	svcReq := toRetrievalServiceRequest(&req)
+
+	result, err := h.chunkSvc.RetrievalTest(svcReq, user.ID)
+	if err != nil {
+		common.Warn("searchbot retrieval test failed", zap.String("error", err.Error()))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": common.CodeServerError, "data": nil, "message": "retrieval test failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": int(common.CodeSuccess), "data": result, "message": "success"})
+}
+
+// Ask performs a retrieval-augmented Q&A with streaming SSE response.
+// @Summary Ask with Knowledge Bases
+// @Description Retrieves chunks, builds prompt, and streams LLM answer with citations via SSE.
+// @Tags searchbots
+// @Accept json
+// @Produce text/event-stream
+// @Param request body SearchBotAskRequest true "Ask parameters"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/v1/searchbots/ask [post]
+func (h *SearchBotHandler) Ask(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var req SearchBotAskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeArgumentError, "data": nil, "message": err.Error()})
+		return
+	}
+
+	// Filter empty kb_ids.
+	filtered := make(common.StringSlice, 0, len(req.KbIDs))
+	for _, id := range req.KbIDs {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	if len(filtered) == 0 || strings.TrimSpace(req.Question) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeArgumentError, "data": nil, "message": "kb_ids and question are required"})
+		return
+	}
+
+	// Resolve chat model ID.
+	modelID := ""
+	modelTenantID := user.ID
+	if req.SearchID != "" {
+		if h.searchSvc == nil {
+			jsonError(c, common.CodeServerError, "search service is not configured")
+			return
+		}
+		detail, err := h.searchSvc.GetSearchDetail(user.ID, req.SearchID)
+		if err != nil {
+			jsonError(c, common.CodeAuthenticationError, "search app is not accessible")
+			return
+		}
+		if cid, ok := detail.SearchConfig["chat_id"].(string); ok && cid != "" {
+			modelID = cid
+			modelTenantID = detail.TenantID
+		}
+	}
+	if modelID == "" && h.tenantSvc != nil {
+		defaultModel, err := h.tenantSvc.GetDefaultModelName(user.ID, entity.ModelTypeChat)
+		if err == nil && defaultModel != "" {
+			modelID = defaultModel
+		}
+	}
+	if modelID == "" {
+		h.sseWriter.Write(c, sseError("chat model not configured"))
+		return
+	}
+
+	disableWriteDeadlineForSSE(c)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	if h.askSvc == nil {
+		h.sseWriter.Write(c, sseError("ask service not configured"))
+		return
+	}
+	ctx := c.Request.Context()
+	adapter := &askStreamAdapter{llm: h.streamLLM, tenantID: modelTenantID, modelID: modelID}
+	completed := false
+	for delta := range h.askSvc.Stream(ctx, adapter, user.ID, req.Question, filtered) {
+		switch delta.Kind {
+		case service.AskDeltaAnswer:
+			h.sseWriter.Write(c, sseAnswer(delta.Value, nil, false))
+		case service.AskDeltaMarker:
+			h.sseWriter.Write(c, sseMarker(delta.Value))
+		case service.AskDeltaError:
+			h.sseWriter.Write(c, sseError(delta.Value))
+		case service.AskDeltaFinal:
+			completed = true
+			h.sseWriter.Write(c, sseAnswer(delta.Value, delta.Refs, true))
+		}
+	}
+	if !completed || ctx.Err() != nil {
+		return
+	}
+	c.Stream(func(w io.Writer) bool {
+		fmt.Fprintf(w, "data: {\"code\": 0, \"message\": \"\", \"data\": true}\n\n")
+		return false
+	})
+
+}
+
+// ---- SSE helpers ----
+
+type ssePayload struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data"`
+}
+
+// askSSEData is the inner data object for SSE events, matching Python bot_api.py.
+// The Reference field is always present (non-nil) so the frontend can safely
+// access .chunks or .reduce without a null guard.
+type askSSEData struct {
+	Answer       string      `json:"answer"`
+	Reference    interface{} `json:"reference"`
+	Final        bool        `json:"final"`
+	StartToThink bool        `json:"start_to_think,omitempty"`
+	EndToThink   bool        `json:"end_to_think,omitempty"`
+}
+
+func sseAnswer(answer string, refs interface{}, final bool) string {
+	if refs == nil {
+		refs = map[string]interface{}{}
+	}
+	payload := ssePayload{
+		Code:    0,
+		Message: "",
+		Data: askSSEData{
+			Answer:    answer,
+			Reference: refs,
+			Final:     final,
+		},
+	}
+	b, _ := json.Marshal(payload)
+	return fmt.Sprintf("data: %s\n\n", string(b))
+}
+
+// sseError matches Python bot_api.py error format:
+//
+//	{"code": 500, "message": "...", "data": {"answer": "**ERROR**: ...", "reference": []}}
+func sseError(message string) string {
+	payload := ssePayload{
+		Code:    int(common.CodeServerError),
+		Message: message,
+		Data: askSSEData{
+			Answer:    "**ERROR**: " + message,
+			Reference: []map[string]interface{}{},
+		},
+	}
+	b, _ := json.Marshal(payload)
+	return fmt.Sprintf("data: %s\n\n", string(b))
+}
+
+// sseMarker matches Python dialog_service.py think-tag marker format:
+//
+//	{"answer": "", "reference": {}, "final": false, "start_to_think": true}
+func sseMarker(marker string) string {
+	d := askSSEData{
+		Answer:    "",
+		Reference: map[string]interface{}{},
+	}
+	if marker == "<think>" {
+		d.StartToThink = true
+	} else {
+		d.EndToThink = true
+	}
+	payload := ssePayload{Code: 0, Message: "", Data: d}
+	b, _ := json.Marshal(payload)
+	return fmt.Sprintf("data: %s\n\n", string(b))
+}
+
+// SSEWriter writes an SSE event to the client.
+type SSEWriter interface {
+	Write(c *gin.Context, data string)
+}
+
+// ginSSEWriter is the production SSEWriter backed by gin.Context.Stream.
+type ginSSEWriter struct{}
+
+func (w *ginSSEWriter) Write(c *gin.Context, data string) {
+	c.Stream(func(w io.Writer) bool {
+		fmt.Fprint(w, data)
+		return false
+	})
+}
+
+// toRetrievalServiceRequest maps the handler DTO to the service DTO.
+// The two structs differ in KbIDs (StringSlice → []string) and
+// MetaDataFilter (→ Filter) to maintain Python API compatibility.
+func toRetrievalServiceRequest(h *SearchBotRetrievalTestRequest) *service.RetrievalTestRequest {
+	return &service.RetrievalTestRequest{
+		Datasets:               common.StringSlice(h.KbIDs),
+		Question:               h.Question,
+		Page:                   h.Page,
+		Size:                   h.Size,
+		DocIDs:                 h.DocIDs,
+		UseKG:                  h.UseKG,
+		TopK:                   h.TopK,
+		CrossLanguages:         h.CrossLanguages,
+		SearchID:               h.SearchID,
+		Filter:                 h.MetaDataFilter,
+		TenantRerankID:         h.TenantRerankID,
+		RerankID:               h.RerankID,
+		Keyword:                h.Keyword,
+		SimilarityThreshold:    h.SimilarityThreshold,
+		VectorSimilarityWeight: h.VectorSimilarityWeight,
+	}
+}
+
+// ptrFloat64 returns a pointer to a float64 value.
+func ptrFloat64(v float64) *float64 { return &v }
+
+func intPtr(v int) *int           { return &v }
+func floatPtr(v float64) *float64 { return &v }
+
+// applyRetrievalDefaults fills in default values for optional fields,
+// matching Python bot_api.py retrieval_test endpoint.
+func applyRetrievalDefaults(req *SearchBotRetrievalTestRequest) {
+	if req.Page == nil {
+		v := 1
+		req.Page = &v
+	}
+	if req.Size == nil {
+		v := 30
+		req.Size = &v
+	}
+	if req.TopK == nil {
+		v := 1024
+		req.TopK = &v
+	}
+	if req.UseKG == nil {
+		v := false
+		req.UseKG = &v
+	}
+	if req.Keyword == nil {
+		v := false
+		req.Keyword = &v
+	}
+	if req.SimilarityThreshold == nil {
+		v := 0.0
+		req.SimilarityThreshold = &v
+	}
+	if req.VectorSimilarityWeight == nil {
+		v := 0.3
+		req.VectorSimilarityWeight = &v
+	}
+}
+
+var relatedQuestionLineRe = regexp.MustCompile(`^\d+\.\s`)
+
+// parseRelatedQuestions extracts numbered list items from an LLM response.
+// Lines matching "^N. " are extracted and the number prefix is stripped.
+func parseRelatedQuestions(text string) []string {
+	text = service.ExtractVisibleAnswer(text)
+	var result []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if relatedQuestionLineRe.MatchString(line) {
+			question := strings.TrimSpace(relatedQuestionLineRe.ReplaceAllString(line, ""))
+			if question == "" {
+				continue
+			}
+			result = append(result, question)
+		}
+	}
+	if result == nil {
+		return []string{}
+	}
+	return result
+}
+
+// relatedQuestionPrompt is the system prompt for generating related search questions.
+// Matches Python rag/prompts/related_question.md
+const relatedQuestionPrompt = `# Role
+You are an AI language model assistant tasked with generating **5-10 related questions** based on a user's original query.
+These questions should help **expand the search query scope** and **improve search relevance**.
+
+---
+
+## Instructions
+
+**Input:**
+You are provided with a **user's question**.
+
+**Output:**
+Generate **5-10 alternative questions** that are **related** to the original user question.
+These alternatives should help retrieve a **broader range of relevant documents** from a vector database.
+
+**Context:**
+Focus on **rephrasing** the original question in different ways, ensuring the alternative questions are **diverse but still connected** to the topic of the original query.
+Do **not** create overly obscure, irrelevant, or unrelated questions.
+
+**Fallback:**
+If you cannot generate any relevant alternatives, do **not** return any questions.
+
+---
+
+## Guidance
+
+1. Each alternative should be **unique** but still **relevant** to the original query.
+2. Keep the phrasing **clear, concise, and easy to understand**.
+3. Avoid overly technical jargon or specialized terms **unless directly relevant**.
+4. Ensure that each question **broadens** the search angle, **not narrows** it.
+
+---
+
+## Example
+
+**Original Question:**
+> What are the benefits of electric vehicles?
+
+**Alternative Questions:**
+1. How do electric vehicles impact the environment?
+2. What are the advantages of owning an electric car?
+3. What is the cost-effectiveness of electric vehicles?
+4. How do electric vehicles compare to traditional cars in terms of fuel efficiency?
+5. What are the environmental benefits of switching to electric cars?
+6. How do electric vehicles help reduce carbon emissions?
+7. Why are electric vehicles becoming more popular?
+8. What are the long-term savings of using electric vehicles?
+9. How do electric vehicles contribute to sustainability?
+10. What are the key benefits of electric vehicles for consumers?
+
+---
+
+## Reason
+Rephrasing the original query into multiple alternative questions helps the user explore **different aspects** of their search topic, improving the **quality of search results**.
+These questions guide the search engine to provide a **more comprehensive set** of relevant documents.`

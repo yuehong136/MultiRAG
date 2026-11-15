@@ -15,177 +15,61 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 CORE_SHARDS = 4
 RUNTIME_JOBS = frozenset({"typecheck", "unit", "integration", "integration-infinity", "consumer", "go", "smoke"})
-# These tests require separate owned HTTP/SQL harnesses; ordinary skips are errors.
-GO_LIVE_OPT_INS = {
-    "admin": {
-        "TestAdminVariablesCLIHTTPAndSQL",
-        "TestAfterFFAdminDeleteUserFencesLateProviderSQL",
-        "TestAfterFFAdminDeleteUserModelFailureRollsBackSQL",
-        "TestAfterFFAdminDeleteUserModernCredentialsSQL",
-        "TestAfterFFAdminNumericModelConsumersSQL",
-        "TestAfterFFAdminRegistrationSQL",
-    },
-    "router": {
-        "TestAfter1eGMCPAndOAuth",
-        "TestAfter53GHTTPAndSQL",
-        "TestCatalogActualAuthHTTPAndSQL",
-        "TestAfter7fbAPIHTTPAndSQL",
-        "TestAfter98RouterContractsJWTAPIAndSQL",
-        "TestAfterFFDocumentsJWTHTTPAndSQL",
-        "TestAfterFFModelsHTTPAndSQL",
-        "TestAgentAfter67RouterJWTAPI",
-        "TestConnectorDetailHTTPJWTAndSQL",
-        "TestDocumentListHTTPCLIAndSQL",
-        "TestDocumentStopAfter67Live",
-        "TestMemoryUpdateHTTPAndSQL",
-        "TestRESTAliasesHTTPAndSQL",
-    },
-    "dao": {
-        "TestBaseModelTimeScratchPostgres",
-        "TestBatchGMySQLCredentials",
-        "TestTenantModelExtraScratchPostgres",
-    },
-    "engine": {
-        "TestEngineStoresLive",
-        "TestSkillMilvusLiveUnpublishedFragments",
-    },
-    "handler": {
-        "TestAfter410GoHTTPCLIAndSQL",
-        "TestAfter440ProvidersHTTPCLIAndSQL",
-        "TestAfter4776ProvidersHTTPCLIAndSQL",
-        "TestAfter5ESearchbotRouterSQLAndElasticsearch",
-        "TestAfter775ProvidersHTTPCLIAndSQL",
-        "TestAfter9dProvidersHTTPCLIAndSQL",
-        "TestAfterAABSearchRouterSQLAndElasticsearch",
-        "TestAfterAabDocumentFilesHTTPAndWeb",
-        "TestAfterBBBProvidersHTTPCLIAndSQL",
-        "TestAfterD7ProvidersHTTPCLIAndSQL",
-        "TestAfterF9ProvidersHTTPCLIAndSQL",
-        "TestAgentCatalogTagsScratchPostgres",
-        "TestAgentSessionsScratchPostgres",
-        "TestAgentVersionsUploadScratchPostgres",
-        "TestBatchGoAPI",
-        "TestChatSessionLiveHTTPAndSQL",
-        "TestDatasetChunkMetadataCLIAndStores",
-        "TestDatasetGraphHTTPAndSQL",
-        "TestDatasetReadHTTPAndSQL",
-        "TestDatasetTimeHTTPAndSQL",
-        "TestDifyCredentialSQLAndScope",
-        "TestDocumentGetByIDsLiveProjectionAndContext",
-        "TestDocumentStatusLiveServer",
-        "TestDocumentStopHTTPRealSQLRedis",
-        "TestGoogleEmbeddingLiveHTTPAndSQL",
-        "TestGoogleProviderLiveHTTPAndSQL",
-        "TestHostedProviderRoutesScratchPostgres",
-        "TestHybridAuthLiveServer",
-        "TestMCPManagementHTTPAndSQL",
-        "TestMediaHTTPCLIAndSQL",
-        "TestModelClassProviderLiveHTTPAndSQL",
-        "TestModelInferenceLiveHTTPAndSQL",
-        "TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL",
-        "TestOllamaInstanceLiveHTTPAndSQL",
-        "TestProviderInstancesLiveHTTPAndSQL",
-        "TestSkillCoreLiveServer",
-        "TestSpeechProvidersHTTPCLIAndSQL",
-        "TestTaskLiveServer",
-        "TestUserTimeHTTPCLIAndSQL",
-        "TestXAIInstanceLiveHTTPAndSQL",
-    },
-    "service": {
-        "TestAfter0fbNewModelsHTTPCLIAndSQL",
-        "TestAfter2836ModelsHTTPCLIAndSQL",
-        "TestAfter67SearchScopeSQLHTTP",
-        "TestAfter7ddXiaomiServiceMedia",
-        "TestAfter98MetadataSQLAndElasticsearch",
-        "TestAfterFFMemoryModelBindingsSQL",
-        "TestAfteraabModelBindingsSQLHTTP",
-        "TestBatchGMySQLStats",
-        "TestChatSessionScratchPostgres",
-        "TestConnectorOAuthLiveSQLRedisAndTLS",
-        "TestDAfter53GPUStackHTTPAndSQL",
-        "TestDocumentDeleteLiveAllSelectionReadsEveryPage",
-        "TestDocumentDeleteLiveAttachWaitsForFileRetirement",
-        "TestDocumentDeleteLiveCanceledHTTPDrainsNativeBeforeUnlock",
-        "TestDocumentDeleteLiveCancellationFailureCompensatesOwnNonce",
-        "TestDocumentDeleteLiveEarlierAttachProtectsFileAndSource",
-        "TestDocumentDeleteLiveFinalSQLFailureRollsBackAllCounters",
-        "TestDocumentDeleteLiveGraphLostAckInvalidatesBeforeRetry",
-        "TestDocumentDeleteLiveMinioStorage",
-        "TestDocumentDeleteLiveMissingFileAndRecoveryMirrorsBlockBeforeCancel",
-        "TestDocumentDeleteLivePendingSQLRecoveryBlocksAndReadyRetires",
-        "TestDocumentDeleteLivePreservesSharedFileImageAndPendingWriter",
-        "TestDocumentDeleteLiveRejectsBeforeCancellation",
-        "TestDocumentDeleteLiveSharedGraphAndZeroCounterRows",
-        "TestDocumentDeleteLiveUnknownObjectAndIndexFailuresRemainRetryable",
-        "TestDocumentFilesMinioRedis",
-        "TestDocumentFilesResourceAckLoss",
-        "TestDocumentFilesSQLAuthorizationAndBindings",
-        "TestDocumentMetadataScopeIndexResults",
-        "TestDocumentMetadataScopeSQL",
-        "TestDocumentStopLiveAtomicDeduplicatedBatch",
-        "TestDocumentStopLiveCanceledBeforeStorage",
-        "TestDocumentStopLiveCommitAckLossPreservesCancellationFences",
-        "TestDocumentStopLiveDisabledActiveDocumentRemainsCancelable",
-        "TestDocumentStopLiveFinishedRuntimeRejectsActiveSQLBatch",
-        "TestDocumentStopLiveLocksDocumentBeforeTask",
-        "TestDocumentStopLiveMembershipRevocationSerializesBeforeEffects",
-        "TestDocumentStopLiveMixedTerminalBatchRejectsBeforeCancellation",
-        "TestDocumentStopLiveRejectsEntireBatchBeforeEffects",
-        "TestDocumentStopLiveRuntimeOwnerMismatchHasNoEffects",
-        "TestDocumentStopLiveSQLFailureCompensatesOnlyOwnNonce",
-        "TestDocumentStopLiveTerminalDocumentsRejectWithoutEffects",
-        "TestDocumentStopLiveUnfinishedTasksCancelRegardlessOfRun",
-        "TestHostedProviderBindingScratchPostgres",
-        "TestMCPDiscoverySQL",
-        "TestModelBindingScratchPostgres",
-        "TestProviderBatchCLIHTTPAndSQL",
-        "TestProviderFixesHTTPCLIAndSQL",
-        "TestRegistrationCatalogZeroASR",
-    },
-    "service/nlp": {
-        "TestRetrievalScratchPostgresInfinity",
-    },
-    "skills": {
-        "TestSkillsLiveServer",
-    },
-    "service/kg": {
-        "TestKGLiveSQLAndES",
-    },
-}
-
+# Every CI Go case runs with owned services. Missing fixtures are failures,
+# and no skipped test is accepted as a substitute for the canonical contract.
 GO_REQUIRED_TESTS = frozenset(
     {
-        "multirag/internal/handler::TestAfter10bbeAskChatRAGJWTSQL",
-        "multirag/internal/handler::TestAfter10bbeAgentMetadataHTTPAndSQL",
-        "multirag/internal/handler::TestHandlerInternalErrorsSQLHTTP",
-        "multirag/internal/service::TestAfter10bbeDBProbeMySQLProtocol",
-        "multirag/internal/service::TestDeepSeekCatalogDiscoveryConsumersHTTPAndSQL",
-        "multirag/internal/service::TestExpandedCatalogDiscoveryConsumersHTTPAndSQL",
-        "multirag/internal/handler::TestAgentDownloadHTTP",
-        "multirag/internal/service::TestAgentDownloadAuthority",
-        "multirag/internal/service::TestAgentDownloadStorageFailures",
-        "multirag/internal/storage::TestStorageContextReadCancellationClosesBody",
-        "multirag/internal/storage::TestRuntimeUploadAdapterRetainsActorForEntireObjectLifecycle",
-        "multirag/internal/storage::TestRuntimeUploadAdapterS3ConfigurationSnapshotHonorsExplicitEmptyValues",
+        "multirag/internal/entity/models::TestCanonicalCatalogProvidersModelsAndAliases",
+        "multirag/internal/entity/models::TestCanonicalCatalogTypedProjectionDoesNotMutateMetadata",
+        "multirag/internal/entity/models::TestCanonicalCatalogPublicationIsAtomic",
+        "multirag/internal/common::TestLoggerCanonicalLevelsAndCapturedLogger",
+        "multirag/internal/common::TestLoggerCreatesColdStartDirectory",
+        "multirag/internal/cli::TestLocalIngestionCLIExecutesActualContent",
+        "multirag/internal/deepdoc::TestDLAFailuresAreNotEmptyDetections",
+        "multirag/internal/ingestion::TestIngestionNATSTransportFailureRedeliveryAndLifecycle",
+        "multirag/internal/engine::TestEngineStoresLive",
+        "multirag/internal/engine/redis::TestCanonicalRedisLifecycleAndReadOnlyHealth",
+        "multirag/internal/engine/elasticsearch::TestChunkWritesKeepTypedIDAndDatasetScope",
+        "multirag/internal/engine/elasticsearch::TestBulkStableIdentityAndPartialFailure",
+        "multirag/internal/engine/elasticsearch::TestKGCanonicalMetadataPrecisionErrorsAndScope",
+        "multirag/internal/utility::TestCanonicalSMTPDeliveryCancellationAndAcceptedProof",
+        "multirag/internal/utility::TestMCPDiscoveryCanonicalHTTPPaginationSession",
+        "multirag/internal/utility::TestMCPDiscoveryCanonicalSSELifecycle",
+        "multirag/internal/utility::TestMCPSSRFPinnedTCPHostProxyAndRedirectCredentials",
+        "multirag/internal/service::TestCanonicalModelBindingsSQLHTTP",
+        "multirag/internal/service::TestCanonicalModelIDOwnershipAndInputFailures",
+        "multirag/internal/service::TestCanonicalASRPayloadBoundarySQLHTTP",
+        "multirag/internal/service::TestCanonicalModelWritesFenceTenantRemoval",
+        "multirag/internal/service::TestCanonicalModelDefaultSlotTypeVocabularySQL",
+        "multirag/internal/service::TestRegistrationCatalogZeroASR",
+        "multirag/internal/service::TestCanonicalFileUploadSQLObjectsAndCompensation",
+        "multirag/internal/service::TestCanonicalFileUploadPreservesMultipartDirectory",
+        "multirag/internal/service::TestCanonicalSkillsSQLObjectsAndElasticsearch",
+        "multirag/internal/service::TestCanonicalSkillUploadPathBoundarySQLObjects",
         "multirag/internal/service::TestFileLinkScratchLifecycle",
-        "multirag/internal/service::TestFileLinkReplaceSerializesRetirement",
-        "multirag/internal/service::TestMemoryForgetScratch",
-        "multirag/internal/service::TestMemoryForgetCanceledWriteRetainsAuthority",
-        "multirag/internal/engine/infinity::TestMemoryMessageInfinityScratch",
+        "multirag/internal/service::TestFileLinkMappingFailureCompensatesDocumentAndCounters",
         "multirag/internal/service::TestForgotPasswordScratch",
-        "multirag/internal/service::TestForgotSMTPDeadlineAndCancellation",
-        "multirag/internal/service::TestForgotSMTPAcceptedBeforeCancellation",
+        "multirag/internal/service::TestForgotSMTPFailureRestoresDeliveryState",
         "multirag/internal/service::TestForgotResetUnknownCommitDoesNotRestoreProof",
-        "multirag/internal/service::TestForgotResetPendingCommitWaitsForLockedReadback",
-        "multirag/internal/service::TestForgotResetCommitReadbackDeadlineDoesNotRestoreProof",
-        "multirag/internal/handler::TestRecoveryOriginBeforeEffects",
-        "multirag/internal/handler::TestRecoveryCookiePolicy",
-        "multirag/internal/handler::TestParseMemoryMessagePath",
-        "multirag/internal/service::TestDocumentDeleteRegressionScratch",
-        "multirag/internal/router::TestAfterDCFRouterScratch",
-        "multirag/internal/skills::TestLegacyEmbeddingScratchPostgres",
-        "multirag/internal/router::TestAfter33GManagementHTTPAndSQL",
-        "multirag/internal/router::TestAfter33GManagementHTTPAndSQL/built_CLI_consumer",
+        "multirag/internal/service::TestMemoryForgetScratch",
+        "multirag/internal/service::TestMetadataCheckedPropagatesModelFailureAndCancellation",
+        "multirag/internal/service::TestMetadataGeneratedFilterPreservesExactNumericOperandAndStablePrompt",
+        "multirag/internal/handler::TestProviderInstancesLiveHTTPAndSQL",
+        "multirag/internal/handler::TestAdditionalCanonicalProviderConsumersHTTPCLIAndSQL",
+        "multirag/internal/handler::TestMCPManagementHTTPAndSQL",
+        "multirag/internal/handler::TestAgentExecutionHTTPMySQL",
+        "multirag/internal/handler::TestAgentLogsRedisHTTP",
+        "multirag/internal/router::TestCanonicalRouterSignedAuthSQLAndRealCLI",
+        "multirag/internal/dao::TestKnowledgebaseAccessRequiresActiveIdentitySQL",
+        "multirag/internal/admin::TestInitDefaultAdminAtomicSQL",
+        "multirag/internal/admin::TestAdminUnsupportedOperationsHTTP",
+        "multirag/internal/admin::TestHeartbeatConcurrentReportsAndReads",
+        "multirag/internal/admin::TestAfterFFAdminDeleteUserModernCredentialsSQL",
+        "multirag/internal/admin::TestAfterFFAdminDeleteUserModelFailureRollsBackSQL",
+        "multirag/internal/storage::TestMinioStorage_PutAndGet",
+        "multirag/internal/storage::TestMinioStorage_Copy",
+        "multirag/internal/storage::TestAfter7fbStorageReadinessIsReadOnly",
+        "multirag/internal/storage::TestStorageReadFailureClosesBodyAndPreservesCause",
     }
 )
 
@@ -264,11 +148,9 @@ def required_gate(needs: dict[str, Any]) -> None:
 
 
 def audit_go(path: Path, *, require_ci_tests: bool = False) -> dict[str, Any]:
-    allowed = {f"multirag/internal/{package}::{test}" for package, tests in GO_LIVE_OPT_INS.items() for test in tests}
     started: Counter[str] = Counter()
     finished: Counter[str] = Counter()
     counts: Counter[str] = Counter()
-    opt_ins: list[str] = []
     passed: set[str] = set()
     for line in path.read_text().splitlines():
         event = json.loads(line)
@@ -285,14 +167,12 @@ def audit_go(path: Path, *, require_ci_tests: bool = False) -> dict[str, Any]:
                 finished[package] += 1
             elif action == "skip":
                 identity = f"{package}::{test}"
-                if identity in GO_REQUIRED_TESTS or identity not in allowed:
-                    raise ValueError(f"Unexpected Go skip: {identity}")
-                opt_ins.append(identity)
+                raise ValueError(f"Unexpected Go skip: {identity}")
     if not started or started != finished or not counts["pass_test"]:
         raise ValueError("Empty or incomplete Go evidence")
     if require_ci_tests and not GO_REQUIRED_TESTS <= passed:
         raise ValueError(f"Missing required Go tests: {sorted(GO_REQUIRED_TESTS - passed)}")
-    return {"counts": dict(counts), "unverified_live_opt_ins": opt_ins}
+    return {"counts": dict(counts)}
 
 
 def main() -> int:

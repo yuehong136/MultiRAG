@@ -10,7 +10,7 @@ import (
 	"multirag/internal/engine/types"
 )
 
-func TestGetChunkKeepsScopeWithoutRetrievalAvailabilityDefault(t *testing.T) {
+func TestGetChunkKeepsFrozenScopeAndExplicitAvailability(t *testing.T) {
 	bodies := []string{}
 	e := testEngine(t, func(w http.ResponseWriter, request *http.Request) {
 		var body map[string]any
@@ -38,23 +38,17 @@ func TestGetChunkKeepsScopeWithoutRetrievalAvailabilityDefault(t *testing.T) {
 	if len(bodies) != 0 {
 		t.Fatal("invalid scopes made requests")
 	}
-	row, err := e.GetChunkForManagement(t.Context(), "tenant", "c", []string{"kb"})
+	row, err := e.GetChunk(t.Context(), "tenant", "c", []string{"kb"})
 	if err != nil || row.(map[string]any)["available_int"] != float64(0) {
 		t.Fatal(row, err)
 	}
-	if !strings.Contains(bodies[0], `"kb_id":["kb"]`) || !strings.Contains(bodies[0], `"id":"c"`) || strings.Contains(bodies[0], "available_int") {
+	if !strings.Contains(bodies[0], `"kb_id":"kb"`) || !strings.Contains(bodies[0], `"id":"c"`) || strings.Contains(bodies[0], "available_int") {
 		t.Fatal("scoped administrative read gained a retrieval filter", bodies[0])
 	}
-	if row, err := e.GetChunk(t.Context(), "tenant", "c", []string{"kb"}); err != nil || row != nil {
-		t.Fatal("ordinary GetChunk broadened retrieval visibility", row, err)
-	}
-	if !strings.Contains(bodies[1], `"available_int"`) {
-		t.Fatal("ordinary GetChunk lost its availability policy", bodies[1])
-	}
-	if _, err := e.Search(t.Context(), &types.SearchRequest{IndexNames: []string{"tenant"}, KbIDs: []string{"kb"}, MatchExprs: []any{&types.MatchTextExpr{MatchingText: "body"}}}); err != nil {
+	if _, err := e.Search(t.Context(), &types.SearchRequest{IndexNames: []string{"tenant"}, KbIDs: []string{"kb"}, Filter: map[string]interface{}{"available_int": 1}, MatchExprs: []any{&types.MatchTextExpr{MatchingText: "body"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(bodies[2], `"available_int"`) {
-		t.Fatal("retrieval availability default changed", bodies[2])
+	if !strings.Contains(bodies[1], `"available_int"`) {
+		t.Fatal("retrieval availability default changed", bodies[1])
 	}
 }

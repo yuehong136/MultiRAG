@@ -52,7 +52,7 @@ func (h *AuthHandler) AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Get user by access token; fall back to API token authentication
+		// Get user by access token
 		user, code, err := h.userService.GetUserByToken(token)
 		if err != nil {
 			user, code, err = h.userService.GetUserByAPIToken(token)
@@ -66,6 +66,11 @@ func (h *AuthHandler) AuthMiddleware() gin.HandlerFunc {
 			}
 		}
 
+		if user == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": common.CodeUnauthorized, "message": "Invalid access token"})
+			c.Abort()
+			return
+		}
 		if user.IsSuperuser != nil && *user.IsSuperuser {
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":    common.CodeForbidden,

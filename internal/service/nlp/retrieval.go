@@ -21,14 +21,13 @@ import (
 	"fmt"
 	"math"
 	"multirag/internal/common"
-	"sort"
-	"strings"
-
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/engine/types"
-	"multirag/internal/entity"
 	"multirag/internal/entity/models"
+	"sort"
+	"strings"
+
 	"multirag/internal/tokenizer"
 
 	"go.uber.org/zap"
@@ -37,21 +36,12 @@ import (
 // RetrievalService provides retrieval search functionality
 type RetrievalService struct {
 	docEngine   engine.DocEngine
-	documentDAO documentReader
-	kbDAO       knowledgebaseReader
-}
-
-type documentReader interface {
-	GetByIDs(context.Context, []string) ([]*entity.Document, error)
-}
-
-type knowledgebaseReader interface {
-	GetExistingIDs(context.Context, []string) ([]string, error)
+	documentDAO *dao.DocumentDAO
 }
 
 // NewRetrievalService creates a new RetrievalService with the given doc engine
-func NewRetrievalService(docEngine engine.DocEngine) *RetrievalService {
-	return &RetrievalService{docEngine: docEngine, documentDAO: dao.NewDocumentDAO(), kbDAO: dao.NewKnowledgebaseDAO()}
+func NewRetrievalService(docEngine engine.DocEngine, documentDAO *dao.DocumentDAO) *RetrievalService {
+	return &RetrievalService{docEngine: docEngine, documentDAO: documentDAO}
 }
 
 // RetrievalRequest request for retrieval search
@@ -74,9 +64,9 @@ type RetrievalRequest struct {
 
 // RetrievalResult result from retrieval search
 type RetrievalResult struct {
-	Total   int64
 	Chunks  []map[string]interface{}
 	DocAggs []map[string]interface{} // Aggregated document counts, sorted by count desc
+	Total   int64                    // Post-pagination chunk count (matches Python's len(ranks["chunks"]))
 }
 
 // Retrieval performs hybrid search + reranking + pagination
@@ -87,11 +77,9 @@ type RetrievalResult struct {
 // - Build chunks
 // - Build document aggregation if specified
 func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest) (*RetrievalResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if req.Question == "" || (req.DocIDs != nil && len(req.DocIDs) == 0) {
-		return &RetrievalResult{Chunks: []map[string]interface{}{}, DocAggs: []map[string]interface{}{}}, nil
+	common.Info("Retrieval START", zap.String("question", req.Question), zap.Int("page", req.Page), zap.Int("pageSize", req.PageSize))
+	if req.Question == "" {
+		return &RetrievalResult{Chunks: []map[string]interface{}{}, DocAggs: []map[string]interface{}{}, Total: 0}, nil
 	}
 
 	// Apply default values
@@ -99,7 +87,7 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 		req.Top = func() *int { v := 1024; return &v }()
 	}
 	if req.SimilarityThreshold == nil {
-		req.SimilarityThreshold = func() *float64 { v := 0.0; return &v }()
+		req.SimilarityThreshold = func() *float64 { v := 0.2; return &v }()
 	}
 	if req.VectorSimilarityWeight == nil {
 		req.VectorSimilarityWeight = func() *float64 { v := 0.3; return &v }()
@@ -111,28 +99,32 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 		req.Aggs = func() *bool { v := true; return &v }()
 	}
 
-	if req.Page <= 0 || req.PageSize <= 0 {
-		return nil, fmt.Errorf("page and page size must be positive")
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = 1
 	}
 
-	if *req.Top < 0 {
-		return nil, fmt.Errorf("top must be non-negative")
-	}
-	if err := validateRerankWeights(1-*req.VectorSimilarityWeight, *req.VectorSimilarityWeight); err != nil {
-		return nil, err
-	}
-	if threshold := *req.SimilarityThreshold; math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold < 0 || threshold > 1 {
-		return nil, fmt.Errorf("similarity threshold must be finite and between 0 and 1")
-	}
-	// Fetch and in-block slicing must use exactly the same page-aligned window.
+	// Calculate rerank limit to ensure we get enough results for proper pagination
 	pageSize := req.PageSize
-	top := 0
-	if req.RerankModel != nil {
-		top = *req.Top
+	rerankLimit := pageSize
+	if pageSize > 1 {
+		rerankLimit = int(math.Ceil(64.0/float64(pageSize))) * pageSize
+	} else {
+		rerankLimit = 1
 	}
-	rerankLimit := types.RerankWindow(pageSize, top)
-	if req.Page-1 > int(^uint(0)>>1)/pageSize {
-		return nil, fmt.Errorf("page offset is too large")
+	if rerankLimit < 30 {
+		rerankLimit = 30
+	}
+	// Cap rerank limit when external rerank model is used
+	if req.RerankModel != nil && *req.Top > 0 {
+		if rerankLimit > *req.Top {
+			rerankLimit = *req.Top
+		}
+		if rerankLimit > 64 {
+			rerankLimit = 64
+		}
 	}
 
 	page := req.Page
@@ -158,39 +150,136 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 		return nil, fmt.Errorf("Search failed: %w", err)
 	}
 
-	searchResult, err = s.pruneDeletedChunks(ctx, searchResult, req.KbIDs)
+	// Prune deleted chunks
+	searchResult, err = s.PruneDeletedChunks(searchResult)
 	if err != nil {
-		return nil, fmt.Errorf("prune deleted chunks: %w", err)
+		return nil, fmt.Errorf("PruneDeletedChunks failed: %w", err)
 	}
-	if len(searchResult.IDs) == 0 {
-		return &RetrievalResult{Total: searchResult.Total, Chunks: []map[string]interface{}{}, DocAggs: []map[string]interface{}{}}, nil
+	if searchResult.Total == 0 {
+		return &RetrievalResult{Chunks: []map[string]interface{}{}, DocAggs: []map[string]interface{}{}, Total: 0}, nil
 	}
 
-	// Perform reranking
-	vtWeight := *req.VectorSimilarityWeight
-	tkWeight := 1.0 - vtWeight
+	// sim = tkWeight*tsim + vtWeight*vsim
+	vtWeightOrig := *req.VectorSimilarityWeight
+	tkWeightOrig := 1.0 - vtWeightOrig
+	tkWeight := tkWeightOrig
+	vtWeight := vtWeightOrig
 	qb := GetQueryBuilder()
-	useInfinity := engine.GetEngineType() == engine.EngineInfinity
-	sim, termSimilarity, vectorSimilarity, err := Rerank(
-		ctx,
-		req.RerankModel,
-		searchResult.Chunks,
-		int(searchResult.Total),
-		nil,
-		searchResult.QueryVector,
-		req.Question,
-		tkWeight,
-		vtWeight,
-		useInfinity,
-		"content_ltks",
-		qb,
-		*req.RankFeature,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("rerank: %w", err)
+	useInfinity := engine.GetEngineType() != engine.EngineElasticsearch
+	useOceanBase := false // TODO: add OceanBase detection when supported
+
+	// For ES path: call GetScores() for second-pass KNN to get clean cosine similarity
+	// For Infinity path: use _score directly (scores already normalized during fusion)
+	// For OceanBase path: extract vectors and compute locally
+	var sim []float64
+	var term_similarity []float64
+	var vector_similarity []float64
+
+	if req.RerankModel != nil && searchResult.Total > 0 {
+		// External rerank model path - use RerankByModel
+		sim, term_similarity, vector_similarity = RerankByModel(
+			req.RerankModel,
+			searchResult.Chunks,
+			searchResult.IDs,
+			searchResult.Field,
+			req.Question,
+			tkWeight,
+			vtWeight,
+			"content_ltks",
+			qb,
+			*req.RankFeature,
+		)
+	} else if useInfinity {
+		// Infinity: scores already normalized before fusion, just extract _score
+		sim = make([]float64, len(searchResult.IDs))
+		for i, id := range searchResult.IDs {
+			if chunk, ok := searchResult.Field[id]; ok {
+				if score, ok := chunk["_score"].(float64); ok {
+					sim[i] = score
+				} else if score, ok := chunk["SCORE"].(float64); ok {
+					sim[i] = score
+				} else if score, ok := chunk["SIMILARITY"].(float64); ok {
+					sim[i] = score
+				} else {
+					sim[i] = 0.0
+				}
+			} else {
+				sim[i] = 0.0
+			}
+		}
+		term_similarity = sim
+		vector_similarity = sim
+	} else if useOceanBase {
+		// OceanBase: extract vectors and compute locally (not implemented)
+		sim = make([]float64, len(searchResult.IDs))
+		for i := range searchResult.IDs {
+			sim[i] = 0.0
+		}
+		term_similarity = sim
+		vector_similarity = sim
+	} else {
+		// ES PATH: Two-pass KNN approach for clean cosine similarity scores
+		//
+		// Python's equivalent flow (rag/nlp/search.py L656-669):
+		//   1. First search returns text+vector matched chunks (hybrid BM25 + KNN fusion)
+		//   2. _knn_scores: second KNN-only query filtered by those chunk IDs
+		//      - ES computes cosine similarity between query vector and stored vectors
+		//      - Vectors stay in ES index (not shipped to application)
+		//      - Returns raw KNN result with _id -> _score mappings
+		//   3. get_scores: extracts doc_id -> score from the KNN result
+		//   4. rerank_with_knn: combines token similarity + vector similarity + rank features
+		//
+		// Go implementation mirrors this exactly:
+		//   KNNScores() -> performs second KNN query (ES-specific, on DocEngine interface)
+		//   GetScores() -> extracts doc_id -> score from result (matches Python's get_scores)
+		//   RerankWithKNN() -> combines tksim + vtsim + rank_features (matches rerank_with_knn)
+		//
+		// Why two passes?
+		//   - First search uses fusion (BM25 * vector_similarity_weight + KNN * (1-vector_similarity_weight))
+		//   - The fusion score is not a clean cosine similarity - it's a weighted combination
+		//   - Second KNN-only query gives us the pure cosine similarity for reranking
+		//   - This keeps vectors in ES (no need to extract them) while getting clean scores
+
+		// PASS 1: Second KNN query to get clean cosine similarities
+		// KNNScores() performs the ES-specific KNN search and returns raw result
+		knnResult, err := s.docEngine.KNNScores(ctx, searchResult.Chunks, searchResult.QueryVector, len(searchResult.IDs))
+		if err != nil {
+			common.Warn("KNNScores failed for ES, falling back to local computation", zap.Error(err))
+			// Fallback: RerankStandard computes vector similarity locally (requires shipping vectors)
+			sim, term_similarity, vector_similarity = RerankStandard(
+				searchResult.Chunks,
+				nil, // keywords computed internally
+				searchResult.QueryVector,
+				req.Question,
+				tkWeight,
+				vtWeight,
+				"content_ltks",
+				qb,
+				*req.RankFeature,
+			)
+		} else {
+			// PASS 2: Extract scores from KNN result
+			// GetScores() mirrors Python's get_scores() - maps doc_id -> _score
+			knnScores := s.docEngine.GetScores(knnResult)
+
+			// RERANK: Combine token + vector + rank feature similarities
+			// Matches Python's rerank_with_knn(): sim = tkweight * tksim + vtweight * vtsim + rank_fea
+			sim, term_similarity, vector_similarity = RerankWithKNN(
+				searchResult.Chunks,
+				searchResult.IDs,
+				searchResult.Field,
+				knnScores,
+				req.Question,
+				tkWeight,
+				vtWeight,
+				"content_ltks",
+				qb,
+				*req.RankFeature,
+			)
+		}
 	}
 	if len(sim) == 0 {
-		return &RetrievalResult{Total: searchResult.Total, Chunks: []map[string]interface{}{}, DocAggs: []map[string]interface{}{}}, nil
+		return &RetrievalResult{Chunks: []map[string]interface{}{}, DocAggs: []map[string]interface{}{}, Total: 0}, nil
 	}
 
 	// Sort indices (positions into search results) by score descending
@@ -203,13 +292,14 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 	for i, s := range sim {
 		idxScores = append(idxScores, idxScore{idx: i, score: s})
 	}
+	// Use SliceStable for deterministic ordering when scores are tied
 	sort.SliceStable(idxScores, func(i, j int) bool {
 		return idxScores[i].score > idxScores[j].score
 	})
 
 	// When vector_similarity_weight is 0, similarity_threshold is not meaningful for term-only scores
 	postThreshold := *req.SimilarityThreshold
-	if *req.VectorSimilarityWeight <= 0 {
+	if vtWeight <= 0 {
 		postThreshold = 0.0
 	}
 
@@ -221,7 +311,7 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 		}
 	}
 	if len(validIdx) == 0 {
-		return &RetrievalResult{Total: searchResult.Total, Chunks: []map[string]interface{}{}, DocAggs: []map[string]interface{}{}}, nil
+		return &RetrievalResult{Chunks: []map[string]interface{}{}, DocAggs: []map[string]interface{}{}, Total: 0}, nil
 	}
 
 	// Calculate pagination
@@ -237,8 +327,8 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 		}
 		pageIdx = validIdx[begin:end]
 	}
-	common.Debug("Pagination result info", zap.Int("totalValid", len(validIdx)), zap.Int("begin", begin),
-		zap.Int("end", end), zap.Int("chunkCount", len(pageIdx)))
+	common.Info("Pagination result info", zap.Int("totalValid", len(validIdx)), zap.Int("begin", begin),
+		zap.Int("end", end), zap.Int("chunkCount", len(pageIdx)), zap.Float64("postThreshold", postThreshold))
 
 	// Build chunks for pageIdx, transforms raw search results into the API response format
 	var filteredChunks []map[string]interface{}
@@ -286,23 +376,67 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 		}
 		if v, ok := chunk["img_id"]; ok {
 			resultChunk["image_id"] = v
+		} else {
+			resultChunk["image_id"] = ""
 		}
-		if v, ok := chunk["position_int"]; ok {
+		if v, ok := chunk["position_int"]; ok && v != nil {
 			resultChunk["positions"] = v
+		} else {
+			resultChunk["positions"] = []interface{}{}
 		}
-		if v, ok := chunk["doc_type_kwd"]; ok {
-			resultChunk["doc_type_kwd"] = v
-		}
-		if v, ok := chunk["mom_id"]; ok {
-			resultChunk["mom_id"] = v
+		if v, ok := chunk["doc_type_kwd"]; ok && v != nil {
+			if s, ok := v.(string); ok {
+				if s == "" {
+					// Infinity's whitespace-# analyzer returns empty string as [] in Python SDK
+					// but as "" in Go SDK. Both Infinity and Elasticsearch paths normalize
+					// to None on the Python side (the test converts [] to None), so use nil
+					// here for parity instead of []interface{}{}.
+					resultChunk["doc_type_kwd"] = nil
+				} else {
+					resultChunk["doc_type_kwd"] = s
+				}
+			} else if sliceVal, ok := v.([]interface{}); ok {
+				if len(sliceVal) == 0 {
+					resultChunk["doc_type_kwd"] = nil
+				} else {
+					resultChunk["doc_type_kwd"] = sliceVal
+				}
+			} else {
+				resultChunk["doc_type_kwd"] = nil
+			}
+		} else {
+			resultChunk["doc_type_kwd"] = nil
 		}
 		// row_id: row identifier (for structured data like tables)
 		if v, ok := chunk["row_id()"]; ok {
 			resultChunk["row_id"] = v
 		}
 		resultChunk["similarity"] = sim[i]
-		resultChunk["term_similarity"] = termSimilarity[i]
-		resultChunk["vector_similarity"] = vectorSimilarity[i]
+		resultChunk["term_similarity"] = term_similarity[i]
+		resultChunk["vector_similarity"] = vector_similarity[i]
+
+		// Always set these fields even if empty, to match Python response format
+		if v, ok := chunk["important_kwd"]; ok {
+			resultChunk["important_kwd"] = v
+		} else {
+			resultChunk["important_kwd"] = []string{}
+		}
+		if v, ok := chunk["mom_id"]; ok {
+			resultChunk["mom_id"] = v
+		} else {
+			resultChunk["mom_id"] = ""
+		}
+		if v, ok := chunk["row_id()"]; ok {
+			resultChunk["row_id"] = v
+		} else {
+			resultChunk["row_id"] = nil
+		}
+		if v, ok := chunk["tag_kwd"]; ok {
+			resultChunk["tag_kwd"] = v
+		} else {
+			resultChunk["tag_kwd"] = []string{}
+		}
+
 		vectorColumn := fmt.Sprintf("q_%d_vec", dim)
 		if v, ok := chunk[vectorColumn]; ok {
 			resultChunk["vector"] = v
@@ -328,8 +462,7 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 	// This is useful for showing users which documents are most relevant to their query.
 	var docAggs []map[string]interface{}
 	if req.Aggs != nil && *req.Aggs {
-		type docAggKey struct{ docName, docID, kbID string }
-		docAggsMap := make(map[docAggKey]struct {
+		docAggsMap := make(map[string]struct {
 			docID string
 			count int
 		})
@@ -350,12 +483,11 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 			if v, ok := chunk["doc_id"].(string); ok {
 				docID = v
 			}
-			key := docAggKey{docName: docName, docID: docID, kbID: chunkScalar(chunk["kb_id"])}
-			if entry, exists := docAggsMap[key]; exists {
+			if entry, exists := docAggsMap[docName]; exists {
 				entry.count++
-				docAggsMap[key] = entry
+				docAggsMap[docName] = entry
 			} else {
-				docAggsMap[key] = struct {
+				docAggsMap[docName] = struct {
 					docID string
 					count int
 				}{docID: docID, count: 1}
@@ -369,16 +501,10 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 			count   int
 		}
 		docAggsList := make([]docAggEntry, 0, len(docAggsMap))
-		for key, entry := range docAggsMap {
-			docAggsList = append(docAggsList, docAggEntry{docName: key.docName, docID: entry.docID, count: entry.count})
+		for docName, entry := range docAggsMap {
+			docAggsList = append(docAggsList, docAggEntry{docName: docName, docID: entry.docID, count: entry.count})
 		}
 		sort.Slice(docAggsList, func(i, j int) bool {
-			if docAggsList[i].count == docAggsList[j].count {
-				if docAggsList[i].docName == docAggsList[j].docName {
-					return docAggsList[i].docID < docAggsList[j].docID
-				}
-				return docAggsList[i].docName < docAggsList[j].docName
-			}
 			return docAggsList[i].count > docAggsList[j].count
 		})
 
@@ -395,9 +521,9 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 	}
 
 	return &RetrievalResult{
-		Total:   searchResult.Total,
 		Chunks:  filteredChunks,
 		DocAggs: docAggs,
+		Total:   int64(len(filteredChunks)),
 	}, nil
 }
 
@@ -428,6 +554,7 @@ type RetrievalSearchResult struct {
 	Keywords    []string                          // Keywords from query
 	Aggregation []map[string]interface{}          // Doc aggregation by field
 	Options     map[string]interface{}            // Engine-specific options (e.g., total from get_total)
+	IndexNames  []string                          // Index names for second-pass queries (e.g., KNN scores)
 }
 
 // Search performs search based on question and EmbeddingModel:
@@ -437,16 +564,13 @@ type RetrievalSearchResult struct {
 //
 // Hybrid search path retries with lower thresholds if no results found.
 func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchRequest) (*RetrievalSearchResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if req.DocIDs != nil && len(req.DocIDs) == 0 {
-		return &RetrievalSearchResult{Chunks: []map[string]interface{}{}, Field: map[string]map[string]interface{}{}, IDs: []string{}}, nil
-	}
 	if req.Highlight == nil {
 		req.Highlight = func() *bool { v := false; return &v }()
 	}
 	filters := req.GetFilters()
+	if _, ok := filters["available_int"]; !ok {
+		filters["available_int"] = 1
+	}
 	pg := req.Page - 1
 	if pg < 0 {
 		pg = 0
@@ -463,14 +587,11 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 
 	// Build Source field list
 	src := []string{
-		"id", "docnm_kwd", "content_ltks", "kb_id", "img_id", "title_tks", "important_kwd", "position_int",
+		"docnm_kwd", "content_ltks", "kb_id", "img_id", "title_tks", "important_kwd", "position_int",
 		"doc_id", "chunk_order_int", "page_num_int", "top_int", "create_timestamp_flt", "knowledge_graph_kwd",
 		"question_kwd", "question_tks", "doc_type_kwd",
-		"available_int", "content_with_weight", "mom_id", "pagerank_fea", "tag_feas",
-		"raptor_kwd",
-	}
-	if engine.GetEngineType() == engine.EngineInfinity {
-		src = append(src, "row_id()")
+		"available_int", "content_with_weight", "mom_id", "pagerank_fea", "tag_feas", "row_id()",
+		"_score",
 	}
 
 	kwds := make(map[string]struct{})
@@ -557,11 +678,22 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 			if err != nil {
 				return nil, fmt.Errorf("Search failed: %w", err)
 			}
-			// If result is empty, retry with lower min_match
+			// If result is empty, retry with relaxed conditions
 			if engineResult.Total == 0 {
 				_, hasDocIDFilter := filters["doc_id"]
 				if hasDocIDFilter {
-					// Fallback without vector query when doc_id filter is present
+					// When a doc_id filter is present (e.g. from metadata filter like era=960)
+					// and the hybrid search returns no results, fall back to a filter-only
+					// search (no text match, no vector match). This ensures that when a
+					// metadata filter restricts the search to a specific set of documents
+					// that happen to have no relevant content for the query, we still
+					// return those documents' chunks (ordered by the request's sort/order).
+					//
+					// Example: searching "打虎" with metadata filter era≠960 limits the
+					// search to Three Kingdoms documents (era=220). Since "打虎" only
+					// appears in Water Margin (era=960), the hybrid search returns 0
+					// results. This fallback returns all chunks from Three Kingdoms
+					// documents instead of returning an empty result.
 					searchRequest.SelectFields = src
 					searchRequest.MatchExprs = []interface{}{}
 					searchRequest.RankFeature = nil
@@ -571,7 +703,10 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 						return nil, fmt.Errorf("Search retry failed: %w", err)
 					}
 				} else {
-					// Retry with lower min_match via QueryBuilder
+					// No doc_id filter — retry with lower min_match (0.1 vs default 0.3)
+					// and lower vector similarity threshold (0.17 vs default 0.1-0.2).
+					// This provides a second chance for queries that were too strict
+					// on the first attempt.
 					matchText, _ := GetQueryBuilder().Question(req.Question, "qa", 0.1)
 					matchDense.ExtraOptions["similarity"] = 0.17
 					searchRequest.MatchExprs = []interface{}{matchText, matchDense, fusionExpr}
@@ -592,7 +727,7 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 			kwds[k] = struct{}{}
 			fgToken, _ := tokenizer.FineGrainedTokenize(k)
 			for _, kk := range strings.Fields(fgToken) {
-				if len([]rune(kk)) < 2 {
+				if len(kk) < 2 {
 					continue
 				}
 				if _, ok := kwds[kk]; ok {
@@ -604,7 +739,8 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 	}
 
 	searchResult := engineResult
-	ids := s.docEngine.GetDocIDs(searchResult.Chunks)
+	ids := s.docEngine.GetChunkIDs(searchResult.Chunks)
+	common.Info("GetChunkIDs result", zap.Int("count", len(ids)), zap.Strings("ids", ids))
 
 	// Build Keywords list from kwds set
 	keywordsList := make([]string, 0, len(kwds))
@@ -612,10 +748,14 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 		keywordsList = append(keywordsList, k)
 	}
 
-	sort.Strings(keywordsList)
-
-	// Build Field map
-	fieldMap := s.docEngine.GetFields(searchResult.Chunks, nil)
+	fieldMap := s.docEngine.GetFields(searchResult.Chunks, src)
+	common.Info("GetFields result", zap.Int("count", len(fieldMap)), zap.Strings("keys", func() []string {
+		keys := make([]string, 0, len(fieldMap))
+		for k := range fieldMap {
+			keys = append(keys, k)
+		}
+		return keys
+	}()), zap.Strings("ids_from_GetDocIDs", ids))
 
 	// Build Aggregation
 	aggregation := s.docEngine.GetAggregation(searchResult.Chunks, "docnm_kwd")
@@ -635,30 +775,20 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 		IDs:         ids,
 		Keywords:    keywordsList,
 		Aggregation: aggregation,
+		IndexNames:  searchRequest.IndexNames,
 	}, nil
 }
 
 // GetVector computes query vector and returns MatchDenseExpr for hybrid search
 func (s *RetrievalService) GetVector(txt string, embModel *models.EmbeddingModel, topk int, similarity float64) (*types.MatchDenseExpr, error) {
-	if topk < 0 {
-		return nil, fmt.Errorf("top must be non-negative")
+	embeddingConfig := &models.EmbeddingConfig{
+		Dimension: 0,
 	}
-	if topk == 0 {
-		topk = 1024
-	}
-	queryModel := *embModel
-	config := models.EmbeddingConfig{Query: true}
-	if embModel.EmbeddingConfig != nil {
-		config = *embModel.EmbeddingConfig
-		config.Query = true
-	}
-	queryModel.EmbeddingConfig = &config
-	embeddings, err := queryModel.Embed([]string{txt})
+	embeddings, err := embModel.ModelDriver.Embed(embModel.ModelName, []string{txt}, embModel.APIConfig, embeddingConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	// Bound Embed validates exactly one nonempty vector before indexing.
 	vector := embeddings[0].Embedding
 	vectorSize := len(vector)
 	vectorColumnName := fmt.Sprintf("q_%d_vec", vectorSize)
@@ -696,97 +826,69 @@ func (r *RetrievalSearchRequest) GetFilters() map[string]interface{} {
 	return filters
 }
 
-// RetrievalByChildrenChecked expands verified children without hiding storage failures.
-func RetrievalByChildrenChecked(ctx context.Context, chunks []map[string]interface{}, tenantIDs []string, docEngine engine.DocEngine) ([]map[string]interface{}, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+// RetrievalByChildren aggregates child chunks into parent chunks
+func RetrievalByChildren(chunks []map[string]interface{}, tenantIDs []string, docEngine engine.DocEngine, ctx context.Context) []map[string]interface{} {
 	common.Info("RetrievalByChildren started", zap.Int("chunks", len(chunks)), zap.Strings("tenantIDs", tenantIDs))
 
 	indexNames := buildIndexNames(tenantIDs)
 	if len(chunks) == 0 || len(indexNames) == 0 {
-		return chunks, nil
+		return chunks
 	}
 
-	// Group children by parent ID and their verified SQL document/dataset.
+	// Group child chunks by mom_id
 	type childChunk struct {
-		chunk    map[string]interface{}
-		position int
-	}
-	type parentKey struct {
-		momID string
-		docID string
+		chunk map[string]interface{}
 		kbID  string
 	}
-	momChunks := make(map[parentKey][]childChunk)
-	var keyOrder []parentKey
-	firstPosition := make(map[parentKey]int)
-	var output []childChunk
+	momChunks := make(map[string][]childChunk)
+	remainingChunks := make([]map[string]interface{}, 0, len(chunks))
 
-	for position, ck := range chunks {
+	for _, ck := range chunks {
 		momID, ok := ck["mom_id"].(string)
 		if !ok || momID == "" {
-			output = append(output, childChunk{chunk: ck, position: position})
+			remainingChunks = append(remainingChunks, ck)
 			continue
 		}
-		key := parentKey{momID: momID, docID: chunkScalar(ck["doc_id"]), kbID: chunkScalar(ck["kb_id"])}
-		if _, exists := momChunks[key]; !exists {
-			keyOrder = append(keyOrder, key)
-			firstPosition[key] = position
-		}
-		momChunks[key] = append(momChunks[key], childChunk{chunk: ck, position: position})
+		kbID, _ := ck["kb_id"].(string)
+		momChunks[momID] = append(momChunks[momID], childChunk{chunk: ck, kbID: kbID})
 	}
 
 	if len(momChunks) == 0 {
 		common.Info("RetrievalByChildren finished", zap.Int("momChunks", len(momChunks)), zap.Int("resultChunks", len(chunks)))
-		return chunks, nil
+		return chunks
 	}
 
 	// Fetch parent chunks and aggregate
-	for _, key := range keyOrder {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	vectorSize := 1024
+	for momID, childList := range momChunks {
+		kbIDs := make([]string, 0, len(childList))
+		for _, c := range childList {
+			if c.kbID != "" {
+				kbIDs = append(kbIDs, c.kbID)
+			}
 		}
-		childList := momChunks[key]
-		momID := key.momID
-		kbIDs := []string{key.kbID}
+		if len(kbIDs) == 0 {
+			kbIDs = append(kbIDs, "")
+		}
 
-		if key.docID == "" || key.kbID == "" {
-			return nil, fmt.Errorf("parent expansion requires document and dataset scope")
+		parent, err := docEngine.GetChunk(ctx, indexNames[0], momID, kbIDs)
+		if err != nil {
+			common.Warn("Failed to get parent chunk", zap.String("momID", momID), zap.Error(err))
+			continue
 		}
-		var parentMap map[string]interface{}
-		for _, indexName := range indexNames {
-			parent, err := docEngine.GetChunk(ctx, indexName, momID, kbIDs)
-			if err != nil {
-				return nil, fmt.Errorf("get parent chunk: %w", err)
-			}
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			if parent == nil {
-				continue
-			}
-			var ok bool
-			parentMap, ok = parent.(map[string]interface{})
-			if !ok {
-				return nil, fmt.Errorf("parent chunk has invalid shape")
-			}
-			if chunkScalar(parentMap["doc_id"]) != key.docID || chunkScalar(parentMap["kb_id"]) != key.kbID {
-				return nil, fmt.Errorf("parent chunk does not match document and dataset scope")
-			}
-			break
-		}
-		if parentMap == nil {
+		parentMap, ok := parent.(map[string]interface{})
+		if !ok {
 			continue
 		}
 
 		// Calculate average similarity
-		var totalSim float64
+		simBuf := make([]float64, 0, len(childList))
 		for _, c := range childList {
 			if sim, ok := c.chunk["similarity"].(float64); ok {
-				totalSim += sim
+				simBuf = append(simBuf, sim)
 			}
 		}
+		totalSim := common.PairwiseSum(simBuf)
 		avgSim := totalSim / float64(len(childList))
 
 		// Collect content_ltks from children
@@ -811,9 +913,13 @@ func RetrievalByChildrenChecked(ctx context.Context, chunks []map[string]interfa
 		}
 
 		// Build aggregated chunk
-		docTypeKwd := parentMap["doc_type_kwd"]
-		if v, ok := docTypeKwd.(string); ok && v == "" {
-			docTypeKwd = []interface{}{}
+		docTypeKwd := ""
+		if v, ok := parentMap["doc_type_kwd"].(string); ok {
+			docTypeKwd = v
+		}
+		imgID := parentMap["img_id"]
+		if imgID == nil || imgID == "" {
+			imgID = ""
 		}
 		aggregated := map[string]interface{}{
 			"chunk_id":            momID,
@@ -823,157 +929,144 @@ func RetrievalByChildrenChecked(ctx context.Context, chunks []map[string]interfa
 			"docnm_kwd":           parentMap["docnm_kwd"],
 			"kb_id":               parentMap["kb_id"],
 			"important_kwd":       allImportantKwd,
-			"image_id":            parentMap["img_id"],
+			"image_id":            imgID,
 			"similarity":          avgSim,
 			"vector_similarity":   avgSim,
 			"term_similarity":     avgSim,
-			"vector":              []float64{},
+			"vector":              make([]float64, vectorSize),
 			"positions":           parentMap["position_int"],
 			"doc_type_kwd":        docTypeKwd,
 		}
 
-		// Child API results expose the selected embedding as vector. Preserve it
-		// without inferring a dimension from an unrelated parent group.
-		for _, child := range childList {
-			if vector, ok := child.chunk["vector"].([]float64); ok {
-				aggregated["vector"] = vector
-				break
+		// Get vector from first child if available
+	childVecLoop:
+		for _, c := range childList {
+			for k := range c.chunk {
+				if strings.HasSuffix(k, "_vec") {
+					if vec, ok := c.chunk[k].([]float64); ok {
+						aggregated["vector"] = vec
+						vectorSize = len(vec)
+						break childVecLoop
+					}
+				}
 			}
 		}
 
-		output = append(output, childChunk{chunk: aggregated, position: firstPosition[key]})
+		remainingChunks = append(remainingChunks, aggregated)
 	}
 
-	// Stable score ties retain the original candidate order, including parents.
-	sort.SliceStable(output, func(i, j int) bool {
-		left, _ := output[i].chunk["similarity"].(float64)
-		right, _ := output[j].chunk["similarity"].(float64)
-		if left == right {
-			return output[i].position < output[j].position
+	// Sort by similarity descending
+	for i := 0; i < len(remainingChunks); i++ {
+		for j := i + 1; j < len(remainingChunks); j++ {
+			simI, _ := remainingChunks[i]["similarity"].(float64)
+			simJ, _ := remainingChunks[j]["similarity"].(float64)
+			if simJ > simI {
+				remainingChunks[i], remainingChunks[j] = remainingChunks[j], remainingChunks[i]
+			}
 		}
-		return left > right
-	})
-	remainingChunks := make([]map[string]interface{}, 0, len(output))
-	for _, item := range output {
-		remainingChunks = append(remainingChunks, item.chunk)
 	}
 
 	common.Info("RetrievalByChildren finished", zap.Int("momChunks", len(momChunks)), zap.Int("resultChunks", len(remainingChunks)))
-	return remainingChunks, nil
+	return remainingChunks
 }
 
-// chunkScalar accepts the scalar and singleton-list forms used by index engines.
-func chunkScalar(value interface{}) string {
-	switch value := value.(type) {
-	case string:
-		return value
-	case []string:
-		if len(value) == 1 {
-			return value[0]
-		}
-	case []interface{}:
-		if len(value) == 1 {
-			text, _ := value[0].(string)
-			return text
+// PruneDeletedChunks removes chunks whose documents no longer exist
+func (s *RetrievalService) PruneDeletedChunks(result *RetrievalSearchResult) (*RetrievalSearchResult, error) {
+	if s.documentDAO == nil {
+		return nil, fmt.Errorf("documentDAO is not initialized")
+	}
+	// Collect all doc_ids from chunks
+	chunkDocIDs := make([]string, 0, len(result.Field))
+	for _, chunk := range result.Field {
+		if docID, ok := chunk["doc_id"].(string); ok && docID != "" {
+			chunkDocIDs = append(chunkDocIDs, docID)
 		}
 	}
-	return ""
-}
 
-func isDatasetRaptorChunk(chunk map[string]interface{}) bool {
-	return chunkScalar(chunk["doc_id"]) == "graph_raptor_x" &&
-		chunkScalar(chunk["raptor_kwd"]) == "raptor" && chunkScalar(chunk["kb_id"]) != ""
-}
+	if len(chunkDocIDs) == 0 {
+		return result, nil
+	}
 
-// pruneDeletedChunks checks each candidate's SQL parent before its text reaches
-// scoring. Dataset RAPTOR summaries use a live selected dataset as their parent;
-// file RAPTOR uses a document. Explicit KG retrieval keeps its separate lifecycle.
-// Keep the backend total and candidate-window offsets; pruning can yield short pages.
-func (s *RetrievalService) pruneDeletedChunks(ctx context.Context, result *RetrievalSearchResult, kbIDs []string) (*RetrievalSearchResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	// Deduplicate chunkDocIDs for correct comparison with existingDocIDs
+	uniqueDocIDs := make([]string, 0, len(chunkDocIDs))
+	seen := make(map[string]struct{}, len(chunkDocIDs))
+	for _, id := range chunkDocIDs {
+		if _, exists := seen[id]; !exists {
+			seen[id] = struct{}{}
+			uniqueDocIDs = append(uniqueDocIDs, id)
+		}
 	}
-	docIDs, summaryKBIDs := []string{}, []string{}
-	seenDocs, seenKBs := map[string]bool{}, map[string]bool{}
-	selectedKBs := map[string]bool{}
-	for _, id := range kbIDs {
-		selectedKBs[id] = true
+
+	// Get existing document IDs
+	docs, err := s.documentDAO.GetByIDs(uniqueDocIDs)
+	if err != nil {
+		return nil, fmt.Errorf("GetByIDs failed: %w", err)
 	}
-	for _, id := range result.IDs {
-		chunk := result.Field[id]
-		kbID := chunkScalar(chunk["kb_id"])
-		if chunk == nil || (len(kbIDs) > 0 && !selectedKBs[kbID]) {
+
+	existingDocIDs := make(map[string]struct{}, len(docs))
+	for _, doc := range docs {
+		existingDocIDs[doc.ID] = struct{}{}
+	}
+
+	// Early return if all docs exist
+	if len(existingDocIDs) == len(uniqueDocIDs) {
+		return result, nil
+	}
+
+	// Filter out chunks with deleted documents
+	filteredIDs := make([]string, 0, len(result.IDs))
+	filteredChunks := make([]map[string]interface{}, 0, len(result.IDs))
+	filteredField := make(map[string]map[string]interface{}, len(result.IDs))
+	filteredHighlight := make(map[string]string)
+	removed := 0
+
+	for _, chunkID := range result.IDs {
+		chunk, exists := result.Field[chunkID]
+		if !exists {
 			continue
 		}
-		if isDatasetRaptorChunk(chunk) {
-			if selectedKBs[kbID] && !seenKBs[kbID] {
-				seenKBs[kbID] = true
-				summaryKBIDs = append(summaryKBIDs, kbID)
+		docID, ok := chunk["doc_id"].(string)
+		if !ok || docID == "" {
+			// Keep chunks without doc_id
+			filteredIDs = append(filteredIDs, chunkID)
+			filteredChunks = append(filteredChunks, chunk)
+			filteredField[chunkID] = chunk
+			if result.Highlight != nil {
+				if hl, ok := result.Highlight[chunkID]; ok {
+					filteredHighlight[chunkID] = hl
+				}
 			}
-		} else if docID := chunkScalar(chunk["doc_id"]); docID != "" && !seenDocs[docID] {
-			seenDocs[docID] = true
-			docIDs = append(docIDs, docID)
-		}
-	}
-	existingDocs := map[string]string{}
-	if len(docIDs) > 0 {
-		if s.documentDAO == nil {
-			return nil, fmt.Errorf("document reader is not initialized")
-		}
-		docs, err := s.documentDAO.GetByIDs(ctx, docIDs)
-		if err != nil {
-			return nil, fmt.Errorf("document existence lookup: %w", err)
-		}
-		for _, doc := range docs {
-			if doc != nil {
-				existingDocs[doc.ID] = doc.KbID
-			}
-		}
-	}
-	existingKBs := map[string]bool{}
-	if len(summaryKBIDs) > 0 {
-		if s.kbDAO == nil {
-			return nil, fmt.Errorf("dataset reader is not initialized")
-		}
-		ids, err := s.kbDAO.GetExistingIDs(ctx, summaryKBIDs)
-		if err != nil {
-			return nil, fmt.Errorf("dataset existence lookup: %w", err)
-		}
-		for _, id := range ids {
-			existingKBs[id] = true
-		}
-	}
-	filtered := *result
-	filtered.IDs = make([]string, 0, len(result.IDs))
-	filtered.Chunks = make([]map[string]interface{}, 0, len(result.IDs))
-	filtered.Field = make(map[string]map[string]interface{}, len(result.IDs))
-	if result.Highlight != nil {
-		filtered.Highlight = make(map[string]string)
-	}
-	for _, id := range result.IDs {
-		chunk := result.Field[id]
-		kbID := chunkScalar(chunk["kb_id"])
-		if chunk == nil || (len(kbIDs) > 0 && !selectedKBs[kbID]) {
 			continue
 		}
-		if isDatasetRaptorChunk(chunk) {
-			if !selectedKBs[kbID] || !existingKBs[kbID] {
-				continue
-			}
-		} else if parentKB, ok := existingDocs[chunkScalar(chunk["doc_id"])]; !ok || parentKB != kbID {
+		if _, docExists := existingDocIDs[docID]; !docExists {
+			removed++
 			continue
 		}
-		filtered.IDs = append(filtered.IDs, id)
-		filtered.Chunks = append(filtered.Chunks, chunk)
-		filtered.Field[id] = chunk
-		if text, ok := result.Highlight[id]; ok {
-			filtered.Highlight[id] = text
+		filteredIDs = append(filteredIDs, chunkID)
+		filteredChunks = append(filteredChunks, chunk)
+		filteredField[chunkID] = chunk
+		if result.Highlight != nil {
+			if hl, ok := result.Highlight[chunkID]; ok {
+				filteredHighlight[chunkID] = hl
+			}
 		}
 	}
-	if removed := len(result.IDs) - len(filtered.IDs); removed > 0 {
-		common.Warn("Pruned chunks without a live SQL parent", zap.Int("removed", removed))
+
+	if removed > 0 {
+		common.Warn("Pruned stale chunks whose documents no longer exist", zap.Int("removed", removed))
 	}
-	return &filtered, nil
+
+	return &RetrievalSearchResult{
+		Chunks:      filteredChunks,
+		Total:       int64(len(filteredIDs)),
+		QueryVector: result.QueryVector,
+		Highlight:   filteredHighlight,
+		Field:       filteredField,
+		IDs:         filteredIDs,
+		Keywords:    result.Keywords,
+		Aggregation: result.Aggregation,
+		Options:     result.Options,
+	}, nil
 }
 
 // buildIndexNames creates index names for the given tenant IDs

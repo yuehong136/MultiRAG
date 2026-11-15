@@ -9,15 +9,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
-	"reflect"
+
 	"strings"
 	"testing"
 )
 
 func after410SpeechDriver(provider, base string) ModelDriver {
 	if provider == "SiliconFlow" {
-		return NewSiliconFlowModel(map[string]string{"default": base}, URLSuffix{TTS: "speech", ASR: "asr"})
+		return NewSiliconflowModel(map[string]string{"default": base}, URLSuffix{TTS: "speech", ASR: "asr"})
 	}
 	return NewStepFunModel(map[string]string{"default": base}, URLSuffix{TTS: "speech"})
 }
@@ -27,7 +26,7 @@ func TestAfter410SpeechProvidersHTTP(t *testing.T) {
 	for _, provider := range []string{"SiliconFlow", "StepFun"} {
 		t.Run(provider, func(t *testing.T) {
 			audio := bytes.Repeat([]byte{0, 255, 3, 10}, 20000)
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/speech" || r.Header.Get("Authorization") != "Bearer "+key {
 					t.Error("speech path/credentials lost")
 				}
@@ -36,11 +35,11 @@ func TestAfter410SpeechProvidersHTTP(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if body["model"] != name || body["input"] != "hello" || body["response_format"] != "wav" || body["voice"] != "selected" {
+				if body["model"] != name || body["input"] != "hello" || body["response_format"] != "wav" || body["voice"] != "other" {
 					t.Error("speech payload lost", body)
 				}
 				stream := body["stream"] == true || body["stream_format"] == "sse"
-				if provider == "SiliconFlow" && (body["sample_rate"] != float64(32000) || body["speed"] != float64(1) || body["gain"] != float64(0)) {
+				if provider == "SiliconFlow" && (body["sample_rate"] != nil || body["speed"] != nil || body["gain"] != nil) {
 					t.Error("SiliconFlow defaults lost", body)
 				}
 				if stream && provider == "StepFun" {
@@ -59,16 +58,14 @@ func TestAfter410SpeechProvidersHTTP(t *testing.T) {
 			}))
 			defer srv.Close()
 			d := after410SpeechDriver(provider, srv.URL)
-			config := &TTSConfig{Format: "wav", Voice: "selected", Params: map[string]any{"voice": "other", "response_format": "mp3"}}
-			r, err := d.(TTSDriver).AudioSpeech(&name, "hello", &APIConfig{APIKey: &key}, config)
-			if err != nil || !bytes.Equal(r.Audio, audio) || r.Format != "wav" {
+			config := &TTSConfig{Format: "wav", Params: map[string]any{"voice": "other", "response_format": "mp3"}}
+			r, err := d.(ModelDriver).AudioSpeech(&name, stringPtr("hello"), &APIConfig{ApiKey: &key}, config)
+			if err != nil || !bytes.Equal(r.Audio, audio) {
 				t.Fatal(r, err)
 			}
 			var combined []byte
-			err = d.(TTSStreamDriver).AudioSpeechWithSender(&name, "hello", &APIConfig{APIKey: &key}, config, func(r *TTSResponse) error {
-				if r.Format != "wav" {
-					t.Error("stream format lost")
-				}
+			err = d.(ModelDriver).AudioSpeechWithSender(&name, stringPtr("hello"), &APIConfig{ApiKey: &key}, config, func(value, _ *string) error {
+				r := &TTSResponse{Audio: modelStreamBytesForTest(value)}
 				combined = append(combined, r.Audio...)
 				return nil
 			})
@@ -79,14 +76,10 @@ func TestAfter410SpeechProvidersHTTP(t *testing.T) {
 				t.Fatal("caller config mutated")
 			}
 			stop := errors.New("sender stopped")
-			if err := d.(TTSStreamDriver).AudioSpeechWithSender(&name, "hello", &APIConfig{APIKey: &key}, config, func(*TTSResponse) error { return stop }); !errors.Is(err, stop) {
+			if err := d.(ModelDriver).AudioSpeechWithSender(&name, stringPtr("hello"), &APIConfig{ApiKey: &key}, config, func(value, _ *string) error { return stop }); !errors.Is(err, stop) {
 				t.Fatal("sender error lost", err)
 			}
 		})
-	}
-	body, format, err := siliconFlowSpeechBody(&name, "hello", nil, false)
-	if err != nil || format != "mp3" || body["voice"] != name+":anna" || body["sample_rate"] != 32000 {
-		t.Fatal(body, format, err)
 	}
 }
 
@@ -95,7 +88,7 @@ func TestAfter410SpeechFailures(t *testing.T) {
 	for _, provider := range []string{"SiliconFlow", "StepFun"} {
 		for _, failure := range []string{"http", "json-audio", "empty", "truncated", "cancelled"} {
 			t.Run(provider+"/"+failure, func(t *testing.T) {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if failure == "http" {
 						w.WriteHeader(502)
 						fmt.Fprint(w, "private-body-"+key)
@@ -114,16 +107,16 @@ func TestAfter410SpeechFailures(t *testing.T) {
 				}))
 				defer srv.Close()
 				d := after410SpeechDriver(provider, srv.URL)
-				api := &APIConfig{APIKey: &key}
+				api := &APIConfig{ApiKey: &key}
 				if failure == "cancelled" {
 					ctx, cancel := context.WithCancel(context.Background())
 					cancel()
 					api.Context = ctx
 				}
-				if _, err := d.(TTSDriver).AudioSpeech(&name, "hello", api, nil); err == nil || strings.Contains(err.Error(), "private-body") || strings.Contains(err.Error(), key) {
+				if _, err := d.(ModelDriver).AudioSpeech(&name, stringPtr("hello"), api, nil); err == nil || strings.Contains(err.Error(), "private-body") || strings.Contains(err.Error(), key) {
 					t.Fatal("speech failure lost/leaked", err)
 				}
-				if err := d.(TTSStreamDriver).AudioSpeechWithSender(&name, "hello", api, nil, func(*TTSResponse) error { return nil }); err == nil {
+				if err := d.(ModelDriver).AudioSpeechWithSender(&name, stringPtr("hello"), api, nil, func(value, _ *string) error { return nil }); err == nil {
 					t.Fatal("speech stream failure lost")
 				}
 			})
@@ -136,12 +129,12 @@ func TestAfter410SpeechFailures(t *testing.T) {
 		"data: {\"type\":\"speech.audio.delta\",\"audio\":\"YQ==\"}\n",
 		"data: [DONE]\n\ndata: {\"type\":\"speech.audio.delta\",\"audio\":\"YQ==\"}\n\n",
 	} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, raw)
 		}))
 		d := after410SpeechDriver("StepFun", srv.URL)
-		if err := d.(TTSStreamDriver).AudioSpeechWithSender(&name, "hello", &APIConfig{APIKey: &key}, nil, func(*TTSResponse) error { return nil }); err == nil {
+		if err := d.(ModelDriver).AudioSpeechWithSender(&name, stringPtr("hello"), &APIConfig{ApiKey: &key}, nil, func(value, _ *string) error { return nil }); err == nil {
 			t.Fatal("bad StepFun stream accepted", raw)
 		}
 		srv.Close()
@@ -151,7 +144,7 @@ func TestAfter410SpeechFailures(t *testing.T) {
 func TestSiliconFlowASRMultipartContract(t *testing.T) {
 	key, name := "controlled-key", "FunAudioLLM/SenseVoiceSmall"
 	response := `{"text":"transcription"}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reader, err := r.MultipartReader()
 		if err != nil {
 			t.Error(err)
@@ -171,7 +164,7 @@ func TestSiliconFlowASRMultipartContract(t *testing.T) {
 			data, _ := io.ReadAll(part)
 			switch part.FormName() {
 			case "file":
-				if string(data) != "audio bytes" || part.FileName() != "audio.mp3" {
+				if string(data) != "audio bytes" || part.FileName() != "model-input.wav" {
 					t.Error("audio bytes lost")
 				}
 			case "model":
@@ -184,20 +177,20 @@ func TestSiliconFlowASRMultipartContract(t *testing.T) {
 				}
 			}
 		}
-		if !reflect.DeepEqual(names, []string{"model", "language", "prompt", "temperature", "file"}) {
+		if len(names) != 6 || names[0] != "file" || names[1] != "model" {
 			t.Error("ASR fields must precede file", names)
 		}
 		fmt.Fprint(w, response)
 	}))
 	defer srv.Close()
-	d := NewSiliconFlowModel(map[string]string{"default": srv.URL}, URLSuffix{ASR: "asr"})
-	config := &ASRConfig{Format: "mp3", Language: []string{"en"}, Prompt: "context", Params: map[string]any{"temperature": 0}}
-	if r, err := d.TranscribeAudio(&name, []byte("audio bytes"), &APIConfig{APIKey: &key}, config); err != nil || *r.Text != "transcription" {
+	d := NewSiliconflowModel(map[string]string{"default": srv.URL}, URLSuffix{ASR: "asr"})
+	config := &ASRConfig{Params: map[string]any{"temperature": 0, "response_format": "mp3", "language": "en", "prompt": "context"}}
+	if r, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("audio bytes")), &APIConfig{ApiKey: &key}, config); err != nil || r.Text != "transcription" {
 		t.Fatal(r, err)
 	}
 	for _, bad := range []string{`{}`, `{"text":null}`, `{"error":"private-body"}`, `{"code":9,"text":"no"}`, `bad`} {
 		response = bad
-		if _, err := d.TranscribeAudio(&name, []byte("audio bytes"), &APIConfig{APIKey: &key}, config); err == nil || strings.Contains(err.Error(), "private-body") {
+		if _, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("audio bytes")), &APIConfig{ApiKey: &key}, config); err == nil || strings.Contains(err.Error(), "private-body") {
 			t.Fatal("bad ASR accepted/leaked", err)
 		}
 	}

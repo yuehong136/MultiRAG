@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"strings"
 	"testing"
@@ -17,10 +17,7 @@ func TestHistoryChatProtocolsAndCancellation(t *testing.T) {
 	for _, provider := range []string{"Aliyun", "Moonshot", "VolcEngine", "Zhipu-AI"} {
 		t.Run(provider, func(t *testing.T) {
 			history := []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "old"}, {Role: "assistant", Content: "reply"}, {Role: "user", Content: "question"}}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/region/chat" || r.Header.Get("Authorization") != "Bearer fixture-key" {
-					t.Errorf("request %s credential mismatch", r.URL.Path)
-				}
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
 					Messages       []map[string]string `json:"messages"`
 					Stream         bool                `json:"stream"`
@@ -30,6 +27,13 @@ func TestHistoryChatProtocolsAndCancellation(t *testing.T) {
 				}
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
+				}
+				expectedPath := "/region/chat"
+				if provider == "VolcEngine" && body.Stream {
+					expectedPath = "/region/chat/completions"
+				}
+				if r.URL.Path != expectedPath || r.Header.Get("Authorization") != "Bearer fixture-key" {
+					t.Errorf("request %s credential mismatch", r.URL.Path)
 				}
 				var got []Message
 				for _, m := range body.Messages {
@@ -57,7 +61,7 @@ func TestHistoryChatProtocolsAndCancellation(t *testing.T) {
 				t.Fatal(err)
 			}
 			key, name, region, off, zero := "fixture-key", "model", "region", false, 0.0
-			api := &APIConfig{APIKey: &key, Region: &region}
+			api := &APIConfig{ApiKey: &key, Region: &region}
 			answer, err := driver.ChatWithMessages(name, history, api, &ChatConfig{Thinking: &off, Temperature: &zero})
 			if err != nil || answer == nil || answer.Answer == nil || *answer.Answer != "answer" {
 				t.Fatalf("history chat=%v err=%v", answer, err)
@@ -95,7 +99,7 @@ func TestHistoryChatProtocolsAndCancellation(t *testing.T) {
 
 func TestBoundHistoryStreamingArrivesBeforeProviderCompletes(t *testing.T) {
 	received := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
 		w.(http.Flusher).Flush()
@@ -106,11 +110,11 @@ func TestBoundHistoryStreamingArrivesBeforeProviderCompletes(t *testing.T) {
 	name, key := "kimi-k2.5", "key"
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	model := NewChatModel(NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"}), &name, &APIConfig{APIKey: &key, Context: ctx})
+	model := NewChatModel(NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"}), &name, &APIConfig{ApiKey: &key, Context: ctx})
 	chunks := make(chan string, 1)
 	finished := make(chan error, 1)
 	go func() {
-		finished <- model.ChatStreamlyWithSender(chatHistory("rules", []map[string]string{{"role": "user", "content": "question"}}), nil, func(content, reason *string) error {
+		finished <- model.ModelDriver.ChatStreamlyWithSender(*model.ModelName, messagesForTest("rules", []map[string]string{{"role": "user", "content": "question"}}), model.APIConfig, nil, func(content, reason *string) error {
 			if content != nil {
 				chunks <- *content
 			}
@@ -148,34 +152,14 @@ func TestBoundHistoryStreamingArrivesBeforeProviderCompletes(t *testing.T) {
 
 func TestBoundHistoryRejectsTruncationAndInvalidConfig(t *testing.T) {
 	for _, response := range []string{"data: [DONE]\n\n", "data: nope\n\n", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 		name, key := "model", "key"
-		bound := NewChatModel(NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"}), &name, &APIConfig{APIKey: &key})
+		bound := NewChatModel(NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"}), &name, &APIConfig{ApiKey: &key})
 		done := false
-		err := bound.ChatStreamlyWithSender(chatHistory("", []map[string]string{{"role": "user", "content": "q"}}), nil, func(content, reason *string) error { done = content != nil && *content == "[DONE]"; return nil })
+		err := bound.ModelDriver.ChatStreamlyWithSender(*bound.ModelName, messagesForTest("", []map[string]string{{"role": "user", "content": "q"}}), bound.APIConfig, nil, func(content, reason *string) error { done = content != nil && *content == "[DONE]"; return nil })
 		server.Close()
 		if err == nil || done {
 			t.Fatalf("failed stream succeeded %v done=%v", err, done)
 		}
-	}
-	off, on := false, true
-	defaults := ChatConfig{Thinking: &on}
-	c, err := chatGenerationConfig(nil, defaults)
-	if err != nil || c.Stream != nil || c.Thinking == nil || !*c.Thinking {
-		t.Fatalf("nil defaults=%#v %v", c, err)
-	}
-	c, err = chatGenerationConfig(map[string]interface{}{"stream": false, "thinking": false}, defaults)
-	if err != nil || c.Stream == nil || *c.Stream != off || *c.Thinking {
-		t.Fatalf("false=%#v %v", c, err)
-	}
-	c, err = chatGenerationConfig(map[string]interface{}{"effort": "high", "verbosity": "low", "stop": []interface{}{"stop"}, "max_tokens": 32.0}, defaults)
-	if err != nil || c.Effort == nil || *c.Effort != "high" || c.Verbosity == nil || *c.Verbosity != "low" || c.Stop == nil || len(*c.Stop) != 1 || c.MaxTokens == nil || *c.MaxTokens != 32 {
-		t.Fatalf("persisted JSON config=%#v %v", c, err)
-	}
-	if _, err := chatGenerationConfig(map[string]interface{}{"stream": "false"}, defaults); err == nil {
-		t.Fatal("invalid boolean accepted")
-	}
-	if _, err := chatGenerationConfig(map[string]interface{}{"stream": func() {}}, defaults); err == nil {
-		t.Fatal("invalid JSON accepted")
 	}
 }

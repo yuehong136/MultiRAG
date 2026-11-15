@@ -354,7 +354,74 @@ func operate(state *runtime.CanvasState, oldVal any, op string, param any) (any,
 		return lst[:len(lst)-1], ""
 
 	case "+=", "-=", "*=", "/=":
-		return exactNumericOperation(oldVal, resolveParamValue(state, param), op)
+		left, right, operator := oldVal, resolveParamValue(state, param), op
+		if !isNumberish(left) || !isNumberish(right) {
+			return nil, "ERROR:VARIABLE_NOT_NUMBER or PARAMETER_NOT_NUMBER"
+		}
+		a, _, err := toFloat64(left)
+		if err != nil {
+			return nil, "ERROR:INVALID_NUMBER"
+		}
+		b, _, err := toFloat64(right)
+		if err != nil {
+			return nil, "ERROR:INVALID_NUMBER"
+		}
+		result := new(big.Rat)
+		switch operator {
+		case "+=":
+			result.Add(a, b)
+		case "-=":
+			result.Sub(a, b)
+		case "*=":
+			result.Mul(a, b)
+		case "/=":
+			if b.Sign() == 0 {
+				return nil, "ERROR:DIVIDE_BY_ZERO"
+			}
+			result.Quo(a, b)
+		}
+		_, leftJSON := left.(json.Number)
+		_, rightJSON := right.(json.Number)
+		if leftJSON || rightJSON {
+			_, number, err := toFloat64(result)
+			if err == nil {
+				return number, ""
+			}
+			// JSON integers and terminating decimals stay exact. Division
+			// may require the same finite approximation as the frozen
+			// float64 operation (for example 1/3), rather than a new error.
+			if operator != "/=" {
+				return nil, "ERROR:NUMERIC_PRECISION_OR_RANGE"
+			}
+		}
+		lhs, _ := a.Float64()
+		rhs, _ := b.Float64()
+		// float32's decimal spelling preserves its JSON value, but the
+		// original native operation widens the actual binary float32.
+		if value, ok := left.(float32); ok {
+			lhs = float64(value)
+		}
+		if value, ok := right.(float32); ok {
+			rhs = float64(value)
+		}
+		var floating float64
+		switch operator {
+		case "+=":
+			floating = lhs + rhs
+		case "-=":
+			floating = lhs - rhs
+		case "*=":
+			floating = lhs * rhs
+		case "/=":
+			floating = lhs / rhs
+		}
+		if math.IsNaN(floating) || math.IsInf(floating, 0) || floating == 0 && result.Sign() != 0 {
+			return nil, "ERROR:NUMERIC_PRECISION_OR_RANGE"
+		}
+		if leftJSON || rightJSON {
+			return json.Number(strconv.FormatFloat(floating, 'g', -1, 64)), ""
+		}
+		return floating, ""
 
 	}
 	return nil, "ERROR:UNKNOWN_OPERATOR"
@@ -461,8 +528,8 @@ func goKind(v any) string {
 	return "unknown"
 }
 
-// isNumberType distinguishes numbers from booleans and numeric-looking strings.
-func isNumberType(v any) bool {
+// isNumberish distinguishes numeric types from booleans and numeric strings.
+func isNumberish(v any) bool {
 	switch v.(type) {
 	case json.Number, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 		return true
@@ -470,71 +537,14 @@ func isNumberType(v any) bool {
 	return false
 }
 
-// exactNumber preserves JSON decimal/integer value without a float64 roundtrip.
-// The literal/exponent limits bound allocations; finite float range guards
-// reject overflow/underflow while allowing exact integers beyond 2^53.
-func exactNumber(v any) (*big.Rat, error) {
-	var text string
-	switch n := v.(type) {
-	case json.Number:
-		text = n.String()
-	case int:
-		text = strconv.FormatInt(int64(n), 10)
-	case int8:
-		text = strconv.FormatInt(int64(n), 10)
-	case int16:
-		text = strconv.FormatInt(int64(n), 10)
-	case int32:
-		text = strconv.FormatInt(int64(n), 10)
-	case int64:
-		text = strconv.FormatInt(n, 10)
-	case uint:
-		text = strconv.FormatUint(uint64(n), 10)
-	case uint8:
-		text = strconv.FormatUint(uint64(n), 10)
-	case uint16:
-		text = strconv.FormatUint(uint64(n), 10)
-	case uint32:
-		text = strconv.FormatUint(uint64(n), 10)
-	case uint64:
-		text = strconv.FormatUint(n, 10)
-	case float32:
-		text = strconv.FormatFloat(float64(n), 'g', -1, 32)
-	case float64:
-		text = strconv.FormatFloat(n, 'g', -1, 64)
-	default:
-		return nil, fmt.Errorf("not a number")
-	}
-	if len(text) == 0 || len(text) > 1024 || !json.Valid([]byte(text)) || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) {
-		return nil, fmt.Errorf("invalid numeric literal")
-	}
-	if at := strings.IndexAny(text, "eE"); at >= 0 {
-		exponent, err := strconv.Atoi(text[at+1:])
-		if err != nil || exponent < -1024 || exponent > 1024 {
-			return nil, fmt.Errorf("numeric exponent exceeds range")
-		}
-	}
-	finite, err := strconv.ParseFloat(text, 64)
-	if err != nil || math.IsNaN(finite) || math.IsInf(finite, 0) {
-		return nil, fmt.Errorf("number exceeds finite range")
-	}
-	result, ok := new(big.Rat).SetString(text)
-	if !ok || (finite == 0 && result.Sign() != 0) {
-		return nil, fmt.Errorf("number underflows finite range")
-	}
-	return result, nil
-}
-
-func isNumberish(v any) bool { _, err := exactNumber(v); return err == nil }
-
 // validateNumericTree rejects invalid embedded numbers before a consumer can
 // hide them through string fallback, truthiness, sorting or a partial write.
 func validateNumericTree(v any, depth int) error {
 	if depth > 64 {
 		return fmt.Errorf("numeric container nesting exceeds limit")
 	}
-	if isNumberType(v) {
-		_, err := exactNumber(v)
+	if isNumberish(v) {
+		_, _, err := toFloat64(v)
 		return err
 	}
 	switch value := v.(type) {
@@ -560,15 +570,72 @@ func validateNumericTree(v any, depth int) error {
 	return nil
 }
 
-// exactDecimal represents terminating decimal results as json.Number; a
-// non-terminating rational is rejected rather than rounded silently.
-func exactDecimal(value *big.Rat) (json.Number, error) {
+// toFloat64 retains the upstream conversion symbol. Exact rational and JSON
+// results are necessary because float64 cannot distinguish integers beyond 2^53.
+func toFloat64(v any) (*big.Rat, json.Number, error) {
+	var value *big.Rat
+	if rational, ok := v.(*big.Rat); ok {
+		if rational == nil {
+			return nil, "", fmt.Errorf("nil numeric value")
+		}
+		value = new(big.Rat).Set(rational)
+	} else {
+		var text string
+		switch n := v.(type) {
+		case json.Number:
+			text = n.String()
+		case int:
+			text = strconv.FormatInt(int64(n), 10)
+		case int8:
+			text = strconv.FormatInt(int64(n), 10)
+		case int16:
+			text = strconv.FormatInt(int64(n), 10)
+		case int32:
+			text = strconv.FormatInt(int64(n), 10)
+		case int64:
+			text = strconv.FormatInt(n, 10)
+		case uint:
+			text = strconv.FormatUint(uint64(n), 10)
+		case uint8:
+			text = strconv.FormatUint(uint64(n), 10)
+		case uint16:
+			text = strconv.FormatUint(uint64(n), 10)
+		case uint32:
+			text = strconv.FormatUint(uint64(n), 10)
+		case uint64:
+			text = strconv.FormatUint(n, 10)
+		case float32:
+			text = strconv.FormatFloat(float64(n), 'g', -1, 32)
+		case float64:
+			text = strconv.FormatFloat(n, 'g', -1, 64)
+		default:
+			return nil, "", fmt.Errorf("not a number")
+		}
+		if len(text) == 0 || len(text) > 1024 || !json.Valid([]byte(text)) || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) {
+			return nil, "", fmt.Errorf("invalid numeric literal")
+		}
+		if at := strings.IndexAny(text, "eE"); at >= 0 {
+			exponent, err := strconv.Atoi(text[at+1:])
+			if err != nil || exponent < -1024 || exponent > 1024 {
+				return nil, "", fmt.Errorf("numeric exponent exceeds range")
+			}
+		}
+		finite, err := strconv.ParseFloat(text, 64)
+		if err != nil || math.IsNaN(finite) || math.IsInf(finite, 0) {
+			return nil, "", fmt.Errorf("number exceeds finite range")
+		}
+		result, ok := new(big.Rat).SetString(text)
+		if !ok || (finite == 0 && result.Sign() != 0) {
+			return nil, "", fmt.Errorf("number underflows finite range")
+		}
+		value = result
+	}
 	if value.Num().BitLen() > 8192 || value.Denom().BitLen() > 8192 {
-		return "", fmt.Errorf("numeric result exceeds range")
+		return nil, "", fmt.Errorf("numeric result exceeds range")
 	}
 	finite, _ := value.Float64()
 	if math.IsInf(finite, 0) || math.IsNaN(finite) || (finite == 0 && value.Sign() != 0) {
-		return "", fmt.Errorf("numeric result exceeds finite range")
+		return nil, "", fmt.Errorf("numeric result exceeds finite range")
 	}
 	denominator := new(big.Int).Set(value.Denom())
 	remainder := new(big.Int)
@@ -586,7 +653,7 @@ func exactDecimal(value *big.Rat) (json.Number, error) {
 		}
 	}
 	if denominator.Cmp(big.NewInt(1)) != 0 {
-		return "", fmt.Errorf("numeric result requires rounding")
+		return nil, "", fmt.Errorf("numeric result requires rounding")
 	}
 	text := value.FloatString(max(powers[0], powers[1]))
 	if strings.Contains(text, ".") {
@@ -595,49 +662,7 @@ func exactDecimal(value *big.Rat) (json.Number, error) {
 	if text == "-0" {
 		text = "0"
 	}
-	return json.Number(text), nil
-}
-
-func exactNumericOperation(left, right any, operator string) (any, string) {
-	if !isNumberType(left) || !isNumberType(right) {
-		return nil, "ERROR:VARIABLE_NOT_NUMBER or PARAMETER_NOT_NUMBER"
-	}
-	a, err := exactNumber(left)
-	if err != nil {
-		return nil, "ERROR:INVALID_NUMBER"
-	}
-	b, err := exactNumber(right)
-	if err != nil {
-		return nil, "ERROR:INVALID_NUMBER"
-	}
-	result := new(big.Rat)
-	switch operator {
-	case "+=":
-		result.Add(a, b)
-	case "-=":
-		result.Sub(a, b)
-	case "*=":
-		result.Mul(a, b)
-	case "/=":
-		if b.Sign() == 0 {
-			return nil, "ERROR:DIVIDE_BY_ZERO"
-		}
-		result.Quo(a, b)
-	}
-	number, err := exactDecimal(result)
-	if err != nil {
-		return nil, "ERROR:NUMERIC_PRECISION_OR_RANGE"
-	}
-	_, leftJSON := left.(json.Number)
-	_, rightJSON := right.(json.Number)
-	if leftJSON || rightJSON {
-		return number, ""
-	}
-	floating, exact := result.Float64()
-	if !exact {
-		return nil, "ERROR:NUMERIC_PRECISION_OR_RANGE"
-	}
-	return floating, ""
+	return value, json.Number(text), nil
 }
 
 func init() {

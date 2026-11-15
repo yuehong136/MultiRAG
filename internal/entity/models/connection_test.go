@@ -22,7 +22,7 @@ func TestMinimaxCheckConnectionUsesConfiguredRegionAndBearerToken(t *testing.T) 
 	)
 	apiKey := "secret"
 	region := "global"
-	if err := model.CheckConnection(&APIConfig{APIKey: &apiKey, Region: &region}); err != nil {
+	if err := model.CheckConnection(&APIConfig{ApiKey: &apiKey, Region: &region}); err != nil {
 		t.Fatalf("CheckConnection() error = %v", err)
 	}
 	if gotPath != "/v1/models" {
@@ -40,7 +40,7 @@ func TestMinimaxCheckConnectionSurfacesProviderError(t *testing.T) {
 
 	model := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Models: "models", Files: "files"})
 	apiKey := "bad"
-	err := model.CheckConnection(&APIConfig{APIKey: &apiKey})
+	err := model.CheckConnection(&APIConfig{ApiKey: &apiKey})
 	if err == nil || !strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "invalid key") {
 		t.Fatalf("CheckConnection() error = %v", err)
 	}

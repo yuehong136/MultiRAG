@@ -1,301 +1,744 @@
-// Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
-// Licensed under the Apache License, Version 2.0.
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package models
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"maps"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 )
 
-// LocalAIModel uses a tenant endpoint, optional authentication, and no media capability.
+// localAIStreamIdleTimeout bounds how long ChatStreamlyWithSender
+var localAIStreamIdleTimeout = 60 * time.Second
+
+// LocalAIModel implements ModelDriver for LocalAI
 type LocalAIModel struct {
-	*DummyModel
-	httpClient        *http.Client
-	streamIdleTimeout time.Duration
+	baseModel BaseModel
 }
 
-func NewLocalAIModel(urls map[string]string, suffix URLSuffix) *LocalAIModel {
-	return &LocalAIModel{DummyModel: NewDummyModel(maps.Clone(urls), suffix), httpClient: &http.Client{Transport: providerModelTransport}, streamIdleTimeout: 60 * time.Second}
-}
-func (l *LocalAIModel) Name() string { return "LocalAI" }
-
-// Request-scoped drivers share connections; credentials remain on requests.
-var providerModelTransport = providerHTTPTransport()
-
-// providerHTTPTransport retains dial and TLS deadlines with custom defaults.
-
-func providerHTTPTransport() *http.Transport {
-	var transport *http.Transport
-	if standard, ok := http.DefaultTransport.(*http.Transport); ok && standard != nil {
-		transport = standard.Clone()
-	} else {
-		transport = &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: time.Second}
-	}
-	transport.MaxIdleConns = 100
-	transport.MaxIdleConnsPerHost = 10
-	transport.IdleConnTimeout = 90 * time.Second
-	transport.ResponseHeaderTimeout = 60 * time.Second
-	return transport
-}
-
-func localAIChatBody(name string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
-	body, err := openAIChatBody(name, messages, config, stream)
-	if err != nil {
-		return nil, err
-	}
-	if config != nil {
-		if stream && config.Stream != nil && !*config.Stream {
-			return nil, fmt.Errorf("LocalAI: stream must be true")
+// NewLocalAIModel creates a new LocalAI model instance
+func NewLocalAIModel(baseURL map[string]string, urlSuffix URLSuffix) *LocalAIModel {
+	if baseURL != nil {
+		copied := make(map[string]string, len(baseURL))
+		for region, value := range baseURL {
+			copied[region] = value
 		}
-		if config.Thinking != nil {
-			body["enable_thinking"] = *config.Thinking
-		}
-		if config.Effort != nil && *config.Effort != "" {
-			body["reasoning_effort"] = *config.Effort
-		}
+		baseURL = copied
 	}
-	return body, nil
-}
-func (l *LocalAIModel) request(api *APIConfig, body any) (*http.Response, error) {
-	var region *string
-	if api != nil {
-		region = api.Region
+	return &LocalAIModel{
+		baseModel: BaseModel{
+			BaseURL:          baseURL,
+			URLSuffix:        urlSuffix,
+			AllowEmptyAPIKey: true,
+			httpClient:       NewDriverHTTPClient(),
+		},
 	}
-	base, err := resolveModelBaseURL(l.BaseURL, region)
-	if err != nil {
-		return nil, err
-	}
-	if l.URLSuffix.Chat == "" {
-		return nil, fmt.Errorf("LocalAI chat endpoint is missing")
-	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(requestContext(api), http.MethodPost, joinModelURL(base, l.URLSuffix.Chat), bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if api != nil && api.APIKey != nil && strings.TrimSpace(*api.APIKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*api.APIKey))
-	}
-	resp, err := l.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("LocalAI chat failed (HTTP %d)", resp.StatusCode)
-	}
-	return resp, nil
 }
 
-type localAIMessage struct {
-	Content          *string `json:"content"`
-	ReasoningContent *string `json:"reasoning_content"`
-	Reasoning        *string `json:"reasoning"`
-	Thinking         *string `json:"thinking"`
+func (l *LocalAIModel) NewInstance(baseURL map[string]string) ModelDriver {
+	return NewLocalAIModel(baseURL, l.baseModel.URLSuffix)
 }
 
-func (m localAIMessage) reasoning() *string {
-	for _, v := range []*string{m.ReasoningContent, m.Reasoning, m.Thinking} {
-		if v != nil && *v != "" {
+func (l *LocalAIModel) Name() string {
+	return "localai"
+}
+
+var localAIReasoningFields = []string{"reasoning_content", "reasoning", "thinking"}
+
+func extractLocalAIReasoning(m map[string]interface{}) string {
+	for _, k := range localAIReasoningFields {
+		if v, ok := m[k].(string); ok && v != "" {
 			return v
 		}
 	}
-	return nil
-}
-func (l *LocalAIModel) ChatWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig) (*ChatResponse, error) {
-	body, err := localAIChatBody(name, messages, config, false)
-	if err != nil {
-		return nil, err
-	}
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	resp, err := l.request(local, body)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var result struct {
-		Choices []struct {
-			Message localAIMessage `json:"message"`
-		} `json:"choices"`
-		Error json.RawMessage `json:"error"`
-	}
-	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
-		return nil, err
-	}
-	if len(result.Error) > 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("LocalAI provider error")
-	}
-	if len(result.Choices) == 0 || result.Choices[0].Message.Content == nil || strings.TrimSpace(*result.Choices[0].Message.Content) == "" {
-		return nil, fmt.Errorf("LocalAI: no text answer")
-	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
-	}
-	message := result.Choices[0].Message
-	return &ChatResponse{Answer: message.Content, ReasoningContent: message.reasoning()}, nil
+	return ""
 }
 
-func (l *LocalAIModel) ChatStreamlyWithSender(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+func addLocalAIReasoningRequestParams(reqBody map[string]interface{}, cfg *ChatConfig) {
+	if cfg == nil {
+		return
+	}
+	if cfg.Effort != nil && *cfg.Effort != "" {
+		reqBody["reasoning_effort"] = *cfg.Effort
+	}
+	if cfg.Thinking != nil {
+		reqBody["enable_thinking"] = *cfg.Thinking
+	}
+}
+
+// ChatWithMessages sends multiple messages with roles and returns the response.
+func (l *LocalAIModel) ChatWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	if err := l.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("messages is empty")
+	}
+
+	baseURL, err := l.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/%s", strings.TrimSuffix(baseURL, "/"), l.baseModel.URLSuffix.Chat)
+
+	apiMessages := make([]map[string]interface{}, len(messages))
+	for i, msg := range messages {
+		apiMessages[i] = map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
+		}
+	}
+
+	reqBody := map[string]interface{}{
+		"model":    modelName,
+		"messages": apiMessages,
+		"stream":   false,
+	}
+
+	if chatModelConfig != nil {
+		if chatModelConfig.MaxTokens != nil {
+			reqBody["max_tokens"] = *chatModelConfig.MaxTokens
+		}
+		if chatModelConfig.Temperature != nil {
+			reqBody["temperature"] = *chatModelConfig.Temperature
+		}
+		if chatModelConfig.TopP != nil {
+			reqBody["top_p"] = *chatModelConfig.TopP
+		}
+		if chatModelConfig.Stop != nil {
+			reqBody["stop"] = *chatModelConfig.Stop
+		}
+		addLocalAIReasoningRequestParams(reqBody, chatModelConfig)
+	}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if auth := BearerAuth(apiConfig); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
+	resp, err := l.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, "[redacted]")
+	}
+
+	var result map[string]interface{}
+	if err = json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	choices, ok := result["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return nil, fmt.Errorf("no choices in response")
+	}
+
+	firstChoice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid choice format")
+	}
+
+	messageMap, ok := firstChoice["message"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid message format")
+	}
+
+	content, ok := messageMap["content"].(string)
+	if !ok {
+		return nil, fmt.Errorf("invalid content format")
+	}
+
+	// Pull the chain-of-thought from whichever field the upstream model
+	// used. See localAIReasoningFields for the priority order.
+	reasonContent := extractLocalAIReasoning(messageMap)
+
+	return &ChatResponse{
+		Answer:        &content,
+		ReasonContent: &reasonContent,
+	}, nil
+}
+
+// ChatStreamlyWithSender sends messages and streams the response via the
+// sender function. The LocalAI SSE stream uses the same shape as OpenAI:
+// "data:" lines carrying JSON events, with a final "[DONE]" line.
+func (l *LocalAIModel) ChatStreamlyWithSender(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
 	if sender == nil {
 		return fmt.Errorf("sender is required")
 	}
-	body, err := localAIChatBody(name, messages, config, true)
+
+	idleTimeout := localAIStreamIdleTimeout
+
+	if err := l.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return err
+	}
+
+	if sender == nil {
+		return fmt.Errorf("sender is required")
+	}
+
+	if len(messages) == 0 {
+		return fmt.Errorf("messages is empty")
+	}
+
+	baseURL, err := l.baseModel.GetBaseURL(apiConfig)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancel(requestContext(api))
+	url := fmt.Sprintf("%s/%s", strings.TrimSuffix(baseURL, "/"), l.baseModel.URLSuffix.Chat)
+
+	apiMessages := make([]map[string]interface{}, len(messages))
+	for i, msg := range messages {
+		apiMessages[i] = map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
+		}
+	}
+
+	reqBody := map[string]interface{}{
+		"model":    modelName,
+		"messages": apiMessages,
+		"stream":   true,
+	}
+
+	if chatModelConfig != nil {
+		if chatModelConfig.Stream != nil && !*chatModelConfig.Stream {
+			return fmt.Errorf("stream must be true in ChatStreamlyWithSender")
+		}
+
+		if chatModelConfig.MaxTokens != nil {
+			reqBody["max_tokens"] = *chatModelConfig.MaxTokens
+		}
+		if chatModelConfig.Temperature != nil {
+			reqBody["temperature"] = *chatModelConfig.Temperature
+		}
+		if chatModelConfig.TopP != nil {
+			reqBody["top_p"] = *chatModelConfig.TopP
+		}
+		if chatModelConfig.Stop != nil {
+			reqBody["stop"] = *chatModelConfig.Stop
+		}
+		addLocalAIReasoningRequestParams(reqBody, chatModelConfig)
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(apiConfig.RequestContext())
 	defer cancel()
-	local := APIConfig{Context: ctx}
-	if api != nil {
-		local = *api
-		local.Context = ctx
-	}
-	resp, err := l.request(&local, body)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if auth := BearerAuth(apiConfig); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
+	resp, err := l.baseModel.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	// Bound inactivity rather than the total duration of a working SSE response.
-	idle := l.streamIdleTimeout
-	if idle <= 0 {
-		idle = 60 * time.Second
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, "[redacted]")
 	}
+
 	lastActive := time.Now()
-	var mu sync.Mutex
-	stopped, watchdogDone := make(chan struct{}), make(chan struct{})
-	timedOut := false
+	var lastActiveMu sync.Mutex
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		defer close(watchdogDone)
-		ticker := time.NewTicker(max(idle/4, time.Millisecond))
+		ticker := time.NewTicker(idleTimeout / 4)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-stopped:
-				return
-			case <-ctx.Done():
+			case <-done:
 				return
 			case now := <-ticker.C:
-				mu.Lock()
-				expired := now.Sub(lastActive) >= idle
-				if expired {
-					timedOut = true
-				}
-				mu.Unlock()
-				if expired {
+				lastActiveMu.Lock()
+				idle := now.Sub(lastActive)
+				lastActiveMu.Unlock()
+				if idle >= idleTimeout {
 					cancel()
 					return
 				}
 			}
 		}
 	}()
-	defer func() { close(stopped); <-watchdogDone }()
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	answered := false
-	complete := func() error {
-		if err := ctx.Err(); err != nil {
-			return err
+
+	sawTerminal, sawContent := false, false
+	streamDone, err := ParseSSEStream[map[string]interface{}](resp.Body, func(event map[string]interface{}) error {
+		if event == nil || event["error"] != nil {
+			return fmt.Errorf("upstream stream error")
 		}
-		if !answered {
-			return fmt.Errorf("LocalAI: no text answer")
-		}
-		done := "[DONE]"
-		return sender(&done, nil)
-	}
-	for scanner.Scan() {
-		mu.Lock()
+		lastActiveMu.Lock()
 		lastActive = time.Now()
-		mu.Unlock()
-		if err := ctx.Err(); err != nil {
-			return err
+		lastActiveMu.Unlock()
+
+		choices, ok := event["choices"].([]interface{})
+		if !ok || len(choices) == 0 {
+			return fmt.Errorf("invalid stream choices")
 		}
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
+
+		firstChoice, ok := choices[0].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid stream frame")
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
-			continue
+
+		delta, ok := firstChoice["delta"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid stream frame")
 		}
-		if data == "[DONE]" {
-			return complete()
-		}
-		var event struct {
-			Choices []struct {
-				Delta        localAIMessage `json:"delta"`
-				FinishReason *string        `json:"finish_reason"`
-			} `json:"choices"`
-			Error json.RawMessage `json:"error"`
-		}
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return fmt.Errorf("LocalAI invalid stream: %w", err)
-		}
-		if len(event.Error) > 0 && string(event.Error) != "null" {
-			return fmt.Errorf("LocalAI stream provider error")
-		}
-		if len(event.Choices) == 0 {
-			continue
-		}
-		delta := event.Choices[0].Delta
-		if reasoning := delta.reasoning(); reasoning != nil {
-			if err := sender(nil, reasoning); err != nil {
+
+		if reasoning := extractLocalAIReasoning(delta); reasoning != "" {
+			sawContent = true
+			if err := sender(nil, &reasoning); err != nil {
 				return err
 			}
 		}
+
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if delta.Content != nil && *delta.Content != "" {
-			answered = answered || strings.TrimSpace(*delta.Content) != ""
-			if err := sender(delta.Content, nil); err != nil {
+		content, ok := delta["content"].(string)
+		if ok && content != "" {
+			sawContent = true
+			if err := sender(&content, nil); err != nil {
 				return err
 			}
 		}
-		if reason := event.Choices[0].FinishReason; reason != nil && *reason != "" {
-			return complete()
+
+		finishReason, ok := firstChoice["finish_reason"].(string)
+		if ok && finishReason != "" {
+			sawTerminal = true
 		}
+		return nil
+	})
+	if err != nil {
+		if apiConfig.RequestContext().Err() != nil {
+			return apiConfig.RequestContext().Err()
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("localai: stream idle for more than %s, aborted", idleTimeout)
+		}
+		return fmt.Errorf("failed to scan response body: %w", err)
 	}
-	mu.Lock()
-	expired := timedOut
-	mu.Unlock()
-	if expired {
-		return fmt.Errorf("LocalAI stream idle timeout: %w", context.DeadlineExceeded)
+	if (!streamDone && !sawTerminal) || !sawContent {
+		return fmt.Errorf("localai: stream ended before [DONE] or finish_reason")
 	}
-	if err := ctx.Err(); err != nil {
+
+	endOfStream := "[DONE]"
+	if err := sender(&endOfStream, nil); err != nil {
 		return err
 	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	return io.ErrUnexpectedEOF
-}
-func (l *LocalAIModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
-	return embedHTTPWithConfig(l.httpClient, l.BaseURL, l.URLSuffix.Embedding, name, texts, api, config, embeddingHTTPOptions{optionalAPIKey: true})
-}
-func (l *LocalAIModel) Rerank(name *string, query string, texts []string, api *APIConfig, config *RerankConfig) (*RerankResponse, error) {
-	return rerankHTTP(l.httpClient, l.BaseURL, l.URLSuffix.Rerank, name, query, texts, api, config, map[string]any{"return_documents": nil}, rerankHTTPOptions{optionalAPIKey: true})
-}
-func (l *LocalAIModel) ListModels(api *APIConfig) ([]string, error) {
-	return listProviderModels(l.httpClient, l.BaseURL, l.URLSuffix.Models, api, false)
-}
-func (l *LocalAIModel) CheckConnection(api *APIConfig) error { _, err := l.ListModels(api); return err }
-func (l *LocalAIModel) Balance(api *APIConfig) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("%w: LocalAI balance", ErrUnsupportedCapability)
+
+	return nil
 }
 
-var _ ModelDriver = (*LocalAIModel)(nil)
+type localAIEmbeddingData struct {
+	Embedding []float64 `json:"embedding"`
+	Object    string    `json:"object"`
+	Index     int       `json:"index"`
+}
+
+type localAIEmbeddingResponse struct {
+	Data   []localAIEmbeddingData `json:"data"`
+	Model  string                 `json:"model"`
+	Object string                 `json:"object"`
+}
+
+func (l *LocalAIModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	if len(texts) > 0 && (modelName == nil || strings.TrimSpace(*modelName) == "") {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	if embeddingConfig != nil && embeddingConfig.Dimension < 0 {
+		return nil, fmt.Errorf("invalid numeric configuration")
+	}
+
+	if err := l.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	if len(texts) == 0 {
+		return []EmbeddingData{}, nil
+	}
+
+	if modelName == nil || *modelName == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	baseURL, err := l.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/%s", strings.TrimSuffix(baseURL, "/"), l.baseModel.URLSuffix.Embedding)
+
+	reqBody := map[string]interface{}{
+		"model": *modelName,
+		"input": texts,
+	}
+	if embeddingConfig != nil && embeddingConfig.Dimension > 0 {
+		reqBody["dimensions"] = embeddingConfig.Dimension
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if auth := BearerAuth(apiConfig); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
+	resp, err := l.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("LocalAI embeddings API error: %s, body: %s", resp.Status, "[redacted]")
+	}
+
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil || envelope == nil || envelope["error"] != nil {
+		return nil, fmt.Errorf("invalid embedding response")
+	}
+	var numeric []EmbeddingData
+	if json.Unmarshal(envelope["data"], &numeric) != nil || len(numeric) != len(texts) {
+		return nil, fmt.Errorf("invalid numeric embeddings")
+	}
+	seenNumeric := map[int]bool{}
+	dimension := 0
+	for _, row := range numeric {
+		if row.Index < 0 || row.Index >= len(texts) || seenNumeric[row.Index] {
+			return nil, fmt.Errorf("invalid embedding identity")
+		}
+		seenNumeric[row.Index] = true
+		if dimension == 0 {
+			dimension = len(row.Embedding)
+		} else if dimension != len(row.Embedding) {
+			return nil, fmt.Errorf("inconsistent embedding dimension")
+		}
+		if embeddingConfig != nil && embeddingConfig.Dimension > 0 && len(row.Embedding) != embeddingConfig.Dimension {
+			return nil, fmt.Errorf("unexpected embedding dimension")
+		}
+	}
+
+	var parsed localAIEmbeddingResponse
+	if err = json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	embeddings := make([]EmbeddingData, len(texts))
+	filled := make([]bool, len(texts))
+	for _, item := range parsed.Data {
+		if item.Index < 0 || item.Index >= len(texts) {
+			return nil, fmt.Errorf("localai: response index %d out of range for %d inputs", item.Index, len(texts))
+		}
+		if filled[item.Index] {
+			return nil, fmt.Errorf("localai: duplicate embedding index %d in response", item.Index)
+		}
+		embeddings[item.Index] = EmbeddingData{
+			Embedding: item.Embedding,
+			Index:     item.Index,
+		}
+		filled[item.Index] = true
+	}
+	for i, ok := range filled {
+		if !ok {
+			return nil, fmt.Errorf("localai: missing embedding for input index %d", i)
+		}
+	}
+
+	return embeddings, nil
+}
+
+type localAIRerankRequest struct {
+	Model     string   `json:"model"`
+	Query     string   `json:"query"`
+	Documents []string `json:"documents"`
+	TopN      int      `json:"top_n"`
+}
+
+type localAIRerankResponse struct {
+	Results []struct {
+		Index          int     `json:"index"`
+		RelevanceScore float64 `json:"relevance_score"`
+	} `json:"results"`
+}
+
+func (l *LocalAIModel) Rerank(modelName *string, query string, documents []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	if len(documents) > 0 && (modelName == nil || strings.TrimSpace(*modelName) == "") {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	if rerankConfig == nil {
+		rerankConfig = &RerankConfig{}
+	}
+	if rerankConfig.TopN < 0 {
+		return nil, fmt.Errorf("top_n must be nonnegative")
+	}
+	if len(documents) > 0 && (modelName == nil || strings.TrimSpace(*modelName) == "") {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	if rerankConfig != nil && rerankConfig.TopN < 0 {
+		return nil, fmt.Errorf("invalid numeric configuration")
+	}
+
+	if err := l.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+	if len(documents) == 0 {
+		return &RerankResponse{}, nil
+	}
+	if modelName == nil || *modelName == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+
+	baseURL, err := l.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/%s", strings.TrimSuffix(baseURL, "/"), l.baseModel.URLSuffix.Rerank)
+
+	topN := len(documents)
+	if rerankConfig != nil && rerankConfig.TopN > 0 {
+		topN = rerankConfig.TopN
+	}
+
+	reqBody := localAIRerankRequest{
+		Model:     *modelName,
+		Query:     query,
+		Documents: documents,
+		TopN:      topN,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if auth := BearerAuth(apiConfig); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
+	resp, err := l.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("LocalAI rerank API error: %s, body: %s", resp.Status, "[redacted]")
+	}
+
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil || envelope == nil || envelope["error"] != nil {
+		return nil, fmt.Errorf("invalid rerank response")
+	}
+	var numeric []RerankResult
+	expected := len(documents)
+	if rerankConfig != nil && rerankConfig.TopN > 0 && rerankConfig.TopN < expected {
+		expected = rerankConfig.TopN
+	}
+	if json.Unmarshal(envelope["results"], &numeric) != nil || len(numeric) != expected {
+		return nil, fmt.Errorf("invalid rerank count or values")
+	}
+	seenNumeric := map[int]bool{}
+	for _, row := range numeric {
+		if row.Index < 0 || row.Index >= len(documents) || seenNumeric[row.Index] {
+			return nil, fmt.Errorf("invalid rerank identity")
+		}
+		seenNumeric[row.Index] = true
+	}
+
+	var parsed localAIRerankResponse
+	if err = json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	rerankResponse := &RerankResponse{}
+	for _, r := range parsed.Results {
+		if r.Index < 0 || r.Index >= len(documents) {
+			return nil, fmt.Errorf("localai: rerank result index %d out of range for %d documents", r.Index, len(documents))
+		}
+		rerankResponse.Data = append(rerankResponse.Data, RerankResult{
+			Index:          r.Index,
+			RelevanceScore: r.RelevanceScore,
+		})
+	}
+
+	return rerankResponse, nil
+}
+
+func (l *LocalAIModel) ListModels(apiConfig *APIConfig) ([]ListModelResponse, error) {
+	if err := l.baseModel.APIConfigCheck(apiConfig); err != nil {
+		return nil, err
+	}
+
+	baseURL, err := l.baseModel.GetBaseURL(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/%s", strings.TrimSuffix(baseURL, "/"), l.baseModel.URLSuffix.Models)
+
+	ctx, cancel := context.WithTimeout(apiConfig.RequestContext(), nonStreamCallTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if auth := BearerAuth(apiConfig); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
+	resp, err := l.baseModel.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, "[redacted]")
+	}
+
+	// Parse response
+	var modelList ModelList
+	if err = json.Unmarshal(body, &modelList); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	if modelList.Models == nil {
+		return nil, fmt.Errorf("invalid models list format")
+	}
+
+	return ParseListModel(modelList), nil
+}
+
+func (l *LocalAIModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("no such method")
+}
+
+func (l *LocalAIModel) CheckConnection(apiConfig *APIConfig) error {
+	_, err := l.ListModels(apiConfig)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (l *LocalAIModel) TranscribeAudio(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig) (*ASRResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", l.Name())
+}
+
+func (l *LocalAIModel) TranscribeAudioWithSender(modelName *string, file *string, apiConfig *APIConfig, asrConfig *ASRConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", l.Name())
+}
+
+// AudioSpeech convert text to audio
+func (l *LocalAIModel) AudioSpeech(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig) (*TTSResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", l.Name())
+}
+
+func (l *LocalAIModel) AudioSpeechWithSender(modelName *string, audioContent *string, apiConfig *APIConfig, ttsConfig *TTSConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s, no such method", l.Name())
+}
+
+func (l *LocalAIModel) OCRFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, ocrConfig *OCRConfig) (*OCRFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", l.Name())
+}
+
+// ParseFile parse file
+func (l *LocalAIModel) ParseFile(modelName *string, content []byte, url *string, apiConfig *APIConfig, parseFileConfig *ParseFileConfig) (*ParseFileResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", l.Name())
+}
+
+func (l *LocalAIModel) ListTasks(apiConfig *APIConfig) ([]ListTaskStatus, error) {
+	return nil, fmt.Errorf("%s, no such method", l.Name())
+}
+
+func (l *LocalAIModel) ShowTask(taskID string, apiConfig *APIConfig) (*TaskResponse, error) {
+	return nil, fmt.Errorf("%s, no such method", l.Name())
+}

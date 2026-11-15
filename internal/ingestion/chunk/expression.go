@@ -18,6 +18,7 @@ package chunk
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"unicode"
@@ -31,7 +32,6 @@ type tokenType int
 
 const (
 	tokenEOF tokenType = iota
-	tokenInvalid
 	tokenIdentifier
 	tokenString
 	tokenNumber
@@ -94,15 +94,15 @@ func (l *lexer) next() token {
 
 	// Single-quoted string
 	if ch == '\'' {
-		l.pos++ // skip opening '
+		l.pos++
 		start := l.pos
 		for l.pos < len(l.input) && l.input[l.pos] != '\'' {
 			l.pos++
 		}
-		raw := string(l.input[start:l.pos])
 		if l.pos == len(l.input) {
-			return token{typ: tokenInvalid, raw: "unterminated string"}
+			return token{typ: tokenType(-1), raw: "unterminated string"}
 		}
+		raw := string(l.input[start:l.pos])
 		l.pos++
 		return token{typ: tokenString, raw: raw}
 	}
@@ -167,7 +167,7 @@ func (l *lexer) next() token {
 
 	// Unknown
 	l.pos++
-	return token{typ: tokenInvalid, raw: string(ch)}
+	return token{typ: tokenType(-1), raw: string(ch)}
 }
 
 func (l *lexer) peek() token {
@@ -281,18 +281,18 @@ func (p *parser) peek() token {
 func (p *parser) expect(typ tokenType) token {
 	tok := p.cur
 	if tok.typ != typ {
-		panic(syntaxError(fmt.Sprintf("expected token %d but got %d (%q)", typ, tok.typ, tok.raw)))
+		panic(fmt.Sprintf("expected token %d but got %d (%q)", typ, tok.typ, tok.raw))
 	}
 	p.advance()
 	return tok
 }
 
 func (p *parser) parse() Expr {
-	e := p.parseOr()
+	expression := p.parseOr()
 	if p.cur.typ != tokenEOF {
-		panic(syntaxError("unexpected token: " + p.cur.raw))
+		panic("trailing expression token")
 	}
-	return e
+	return expression
 }
 
 // or_expr → and_expr ("OR" and_expr)*
@@ -374,8 +374,8 @@ func (p *parser) parseValue() Expr {
 		return v
 	case tokenNumber:
 		f, err := strconv.ParseFloat(p.cur.raw, 64)
-		if err != nil {
-			panic(syntaxError("invalid number: " + p.cur.raw))
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			panic("invalid number")
 		}
 		p.advance()
 		return numberExpr{value: f}
@@ -385,12 +385,13 @@ func (p *parser) parseValue() Expr {
 	case tokenFalse:
 		p.advance()
 		return boolExpr{value: false}
-	case tokenIdentifier:
+	default:
+		if p.cur.typ != tokenIdentifier {
+			panic("expected expression value")
+		}
 		id := identifierExpr{name: p.cur.raw}
 		p.advance()
 		return id
-	default:
-		panic(syntaxError("expected value, got " + p.cur.raw))
 	}
 }
 
@@ -435,27 +436,27 @@ func Evaluate(exprStr string, vars map[string]interface{}) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return EvalCompiled(ast, vars)
+	res, err := eval(ast, vars)
+	if err != nil {
+		return false, fmt.Errorf("evaluate %q: %w", exprStr, err)
+	}
+	b, ok := toBool(res)
+	if !ok {
+		return false, fmt.Errorf("evaluate %q: result %v (%T) is not a boolean", exprStr, res, res)
+	}
+	return b, nil
 }
 
-type syntaxError string
-
-// CompileExpression fully validates syntax and returns errors for malformed input.
+// CompileExpression parses an expression string into a reusable AST.
 func CompileExpression(exprStr string) (expression Expr, err error) {
-	if len(exprStr) == 0 || len(exprStr) > 4096 {
-		return nil, fmt.Errorf("expression length must be 1..4096 bytes")
-	}
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			if syntax, ok := recovered.(syntaxError); ok {
-				expression = nil
-				err = fmt.Errorf("invalid expression: %s", syntax)
-			} else {
-				panic(recovered)
-			}
+		if problem := recover(); problem != nil {
+			expression = nil
+			err = fmt.Errorf("compile expression %q: %v", exprStr, problem)
 		}
 	}()
-	return newParser(exprStr).parse(), nil
+	p := newParser(exprStr)
+	return p.parse(), nil
 }
 
 // EvalCompiled evaluates a pre-compiled expression AST against variables.
@@ -504,14 +505,14 @@ func evalBinary(e binaryExpr, vars map[string]interface{}) (interface{}, error) 
 		return nil, err
 	}
 	if e.op == tokenAnd || e.op == tokenOr {
-		l, ok := left.(bool)
+		flag, ok := toBool(left)
 		if !ok {
-			return nil, fmt.Errorf("logical operator requires boolean operands")
+			return nil, fmt.Errorf("boolean operator requires boolean operand")
 		}
-		if e.op == tokenAnd && !l {
+		if e.op == tokenAnd && !flag {
 			return false, nil
 		}
-		if e.op == tokenOr && l {
+		if e.op == tokenOr && flag {
 			return true, nil
 		}
 	}
@@ -573,8 +574,17 @@ func evalUnary(e unaryExpr, vars map[string]interface{}) (interface{}, error) {
 }
 
 func toBool(v interface{}) (bool, bool) {
-	b, ok := v.(bool)
-	return b, ok
+	switch vv := v.(type) {
+	case bool:
+		return vv, true
+	case string:
+		return vv == "true" || vv == "TRUE" || vv == "1", true
+	case float64:
+		return vv != 0, true
+	case int:
+		return vv != 0, true
+	}
+	return false, false
 }
 
 func compareEq(a, b interface{}) bool {
@@ -659,3 +669,6 @@ func DetectLanguage(text string) string {
 func RuneCount(text string) int {
 	return len([]rune(text))
 }
+
+// Ensure math is used (for NaN etc.)
+var _ = math.NaN

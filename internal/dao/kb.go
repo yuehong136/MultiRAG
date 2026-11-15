@@ -19,8 +19,8 @@ package dao
 import (
 	"errors"
 	"fmt"
-	"path"
 	"multirag/internal/entity"
+	"path"
 
 	"strconv"
 	"strings"
@@ -260,8 +260,17 @@ func (dao *KnowledgebaseDAO) GetDetail(kbID string) (*entity.KnowledgebaseDetail
 // 3. If permission is "me", only owner tenant can access
 // 4. If permission is "team", user must be a member of the tenant
 func (dao *KnowledgebaseDAO) Accessible(kbID, userID string) bool {
+	if DB == nil || strings.TrimSpace(kbID) == "" || strings.TrimSpace(userID) == "" {
+		return false
+	}
+	var actorCount int64
+	if err := DB.Model(&entity.User{}).Where("id = ? AND status = ? AND is_active = ?", userID, "1", "1").Count(&actorCount).Error; err != nil || actorCount != 1 {
+		return false
+	}
 	var kb entity.Knowledgebase
-	err := DB.Where("id = ? AND status = ?", kbID, string(entity.StatusValid)).First(&kb).Error
+	err := DB.Model(&entity.Knowledgebase{}).
+		Joins("JOIN tenant ON tenant.id = knowledgebase.tenant_id AND tenant.status = ?", "1").
+		Where("knowledgebase.id = ? AND knowledgebase.status = ?", kbID, string(entity.StatusValid)).First(&kb).Error
 	if err != nil {
 		return false
 	}
@@ -272,13 +281,13 @@ func (dao *KnowledgebaseDAO) Accessible(kbID, userID string) bool {
 	}
 
 	// If permission is "me", only the owner can access
-	if kb.Permission == string(entity.TenantPermissionMe) {
+	if kb.Permission != string(entity.TenantPermissionTeam) {
 		return false
 	}
 
 	var count int64
 	err = DB.Table("user_tenant").
-		Where("tenant_id = ? AND user_id = ?", kb.TenantID, userID).
+		Where("tenant_id = ? AND user_id = ? AND status = ? AND role IN ?", kb.TenantID, userID, "1", []string{"owner", "normal", "admin"}).
 		Count(&count).Error
 
 	if err != nil {

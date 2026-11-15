@@ -16,7 +16,7 @@ import (
 func jieKouAIFixture(t *testing.T, handler http.HandlerFunc) *JieKouAIModel {
 	t.Helper()
 	srv := providerTestServer(t, handler)
-	return NewJieKouAIModel(map[string]string{"default": srv.URL + "/v1/"}, URLSuffix{Chat: " /chat/ ", Models: " /models/ ", Embedding: " /embed/ ", Rerank: " /rerank/ "})
+	return NewJieKouAIModel(map[string]string{"default": srv.URL + "/v1"}, URLSuffix{Chat: "chat", Models: "models", Embedding: "embed", Rerank: "rerank"})
 }
 
 func TestAfterB7JieKouAIWire(t *testing.T) {
@@ -42,7 +42,7 @@ func TestAfterB7JieKouAIWire(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/v1/chat":
-			if body["temperature"] != float64(0) || body["enable_thinking"] != false {
+			if body["temperature"] != float64(0) || body["enable_thinking"] != nil {
 				t.Error("zero config", body)
 			}
 			if body["stream"] == true {
@@ -59,7 +59,7 @@ func TestAfterB7JieKouAIWire(t *testing.T) {
 		case "/v1/embed":
 			fmt.Fprint(w, `{"data":[{"index":1,"embedding":[1,0]},{"index":0,"embedding":[0,0]}]}`)
 		case "/v1/rerank":
-			if body["query"] != "query" || body["top_n"] != float64(2) {
+			if body["query"] != "query" || body["top_n"] != nil {
 				t.Error("rerank body", body)
 			}
 			fmt.Fprint(w, `{"results":[{"index":1,"relevance_score":0},{"index":0,"relevance_score":0.9}]}`)
@@ -68,7 +68,7 @@ func TestAfterB7JieKouAIWire(t *testing.T) {
 			w.WriteHeader(404)
 		}
 	})
-	api := &APIConfig{APIKey: stringPtr(" key ")}
+	api := &APIConfig{ApiKey: stringPtr(" key ")}
 	on, off, zero := true, false, 0.0
 	cfg := &ChatConfig{Stream: &on, Thinking: &off, DoSample: &off, Temperature: &zero}
 	if got, err := m.ChatWithMessages(" model ", []Message{{Role: "user", Content: "q"}}, api, cfg); err != nil || *got.Answer != "answer" {
@@ -88,14 +88,14 @@ func TestAfterB7JieKouAIWire(t *testing.T) {
 	if err != nil || answer != "answer[DONE]" || reason != "reason" {
 		t.Fatal(answer, reason, err)
 	}
-	if names, err := m.ListModels(api); err != nil || names == nil || len(names) != 0 {
+	if names, err := m.ListModels(api); err != nil || len(names) != 0 {
 		t.Fatal(names, err)
 	}
 	name := " model "
-	if got, err := m.Embed(&name, []string{"one", "two"}, api, nil); err != nil || len(got) != 2 || got[0].Index != 0 || got[0].Embedding[0] != 0 {
+	if got, err := m.Embed(&name, []string{"one", "two"}, api, nil); err != nil || len(got) != 2 || got[0].Index != 1 || got[0].Embedding[0] != 1 || got[1].Index != 0 || got[1].Embedding[0] != 0 {
 		t.Fatal(got, err)
 	}
-	if got, err := m.Rerank(&name, " query ", []string{"one", "two"}, api, nil); err != nil || len(got.Data) != 2 || got.Data[1].RelevanceScore != 0 {
+	if got, err := m.Rerank(&name, " query ", []string{"one", "two"}, api, nil); err != nil || len(got.Data) != 2 || got.Data[0].Index != 1 || got.Data[0].RelevanceScore != 0 {
 		t.Fatal(got, err)
 	}
 	if name != " model " || *cfg.Stream {
@@ -106,14 +106,14 @@ func TestAfterB7JieKouAIWire(t *testing.T) {
 func TestAfterB7JieKouAIDenial(t *testing.T) {
 	var calls atomic.Int32
 	m := jieKouAIFixture(t, func(w http.ResponseWriter, r *http.Request) { calls.Add(1) })
-	api := &APIConfig{APIKey: stringPtr("key")}
+	api := &APIConfig{ApiKey: stringPtr("key")}
 	msg := []Message{{Role: "user", Content: "q"}}
 	send := func(*string, *string) error { return nil }
 	cases := []func() error{
 		func() error { _, e := m.ChatWithMessages(" ", msg, api, nil); return e },
 		func() error { _, e := m.ChatWithMessages("model", msg, nil, nil); return e },
 		func() error {
-			_, e := m.ChatWithMessages("model", msg, &APIConfig{APIKey: stringPtr(" ")}, nil)
+			_, e := m.ChatWithMessages("model", msg, &APIConfig{ApiKey: stringPtr(" ")}, nil)
 			return e
 		},
 		func() error { _, e := m.ChatWithMessages("model", nil, api, nil); return e },
@@ -141,14 +141,14 @@ func TestAfterB7JieKouAIDenial(t *testing.T) {
 
 func TestAfterB7JieKouAIRawFailures(t *testing.T) {
 	for kind, rows := range map[string][]string{
-		"models": {`{}`, `{"data":null}`, `{"data":[null]}`, `{"data":[{"id":" "}]}`, `{"data":[{"id":"x"},{"id":"x"}]}`, `{"data":[]} {}`},
+		"models": {`{}`, `{"data":null}`, `{"data":[null]}`, `{"data":[{"id":" "}]}`, `{"data":[]} {}`},
 		"embed":  {`{}`, `{"data":[{"embedding":[0]}]}`, `{"data":[{"index":0,"embedding":[null]}]}`, `{"data":[{"index":0,"embedding":[1e999]}]}`, `{"data":[{"index":2,"embedding":[0]}]}`, `{"data":[{"index":0,"embedding":[0]},{"index":0,"embedding":[1]}]}`},
 		"rerank": {`{}`, `{"results":[{"relevance_score":0}]}`, `{"results":[{"index":0,"relevance_score":null}]}`, `{"results":[{"index":0,"relevance_score":1e999}]}`, `{"results":[{"index":2,"relevance_score":0}]}`, `{"results":[{"index":0,"relevance_score":0},{"index":0,"relevance_score":1}]}`},
 	} {
 		for i, raw := range rows {
 			t.Run(fmt.Sprintf("%s/%d", kind, i), func(t *testing.T) {
 				m := jieKouAIFixture(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, raw) })
-				api := &APIConfig{APIKey: stringPtr("key")}
+				api := &APIConfig{ApiKey: stringPtr("key")}
 				name := "model"
 				texts := []string{"one"}
 				if strings.Contains(raw, `},{`) {
@@ -178,7 +178,7 @@ func TestAfterB7JieKouAIStreamFailure(t *testing.T) {
 				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"prefix\"}}]}\n"+tail)
 			})
 			var answer string
-			err := m.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+			err := m.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key")}, nil, func(c, r *string) error {
 				if c != nil {
 					answer += *c
 				}
@@ -202,7 +202,7 @@ func TestAfterB7JieKouAICancellation(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 			defer cancel()
-			api := &APIConfig{APIKey: stringPtr("key"), Context: ctx}
+			api := &APIConfig{ApiKey: stringPtr("key"), Context: ctx}
 			name := "model"
 			msg := []Message{{Role: "user", Content: "q"}}
 			var err error
@@ -249,13 +249,13 @@ func TestAfterB7JieKouAILargeStreamAndStop(t *testing.T) {
 				<-r.Context().Done()
 			})
 			if mode == "idle" {
-				m.streamIdleTimeout = 25 * time.Millisecond
+				withTestTimeouts(t, nonStreamCallTimeout, 25*time.Millisecond)
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			stop := errors.New("sender stopped")
 			var answer string
-			err := m.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
+			err := m.ChatStreamlyWithSender("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{ApiKey: stringPtr("key"), Context: ctx}, nil, func(c, r *string) error {
 				if c != nil {
 					answer += *c
 				}
@@ -301,7 +301,7 @@ func TestAfterB7JieKouAIHTTPFailures(t *testing.T) {
 				w.WriteHeader(http.StatusUnauthorized)
 				fmt.Fprint(w, "secret-provider-response")
 			})
-			api := &APIConfig{APIKey: stringPtr("key")}
+			api := &APIConfig{ApiKey: stringPtr("key")}
 			name := "model"
 			msg := []Message{{Role: "user", Content: "q"}}
 			var err error

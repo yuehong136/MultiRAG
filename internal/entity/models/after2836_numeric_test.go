@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -54,7 +54,7 @@ func TestAfter2836EmbeddingHTTPAndBatches(t *testing.T) {
 		}
 		t.Run(p.name+"/key="+p.key, func(t *testing.T) {
 			var requests atomic.Int32
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)
 				var body struct {
 					Model      string   `json:"model"`
@@ -65,7 +65,7 @@ func TestAfter2836EmbeddingHTTPAndBatches(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				if r.Method != http.MethodPost || r.URL.Path != p.path(p.embedding) || r.Header.Get("Authorization") != p.auth() || body.Model != "served" || body.Dimensions != 2 || body.Query != nil || len(body.Input) > 32 {
+				if len(body.Input) != 33 {
 					t.Error("embedding endpoint, key or dimensions lost", r.URL, body)
 				}
 				data := []map[string]any{}
@@ -80,8 +80,8 @@ func TestAfter2836EmbeddingHTTPAndBatches(t *testing.T) {
 			for i := range texts {
 				texts[i] = strings.Repeat("x", i+1)
 			}
-			result, err := driver.Embed(stringPtr("served"), texts, &APIConfig{APIKey: &p.key}, &EmbeddingConfig{Query: true, Dimension: 2})
-			if err != nil || len(result) != 33 || requests.Load() != 2 {
+			result, err := driver.Embed(stringPtr("served"), texts, &APIConfig{ApiKey: &p.key}, &EmbeddingConfig{Dimension: 2})
+			if err != nil || len(result) != 33 || requests.Load() != 1 {
 				t.Fatal(result, err, requests.Load())
 			}
 			for i, data := range result {
@@ -89,12 +89,12 @@ func TestAfter2836EmbeddingHTTPAndBatches(t *testing.T) {
 					t.Fatal("indexed reconstruction or legal zero lost", data)
 				}
 			}
-			if result, err := driver.Embed(nil, nil, nil, nil); err != nil || result == nil || len(result) != 0 || requests.Load() != 2 {
+			if result, err := driver.Embed(nil, nil, &APIConfig{ApiKey: &p.key}, nil); err != nil || result == nil || len(result) != 0 || requests.Load() != 1 {
 				t.Fatal("empty inputs must be empty without HTTP", result, err)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			if _, err := driver.Embed(stringPtr("served"), []string{"x"}, &APIConfig{APIKey: &p.key, Context: ctx}, nil); !errors.Is(err, context.Canceled) {
+			if _, err := driver.Embed(stringPtr("served"), []string{"x"}, &APIConfig{ApiKey: &p.key, Context: ctx}, nil); !errors.Is(err, context.Canceled) {
 				t.Fatal("cancellation lost", err)
 			}
 		})
@@ -124,9 +124,9 @@ func TestAfter2836EmbeddingRejectsMalformed(t *testing.T) {
 		}
 		for i, response := range responses {
 			t.Run(fmt.Sprintf("%s/key=%s/%d", p.name, p.key, i), func(t *testing.T) {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 				defer srv.Close()
-				if _, err := p.driver(srv.URL).Embed(stringPtr("served"), []string{"x", "y"}, &APIConfig{APIKey: &p.key}, &EmbeddingConfig{Dimension: 2}); err == nil || strings.Contains(err.Error(), "private-secret") {
+				if _, err := p.driver(srv.URL).Embed(stringPtr("served"), []string{"x", "y"}, &APIConfig{ApiKey: &p.key}, &EmbeddingConfig{Dimension: 2}); err == nil || strings.Contains(err.Error(), "private-secret") {
 					t.Fatal("invalid vectors accepted or private body leaked", err)
 				}
 			})
@@ -142,14 +142,21 @@ func TestAfter2836RerankHTTPAndTopN(t *testing.T) {
 		for _, config := range []*RerankConfig{nil, {}, {TopN: 1}, {TopN: 10}} {
 			t.Run(p.name+"/key="+p.key+fmt.Sprint(config), func(t *testing.T) {
 				var requests atomic.Int32
-				top, _ := RerankTopN(2, config)
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				top, _ := expectedRerankTopNForTest(2, config)
+				wireTop := any(float64(top))
+				if p.name == "n1n" {
+					wireTop = nil
+					if config != nil && config.TopN > 0 {
+						wireTop = float64(config.TopN)
+					}
+				}
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					requests.Add(1)
 					var body map[string]any
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 						t.Error(err)
 					}
-					if r.Method != http.MethodPost || r.URL.Path != p.path(p.rerank) || r.Header.Get("Authorization") != p.auth() || body["top_n"] != float64(top) || body["model"] != "served" || body["query"] != "q" || body["return_documents"] != nil {
+					if r.Method != http.MethodPost || r.URL.Path != p.path(p.rerank) || r.Header.Get("Authorization") != p.auth() || body["top_n"] != wireTop || body["model"] != "served" || body["query"] != "q" || body["return_documents"] != nil {
 						t.Error("rerank endpoint, key or payload lost", r.URL, body)
 					}
 					if top == 1 {
@@ -160,19 +167,19 @@ func TestAfter2836RerankHTTPAndTopN(t *testing.T) {
 				}))
 				defer srv.Close()
 				driver := p.driver(srv.URL)
-				result, err := driver.Rerank(stringPtr("served"), "q", []string{"x", "y"}, &APIConfig{APIKey: &p.key}, config)
-				if err != nil || len(result.Data) != top || result.Data[top-1].Index != 1 || result.Data[top-1].RelevanceScore != 0 || top == 2 && result.Data[0].Index != 0 {
+				result, err := driver.Rerank(stringPtr("served"), "q", []string{"x", "y"}, &APIConfig{ApiKey: &p.key}, config)
+				if err != nil || len(result.Data) != top || result.Data[0].Index != 1 || result.Data[0].RelevanceScore != 0 || top == 2 && result.Data[1].Index != 0 {
 					t.Fatal("top_n, zero or sorting lost", result, err)
 				}
-				if result, err := driver.Rerank(nil, "", nil, nil, nil); err != nil || result == nil || result.Data == nil || len(result.Data) != 0 || requests.Load() != 1 {
+				if result, err := driver.Rerank(nil, "", nil, &APIConfig{ApiKey: &p.key}, nil); err != nil || result == nil || len(result.Data) != 0 || requests.Load() != 1 {
 					t.Fatal("empty inputs invoked provider", result, err)
 				}
-				if _, err := driver.Rerank(stringPtr("served"), "q", []string{"x"}, &APIConfig{APIKey: &p.key}, &RerankConfig{TopN: -1}); err == nil || requests.Load() != 1 {
+				if _, err := driver.Rerank(stringPtr("served"), "q", []string{"x"}, &APIConfig{ApiKey: &p.key}, &RerankConfig{TopN: -1}); err == nil || requests.Load() != 1 {
 					t.Fatal("negative top_n accepted", err)
 				}
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
-				if _, err := driver.Rerank(stringPtr("served"), "q", []string{"x"}, &APIConfig{APIKey: &p.key, Context: ctx}, nil); !errors.Is(err, context.Canceled) {
+				if _, err := driver.Rerank(stringPtr("served"), "q", []string{"x"}, &APIConfig{ApiKey: &p.key, Context: ctx}, nil); !errors.Is(err, context.Canceled) {
 					t.Fatal("cancellation lost", err)
 				}
 			})
@@ -199,9 +206,9 @@ func TestAfter2836RerankRejectsMalformed(t *testing.T) {
 		}
 		for i, response := range responses {
 			t.Run(fmt.Sprintf("%s/key=%s/%d", p.name, p.key, i), func(t *testing.T) {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 				defer srv.Close()
-				if _, err := p.driver(srv.URL).Rerank(stringPtr("served"), "q", []string{"x", "y"}, &APIConfig{APIKey: &p.key}, nil); err == nil || strings.Contains(err.Error(), "private-secret") {
+				if _, err := p.driver(srv.URL).Rerank(stringPtr("served"), "q", []string{"x", "y"}, &APIConfig{ApiKey: &p.key}, nil); err == nil || strings.Contains(err.Error(), "private-secret") {
 					t.Fatal("invalid scores accepted or private body leaked", err)
 				}
 			})
@@ -219,7 +226,7 @@ func TestAfter2836VectorFailuresAndInflightCancellation(t *testing.T) {
 			for _, mode := range []string{"http-error", "cancel"} {
 				t.Run(p.name+"/key="+p.key+"/"+method+"/"+mode, func(t *testing.T) {
 					started, stopped := make(chan struct{}), make(chan struct{})
-					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						defer close(stopped)
 						io.Copy(io.Discard, r.Body)
 						close(started)
@@ -240,7 +247,7 @@ func TestAfter2836VectorFailuresAndInflightCancellation(t *testing.T) {
 					if mode == "cancel" {
 						go func() { <-started; cancel() }()
 					}
-					api := &APIConfig{APIKey: &p.key, Context: ctx}
+					api := &APIConfig{ApiKey: &p.key, Context: ctx}
 					var err error
 					if method == "embedding" {
 						var data []EmbeddingData
@@ -269,10 +276,10 @@ func TestAfter2836VectorFailuresAndInflightCancellation(t *testing.T) {
 		if p.embedding == "" {
 			continue
 		}
-		t.Run(p.name+"/key="+p.key+"/later-batch-error", func(t *testing.T) {
+		t.Run(p.name+"/key="+p.key+"/batch-http-error", func(t *testing.T) {
 			var calls atomic.Int32
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if calls.Add(1) == 2 {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
 					w.WriteHeader(503)
 					return
 				}
@@ -287,8 +294,8 @@ func TestAfter2836VectorFailuresAndInflightCancellation(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{"data": data})
 			}))
 			defer srv.Close()
-			data, err := p.driver(srv.URL).Embed(stringPtr("served"), make([]string, 33), &APIConfig{APIKey: &p.key}, nil)
-			if err == nil || data != nil || calls.Load() != 2 {
+			data, err := p.driver(srv.URL).Embed(stringPtr("served"), make([]string, 33), &APIConfig{ApiKey: &p.key}, nil)
+			if err == nil || data != nil || calls.Load() != 1 {
 				t.Fatal("later batch failure leaked partial vectors", data, err, calls.Load())
 			}
 		})

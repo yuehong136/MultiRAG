@@ -18,22 +18,21 @@ package service
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
-	"multirag/internal/common"
+	"multirag/internal/engine/redis"
+	"strings"
+	"time"
+
 	"multirag/internal/dao"
 	"multirag/internal/engine"
-	redisengine "multirag/internal/engine/redis"
 	"multirag/internal/server"
 	"multirag/internal/storage"
 	"multirag/internal/utility"
-	"time"
 )
 
 // SystemService system service
-type SystemService struct {
-	healthChecks map[string]func(context.Context) error
-}
+type SystemService struct{}
 
 // NewSystemService create system service
 func NewSystemService() *SystemService {
@@ -49,8 +48,12 @@ type ConfigResponse struct {
 // GetConfig get system configuration
 func (s *SystemService) GetConfig() (*ConfigResponse, error) {
 	cfg := server.GetConfig()
+	registerEnabled := 1
+	if !cfg.Authentication.RegisterEnabled {
+		registerEnabled = 0
+	}
 	return &ConfigResponse{
-		RegisterEnabled:      cfg.RegisterEnabled,
+		RegisterEnabled:      registerEnabled,
 		DisablePasswordLogin: cfg.Authentication.DisablePasswordLogin,
 	}, nil
 }
@@ -60,20 +63,11 @@ type VersionResponse struct {
 	Version string `json:"version"`
 }
 
-// GetVersion get MultiRAG version
-func (s *SystemService) GetVersion() (*VersionResponse, error) {
-	version := utility.GetMultiRAGVersion()
-	return &VersionResponse{
-		Version: version,
-	}, nil
-}
-
-// HealthzMeta includes timing and sanitized dependency failures.
 type HealthzMeta struct {
 	Elapsed string `json:"elapsed"`
-	Reason  string `json:"reason,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
+
 type HealthzResponse struct {
 	DB        string                 `json:"db"`
 	Redis     string                 `json:"redis"`
@@ -83,96 +77,314 @@ type HealthzResponse struct {
 	Meta      map[string]HealthzMeta `json:"_meta,omitempty"`
 }
 
-// Healthz reports every required dependency; /health remains a liveness endpoint.
-func (s *SystemService) Healthz(ctx context.Context) (*HealthzResponse, bool) {
-	checks := s.healthChecks
-	if checks == nil {
-		checks = map[string]func(context.Context) error{
-			"db": func(ctx context.Context) error {
-				if dao.DB == nil {
-					return errHealthUninitialized
-				}
-				db, err := dao.DB.DB()
-				if err != nil {
-					return err
-				}
-				return db.PingContext(ctx)
-			},
-			"redis": func(ctx context.Context) error {
-				if redisengine.Get() == nil {
-					return errHealthUninitialized
-				}
-				return redisengine.Get().PingContext(ctx)
-			},
-			"doc_engine": func(ctx context.Context) error { return documentEngineHealth(ctx, engine.Get()) },
-			"storage": func(ctx context.Context) error {
-				if storage.GetStorageFactory().GetStorage() == nil {
-					return errHealthUninitialized
-				}
-				return storage.Readiness(ctx)
-			},
-		}
-	}
-	states := map[string]string{}
-	meta := map[string]HealthzMeta{}
-	allOK := true
-	for _, key := range []string{"db", "redis", "doc_engine", "storage"} {
-		start := time.Now()
-		bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
-		check := checks[key]
-		var err error
-		if check == nil {
-			err = errHealthUninitialized
-		} else {
-			err = check(bounded)
-		}
-		if bounded.Err() != nil {
-			err = bounded.Err()
-		}
-		cancel()
-		states[key] = "ok"
-		m := HealthzMeta{Elapsed: fmt.Sprintf("%.1f", float64(time.Since(start).Microseconds())/1000)}
-		if err != nil {
-			allOK = false
-			states[key] = "nok"
-			m.Error = key + " health check failed"
-			m.Reason = "probe_failed"
-			switch {
-			case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-				m.Reason = "timeout"
-			case errors.Is(err, errHealthUnsupported):
-				m.Reason = "unsupported"
-			case errors.Is(err, errHealthUninitialized):
-				m.Reason = "uninitialized"
-			}
-		}
-		meta[key] = m
-	}
-	status := "ok"
-	if !allOK {
-		status = "nok"
-	}
-	return &HealthzResponse{DB: states["db"], Redis: states["redis"], DocEngine: states["doc_engine"], Storage: states["storage"], Status: status, Meta: meta}, allOK
+// GetVersion get RAGFlow version
+func (s *SystemService) GetVersion() (*VersionResponse, error) {
+	version := utility.GetRAGFlowVersion()
+	return &VersionResponse{
+		Version: version,
+	}, nil
 }
 
-var errHealthUnsupported = errors.New("active health probe unavailable")
-var errHealthUninitialized = errors.New("dependency not initialized")
+// ComponentStatus describes one dependency health check.
+type ComponentStatus map[string]interface{}
 
-func documentEngineHealth(ctx context.Context, store engine.DocEngine) error {
-	if store == nil {
-		return errHealthUninitialized
-	}
-	if kind, ok := store.(interface{ Type() string }); ok && kind.Type() == "infinity" {
-		return errHealthUnsupported
-	}
-	return store.Ping(ctx)
+// StatusResponse system status response.
+type StatusResponse struct {
+	DocEngine              ComponentStatus          `json:"doc_engine"`
+	Storage                ComponentStatus          `json:"storage"`
+	Database               ComponentStatus          `json:"database"`
+	Redis                  ComponentStatus          `json:"redis"`
+	TaskExecutorHeartbeats map[string][]interface{} `json:"task_executor_heartbeats"`
 }
 
-// GetPublicConfigs returns an explicit allowlist; credentials and arbitrary URLs never serialize.
-func (s *SystemService) GetPublicConfigs() (map[string]any, error) {
+// GetStatus gets health status for core system dependencies.
+func (s *SystemService) GetStatus() (*StatusResponse, error) {
+	return &StatusResponse{
+		DocEngine:              s.getDocEngineStatus(),
+		Storage:                s.getStorageStatus(),
+		Database:               s.getDatabaseStatus(),
+		Redis:                  s.getRedisStatus(),
+		TaskExecutorHeartbeats: s.getTaskExecutorHeartbeats(),
+	}, nil
+}
+
+func (s *SystemService) getDocEngineStatus() ComponentStatus {
 	cfg := server.GetConfig()
-	if cfg == nil {
-		return nil, errors.New("configuration unavailable")
+	docEngineType := ""
+	if cfg != nil {
+		docEngineType = strings.ToLower(string(cfg.DocEngine.Type))
 	}
-	return map[string]any{"RegisterEnabled": cfg.RegisterEnabled, "Language": cfg.Language, "Log": map[string]any{"Level": common.GetLevel()}, "Database": map[string]any{"Driver": cfg.Database.Driver}, "DocEngine": map[string]any{"Type": cfg.DocEngine.Type}, "StorageEngine": map[string]any{"Type": cfg.StorageEngine.Type}}, nil
+
+	startedAt := time.Now()
+	docEngine := engine.Get()
+	if docEngine == nil {
+		return ComponentStatus{
+			"type":    docEngineType,
+			"status":  "red",
+			"elapsed": elapsedMilliseconds(startedAt),
+			"error":   "doc engine not initialized",
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := docEngine.Ping(ctx); err != nil {
+		return ComponentStatus{
+			"type":    docEngine.GetType(),
+			"status":  "red",
+			"elapsed": elapsedMilliseconds(startedAt),
+			"error":   err.Error(),
+		}
+	}
+
+	return ComponentStatus{
+		"type":    docEngine.GetType(),
+		"status":  "green",
+		"elapsed": elapsedMilliseconds(startedAt),
+	}
+}
+
+func (s *SystemService) getStorageStatus() ComponentStatus {
+	cfg := server.GetConfig()
+	storageType := ""
+	if cfg != nil {
+		storageType = strings.ToLower(string(cfg.StorageEngine.Type))
+	}
+
+	startedAt := time.Now()
+	factory := storage.GetStorageFactory().GetStorage()
+	if factory == nil {
+		return ComponentStatus{
+			"type":    storageType,
+			"status":  "red",
+			"elapsed": elapsedMilliseconds(startedAt),
+			"error":   "storage not initialized",
+		}
+	}
+
+	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if !factory.Health() {
+		return ComponentStatus{
+			"type":    storageType,
+			"status":  "red",
+			"elapsed": elapsedMilliseconds(startedAt),
+			"error":   "storage health check failed",
+		}
+	}
+
+	return ComponentStatus{
+		"type":    storageType,
+		"status":  "green",
+		"elapsed": elapsedMilliseconds(startedAt),
+	}
+}
+
+func (s *SystemService) getDatabaseStatus() ComponentStatus {
+	cfg := server.GetConfig()
+	databaseType := ""
+	if cfg != nil {
+		databaseType = cfg.Database.Driver
+	}
+
+	startedAt := time.Now()
+	if dao.DB == nil {
+		return ComponentStatus{
+			"type":    databaseType,
+			"status":  "red",
+			"elapsed": elapsedMilliseconds(startedAt),
+			"error":   "database not initialized",
+		}
+	}
+
+	sqlDB, err := dao.GetDB().DB()
+	if err != nil {
+		return ComponentStatus{
+			"type":    databaseType,
+			"status":  "red",
+			"elapsed": elapsedMilliseconds(startedAt),
+			"error":   err.Error(),
+		}
+	}
+
+	if err = sqlDB.Ping(); err != nil {
+		return ComponentStatus{
+			"type":    databaseType,
+			"status":  "red",
+			"elapsed": elapsedMilliseconds(startedAt),
+			"error":   err.Error(),
+		}
+	}
+
+	return ComponentStatus{
+		"type":    databaseType,
+		"status":  "green",
+		"elapsed": elapsedMilliseconds(startedAt),
+	}
+}
+
+func (s *SystemService) getRedisStatus() ComponentStatus {
+	startedAt := time.Now()
+	redisClient := redis.Get()
+	if redisClient == nil {
+		return ComponentStatus{
+			"status":  "red",
+			"elapsed": elapsedMilliseconds(startedAt),
+			"error":   "redis not initialized",
+		}
+	}
+	if !redisClient.Health() {
+		return ComponentStatus{
+			"status":  "red",
+			"elapsed": elapsedMilliseconds(startedAt),
+			"error":   "Lost connection!",
+		}
+	}
+
+	return ComponentStatus{
+		"status":  "green",
+		"elapsed": elapsedMilliseconds(startedAt),
+	}
+}
+
+func (s *SystemService) getTaskExecutorHeartbeats() map[string][]interface{} {
+	heartbeatsByExecutor := map[string][]interface{}{}
+	redisClient := redis.Get()
+	if redisClient == nil {
+		return heartbeatsByExecutor
+	}
+
+	taskExecutorIDs, err := redisClient.SMembers("TASKEXE")
+	if err != nil {
+		return heartbeatsByExecutor
+	}
+
+	now := float64(time.Now().Unix())
+	for _, taskExecutorID := range taskExecutorIDs {
+		rawHeartbeats, err := redisClient.ZRangeByScore(taskExecutorID, now-60*30, now)
+		if err != nil {
+			continue
+		}
+
+		heartbeats := make([]interface{}, 0, len(rawHeartbeats))
+		for _, rawHeartbeat := range rawHeartbeats {
+			var heartbeat interface{}
+			if err := json.Unmarshal([]byte(rawHeartbeat), &heartbeat); err != nil {
+				heartbeats = append(heartbeats, rawHeartbeat)
+				continue
+			}
+			heartbeats = append(heartbeats, heartbeat)
+		}
+		heartbeatsByExecutor[taskExecutorID] = heartbeats
+	}
+
+	return heartbeatsByExecutor
+}
+
+func elapsedMilliseconds(startedAt time.Time) string {
+	return fmt.Sprintf("%.1f", float64(time.Since(startedAt).Microseconds())/1000.0)
+}
+
+func okNok(ok bool) string {
+	if ok {
+		return "ok"
+	}
+	return "nok"
+}
+
+func timedHealthCheck(check func() error) (bool, HealthzMeta) {
+	start := time.Now()
+	err := check()
+	meta := HealthzMeta{
+		Elapsed: fmt.Sprintf("%.1f", float64(time.Since(start).Microseconds())/1000.0),
+	}
+	if err != nil {
+		meta.Error = err.Error()
+		return false, meta
+	}
+	return true, meta
+}
+
+// Healthz runs lightweight dependency checks for /api/v1/system/healthz.
+func (s *SystemService) Healthz(ctx context.Context) (*HealthzResponse, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	meta := map[string]HealthzMeta{}
+
+	dbOK, dbMeta := timedHealthCheck(func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if dao.DB == nil {
+			return fmt.Errorf("database is not initialized")
+		}
+		sqlDB, err := dao.DB.DB()
+		if err != nil {
+			return err
+		}
+		return sqlDB.PingContext(ctx)
+	})
+	if !dbOK {
+		dbMeta.Error = "db health check failed"
+		meta["db"] = dbMeta
+	}
+
+	redisOK, redisMeta := timedHealthCheck(func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		redisClient := redis.Get()
+		if redisClient == nil || !redisClient.Health() {
+			return fmt.Errorf("redis is not healthy")
+		}
+		return nil
+	})
+	if !redisOK {
+		redisMeta.Error = "redis health check failed"
+		meta["redis"] = redisMeta
+	}
+
+	docOK, docMeta := timedHealthCheck(func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		docEngine := engine.Get()
+		if docEngine == nil {
+			return fmt.Errorf("document engine is not initialized")
+		}
+		return docEngine.Ping(ctx)
+	})
+	if !docOK {
+		docMeta.Error = "doc_engine health check failed"
+		meta["doc_engine"] = docMeta
+	}
+
+	storageOK, storageMeta := timedHealthCheck(func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		store := storage.GetStorageFactory().GetStorage()
+		if store == nil || !store.Health() {
+			return fmt.Errorf("storage is not healthy")
+		}
+		return nil
+	})
+	if !storageOK {
+		storageMeta.Error = "storage health check failed"
+		meta["storage"] = storageMeta
+	}
+
+	allOK := dbOK && redisOK && docOK && storageOK
+	result := &HealthzResponse{
+		DB:        okNok(dbOK),
+		Redis:     okNok(redisOK),
+		DocEngine: okNok(docOK),
+		Storage:   okNok(storageOK),
+		Status:    okNok(allOK),
+	}
+	if len(meta) > 0 {
+		result.Meta = meta
+	}
+	return result, allOK
 }

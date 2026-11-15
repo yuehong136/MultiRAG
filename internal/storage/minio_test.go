@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,12 +33,18 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"multirag/internal/server"
+	"multirag/internal/testsupport"
 )
 
 // Test credentials are explicit and separate from the application's storage.
 // Keep this file outside Git and restrict its permissions to the current user.
 func getMinioConfig() (*server.MinioConfig, error) {
 	path := os.Getenv("MULTIRAG_GO_TEST_MINIO_CONFIG")
+	alignment := false
+	if path == "" {
+		path = os.Getenv("MULTIRAG_GO_ALIGNMENT_CONFIG")
+		alignment = path != ""
+	}
 	if path == "" {
 		return nil, fmt.Errorf("set MULTIRAG_GO_TEST_MINIO_CONFIG to a private JSON test configuration")
 	}
@@ -46,7 +53,13 @@ func getMinioConfig() (*server.MinioConfig, error) {
 		return nil, fmt.Errorf("read MinIO test config: %w", err)
 	}
 	var config server.MinioConfig
-	if err := json.Unmarshal(data, &config); err != nil {
+	if alignment {
+		var all struct{ MinIO server.MinioConfig }
+		if err := json.Unmarshal(data, &all); err != nil {
+			return nil, fmt.Errorf("decode private test config")
+		}
+		config = all.MinIO
+	} else if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("decode MinIO test config: %w", err)
 	}
 	if config.Host == "" || config.User == "" || config.Password == "" {
@@ -82,14 +95,26 @@ func newTestMinioStorage(t *testing.T) *MinioStorage {
 func testMinioBucket(t *testing.T, storage *MinioStorage) string {
 	t.Helper()
 	bucket := "multirag-go-test-" + strings.ToLower(rand.Text())
+	journal := testsupport.NewCase(t)
+	journal.Event("reserve-storage-bucket", map[string]interface{}{"bucket": bucket, "key_scope": "test-owned-bucket"})
 	t.Cleanup(func() {
 		if err := storage.RemoveBucket(bucket); err != nil {
-			response := minio.ToErrorResponse(err)
-			if response.Code != "NoSuchBucket" {
+			var response minio.ErrorResponse
+			if !errors.As(err, &response) || response.Code != "NoSuchBucket" {
 				t.Errorf("cleanup owned MinIO bucket: %v", err)
 			}
 		}
-		if storage.BucketExists(bucket) {
+		reader, readerErr := NewMinioStorage(storage.config)
+		if readerErr != nil {
+			t.Error("create cleanup readback client")
+			return
+		}
+		readCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		exists, readErr := reader.client.BucketExists(readCtx, bucket)
+		absent := readErr == nil && !exists
+		journal.Event("cleanup-storage-bucket-readback", map[string]interface{}{"bucket": bucket, "absent": absent})
+		if !absent {
 			t.Errorf("owned MinIO bucket remains after cleanup")
 		}
 	})
@@ -677,6 +702,7 @@ func TestMinioTestConfigIsolation(t *testing.T) {
 	}
 	t.Run("missing config", func(t *testing.T) {
 		t.Setenv("MULTIRAG_GO_TEST_MINIO_CONFIG", "")
+		t.Setenv("MULTIRAG_GO_ALIGNMENT_CONFIG", "")
 		if _, err := getMinioConfig(); err == nil {
 			t.Fatal("test config fell back to application credentials")
 		}

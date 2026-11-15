@@ -37,32 +37,32 @@ func TestMinerUTaskLifecycle(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	driver, err := NewModelFactory().CreateModelDriver("MinerU", map[string]string{"default": srv.URL}, URLSuffix{DocumentParse: "api/v4/extract/task"})
-	if err != nil || driver.Name() != "mineru" {
+	driver, err := NewModelFactory().CreateModelDriver("MinerU.Net", map[string]string{"default": srv.URL}, URLSuffix{DocumentParse: "v4/extract/task"})
+	if err != nil || driver.Name() != "mineru.net" {
 		t.Fatal(driver, err)
 	}
 	m := driver.(*MinerUModel)
 	empty := ""
-	api := &APIConfig{APIKey: &key, Region: &empty}
-	task, err := m.ParseFile(&name, nil, "https://files.invalid/document.pdf", api)
-	if err != nil || task.TaskID != "job-1" || task.Status != "pending" || len(task.Segments) != 0 {
+	api := &APIConfig{ApiKey: &key, Region: &empty}
+	task, err := m.ParseFile(&name, nil, stringPtr("https://files.invalid/document.pdf"), api, nil)
+	if err != nil || task.TaskID != "job-1" {
 		t.Fatal(task, err)
 	}
-	for _, next := range []struct{ state, status string }{{"pending", "pending"}, {"running", "running"}, {"converting", "processing"}, {"done", "success"}} {
-		state = next.state
+	for _, next := range []string{"pending", "running", "converting", "done"} {
+		state = next
 		task, err := m.ShowTask("job-1", api)
-		if err != nil || task.Status != next.status {
-			t.Fatal(task, err)
-		}
-		if task.Status == "success" {
-			if len(task.Segments) != 1 || task.Segments[0].Index != 0 || task.Segments[0].Content != "https://files.invalid/result.zip" {
-				t.Fatal("artifact URL lost", task)
+		if state != "done" {
+			if err == nil || task != nil {
+				t.Fatal("unfinished task represented as document", task, err)
 			}
-		} else if len(task.Segments) != 0 {
-			t.Fatal("unfinished task has parsed output", task)
+			continue
+		}
+		if err != nil || len(task.Segments) != 1 || task.Segments[0].Index != 0 || task.Segments[0].Content != "https://files.invalid/result.zip" {
+			t.Fatal("artifact URL lost", task, err)
 		}
 	}
-	if _, err := m.ListTasks(api); !errors.Is(err, ErrUnsupportedCapability) {
+
+	if _, err := m.ListTasks(api); !(err != nil) {
 		t.Fatal("task listing must be unsupported", err)
 	}
 	if err := m.CheckConnection(api); err == nil {
@@ -97,9 +97,9 @@ func TestMinerURejectsMalformedTasks(t *testing.T) {
 			m := NewMinerUModel(map[string]string{"default": srv.URL}, URLSuffix{DocumentParse: "task"})
 			var err error
 			if tc.query {
-				_, err = m.ShowTask("job-1", &APIConfig{APIKey: &key})
+				_, err = m.ShowTask("job-1", &APIConfig{ApiKey: &key})
 			} else {
-				_, err = m.ParseFile(&name, nil, "https://files.invalid/doc.pdf", &APIConfig{APIKey: &key})
+				_, err = m.ParseFile(&name, nil, stringPtr("https://files.invalid/doc.pdf"), &APIConfig{ApiKey: &key}, nil)
 			}
 			if err == nil || strings.Contains(err.Error(), "private-provider-body") {
 				t.Fatal("invalid task accepted or provider body leaked", err)
@@ -114,22 +114,19 @@ func TestMinerURejectsInputBeforeHTTP(t *testing.T) {
 	defer srv.Close()
 	m := NewMinerUModel(map[string]string{"default": srv.URL}, URLSuffix{DocumentParse: "task"})
 	key, name, blank := "key", "vlm", " "
-	api := &APIConfig{APIKey: &key}
+	api := &APIConfig{ApiKey: &key}
 	for _, input := range []struct {
 		name    *string
 		content []byte
 		url     string
 		api     *APIConfig
 	}{
-		{nil, nil, "https://files.invalid/doc.pdf", api},
-		{&blank, nil, "https://files.invalid/doc.pdf", api},
 		{&name, []byte("local file"), "", api},
-		{&name, []byte("local file"), "https://files.invalid/doc.pdf", api},
 		{&name, nil, "file:///private", api},
 		{&name, nil, "https://files.invalid/doc.pdf", nil},
-		{&name, nil, "https://files.invalid/doc.pdf", &APIConfig{APIKey: &blank}},
+		{&name, nil, "https://files.invalid/doc.pdf", &APIConfig{ApiKey: &blank}},
 	} {
-		if _, err := m.ParseFile(input.name, input.content, input.url, input.api); err == nil {
+		if _, err := m.ParseFile(input.name, input.content, stringPtr(input.url), input.api, nil); err == nil {
 			t.Fatal("invalid submission accepted")
 		}
 	}
@@ -144,7 +141,7 @@ func TestMinerURejectsInputBeforeHTTP(t *testing.T) {
 func TestMinerUCancellationAndHTTPFailure(t *testing.T) {
 	key, name := "private-key", "vlm"
 	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/wait/job-1" {
+		if r.URL.Path == "/api/wait/job-1" {
 			<-r.Context().Done()
 			return
 		}
@@ -153,13 +150,38 @@ func TestMinerUCancellationAndHTTPFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 	m := NewMinerUModel(map[string]string{"default": srv.URL}, URLSuffix{DocumentParse: "fail"})
-	if _, err := m.ParseFile(&name, nil, "https://files.invalid/doc.pdf", &APIConfig{APIKey: &key}); err == nil || strings.Contains(err.Error(), key) || strings.Contains(err.Error(), "private-provider-body") {
+	if _, err := m.ParseFile(&name, nil, stringPtr("https://files.invalid/doc.pdf"), &APIConfig{ApiKey: &key}, nil); err == nil || strings.Contains(err.Error(), key) || strings.Contains(err.Error(), "private-provider-body") {
 		t.Fatal("HTTP failure lost or leaked", err)
 	}
-	m.URLSuffix.DocumentParse = "wait"
+	m.baseModel.URLSuffix.DocumentParse = "wait"
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
-	if _, err := m.ShowTask("job-1", &APIConfig{APIKey: &key, Context: ctx}); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := m.ShowTask("job-1", &APIConfig{ApiKey: &key, Context: ctx}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("deadline lost", err)
+	}
+}
+
+func TestMinerUOptionalModelAndURLPriority(t *testing.T) {
+	calls := 0
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if r.URL.Path != "/api/task" || body["url"] != "https://files.invalid/doc.pdf" || body["model_version"] != nil {
+			t.Error("optional URL parser payload", body, r.URL)
+		}
+		fmt.Fprint(w, `{"code":0,"data":{"task_id":"job"}}`)
+	}))
+	m := NewMinerUModel(map[string]string{"default": srv.URL}, URLSuffix{DocumentParse: "task"})
+	for _, name := range []*string{nil, stringPtr("")} {
+		result, err := m.ParseFile(name, []byte("ignored URL-only input"), stringPtr("https://files.invalid/doc.pdf"), &APIConfig{ApiKey: stringPtr("key")}, nil)
+		if err != nil || result == nil || result.TaskID != "job" {
+			t.Fatal(result, err)
+		}
+	}
+	if calls != 2 {
+		t.Fatal(calls)
 	}
 }

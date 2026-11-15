@@ -1,6 +1,159 @@
 package models
 
-import "testing"
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"testing"
+
+	"multirag/internal/testsupport"
+)
+
+const modelResponseLimitForTest = 20 * 1024 * 1024
+const modelParamsLimitForTest = 64 * 1024
+
+// Capture the actual frozen provider request, replacing former body-builder
+// unit tests with a controlled HTTP consumer of the same assertion data.
+func captureChatBodyForTest(t *testing.T, provider string, name string, messages []Message, cfg *ChatConfig, stream bool) (map[string]any, error) {
+	t.Helper()
+	var body map[string]any
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if provider == "Ollama" {
+			fmt.Fprintln(w, `{"message":{"content":"answer"},"done":true}`)
+		} else if stream {
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n")
+		} else {
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":""}}]}`)
+		}
+	}))
+	driver, err := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
+	if err != nil {
+		return nil, err
+	}
+	api := &APIConfig{ApiKey: stringPtr("fixture")}
+	if stream {
+		err = driver.ChatStreamlyWithSender(name, messages, api, cfg, func(*string, *string) error { return nil })
+	} else {
+		_, err = driver.ChatWithMessages(name, messages, api, cfg)
+	}
+	return body, err
+}
+
+func modelFixtureFile(t *testing.T, data []byte) *string {
+	t.Helper()
+	journal := testsupport.NewCase(t)
+	path := filepath.Join(t.TempDir(), "model-input.wav")
+	journal.Event("reserve-model-input", map[string]any{"path": path})
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Error(err)
+		}
+		_, err := os.Stat(path)
+		absent := os.IsNotExist(err)
+		journal.Event("model-input-cleanup-readback", map[string]any{"path": path, "absent": absent})
+		if !absent {
+			t.Error("model input remains", path)
+		}
+	})
+	return &path
+}
+
+// The frozen sender exposes raw text/bytes through string pointers.
+func modelStreamTextForTest(value *string) string {
+	if value == nil || *value == "[DONE]" {
+		return ""
+	}
+	return *value
+}
+func modelStreamBytesForTest(value *string) []byte {
+	return []byte(modelStreamTextForTest(value))
+}
+
+// Project the typed response by its explicit indices, without validating it or
+// manufacturing a driver error. Invalid-response tests still require the driver
+// itself to return an error.
+func rerankScoresForTest(bound *RerankModel, query string, documents []string, api *APIConfig, cfg *RerankConfig) ([]float64, error) {
+	response, err := bound.Rerank(query, documents, api, cfg)
+	if err != nil || response == nil {
+		return nil, err
+	}
+	data := append([]RerankResult(nil), response.Data...)
+	sort.SliceStable(data, func(i, j int) bool { return data[i].Index < data[j].Index })
+	scores := make([]float64, len(data))
+	for i, row := range data {
+		scores[i] = row.RelevanceScore
+	}
+	return scores, nil
+}
+
+func joinModelNames(models []ListModelResponse, separator string) string {
+	names := make([]string, len(models))
+	for i, model := range models {
+		names[i] = model.Name
+	}
+	return strings.Join(names, separator)
+}
+
+func modelNamesForTest(models []ListModelResponse) []string {
+	names := make([]string, len(models))
+	for i, model := range models {
+		names[i] = model.Name
+	}
+	return names
+}
+
+func expectedRerankTopNForTest(count int, cfg *RerankConfig) (int, error) {
+	if cfg == nil || cfg.TopN == 0 || cfg.TopN > count {
+		return count, nil
+	}
+	if cfg.TopN < 0 {
+		return 0, fmt.Errorf("negative top_n")
+	}
+	return cfg.TopN, nil
+}
+
+func readProviderConfig(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "conf", "models", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func messagesForTest(system string, history []map[string]string) []Message {
+	messages := make([]Message, 0, len(history)+1)
+	if system != "" {
+		messages = append(messages, Message{Role: "system", Content: system})
+	}
+	for _, item := range history {
+		messages = append(messages, Message{Role: item["role"], Content: item["content"]})
+	}
+	return messages
+}
+
+func chatAnswerForTest(bound *ChatModel, messages []Message, cfg *ChatConfig) (string, error) {
+	response, err := bound.ModelDriver.ChatWithMessages(*bound.ModelName, messages, bound.APIConfig, cfg)
+	if response == nil || response.Answer == nil {
+		return "", err
+	}
+	return *response.Answer, err
+}
 
 func TestGetThinkingAndAnswer(t *testing.T) {
 	tests := []struct {
@@ -66,7 +219,7 @@ func TestNormalizeModelFamily(t *testing.T) {
 			if got := NormalizeModelFamily(tt.input); got != tt.want {
 				t.Fatalf("NormalizeModelFamily=%q, want %q", got, tt.want)
 			}
-			if tt.input != nil && ModelClassFromName(*tt.input) != tt.want {
+			if tt.input != nil && NormalizeModelFamily(stringPtr(*tt.input)) != tt.want {
 				t.Fatal("model-name and explicit-class normalization diverged")
 			}
 		})
@@ -90,16 +243,5 @@ func TestThinkingFamilyExtractionBoundaries(t *testing.T) {
 	}
 	if reason, answer := extractThinkContent(nil); reason != nil || answer != nil {
 		t.Fatal("nil helper input did not return nils")
-	}
-}
-
-func TestChatModelClassNormalizesExplicitAndDerivedFamilies(t *testing.T) {
-	for _, config := range []*ChatConfig{nil, {}, {ModelClass: stringPtr("  ")}, {ModelClass: stringPtr(" Qwen/Qwen3.5-4B ")}} {
-		if got := chatModelClass("Qwen/Qwen3.5-4B", config); got != "qwen3" {
-			t.Fatalf("class=%q", got)
-		}
-	}
-	if got := chatModelClass("qwen/qwen3-8b", &ChatConfig{ModelClass: stringPtr("qwen30")}); got != "qwen30" {
-		t.Fatal("explicit class was ignored", got)
 	}
 }

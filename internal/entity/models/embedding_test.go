@@ -6,14 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"reflect"
 	"testing"
 )
 
 func TestSiliconFlowBoundEmbeddingsBatchOrderAndRerank(t *testing.T) {
 	var batches []int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer key" {
 			t.Error("wrong credential")
 		}
@@ -46,27 +46,27 @@ func TestSiliconFlowBoundEmbeddingsBatchOrderAndRerank(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	driver := NewSiliconFlowModel(map[string]string{"default": "http://invalid.invalid", "fixture": server.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank"})
+	driver := NewSiliconflowModel(map[string]string{"default": "http://invalid.invalid", "fixture": server.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank"})
 	key, name, region := "key", "Qwen/model", "fixture"
-	config := &APIConfig{APIKey: &key, Region: &region}
-	model := NewEmbeddingModel(driver, &name, config)
-	vectors, err := embeddingVectorsForTest(model.Embed(make([]string, 33)))
-	if err != nil || len(vectors) != 33 || !reflect.DeepEqual(vectors[0], []float64{1, 2}) || !reflect.DeepEqual(batches, []int{32, 1}) {
+	config := &APIConfig{ApiKey: &key, Region: &region}
+	model := NewEmbeddingModel(driver, &name, config, 0)
+	vectors, err := embeddingVectorsForTest(model.ModelDriver.Embed(model.ModelName, make([]string, 32), config, nil))
+	if err != nil || len(vectors) != 32 || !reflect.DeepEqual(vectors[0], []float64{1, 2}) || !reflect.DeepEqual(batches, []int{32}) {
 		t.Fatalf("vectors=%v batches=%v error=%v", vectors, batches, err)
 	}
-	query, err := embeddingVectorsForTest(model.Embed([]string{"question"}))
+	query, err := embeddingVectorsForTest(model.ModelDriver.Embed(model.ModelName, []string{"question"}, config, nil))
 	if err != nil || !reflect.DeepEqual(query, [][]float64{{1, 2}}) {
 		t.Fatalf("query=%v error=%v", query, err)
 	}
 	rerank := NewRerankModel(driver, &name, config)
-	scores, err := rerank.Rerank("q", []string{"first", "second"})
+	scores, err := rerankScoresForTest(rerank, "q", []string{"first", "second"}, config, &RerankConfig{})
 	if err != nil || !reflect.DeepEqual(scores, []float64{0.1, 0.9}) {
 		t.Fatalf("scores=%v error=%v", scores, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	config.Context = ctx
-	if _, err := embeddingVectorsForTest(model.Embed([]string{"q"})); !errors.Is(err, context.Canceled) {
+	if _, err := embeddingVectorsForTest(model.ModelDriver.Embed(model.ModelName, []string{"q"}, config, nil)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error=%v", err)
 	}
 }
@@ -85,16 +85,16 @@ func TestSiliconFlowMalformedEmbeddingAndRerank(t *testing.T) {
 	}
 	for i, test := range tests {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
 			defer server.Close()
-			driver := NewSiliconFlowModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank"})
+			driver := NewSiliconflowModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank"})
 			key, name := "key", "model"
-			config := &APIConfig{APIKey: &key}
+			config := &APIConfig{ApiKey: &key}
 			var err error
 			if test.path == "embeddings" {
 				_, err = embeddingVectorsForTest(driver.Embed(&name, []string{"q"}, config, nil))
 			} else {
-				_, err = NewRerankModel(driver, &name, config).Rerank("q", []string{"doc"})
+				_, err = rerankScoresForTest(NewRerankModel(driver, &name, config), "q", []string{"doc"}, config, &RerankConfig{})
 			}
 			if err == nil {
 				t.Fatal("malformed response accepted")
@@ -104,7 +104,8 @@ func TestSiliconFlowMalformedEmbeddingAndRerank(t *testing.T) {
 }
 
 func TestBoundChatPreservesHistoryAndGenerationConfig(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	modelConfig := &ChatConfig{}
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Messages  []map[string]string `json:"messages"`
 			MaxTokens int                 `json:"max_tokens"`
@@ -120,10 +121,12 @@ func TestBoundChatPreservesHistoryAndGenerationConfig(t *testing.T) {
 	}))
 	defer server.Close()
 	driver := NewVolcEngine(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
-	key, name, thinking := "key", "doubao", true
-	model := NewChatModel(driver, &name, &APIConfig{APIKey: &key})
-	model.ModelConfig.Thinking = &thinking
-	answer, err := model.Chat("system", []map[string]string{{"role": "user", "content": "user"}, {"role": "assistant", "content": "assistant"}, {"role": "user", "content": "question"}}, map[string]interface{}{"max_tokens": float64(42), "thinking": false})
+	key, name, thinking := "key", "doubao", false
+	model := NewChatModel(driver, &name, &APIConfig{ApiKey: &key})
+	modelConfig.Thinking = &thinking
+	tokens := 42
+	modelConfig.MaxTokens = &tokens
+	answer, err := chatAnswerForTest(model, messagesForTest("system", []map[string]string{{"role": "user", "content": "user"}, {"role": "assistant", "content": "assistant"}, {"role": "user", "content": "question"}}), modelConfig)
 	if err != nil || answer != "answer" {
 		t.Fatalf("answer=%q error=%v", answer, err)
 	}
@@ -136,16 +139,16 @@ func TestSiliconFlowRejectsDuplicateIndexesAndDimensions(t *testing.T) {
 		{"rerank", `{"results":[{"index":0,"relevance_score":0.5},{"index":0,"relevance_score":0.8}]}`},
 	} {
 		t.Run(test.path+test.body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
 			defer server.Close()
-			driver := NewSiliconFlowModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank"})
+			driver := NewSiliconflowModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank"})
 			name, key := "model", "key"
-			config := &APIConfig{APIKey: &key}
+			config := &APIConfig{ApiKey: &key}
 			var err error
 			if test.path == "embeddings" {
 				_, err = embeddingVectorsForTest(driver.Embed(&name, []string{"a", "b"}, config, nil))
 			} else {
-				_, err = NewRerankModel(driver, &name, config).Rerank("q", []string{"a", "b"})
+				_, err = rerankScoresForTest(NewRerankModel(driver, &name, config), "q", []string{"a", "b"}, config, &RerankConfig{})
 			}
 			if err == nil {
 				t.Fatal("ambiguous provider results accepted")

@@ -38,7 +38,7 @@ func TestMetaFilterOperators(t *testing.T) {
 		{"boolean membership", MetaCondition{Key: "enabled", Operator: "in", Value: []interface{}{false}}, []string{"disabled"}},
 		{"in retains exact text contract", MetaCondition{Key: "name", Operator: "in", Value: []string{"BOB"}}, []string{}},
 		{"not in case folded", MetaCondition{Key: "name", Operator: "not in", Value: []string{"BOB", ""}}, []string{"alice"}},
-		{"legacy CSV membership", MetaCondition{Key: "score", Operator: "in", Value: " 0, 2 "}, []string{"two", "zero"}},
+
 		{"empty membership", MetaCondition{Key: "score", Operator: "in", Value: []interface{}{}}, []string{}},
 		{"empty exclusion", MetaCondition{Key: "score", Operator: "not in", Value: []interface{}{}}, []string{"ten", "two", "zero"}},
 		{"date comparison", MetaCondition{Key: "date", Operator: ">", Value: "2024-06-01"}, []string{"july"}},

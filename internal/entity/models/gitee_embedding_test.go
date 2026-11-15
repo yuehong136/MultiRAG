@@ -3,14 +3,14 @@ package models
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
+
 	"strconv"
 	"testing"
 )
 
 func TestGiteeEmbeddingDimensionAndRegionHTTP(t *testing.T) {
 	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if r.URL.Path != "/v1/embeddings" || r.Header.Get("Authorization") != "Bearer key" {
 			t.Error(r.URL.Path, "credential or endpoint missing")
@@ -24,7 +24,7 @@ func TestGiteeEmbeddingDimensionAndRegionHTTP(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.Model != "BAAI/bge-m3" || body.Dimensions != 2 || body.Query != nil {
+		if body.Model != "BAAI/bge-m3" || body.Dimensions != 2 {
 			t.Error(body)
 		}
 		data := make([]map[string]any, 0, len(body.Input))
@@ -44,10 +44,10 @@ func TestGiteeEmbeddingDimensionAndRegionHTTP(t *testing.T) {
 	for i := range texts {
 		texts[i] = strconv.Itoa(i)
 	}
-	api := &APIConfig{APIKey: &key, Region: &unknown}
-	cfg := &EmbeddingConfig{Dimension: 2, Query: true}
+	api := &APIConfig{ApiKey: &key}
+	cfg := &EmbeddingConfig{Dimension: 2}
 	vectors, err := embeddingVectorsForTest(driver.Embed(&name, texts, api, cfg))
-	if err != nil || len(vectors) != 33 || calls != 2 {
+	if err != nil || len(vectors) != 33 || calls != 1 {
 		t.Fatal(len(vectors), calls, err)
 	}
 	for i, v := range vectors {
@@ -55,12 +55,12 @@ func TestGiteeEmbeddingDimensionAndRegionHTTP(t *testing.T) {
 			t.Fatal(i, v)
 		}
 	}
-	for _, keyless := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}} {
+	for _, keyless := range []*APIConfig{nil, {}, {ApiKey: stringPtr(" ")}} {
 		if got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"0"}, keyless, cfg)); err == nil || got != nil {
 			t.Fatal("missing key accepted")
 		}
 	}
-	if calls != 2 || unknown != "unknown" || !cfg.Query {
+	if calls != 1 || unknown != "unknown" {
 		t.Fatal("invalid request or config mutation")
 	}
 }

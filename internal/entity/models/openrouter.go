@@ -414,6 +414,9 @@ type openrouterUsage struct {
 }
 
 func (o *OpenRouterModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	if embeddingConfig != nil && embeddingConfig.Dimension < 0 {
+		return nil, fmt.Errorf("embedding dimension must be nonnegative")
+	}
 	if err := o.baseModel.APIConfigCheck(apiConfig); err != nil {
 		return nil, err
 	}
@@ -520,6 +523,9 @@ func (o *OpenRouterModel) Embed(modelName *string, texts []string, apiConfig *AP
 		}
 	}
 
+	if embeddingConfig != nil && embeddingConfig.Dimension > 0 && dimension != embeddingConfig.Dimension {
+		return nil, fmt.Errorf("embedding dimension does not match request")
+	}
 	var embeddings []EmbeddingData
 	for _, dataElem := range parsed.Data {
 		var embeddingData EmbeddingData
@@ -783,6 +789,13 @@ func (o *OpenRouterModel) TranscribeAudio(modelName *string, file *string, apiCo
 		return nil, fmt.Errorf("failed to parse transcription response: %w", err)
 	}
 
+	rawText, exists := envelope["text"]
+	if !exists || string(rawText) == "null" {
+		return nil, fmt.Errorf("transcription text is missing")
+	}
+	if raw, exists := envelope["code"]; exists && string(raw) != "null" && string(raw) != "0" {
+		return nil, fmt.Errorf("provider transcription error")
+	}
 	return &ASRResponse{Text: result.Text}, nil
 }
 
@@ -854,6 +867,10 @@ func (o *OpenRouterModel) AudioSpeech(modelName *string, audioContent *string, a
 		return nil, fmt.Errorf("provider HTTP error: status %d", resp.StatusCode)
 	}
 
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if len(body) == 0 || strings.Contains(contentType, "json") || strings.Contains(contentType, "text/") {
+		return nil, fmt.Errorf("provider did not return audio")
+	}
 	return &TTSResponse{Audio: body}, nil
 }
 
