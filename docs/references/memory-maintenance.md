@@ -1,0 +1,124 @@
+# Dreaming 候选整理与审核发布
+
+Dreaming 将显式选择的来源和当前记忆整理成候选，供用户查看差异、批准或拒绝。
+候选保存在独立 SQL 表中，不参与普通消息检索；批准后仍须显式发布，才能成为当前记忆。
+人工批准只表示允许采用该候选，`assessment` 仍是 `hypothesis` / `unverified`，不代表事实已验证。
+
+本功能面向 Python 后端及配套 Web，不依赖上层应用。它不提供 Wiki、上下文压缩、定时夜间运行、
+消费者历史抓取或任意工具执行；模型只有受限的候选输出，没有修改记忆、执行代码或联网的工具。
+
+## 开始前
+
+先读取 `GET /api/v1/memories/{memory_id}/capabilities`，检查 `maintenance.supported`。
+当前严格存储路径要求 active 的受管 Memory，以及每条选中 RAW 已登记且 active 的来源版本。
+未登记返回 `source_adoption_required`；Web 可显式登记选中来源后再创建任务，登记会启用整个 Memory 的受管约束。
+详情见[来源登记与修订](memory-revisions.md)。GET 和模型调用不会静默接管来源。
+
+一个任务只属于一个 Memory 和租户。必须显式提供 1–32 个 RAW 来源 ID，可选 0–32 个逻辑 entry ID；
+空范围不会扩展为全库。选择旧 entry 时，必须同时选入其全部必要来源，且当前版本必须已经就绪。
+同一候选可以关联跨会话来源，但 user/agent 身份必须相同，不把不同用户的内容归入同一条记忆。
+
+所有物理消息和来源 ID 在新接口中使用规范十进制字符串，保留 int64 精度；逻辑 entry/job/candidate ID 使用服务器分配的 ID。
+tenant、actor、模型行、可信状态不能由请求或模型覆盖，权限沿用当前 owner/team 规则，每次动作重新核验。
+
+## 使用步骤
+
+以下路径都在 `/api/v1/memories/{memory_id}` 下：
+
+| 操作 | 路径与输入 | 含义 |
+| --- | --- | --- |
+| 创建任务 | `POST /maintenance-jobs` | 保存授权输入快照，不调用模型 |
+| 查看任务 | `GET /maintenance-jobs` 或 `GET /maintenance-jobs/{job_id}` | 只读状态、来源版本和覆盖量 |
+| 执行分析 | `POST /maintenance-jobs/{job_id}/runs`，`{operation_id}` | 对保存的快照执行一次有界分析 |
+| 查看候选 | `GET /maintenance-jobs/{job_id}/candidates` | 查看最终正文、原文、精确 patch、diff、理由和来源 |
+| 审核候选 | `POST /maintenance-jobs/{job_id}/candidates/{candidate_id}/reviews` | 提交操作 ID、`expected_revision` 和 `approve` / `reject` |
+| 发布批准项 | `POST /maintenance-jobs/{job_id}/publications` | 提交操作 ID及选中的 candidate ID/最新审核版本，最多 16 项 |
+| 取消整理 | `POST /maintenance-jobs/{job_id}/cancellations`，`{operation_id}` | 使分析与未发布候选失效，不撤销已发布记忆 |
+| 查看与对账发布 | 既有 `GET /operations/{operation_id}`、`POST /operations/{operation_id}/reconciliations` | 复用原批次操作及固定消息 ID |
+
+创建请求示例：
+
+```json
+{
+  "operation_id": "dream-project-decisions",
+  "source_ids": ["900", "901"],
+  "entry_ids": [],
+  "policy": "decisions",
+  "input_budget_tokens": 16384,
+  "output_budget_tokens": 4096
+}
+```
+
+策略为 `general`、`preferences`、`decisions`、`procedures`；它们影响分析方向，不创建新的记忆类型。
+输入预算为 1,024–32,768，输出预算为 256–8,192，均是 token 估算预算，不是费用承诺。
+输入过大时整条延期，保留 `coverage=deferred` 及原因；不会静默截断正文后声称已经分析。
+元数据或完整目标正文自身超预算时明确拒绝。没有任何来源能进入预算时也拒绝创建。
+
+任务提供 selected/included/analyzed/deferred 覆盖量，只有实际送入并成功完成分析的输入才计入 analyzed。
+本版本不维护全局完成水位。后续新增来源、新来源版本或新范围需要新的任务，不会根据上次时间猜测全量已经处理。
+RAW 作为 `legacy_combined` / `role_unknown` 使用，不解析正文中的 `User Input:` 等字样来重建可信角色，
+也不把模型或历史 Agent 的自述当成实际工具验证结果。
+
+## 候选与审核
+
+允许的动作只有新增 `add`、精确片段修改 `patch`、无需变化 `noop`。
+patch 必须在选定 entry 的完整原文中唯一匹配，由宿主组成最终正文，保留同条未修改的其他事实；
+零匹配、多匹配、越界来源、伪造验证状态、额外字段或超预算输出会拒绝整份结果，不保存半份候选。
+每个正文最多 65,535 UTF-8 字节、8,192 个估算 token，每次分析最多 32 个提议。
+发布 patch 保留目标原有记忆类型、身份、来源锚点和事件时间，包括有效、失效与遗忘时间；新增项使用选定 RAW 的锚点元数据。
+
+审核使用 candidate revision 的 CAS；批准或拒绝会递增版本。发布必须携带批准后的新版本，
+不能用审核前版本发布，不能发布 pending/rejected/noop 项。审核不会自行执行 embedding 或切换当前记忆。
+来源失效或目标版本变化时重新核验失败，不能在发布时搜索相似文本并改动另一个条目。
+
+任务失败不推进覆盖量、不覆盖旧记忆。有效回包的模型/配置指纹、已知用量与失败记录保存在有限审计中，
+无有效回包时标记 `usage_unavailable`；`provider_billing_verified=false`，估算值不能当作实际账单或提取质量评价。
+模型输出、原始来源和候选理由都是数据，不能改变身份、权限、工具或审核规则。
+
+## 发布、恢复与取消
+
+同一操作 ID 和同一请求复用原结果；不同请求或不同 actor 冲突。发布使用已经保存并批准的最终正文，
+不再次让模型生成内容。先保存稳定消息 ID、向量及整个计划，再暂存并逐项严格读回 inactive 投影。
+全部准备完成后，在同一 SQL 事务中校验选定来源、目标和候选版本并切换所有 current；任一前置条件失配都不能只发布其余部分。
+每项再通过独立索引同步回执启用新投影、停用旧投影。SQL 与远程消息存储不是分布式原子事务。
+
+只有批次 `status=ready` 且 `index_sync_status=ready` 才表示整个批次已确认。
+HTTP 202、已受理、SQL 已发布或单项已同步，都不能显示为整批完成。结果未知时先读取原操作，
+再显式对账；不换 ID 重发。子项操作不能绕过父批次单独触发通用发布。
+
+SQL 决定之前来源失效会中止整批；SQL 决定之后来源撤回只清理依赖该来源的条目，
+无关且已确认的条目可以继续供给。父批次以 `status=stale`、`index_sync_status=unknown` 等状态及错误码报告部分失效，
+不把部分完成冒充整批成功。只要仍有 pending/unknown/sync_pending 子项，`retryable=true`；须继续使用原父操作对账，不能仅凭 stale 判定无需恢复。
+临时停用后，已发布内容只有来源仍为同版本、哈希和身份且重新 active 时才可能恢复；永久撤回不恢复。
+
+分析、发布与清理期间的慢模型或存储 IO 持有实际 writer attempt。创建任务的来源快照为只读 IO，保存前重新核验来源与关闭状态。
+租约超时不代表旧 IO 已结束，取消也必须等待本次 owned work 结算。
+硬崩溃留下的未知 attempt 需按[写入排空工具](memory-revisions.md#整库删除与排空)独立核验，不能通过重试抢占。
+取消整理不等于已受理发布操作的所有物理暂存已经清理：未 SQL 发布的批次仍须用原发布操作对账，
+确认暂存清理并释放容量预留；清理未知时继续保留原 ID 和预留。已经 SQL 发布的记忆不因取消整理而倒退。
+
+来源永久撤回、entry 遗忘、整库删除会在同一 SQL 决定中清理相关输入快照、目标正文副本、候选正文、patch、diff、理由和待发布载荷，
+并阻断迟到模型结果。整库删除仍等待实际 writer 排空。Web 确认撤回后也会清候选缓存并挡住旧请求回填。
+备份、调用者已取得的内容和不可追踪副本不在物理清除认证范围内。
+
+## 部署边界
+
+部署前备份并应用正式 Alembic 迁移，统一切换已排空旧进程的 API/worker。
+本版本通过显式 `runs` 请求执行分析，不启动脱离资源所有权的常驻进程，不承诺页面关闭后自动持续调度。
+本地受控模型和真实 scratch 存储测试验证的是权限、状态、事务与恢复协议；真实模型质量、供应商费用和生产部署需要另外验收。
+
+## 维护接点
+
+候选流程集中在 `memory/maintenance/`，使用独立的 job/input/candidate SQL 表和迁移，
+继续复用现有模型适配器、消息存储、来源版本、writer admission 与索引 outbox，不新增第三方记忆引擎依赖。
+后续跟进上游时，除独立模块外，重点回归以下已有接点：
+
+| 接点 | 本功能依赖的行为 |
+| --- | --- |
+| 来源停用、撤回与 entry 遗忘 | 同一 SQL 决定使候选失效，排空实际 writer 并清理相关投影 |
+| 整库删除 | 关闭分析与发布，清理候选快照，复用现有排空和删除协议 |
+| 普通读取 gate | consolidated 版本须同时具有就绪的子项 outbox 和父 writer admission |
+| 人工修订 | 按每条 source ref 的真实 scope 校验跨会话来源，旧 ref 沿用目标 scope |
+| 操作查询与对账、capabilities | 分发到原 Dreaming 操作，并向 Web 提供明确的支持范围和恢复状态 |
+
+这些接点包含自有发布与失效语义，仍需随上游相关改动验证，不能仅凭独立目录认定不会产生合并冲突。

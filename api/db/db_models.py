@@ -4740,6 +4740,7 @@ def with_retry(max_retries=3, retry_delay=1.0):
 
 # Extension tables share this metadata without expanding the legacy model file.
 # Importing the module (rather than its classes) also permits its Base import.
+from api.db import memory_maintenance_models as _memory_maintenance_models  # noqa: F401
 from api.db import memory_revision_models as _memory_revision_models  # noqa: F401
 from api.db import memory_writer_models as _memory_writer_models  # noqa: F401
 
