@@ -95,6 +95,15 @@ async def memory_capabilities(memory_id: str, db: AsyncSession = Depends(get_asy
                     "max_sources": 32,
                     "max_candidates": 32,
                     "max_publication_candidates": 16,
+                    "discoveries": {
+                        "supported": recent.get("coordinated_writes_supported", False),
+                        "registered_active_only": True,
+                        "max_sources": 256,
+                        "max_batch_sources": 32,
+                        "max_runs_per_request": 8,
+                        "expected_preview_hash_required": True,
+                        "token_fit": "not_checked",
+                    },
                 },
                 "revisions": {
                     "supported": recent.get("managed_revisions_supported", False),

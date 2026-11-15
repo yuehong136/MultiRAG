@@ -1,0 +1,10 @@
+The stable group/flush partition in selection.py is adapted from ReMe:
+Copyright 2025 Alibaba Group, licensed under the Apache License, Version 2.0.
+https://github.com/agentscope-ai/ReMe/blob/b13034ba2ff7339bb03df4fa4ee130b47a731c6c/reme/steps/evolve/dream/utils.py
+
+Modifications: SQL-registered user/agent scope groups replace filesystem days;
+complete source-ID union capacity replaces filesystem byte-size estimates;
+explicit context closure is repeated without double-counting primary sources.
+No ReMe filesystem scanner, prompt truncation or catalog storage is included.
+
+The Apache License, Version 2.0 is included at the repository root as LICENSE.
