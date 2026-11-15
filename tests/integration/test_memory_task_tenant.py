@@ -144,6 +144,64 @@ async def test_enqueue_collect_execute_and_reject_forgery(
     env["journal"].event("memory-chain-readback", tenant_matches_db=True, raw_and_extracted_count=2, denied_variants=5, denied_model_and_storage_effects=0, queue_pending=0)
 
 
+async def test_extraction_retry_uses_persisted_raw_reference(
+    bootstrapped_engine: sa.Engine, bootstrapped_async_engine: AsyncEngine, memory_resources: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = memory_resources
+    with Session(bootstrapped_engine) as db:
+        memory = db.get(Memory, env["mid"])
+        assert memory is not None
+        memory.memory_type = 5
+        db.commit()
+    monkeypatch.setattr(mms, "current_timestamp", lambda: 1793498400000)
+    async with AsyncSession(bootstrapped_async_engine, expire_on_commit=False) as db:
+        assert await mms.queue_save_to_memory_task(
+            db, [env["mid"]], {"user_id": "subject", "agent_id": "agent", "session_id": "session", "user_input": "明天15:00到16:00开会", "agent_response": "已记录"}
+        ) == (True, "All add to task.")
+        await db.commit()
+    queued = json.loads(REDIS_CONN.REDIS.xrange(env["queue"])[0][1]["message"])
+    raw = MessageService.get_by_message_id(env["mid"], queued["source_id"], env["tenant"])
+    assert raw["message_type"] == "raw" and raw["valid_at"]
+    references: list[tuple[str, str]] = []
+
+    async def extract(db: Session, tenant_id: str, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        assert tenant_id == env["tenant"]
+        references.append((kwargs["conversation_time"], kwargs["conversation_content"]))
+        return [{"message_type": "episodic", "content": "controlled meeting", "valid_at": "2026-11-02 15:00:00", "invalid_at": "2026-11-02 16:00:00"}]
+
+    attempts = 0
+    save = mms.embed_and_save
+
+    async def interrupted_save(db: Session, memory: Memory, messages: list[dict[str, Any]], task_id: str | None = None) -> tuple[bool, str]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("controlled failure before extracted storage")
+        return await save(db, memory, messages, task_id)
+
+    monkeypatch.setattr(mms, "extract_by_llm", extract)
+    monkeypatch.setattr(mms, "embed_and_save", interrupted_save)
+    queued["message_dict"].update(user_input="altered queue text", conversation_time="2099-01-01 00:00:00")
+    monkeypatch.setattr(mms, "current_timestamp", lambda: 1893498400000)
+    with Session(bootstrapped_engine) as db, pytest.raises(RuntimeError, match="controlled failure"):
+        await mms.save_extracted_to_memory_only(db, env["mid"], queued["message_dict"], queued["source_id"])
+    assert len(MessageService.get_recent_messages([env["tenant"]], [env["mid"]], "agent", "session", 10)) == 1
+
+    monkeypatch.setattr(mms, "current_timestamp", lambda: 1993498400000)
+    with Session(bootstrapped_engine) as db:
+        assert (await mms.save_extracted_to_memory_only(db, env["mid"], queued["message_dict"], queued["source_id"]))[0]
+    assert references == [(raw["valid_at"], raw["content"])] * 2
+    stored = MessageService.get_recent_messages([env["tenant"]], [env["mid"]], "agent", "session", 10)
+    extracted = next(message for message in stored if message["message_type"] == "episodic")
+    assert len(stored) == 2 and extracted["source_id"] == queued["source_id"]
+    assert extracted["invalid_at"] == "2026-11-02 16:00:00"
+    with Session(bootstrapped_engine) as db:
+        success, message = await mms.save_extracted_to_memory_only(db, env["mid"], queued["message_dict"], extracted["message_id"])
+    assert success is False and "does not match" in message
+    assert len(references) == 2 and attempts == 2
+    env["journal"].event("memory-reference-readback", stored_reference_stable=True, queue_time_ignored=True, stored_content_used=True, event_end_preserved=True, non_raw_source_denied=True)
+
+
 async def test_memory_redelivery_preserves_committed_and_uncertain_storage_results(
     bootstrapped_engine: sa.Engine, bootstrapped_async_engine: AsyncEngine, memory_resources: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:

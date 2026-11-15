@@ -9,13 +9,14 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.apps.services import memory_api_service
+from api.apps.services import memory_api_service, memory_context_service
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from api.db.db_models import get_async_db
 from api.identity.principal import AuthenticationSource
@@ -286,10 +287,32 @@ async def search_message(
     agent_id: str = Query(default="", description="Optional Agent ID filter"),
     session_id: str = Query(default="", description="Optional Session ID filter"),
     user_id: str = Query(default="", description="Optional User ID filter"),
+    include_sources: bool = Query(default=False, description="Include bounded provenance diagnostics"),
+    db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
     if len(memory_id) == 1 and "," in memory_id[0]:
         memory_id = memory_id[0].split(",")
+    if include_sources:
+        if not query.strip() or len(query) > 8192 or not 1 <= top_n <= 100 or not 0 <= similarity_threshold <= 1 or not 0 <= keywords_similarity_weight <= 1:
+            return get_error_argument_result("Invalid bounded source-search parameters.")
+        try:
+            enriched = await memory_context_service.search_with_sources(
+                db,
+                memory_id,
+                query.strip(),
+                actor_id=user.id,
+                top_n=top_n,
+                subject_id=user_id or None,
+                agent_id=agent_id or None,
+                session_id=session_id or None,
+                similarity_threshold=similarity_threshold,
+                keywords_similarity_weight=keywords_similarity_weight,
+            )
+            return get_json_result(data=enriched)
+        except Exception as error:
+            logger.error("Memory source search failed (%s)", type(error).__name__)
+            return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
     filter_dict = {"memory_id": memory_id, "agent_id": agent_id, "session_id": session_id, "user_id": user_id}
     params = {
         "query": query,
@@ -308,6 +331,9 @@ async def get_messages(
     agent_id: str = Query(default="", description="Agent ID"),
     session_id: str = Query(default="", description="Session ID"),
     limit: int = Query(default=10, description="Maximum number of messages"),
+    message_type: Literal["raw", "semantic", "episodic", "procedural"] | None = Query(default=None, description="Optional memory type filter"),
+    user_id: str | None = Query(default=None, max_length=256, description="Optional message subject filter"),
+    status: bool | None = Query(default=None, description="Optional active-state filter"),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
     if len(memory_id) == 1 and "," in memory_id[0]:
@@ -316,7 +342,14 @@ async def get_messages(
         return get_error_argument_result("memory_ids is required.")
     try:
         # DB 读 + msg_store 最近消息交错：整块在工作线程 + 自开短会话执行
-        res = await memory_api_service.get_messages_async(memory_id, agent_id, session_id, limit, user_id=user.id)
+        options: dict[str, str | bool] = {}
+        if message_type is not None:
+            options["message_type"] = message_type
+        if user_id is not None:
+            options["subject_id"] = user_id
+        if status is not None:
+            options["status"] = status
+        res = await memory_api_service.get_messages_async(memory_id, agent_id, session_id, limit, user_id=user.id, **options)
         return get_json_result(data=res)
     except Exception as e:
         logger.error(e)

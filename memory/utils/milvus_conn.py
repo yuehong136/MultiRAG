@@ -18,7 +18,10 @@ Milvus connection for message storage.
 This module provides a specialized Milvus connection for storing and retrieving messages.
 """
 
+import json
 import re
+from importlib.metadata import version
+from typing import Any
 
 from pymilvus import Collection, CollectionSchema, DataType, FieldSchema
 from pymilvus.orm import utility
@@ -71,6 +74,91 @@ class MilvusConnection(MilvusConnectionBase):
 
     def __init__(self):
         super().__init__(logger_name="multirag.memory.milvus_conn")
+
+    def supports_recent_message_query(self) -> bool:
+        """Enable scalar ordering only for the verified SDK and actual server 3.x pair."""
+        if re.fullmatch(r"3\.\d+\.\d+", version("pymilvus")) is None:
+            return False
+        server_version = utility.get_server_version(using=self._using, timeout=5)
+        # The verified official 3.0.6 image reports its release build identity,
+        # rather than a patch semver. Unknown builds and prereleases stay disabled.
+        return re.fullmatch(r"v?3\.\d+\.\d+", server_version) is not None or server_version == "3.0-20261110-63100f8f5b4"
+
+    def query_recent_candidates(self, select_fields: list[str], condition: dict[str, Any], index_name: str, memory_id: str, limit: int) -> list[dict[str, Any]]:
+        """Strict bounded scalar read for older servers; the service sorts the full set."""
+        if not index_name or not memory_id or type(limit) is not int or not 1 <= limit <= 10_000:
+            raise ValueError("An owning index, memory and bounded recent-message scan are required")
+        if set(condition) - {"agent_id", "session_id", "message_type", "user_id", "status"}:
+            raise ValueError("Unsupported recent-message condition")
+        collection_name = _message_collection_name(index_name, memory_id)
+        if not utility.has_collection(collection_name, using=self._using):
+            return []
+        collection = Collection(collection_name, using=self._using)
+        collection.load()
+        return collection.query(
+            expr=self._build_filter_expr(condition, memory_id, hide_forgotten=True),
+            output_fields=self._prepare_output_fields(collection, select_fields),
+            limit=limit,
+            consistency_level="Strong",
+        )
+
+    def query_recent_rows(
+        self,
+        select_fields: list[str],
+        condition: dict[str, Any],
+        index_name: str,
+        memory_id: str,
+        limit: int,
+        *,
+        before: tuple[str, int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read one bank with native scalar ordering and an optional descending seek key.
+
+        The service confirms SDK/server support before calling this method. Failures
+        propagate, rather than turning an unavailable ordered read into an empty page.
+        """
+        if not index_name or not memory_id or type(limit) is not int or not 1 <= limit <= 101:
+            raise ValueError("An owning index, memory and bounded recent-message limit are required")
+        if set(condition) - {"agent_id", "session_id", "message_type", "user_id", "status", "message_id"}:
+            raise ValueError("Unsupported recent-message condition")
+        filter_expr = self._build_filter_expr(condition, memory_id, hide_forgotten=True)
+        if before is not None:
+            valid_at, message_id = before
+            if not isinstance(valid_at, str) or len(valid_at) > 64 or type(message_id) is not int or not 0 < message_id <= 2**63 - 1:
+                raise ValueError("Invalid recent-message seek key")
+            timestamp = json.dumps(valid_at)
+            filter_expr = f"({filter_expr}) and (valid_at < {timestamp} or (valid_at == {timestamp} and message_id < {message_id}))"
+        collection_name = _message_collection_name(index_name, memory_id)
+        if not utility.has_collection(collection_name, using=self._using):
+            return []
+        collection = Collection(collection_name, using=self._using)
+        collection.load()
+        return collection.query(
+            expr=filter_expr,
+            output_fields=self._prepare_output_fields(collection, select_fields),
+            order_by=["valid_at:desc", "message_id:desc"],
+            limit=limit,
+            consistency_level="Strong",
+        )
+
+    def query_source_rows(self, select_fields: list[str], message_ids: list[int], index_name: str, memory_id: str) -> list[dict[str, Any]]:
+        """Fetch a bounded source batch without hiding inactive/forgotten rows or errors."""
+        if not index_name or not memory_id or not 1 <= len(message_ids) <= 100:
+            raise ValueError("An owning index, memory and bounded source-message batch are required")
+        if any(type(message_id) is not int or not 0 < message_id <= 2**63 - 1 for message_id in message_ids):
+            raise ValueError("Source message IDs must be positive signed 64-bit integers")
+        collection_name = _message_collection_name(index_name, memory_id)
+        if not utility.has_collection(collection_name, using=self._using):
+            return []
+        collection = Collection(collection_name, using=self._using)
+        collection.load()
+        unique_ids = list(dict.fromkeys(message_ids))
+        return collection.query(
+            expr=self._build_filter_expr({"message_id": unique_ids}, memory_id, hide_forgotten=False),
+            output_fields=self._prepare_output_fields(collection, select_fields),
+            limit=len(unique_ids),
+            consistency_level="Strong",
+        )
 
     @staticmethod
     def field_keyword(field_name: str) -> bool:
@@ -311,7 +399,7 @@ class MilvusConnection(MilvusConnectionBase):
         :param hide_forgotten: Whether to exclude forgotten messages
         :return: Milvus filter expression string
         """
-        exprs = [f'memory_id == "{memory_id}"']
+        exprs = [f"memory_id == {json.dumps(memory_id)}"]
 
         # Add hide_forgotten filter
         if hide_forgotten:
@@ -321,10 +409,9 @@ class MilvusConnection(MilvusConnectionBase):
             # Convert field name
             field_name = self.convert_field_name(k)
 
-            # Handle session_id with wildcard support
-            if field_name == "session_id" and v:
-                if isinstance(v, str):
-                    exprs.append(f'{field_name} == "{v}"')
+            # Preserve legacy scalar handling; lists use exact membership below.
+            if field_name == "session_id" and isinstance(v, str) and v:
+                exprs.append(f"{field_name} == {json.dumps(v)}")
                 continue
 
             if not v:
@@ -339,16 +426,12 @@ class MilvusConnection(MilvusConnectionBase):
                 continue
 
             if isinstance(v, str):
-                exprs.append(f'{field_name} == "{v}"')
+                exprs.append(f"{field_name} == {json.dumps(v)}")
             elif isinstance(v, int):
                 exprs.append(f"{field_name} == {v}")
             elif isinstance(v, list):
                 if v:
-                    if isinstance(v[0], str):
-                        vals = ", ".join([f'"{x}"' for x in v])
-                    else:
-                        vals = ", ".join([str(x) for x in v])
-                    exprs.append(f"{field_name} in [{vals}]")
+                    exprs.append(f"{field_name} in {json.dumps(v)}")
 
         return " and ".join(exprs) if exprs else ""
 

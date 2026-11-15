@@ -11,8 +11,10 @@ from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from api.apps.services import memory_context_service
 from api.db.db_models import Memory, Task, TenantLLM, UserTenant
 from api.db.joint_services import memory_message_service as mms
 from api.db.services.llm_service import LLMBundle
@@ -126,6 +128,170 @@ def snapshot(env: dict[str, Any]) -> Any:
     messages = {key: MessageService.get_by_message_id(mid, 900, env["tenants"][key]) for key, mid in env["memories"].items()}
     redis = REDIS_CONN.REDIS
     return rows, tasks, messages, redis.xrange(env["queue"]), redis.get(f"{env['queue']}:memory"), {mid: redis.get(mid) for mid in env["memories"].values()}
+
+
+def insert_read_messages(env: dict[str, Any], rows: list[dict[str, Any]], *, key: str = "personal") -> None:
+    """Write only this fixture's owned index; teardown independently deletes it."""
+    memory_id = env["memories"][key]
+    messages = [
+        {
+            "message_id": 910,
+            "message_type": "semantic",
+            "source_id": 900,
+            "memory_id": memory_id,
+            "user_id": "subject",
+            "agent_id": "a",
+            "session_id": "s",
+            "valid_at": "2026-10-08 00:00:00",
+            "invalid_at": None,
+            "forget_at": None,
+            "status": True,
+            "content": "A decision with an inspectable source.",
+            "content_embed": [1.0, 0.0],
+            **row,
+        }
+        for row in rows
+    ]
+    assert MessageService.insert_message(messages, env["tenants"][key], memory_id) == []
+    for message in messages:
+        stored = MessageService.get_by_message_id(memory_id, message["message_id"], env["tenants"][key])
+        assert stored and stored["content"] == message["content"]
+
+
+def fixed_context_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
+    def bundle(db: Session, binding: memory_context_service.MemoryReadBinding) -> FixedEmbedding:
+        model = FixedEmbedding(db, binding.tenant_id)
+        model.db = None
+        return model
+
+    monkeypatch.setattr(memory_context_service, "_embedding_bundle", bundle)
+
+
+def test_optional_reads_enforce_real_auth_and_have_no_write_effects(memory_api: dict[str, Any]) -> None:
+    env = memory_api
+    before = snapshot(env)
+    for key in ("private", "foreign"):
+        mid = env["memories"][key]
+        for method, path, body in [
+            ("GET", f"/memories/{mid}/capabilities", None),
+            ("GET", f"/memories/{mid}/messages", None),
+            ("GET", f"/memories/{mid}/sources/900", None),
+            ("POST", f"/memories/{mid}/context", {"query": "private data"}),
+        ]:
+            response = env["client"].request(method, env["base"] + "/api/v1" + path, headers={"Authorization": f"Bearer {env['jwts'][1]}"}, **({"json": body} if body else {}), timeout=30)
+            assert response.status_code == 404 and response.json()["data"] is False, response.text
+        assert request(env, "GET", f"/messages/search?memory_id={mid}&query=private&include_sources=true")["data"] == []
+    assert snapshot(env) == before
+
+
+def test_recent_page_exact_filters_ties_and_change_detection(memory_api: dict[str, Any]) -> None:
+    env, mid = memory_api, memory_api["memories"]["personal"]
+    insert_read_messages(env, [{"message_id": 910}, {"message_id": 911}, {"message_id": 912, "user_id": "other"}, {"message_id": 913, "status": False}])
+    path = f"/memories/{mid}/messages?message_type=semantic&user_id=subject&status=true&limit=1"
+    first = request(env, "GET", path)["data"]
+    assert [int(message["message_id"]) for message in first["messages"]] == [911]
+    second = request(env, "GET", path, params={"cursor": first["next_cursor"]})["data"]
+    assert [int(message["message_id"]) for message in second["messages"]] == [910]
+    assert second["next_cursor"] is None
+    disabled = request(env, "GET", f"/messages?memory_id={mid}&message_type=semantic&user_id=subject&status=false")["data"]
+    assert [int(message["message_id"]) for message in disabled] == [913]
+    insert_read_messages(env, [{"message_id": 914}])
+    changed = env["client"].get(env["base"] + "/api/v1" + path, params={"cursor": first["next_cursor"]}, headers={"Authorization": f"Bearer {env['jwts'][1]}"}, timeout=30)
+    capabilities = request(env, "GET", f"/memories/{mid}/capabilities")["data"]["recent_messages"]
+    if capabilities["pagination"] == "bounded_scan_cursor":
+        assert changed.status_code == 409 and changed.json()["retcode"] == 409
+    else:
+        assert capabilities["pagination"] == "live_seek_cursor"
+        assert changed.status_code == 200
+        assert [int(message["message_id"]) for message in changed.json()["data"]["messages"]] == [910]
+    assert request(env, "PUT", f"/messages/{mid}:911", json={"status": False})["retcode"] == 0
+    stale_boundary = env["client"].get(env["base"] + "/api/v1" + path, params={"cursor": first["next_cursor"]}, headers={"Authorization": f"Bearer {env['jwts'][1]}"}, timeout=30)
+    assert stale_boundary.status_code == 409
+
+
+def test_source_excerpt_hash_scope_and_membership_readback(memory_api: dict[str, Any]) -> None:
+    env, mid = memory_api, memory_api["memories"]["team"]
+    path = f"/memories/{mid}/sources/900"
+    first = request(env, "GET", path + "?limit=2")["data"]
+    assert first["state"] == "available" and first["excerpt"] == "te"
+    second = request(env, "GET", path, params={"offset": first["next_offset"], "content_sha256": first["content_sha256"]})["data"]
+    assert first["excerpt"] + second["excerpt"] == "team"
+    assert MessageService.update_message({"message_id": 900}, {"content": "changed source"}, env["tenants"]["team"], mid)
+    changed = env["client"].get(env["base"] + "/api/v1" + path, params={"content_sha256": first["content_sha256"]}, headers={"Authorization": f"Bearer {env['jwts'][1]}"}, timeout=30)
+    assert changed.status_code == 409
+    with Session(env["engine"]) as db:
+        db.execute(sa.update(UserTenant).where(UserTenant.user_id == env["owners"][1], UserTenant.tenant_id == env["owners"][0]).values(status="0"))
+        db.commit()
+    denied = env["client"].get(env["base"] + "/api/v1" + path, headers={"Authorization": f"Bearer {env['jwts'][1]}"}, timeout=30)
+    assert denied.status_code == 404 and "changed source" not in denied.text
+
+
+def test_query_context_source_state_budget_and_read_only_storage(memory_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from common.token_utils import num_tokens_from_string
+    from memory.services.context import serialize_query_context
+
+    env, mid = memory_api, memory_api["memories"]["personal"]
+    fixed_context_embedding(monkeypatch)
+    insert_read_messages(env, [{}, {"message_id": 911, "source_id": 9999, "content": "Unsupported statement"}, {"message_id": 912, "user_id": "other", "content": "Wrong subject"}])
+    before = snapshot(env)
+    body = {"query": "decision", "budget_tokens": 1024, "candidate_limit": 20, "user_id": "subject"}
+    data = request(env, "POST", f"/memories/{mid}/context", json=body)["data"]
+    assert data["source_snapshot_only"] is True
+    assert num_tokens_from_string(serialize_query_context(data)) <= data["usage"]["estimated_tokens"] <= 1024
+    selected = {int(item["message_id"]): item for item in data["items"]}
+    assert 910 in selected and 911 not in selected and 912 not in selected
+    assert selected[910]["source"]["state"] == "available"
+    assert selected[910]["source"]["verification"] == "provenance_only"
+    assert selected[910]["role_status"] == "legacy_role_unknown"
+    assert snapshot(env) == before
+    assert request(env, "PUT", f"/messages/{mid}:900", json={"status": False})["retcode"] == 0
+    after_disable = request(env, "POST", f"/memories/{mid}/context", json=body)["data"]
+    assert after_disable["items"] == []
+    assert after_disable["source_state_counts"]["inactive"] >= 1
+
+
+def test_query_context_exact_empty_scope_precedes_candidate_limit(memory_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env, mid = memory_api, memory_api["memories"]["personal"]
+    fixed_context_embedding(monkeypatch)
+    insert_read_messages(
+        env,
+        [
+            {"message_id": 901, "message_type": "raw", "source_id": 0, "user_id": "", "agent_id": "", "session_id": "", "content": "Unattributed receipt"},
+            {"message_id": 911, "source_id": 901, "user_id": "", "agent_id": "", "session_id": "", "content": "Unattributed decision"},
+            {"message_id": 912, "content": "Another subject's competing decision"},
+        ],
+    )
+    data = request(
+        env,
+        "POST",
+        f"/memories/{mid}/context",
+        json={"query": "decision", "candidate_limit": 1, "max_items": 1, "user_id": "", "agent_id": "", "session_id": "", "budget_tokens": 1024},
+    )["data"]
+    assert len(data["items"]) == 1
+    assert all(data["items"][0][field] == "" for field in ("user_id", "agent_id", "session_id"))
+
+
+def test_query_context_returns_sql_connection_before_embedding(memory_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env, mid = memory_api, memory_api["memories"]["personal"]
+    fixed_context_embedding(monkeypatch)
+    sessions: list[AsyncSession] = []
+    build = memory_context_service.query_context
+    calls: list[str] = []
+
+    async def capture(db: AsyncSession, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        sessions.append(db)
+        return await build(db, *args, **kwargs)
+
+    def encode(model: FixedEmbedding, query: str) -> tuple[list[float], int]:
+        assert sessions and not sessions[-1].in_transaction()
+        assert model.db is None
+        calls.append(query)
+        return [1.0, 0.0], 0
+
+    monkeypatch.setattr(memory_context_service, "query_context", capture)
+    monkeypatch.setattr(FixedEmbedding, "encode_queries", encode)
+    assert request(env, "POST", f"/memories/{mid}/context", json={"query": "connection ownership"})["retcode"] == 0
+    assert calls == ["connection ownership"]
 
 
 def test_visible_count_filters_and_pages(memory_api: dict[str, Any]) -> None:
@@ -289,6 +455,7 @@ def test_message_attribution_real_auth_storage_queue_and_denials(memory_api: dic
             persisted = db.get(Task, task["task_id"])
             assert persisted is not None and persisted.doc_id == mid
             message_id = int(persisted.digest)
+            assert message_id > 0
         stored = MessageService.get_by_message_id(mid, message_id, tenant)
         assert stored["user_id"] == expected
         assert stored["session_id"] == session_id

@@ -170,11 +170,14 @@ class InfinityConnection(InfinityConnectionBase):
                     for mem_id in memory_ids:
                         table_name = f"{indexName}_{mem_id}"
                         try:
-                            filter_cond = self.equivalent_condition_to_str(condition_dict, db_instance.get_table(table_name))
-                            table_found = True
-                            break
-                        except Exception:
-                            pass
+                            table_instance = db_instance.get_table(table_name)
+                        except InfinityException as exc:
+                            if exc.error_code != ErrorCode.TABLE_NOT_EXIST:
+                                raise
+                            continue
+                        filter_cond = self.equivalent_condition_to_str(condition_dict, table_instance)
+                        table_found = True
+                        break
                     if table_found:
                         break
                 if not table_found:
@@ -233,7 +236,9 @@ class InfinityConnection(InfinityConnectionBase):
                     table_name = f"{indexName}_{memory_id}"
                     try:
                         table_instance = db_instance.get_table(table_name)
-                    except Exception:
+                    except InfinityException as exc:
+                        if exc.error_code != ErrorCode.TABLE_NOT_EXIST:
+                            raise
                         continue
                     table_list.append(table_name)
                     if not column_name_list:
@@ -358,7 +363,9 @@ class InfinityConnection(InfinityConnectionBase):
                 table_list.append(table_name)
                 try:
                     table_instance = db_instance.get_table(table_name)
-                except Exception:
+                except InfinityException as exc:
+                    if exc.error_code != ErrorCode.TABLE_NOT_EXIST:
+                        raise
                     self.logger.warning(f"Table not found: {table_name}, this memory isn't created in Infinity. Maybe it is created in other document engine.")
                     continue
                 mem_res, _ = table_instance.output(["*"]).filter(f"id = '{message_id}'").to_df()
