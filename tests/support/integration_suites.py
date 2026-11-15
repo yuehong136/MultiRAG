@@ -58,6 +58,8 @@ DATABASE_TESTS = frozenset(
         "test_memory_writer_operators.py",
         "test_memory_maintenance_repository.py",
         "test_memory_maintenance_publication.py",
+        "test_memory_maintenance_execution.py",
+        "test_memory_operation_inbox.py",
         "test_llm_embedding_inputs.py",
         "test_llm_tool_capability.py",
         "test_model_config_resolution.py",
@@ -228,6 +230,8 @@ def required_services(paths: list[Path]) -> set[str]:
             "test_memory_writer_operators.py",
             "test_memory_maintenance_repository.py",
             "test_memory_maintenance_publication.py",
+            "test_memory_maintenance_execution.py",
+            "test_memory_operation_inbox.py",
         }:
             required.add("postgresql")
             continue
@@ -239,6 +243,7 @@ def required_services(paths: list[Path]) -> set[str]:
             "test_memory_writer_web_consumer.py",
             "test_memory_dreaming_http.py",
             "test_memory_dreaming_web_consumer.py",
+            "test_memory_maintenance_worker_cli.py",
         }:
             required.update(("postgresql", "redis", "milvus"))
             continue

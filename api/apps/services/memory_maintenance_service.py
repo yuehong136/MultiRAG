@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.apps.services.memory_context_service import require_memory
 from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
 from common.token_utils import encoder
+from memory.maintenance.execution import ExecutionService
 from memory.maintenance.jobs import JobService
 from memory.maintenance.provider import MaintenanceAnalyst
 from memory.maintenance.publication import PublicationService
@@ -45,6 +46,10 @@ async def jobs(db: AsyncSession, memory_id: str, *, actor_id: str) -> JobService
         analyzer=MaintenanceAnalyst(provider).analyze,
         count_tokens=count_tokens,
     )
+
+
+async def executions(db: AsyncSession, memory_id: str, *, actor_id: str) -> ExecutionService:
+    return ExecutionService(db, jobs=await jobs(db, memory_id, actor_id=actor_id))
 
 
 async def publications(db: AsyncSession, memory_id: str, *, actor_id: str) -> PublicationService:

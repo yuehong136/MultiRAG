@@ -3,8 +3,8 @@
 import asyncio
 import json
 import threading
+import time
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from api.apps.services import memory_maintenance_service
+from api.db.memory_execution_models import MemoryMaintenanceExecution
 from api.db.memory_maintenance_models import MemoryMaintenanceCandidate, MemoryMaintenanceInput, MemoryMaintenanceJob
 from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision
 from core.utils.redis_conn import REDIS_CONN
@@ -21,6 +22,7 @@ from memory.services.messages import MessageService
 from tests.integration.test_memory_writes_http import WriteChat, api_request, manage_bank, result
 from tests.integration.test_memory_writes_http import writes_api as writes_api
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.memory_maintenance_worker import maintenance_worker
 
 _TARGET = "The project uses port 80. Keep the backup policy."
 
@@ -80,18 +82,19 @@ def dreaming_api(writes_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(WriteChat, "async_chat", chat)
     try:
-        yield env
+        with maintenance_worker(env):
+            yield env
     finally:
         if "analysis_release" in env:
             env["analysis_release"].set()
         with Session(env["engine"]) as db:
-            for model in (MemoryMaintenanceCandidate, MemoryMaintenanceInput, MemoryMaintenanceJob):
+            for model in (MemoryMaintenanceExecution, MemoryMaintenanceCandidate, MemoryMaintenanceInput, MemoryMaintenanceJob):
                 db.execute(sa.delete(model).where(model.memory_id == mid))
             db.commit()
         with Session(env["engine"]) as reader:
             remaining = {
                 model.__tablename__: reader.scalar(sa.select(sa.func.count()).select_from(model).where(model.memory_id == mid))
-                for model in (MemoryMaintenanceCandidate, MemoryMaintenanceInput, MemoryMaintenanceJob)
+                for model in (MemoryMaintenanceExecution, MemoryMaintenanceCandidate, MemoryMaintenanceInput, MemoryMaintenanceJob)
             }
             assert not any(remaining.values()), remaining
         env["journal"].event("dreaming-sql-cleanup-readback", memory_id=mid, remaining=remaining)
@@ -106,9 +109,24 @@ def create_job(env: dict[str, Any], *, with_target: bool = True, operation_id: s
 
 def analyze(env: dict[str, Any], job: dict[str, Any]) -> list[dict[str, Any]]:
     mid, jid = env["memory_id"], job["job_id"]
-    completed = result(api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{jid}/runs", json={"operation_id": "run-dream"}))
+    submitted = api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{jid}/runs", json={"operation_id": "run-dream"})
+    accepted = result(submitted, status=submitted.status_code)
+    assert submitted.status_code in {200, 202} and accepted["analysis_operation_id"] == "run-dream"
+    completed = wait_job(env, jid)
     assert completed["state"] == "ready", completed
     return result(api_request(env, "GET", f"/memories/{mid}/maintenance-jobs/{jid}/candidates"))["candidates"]
+
+
+def wait_job(env: dict[str, Any], job_id: str, *, execution_terminal: bool = True) -> dict[str, Any]:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        assert not env.get("worker_errors"), env.get("worker_errors")
+        view = result(api_request(env, "GET", f"/memories/{env['memory_id']}/maintenance-jobs/{job_id}"))
+        execution = view.get("execution") or {}
+        if view["state"] not in {"pending", "running", "cancel_requested"} and (not execution_terminal or execution.get("state") not in {"queued", "claimed", "running"}):
+            return view
+        time.sleep(0.05)
+    raise AssertionError("maintenance execution did not settle")
 
 
 def approve(env: dict[str, Any], job: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -172,21 +190,21 @@ def test_source_withdrawal_clears_candidate_copies_and_fences_late_model_output(
     env["proposals"] = [env["proposals"][0]]
     job = create_job(env, with_target=False)
     env["analysis_started"], env["analysis_release"] = threading.Event(), threading.Event()
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        run = pool.submit(api_request, env, "POST", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/runs", json={"operation_id": "late-model"})
-        try:
-            assert env["analysis_started"].wait(20)
-            withdrawn = result(
-                api_request(env, "POST", f"/memories/{mid}/sources/900/withdrawals", json={"operation_id": "withdraw-in-analysis", "expected_source_revision": 1, "reason": "source retracted"}),
-                status=202,
-            )
-            assert withdrawn["index_sync_status"] != "ready"
-            with Session(env["engine"]) as reader:
-                assert reader.get(MemoryMaintenanceJob, job["job_id"]).state == "redacted"
-                assert all(item.snapshot == {} for item in reader.scalars(sa.select(MemoryMaintenanceInput).where(MemoryMaintenanceInput.job_id == job["job_id"])))
-        finally:
-            env["analysis_release"].set()
-        ended = result(run.result(timeout=30))
+    submitted = api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/runs", json={"operation_id": "late-model"})
+    assert submitted.status_code == 202
+    try:
+        assert env["analysis_started"].wait(20)
+        withdrawn = result(
+            api_request(env, "POST", f"/memories/{mid}/sources/900/withdrawals", json={"operation_id": "withdraw-in-analysis", "expected_source_revision": 1, "reason": "source retracted"}),
+            status=202,
+        )
+        assert withdrawn["index_sync_status"] != "ready"
+        with Session(env["engine"]) as reader:
+            assert reader.get(MemoryMaintenanceJob, job["job_id"]).state == "redacted"
+            assert all(item.snapshot == {} for item in reader.scalars(sa.select(MemoryMaintenanceInput).where(MemoryMaintenanceInput.job_id == job["job_id"])))
+    finally:
+        env["analysis_release"].set()
+    ended = wait_job(env, job["job_id"])
     assert ended["state"] == "redacted"
     assert result(api_request(env, "GET", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/candidates"))["candidates"] == []
     assert result(api_request(env, "POST", f"/memories/{mid}/operations/withdraw-in-analysis/reconciliations"))["index_sync_status"] == "ready"
@@ -222,10 +240,52 @@ def test_malformed_model_output_leaves_no_candidates_or_coverage_success(dreamin
     env, mid = dreaming_api, dreaming_api["memory_id"]
     env["model_response"] = "invalid JSON from controlled model"
     job = create_job(env)
-    failed = result(api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/runs", json={"operation_id": "bad-model"}))
+    submitted = api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/runs", json={"operation_id": "bad-model"})
+    assert submitted.status_code in {200, 202}
+    failed = wait_job(env, job["job_id"])
     assert failed["state"] == "failed" and failed["coverage"]["analyzed"] == 0
     assert result(api_request(env, "GET", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/candidates"))["candidates"] == []
     assert MessageService.get_by_message_id(mid, 910, env["tenants"]["personal"])["content"] == _TARGET
+
+
+def test_durable_submission_is_discovered_after_worker_restart_without_duplicate_analysis(dreaming_api: dict[str, Any]) -> None:
+    env, mid = dreaming_api, dreaming_api["memory_id"]
+    env["worker_stop"].set()
+    env["worker_thread"].join(timeout=10)
+    assert not env["worker_thread"].is_alive()
+    job = create_job(env)
+    queued = result(api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/runs", json={"operation_id": "survive-restart"}), status=202)
+    assert queued["execution"]["state"] == "queued"
+    for _ in range(3):
+        pending = result(api_request(env, "GET", f"/memories/{mid}/operations"))
+        command = next(item for item in pending["operations"] if item["operation_id"] == "survive-restart")
+        assert command["job_id"] == job["job_id"] and command["execution"]["state"] == "queued" and not command["can_reconcile"]
+        detail = result(api_request(env, "GET", f"/memories/{mid}/operations/survive-restart"))
+        assert detail["execution"]["state"] == "queued" and not env["analysis_calls"]
+    with maintenance_worker(env):
+        completed = wait_job(env, job["job_id"])
+        assert completed["state"] == "ready" and completed["execution"]["state"] == "succeeded"
+        replay = result(api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/runs", json={"operation_id": "survive-restart"}))
+        assert replay["execution"]["state"] == "succeeded" and len(env["analysis_calls"]) == 1
+        candidates = result(api_request(env, "GET", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/candidates"))["candidates"]
+        assert candidates and all(item["state"] == "pending" and item["assessment"]["verification_status"] == "unverified" for item in candidates)
+        assert MessageService.get_by_message_id(mid, 910, env["tenants"]["personal"])["content"] == _TARGET
+
+
+def test_cancel_queued_execution_prevents_model_after_worker_returns(dreaming_api: dict[str, Any]) -> None:
+    env, mid = dreaming_api, dreaming_api["memory_id"]
+    env["worker_stop"].set()
+    env["worker_thread"].join(timeout=10)
+    assert not env["worker_thread"].is_alive()
+    job = create_job(env)
+    result(api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/runs", json={"operation_id": "cancel-before-model"}), status=202)
+    canceled = result(api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/cancellations", json={"operation_id": "cancel-queued"}))
+    assert canceled["state"] == canceled["execution"]["state"] == "canceled"
+    with maintenance_worker(env):
+        assert env["worker_polled"].wait(10)
+        detail = result(api_request(env, "GET", f"/memories/{mid}/operations/cancel-before-model"))
+        assert detail["execution"]["state"] == "canceled"
+        assert not env["analysis_calls"]
 
 
 def seed_second_source(env: dict[str, Any]) -> None:

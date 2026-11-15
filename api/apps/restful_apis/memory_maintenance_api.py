@@ -94,12 +94,12 @@ async def get_candidates(memory_id: str, job_id: str, db: AsyncSession = Depends
         return _command_error(error)
 
 
-@router.post("/memories/{memory_id}/maintenance-jobs/{job_id}/runs", summary="Analyze the saved input snapshot without publishing memory")
+@router.post("/memories/{memory_id}/maintenance-jobs/{job_id}/runs", summary="Queue durable analysis of the saved input snapshot without publishing memory")
 async def run_job(memory_id: str, job_id: str, body: MemoryCommand, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
-    from api.apps.services.memory_maintenance_service import jobs
+    from api.apps.services.memory_maintenance_service import executions
 
     try:
-        return job_result(await (await jobs(db, memory_id, actor_id=user.id)).run(memory_id, job_id, operation_id=body.operation_id))
+        return job_result(await (await executions(db, memory_id, actor_id=user.id)).submit(memory_id, job_id, operation_id=body.operation_id))
     except Exception as error:
         return _command_error(error, operation_id=body.operation_id)
 

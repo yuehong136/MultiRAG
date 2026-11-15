@@ -29,12 +29,13 @@ tenant、actor、模型行、可信状态不能由请求或模型覆盖，权限
 | --- | --- | --- |
 | 创建任务 | `POST /maintenance-jobs` | 保存授权输入快照，不调用模型 |
 | 查看任务 | `GET /maintenance-jobs` 或 `GET /maintenance-jobs/{job_id}` | 只读状态、来源版本和覆盖量 |
-| 执行分析 | `POST /maintenance-jobs/{job_id}/runs`，`{operation_id}` | 对保存的快照执行一次有界分析 |
+| 提交分析 | `POST /maintenance-jobs/{job_id}/runs`，`{operation_id}` | 持久提交后台分析，受理请求不执行模型 |
 | 查看候选 | `GET /maintenance-jobs/{job_id}/candidates` | 查看最终正文、原文、精确 patch、diff、理由和来源 |
 | 审核候选 | `POST /maintenance-jobs/{job_id}/candidates/{candidate_id}/reviews` | 提交操作 ID、`expected_revision` 和 `approve` / `reject` |
 | 发布批准项 | `POST /maintenance-jobs/{job_id}/publications` | 提交操作 ID及选中的 candidate ID/最新审核版本，最多 16 项 |
 | 取消整理 | `POST /maintenance-jobs/{job_id}/cancellations`，`{operation_id}` | 使分析与未发布候选失效，不撤销已发布记忆 |
 | 查看与对账发布 | 既有 `GET /operations/{operation_id}`、`POST /operations/{operation_id}/reconciliations` | 复用原批次操作及固定消息 ID |
+| 发现待办 | `GET /operations?view=pending`，或 `view=all` | 找回分析、发布、追加与删除等原操作，支持游标分页 |
 
 创建请求示例：
 
@@ -58,6 +59,43 @@ tenant、actor、模型行、可信状态不能由请求或模型覆盖，权限
 本版本不维护全局完成水位。后续新增来源、新来源版本或新范围需要新的任务，不会根据上次时间猜测全量已经处理。
 RAW 作为 `legacy_combined` / `role_unknown` 使用，不解析正文中的 `User Input:` 等字样来重建可信角色，
 也不把模型或历史 Agent 的自述当成实际工具验证结果。
+
+## 持久后台执行与刷新恢复
+
+`runs` 将分析操作、writer admission、索引 outbox 和 execution 在接受事务中登记，返回 HTTP 202。
+已完成的同操作重放可以返回 200。请求断开或页面关闭不会删除 SQL 中的任务；独立 worker 领取显式提交的 execution，
+继续复用原分析和候选校验，不自动审核或发布。没有 worker 时任务保持 queued，受理成功不代表已经开始分析。
+
+job 的原 `state` 与后台 `execution.state` 分开：
+
+| execution.state | 含义 |
+| --- | --- |
+| `queued` / `claimed` | 等待执行，或已领取但尚未进入分析阶段 |
+| `running` | 本次分析已启动，可能仍有实际模型 IO |
+| `succeeded` | 候选保存与后台执行结算均已确认，不表示候选已发布 |
+| `failed` | 本次失败；允许的重试必须显式使用原操作，并重新核验来源、权限及次数上限 |
+| `canceled` | 已取消并结算；已发布记忆仍按原发布协议保留 |
+| `needs_reconciliation` | 状态或实际 IO 未能确认，需要恢复或独立人工核验 |
+
+execution 只返回状态、尝试次数、时间和安全错误码，不返回 worker/claim/writer token。
+metadata 领取超时只允许重新领取尚未进入真实工作的派发；running 的实际 token 不能靠心跳或租约过期清除。
+终态记账结果未知时 worker 停止，后续 worker 按原记录恢复；job 已 ready、execution 尚未结算时仍会出现在待办中，
+恢复不会重新生成已经保存的候选。每个 execution 最多启动三次分析，显式重试不能绕过上限；模型 SDK 内部重试次数另计。
+
+启动独立 worker 使用 `python -m memory.maintenance.worker`；`--once` 对账既有执行元数据并执行至多一个排队任务，
+`--poll-interval`、`--claim-timeout-seconds`、`--heartbeat-seconds` 控制轮询和派发元数据的监测。
+停止信号要求排空当前 owned work。该 worker 不扫描来源、不维护全局水位，也不提供定时整理。
+
+操作待办 `view=pending` 包含尚未结算、仍需通知提取任务或索引对账的操作；`view=all` 可找回终态句柄。
+分页按创建时间和操作 ID 继续，游标绑定认证用户、Memory、筛选和页大小，每次重新检查当前 owner/team 权限。
+列出公开操作句柄和安全 metadata，不列 Dreaming 内部发布子操作。库删除后沿最小审计权限仅提供原删除操作，不依赖 Memory 配置仍存在。
+
+`can_reconcile` 表达当前用户是否可显式对账；它不是授权凭证，POST 仍检查当前权限和原操作 actor。
+团队成员能阅读的操作不一定能代替原 actor 执行。`writer_busy=true` 或需要人工核验时，不提供直接重放入口。
+RAW 已存但 `queue_state` 尚未 submitted/not_required，或实际 writer 未结算时，不能仅凭 ready 状态显示整体完成。
+
+Web 通过服务端待办与 URL 中的 job/operation ID 恢复选择；独立操作页支持原库删除后的审计读取。
+刷新和轮询只执行 GET，不自动调用模型、对账或发布。候选审核、失败重试和发布继续由用户显式发起。
 
 ## 候选与审核
 
@@ -103,9 +141,10 @@ SQL 决定之前来源失效会中止整批；SQL 决定之后来源撤回只清
 
 ## 部署边界
 
-部署前备份并应用正式 Alembic 迁移，统一切换已排空旧进程的 API/worker。
-本版本通过显式 `runs` 请求执行分析，不启动脱离资源所有权的常驻进程，不承诺页面关闭后自动持续调度。
+部署前备份并应用正式 Alembic 迁移，统一切换已排空旧进程的 API 和维护 worker，并单独运行上述 worker 入口。
+API 不在请求内启动后台线程或创建脱离资源所有权的进程。后台任务由持久 SQL 记录和受管理的 worker 执行，页面不承担调度职责。
 本地受控模型和真实 scratch 存储测试验证的是权限、状态、事务与恢复协议；真实模型质量、供应商费用和生产部署需要另外验收。
+小规模合成效果与成本基线的范围见 [Memory 基线评估](memory-evaluation.md)。
 
 ## 维护接点
 
