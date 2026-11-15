@@ -4389,6 +4389,9 @@ class GatewayModel(BaseModel):
         sa.UniqueConstraint("tenant_id", "name", name="uq_gateway_models_tenant_name"),
         sa.CheckConstraint("status IN ('active', 'inactive')", name="ck_gateway_models_status"),
         sa.CheckConstraint("model_type IN ('chat', 'embedding', 'rerank')", name="ck_gateway_models_type"),
+        sa.CheckConstraint(
+            "(rpm_limit IS NULL OR rpm_limit > 0) AND (tpm_limit IS NULL OR tpm_limit > 0) AND (max_parallel_requests IS NULL OR max_parallel_requests > 0)", name="ck_gateway_models_limits"
+        ),
         {"schema": "usr_ai"},
     )
 
@@ -4399,6 +4402,10 @@ class GatewayModel(BaseModel):
     model_type: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Limits shared by every key that uses this model; NULL means unlimited.
+    rpm_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tpm_limit: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    max_parallel_requests: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_by: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
@@ -4414,6 +4421,13 @@ class GatewayKey(BaseModel):
     __tablename__ = "t_ai_gateway_keys"
     __table_args__ = (
         sa.CheckConstraint("status IN ('active', 'disabled', 'revoked')", name="ck_gateway_keys_status"),
+        sa.CheckConstraint(
+            "(rpm_limit IS NULL OR rpm_limit > 0) AND (tpm_limit IS NULL OR tpm_limit > 0) AND (max_parallel_requests IS NULL OR max_parallel_requests > 0)", name="ck_gateway_keys_limits"
+        ),
+        sa.CheckConstraint(
+            "(token_quota IS NULL AND quota_period IS NULL) OR (token_quota IS NOT NULL AND quota_period IS NOT NULL AND token_quota > 0 AND quota_period IN ('day', 'month'))",
+            name="ck_gateway_keys_quota",
+        ),
         sa.Index("uq_gateway_keys_tenant_name_live", "tenant_id", "name", unique=True, postgresql_where=text("status <> 'revoked'")),
         {"schema": "usr_ai"},
     )
@@ -4428,6 +4442,12 @@ class GatewayKey(BaseModel):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     allow_all_models: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
     allowed_model_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    # NULL means unlimited. The quota is a token budget per UTC day or month.
+    rpm_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tpm_limit: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    max_parallel_requests: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    token_quota: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    quota_period: Mapped[str | None] = mapped_column(String(8), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(32), nullable=True)

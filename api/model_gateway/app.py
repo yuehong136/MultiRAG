@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.model_gateway import errors
 from api.model_gateway.errors import GatewayError
+from api.model_gateway.limits import Limiter, MemoryLimiter
 from api.model_gateway.relay import REQUEST_ID_HEADER, Relay, request_id_of
 from api.model_gateway.store import GatewayStore, SqlGatewayStore
 from common.app_config import ModelGatewayConfig, get_app_config
@@ -26,11 +27,17 @@ _MAX_KEEPALIVE_CONNECTIONS = 100
 
 
 def _error_response(request: Request, error: GatewayError) -> JSONResponse:
-    return JSONResponse(status_code=error.status_code, content=error.body(), headers={REQUEST_ID_HEADER: request_id_of(request)})
+    return JSONResponse(status_code=error.status_code, content=error.body(), headers={**error.headers, REQUEST_ID_HEADER: request_id_of(request)})
 
 
-def create_app(*, store: GatewayStore | None = None, transport: httpx.AsyncBaseTransport | None = None, config: ModelGatewayConfig | None = None) -> FastAPI:
-    """Build the data plane. ``store`` and ``transport`` are injectable for tests."""
+def create_app(
+    *,
+    store: GatewayStore | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    config: ModelGatewayConfig | None = None,
+    limiter: Limiter | None = None,
+) -> FastAPI:
+    """Build the data plane. ``store``, ``transport`` and ``limiter`` are injectable for tests."""
     settings = config or get_app_config().model_gateway
     if store is None:
         from api.db.db_models import async_session_factory
@@ -39,6 +46,7 @@ def create_app(*, store: GatewayStore | None = None, transport: httpx.AsyncBaseT
             raise RuntimeError("The model gateway requires the PostgreSQL async engine")
         store = SqlGatewayStore(async_session_factory)
     gateway_store: GatewayStore = store
+    gateway_limiter: Limiter = limiter or MemoryLimiter(usage_since=gateway_store.tokens_used_since)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -52,7 +60,7 @@ def create_app(*, store: GatewayStore | None = None, transport: httpx.AsyncBaseT
         )
         limits = httpx.Limits(max_connections=_MAX_UPSTREAM_CONNECTIONS, max_keepalive_connections=_MAX_KEEPALIVE_CONNECTIONS)
         async with httpx.AsyncClient(transport=transport, timeout=timeout, limits=limits, follow_redirects=False) as client:
-            relay = Relay(client, gateway_store, settings)
+            relay = Relay(client, gateway_store, settings, gateway_limiter)
             app.state.relay = relay
             try:
                 yield

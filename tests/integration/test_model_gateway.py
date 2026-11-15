@@ -127,9 +127,16 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
             connection.execute(keys.insert().values(id="key-2", tenant_id="t", name="runner", secret_hash="b" * 64, created_by="u"))
             with pytest.raises(IntegrityError), connection.begin_nested():
                 connection.execute(keys.update().where(keys.c.id == "key-2").values(status="paused"))
+            # Limits are positive, and a quota always comes with its period.
+            for invalid in ({"rpm_limit": 0}, {"max_parallel_requests": -1}, {"token_quota": 10}, {"quota_period": "day"}, {"token_quota": 10, "quota_period": "week"}):
+                with pytest.raises(IntegrityError), connection.begin_nested():
+                    connection.execute(keys.update().where(keys.c.id == "key-2").values(**invalid))
+            connection.execute(keys.update().where(keys.c.id == "key-2").values(rpm_limit=60, token_quota=10, quota_period="month"))
             connection.execute(models.insert().values(id="m-1", tenant_id="t", name="chat-default", model_id=1, model_type="chat", created_by="u"))
             with pytest.raises(IntegrityError), connection.begin_nested():
                 connection.execute(models.insert().values(id="m-2", tenant_id="t", name="chat-default", model_id=2, model_type="chat", created_by="u"))
+            with pytest.raises(IntegrityError), connection.begin_nested():
+                connection.execute(models.update().where(models.c.id == "m-1").values(tpm_limit=0))
             with pytest.raises(RuntimeError, match="persisted model gateway data"):
                 migration.downgrade()
             connection.execute(keys.delete())
@@ -313,3 +320,78 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
         assert [item["name"] for item in admin.get(f"{_PREFIX}/models").json()["data"]] == ["chat-default"]
     with Session(owned_engine) as reader:
         assert reader.scalar(sa.select(sa.func.count()).select_from(GatewayRequestLog).where(GatewayRequestLog.gateway_model_id == embed_model["id"])) == 1
+
+
+def test_gateway_limits_refuse_and_quota_survives_a_restart(owned_engine: Engine) -> None:
+    owner = uuid.uuid4().hex
+    with Session(owned_engine) as db:
+        db.add(tenant(owner))
+        chat_id = register_model(db, owner, "VLLM", "qwen-upstream", "chat", "http://models.internal:8000", "upstream-secret")
+        db.commit()
+    upstream = _Upstream()
+    prompt = [{"role": "user", "content": "hello"}]
+
+    with management(owned_engine, owner) as admin:
+        chat_model = admin.post(f"{_PREFIX}/models", json={"name": "chat-default", "model_id": chat_id, "model_type": "chat", "max_parallel_requests": 8}).json()["data"]
+        assert chat_model["max_parallel_requests"] == 8 and chat_model["rpm_limit"] is None
+        scope = {"allowed_model_ids": [chat_model["id"]]}
+        rate_key = admin.post(f"{_PREFIX}/keys", json={"name": "rate-limited", "rpm_limit": 2, **scope}).json()["data"]
+        token_key = admin.post(f"{_PREFIX}/keys", json={"name": "token-limited", "tpm_limit": 4, **scope}).json()["data"]
+        quota_key = admin.post(f"{_PREFIX}/keys", json={"name": "quota-limited", "token_quota": 8, "quota_period": "day", **scope}).json()["data"]
+        assert (rate_key["rpm_limit"], token_key["tpm_limit"], quota_key["token_quota"], quota_key["quota_period"], quota_key["quota_used"]) == (2, 4, 8, "day", 0)
+        assert admin.post(f"{_PREFIX}/keys", json={"name": "half-quota", "token_quota": 8}).status_code == 422
+    with Session(owned_engine) as reader:
+        stored = reader.get(GatewayKey, quota_key["id"])
+        assert stored is not None and (stored.token_quota, stored.quota_period, stored.rpm_limit) == (8, "day", None)
+
+    # Each call uses 5 tokens. A fixed clock keeps every call inside one minute of today.
+    fixed = datetime.now(UTC).replace(second=5, microsecond=0)
+    with data_plane(owned_engine, httpx.MockTransport(upstream), clock=lambda: fixed) as gateway:
+        rate, tokens, quota = sdk(gateway, rate_key["key"]), sdk(gateway, token_key["key"]), sdk(gateway, quota_key["key"])
+        rate.chat.completions.create(model="chat-default", messages=prompt)
+        rate.chat.completions.create(model="chat-default", messages=prompt)
+        with pytest.raises(openai.RateLimitError) as too_fast:
+            rate.chat.completions.create(model="chat-default", messages=prompt)
+        assert (too_fast.value.code, too_fast.value.type) == ("rate_limit_exceeded", "requests")
+        assert too_fast.value.response.headers["retry-after"] == "55"
+
+        tokens.chat.completions.create(model="chat-default", messages=prompt)
+        with pytest.raises(openai.RateLimitError) as too_many_tokens:
+            tokens.chat.completions.create(model="chat-default", messages=prompt)
+        assert (too_many_tokens.value.code, too_many_tokens.value.type) == ("rate_limit_exceeded", "tokens")
+
+        # Quota of 8: the second call crosses it and completes, the third is refused.
+        quota.chat.completions.create(model="chat-default", messages=prompt)
+        list(quota.chat.completions.create(model="chat-default", messages=prompt, stream=True))
+        forwarded = len(upstream.requests)
+        with pytest.raises(openai.RateLimitError) as spent:
+            quota.chat.completions.create(model="chat-default", messages=prompt)
+        assert (spent.value.code, spent.value.type) == ("insufficient_quota", "insufficient_quota")
+        assert len(upstream.requests) == forwarded == 5
+
+    refused = [(row.key_name, row.status_code, row.error_code, row.total_tokens) for row in logs(owned_engine) if row.status_code == 429]
+    assert sorted(refused) == [("quota-limited", 429, "insufficient_quota", None), ("rate-limited", 429, "rate_limit_exceeded", None), ("token-limited", 429, "rate_limit_exceeded", None)]
+
+    # A new process starts with empty minute windows, but the quota is read back from the logs.
+    with data_plane(owned_engine, httpx.MockTransport(upstream)) as restarted:
+        with pytest.raises(openai.RateLimitError) as still_spent:
+            sdk(restarted, quota_key["key"]).chat.completions.create(model="chat-default", messages=prompt)
+        assert still_spent.value.code == "insufficient_quota"
+        assert len(upstream.requests) == forwarded
+        sdk(restarted, rate_key["key"]).chat.completions.create(model="chat-default", messages=prompt)
+
+    with management(owned_engine, owner) as admin:
+        by_name = {item["name"]: item for item in admin.get(f"{_PREFIX}/keys").json()["data"]}
+        assert by_name["quota-limited"]["quota_used"] == 10
+        assert by_name["rate-limited"]["quota_used"] is None
+        # Raising the quota takes effect on the next request; clearing a limit uses explicit nulls.
+        raised = admin.patch(f"{_PREFIX}/keys/{quota_key['id']}", json={"token_quota": 100, "quota_period": "day"}).json()["data"]
+        assert (raised["token_quota"], raised["quota_used"]) == (100, 10)
+        assert admin.patch(f"{_PREFIX}/keys/{quota_key['id']}", json={"token_quota": 100}).status_code == 422
+        cleared = admin.patch(f"{_PREFIX}/keys/{rate_key['id']}", json={"rpm_limit": None}).json()["data"]
+        assert cleared["rpm_limit"] is None
+        assert admin.patch(f"{_PREFIX}/models/{chat_model['id']}", json={"max_parallel_requests": None, "rpm_limit": 600}).json()["data"]["rpm_limit"] == 600
+
+    with data_plane(owned_engine, httpx.MockTransport(upstream)) as gateway:
+        completion = sdk(gateway, quota_key["key"]).chat.completions.create(model="chat-default", messages=prompt)
+        assert completion.usage is not None and completion.usage.total_tokens == 5

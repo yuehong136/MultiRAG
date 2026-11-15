@@ -1,13 +1,13 @@
 # MultiRAG 模型网关（Model Gateway）
 
-> 状态：**P1 最小闭环已实现；P2 限额与 P3 尚未实现**（见第 10 节）
+> 状态：**P1 最小闭环与 P2 限额已实现；调用记录清理、rerank 与 P3 尚未实现**（见第 10 节）
 > 最后核验：2026-11-15
 > 维护范围：把已登记的模型以标准模型接口对外提供、API Key、调用记录与用量、限额
 
 本目录是模型网关的权威文档入口。它不替代模型连接与目录的合同
 （[MODEL_PROVIDERS](../../api/db/services/MODEL_PROVIDERS.md)）、模型删除保护
 （[模型配置生命周期](../model-provider-lifecycle.md)），也不改变既有 RAG SDK 接口。
-第 7 节的限额和第 10 节标为未实现的内容仍是提案，其余描述当前实现。
+第 10 节标为未实现的内容仍是提案，其余描述当前实现。
 
 ## 0. 启用与运行
 
@@ -81,6 +81,7 @@ MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
 | `model_type` | `chat` / `embedding` / `rerank` |
 | `status` | `active` / `inactive` |
 | `description` | 可空 |
+| `rpm_limit`、`tpm_limit`、`max_parallel_requests` | 可空，该模型所有 Key 合计的限额（第 7 节） |
 | `created_by`、`updated_by` | 管理操作人 |
 
 一个公开名对应一个已登记模型。模型语义变化（例如 embedding 更换权重）用新的公开名表达，
@@ -98,6 +99,7 @@ MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
 | `status` | `active` / `disabled` / `revoked`；撤销不可恢复 |
 | `expires_at` | 可空 |
 | `allow_all_models`、`allowed_model_ids` | 模型范围。默认不允许全部；列表为空且未显式允许全部时拒绝一切调用 |
+| `rpm_limit`、`tpm_limit`、`max_parallel_requests`、`token_quota`、`quota_period` | 可空，这把 Key 的限额和配额（第 7 节） |
 | `last_used_at` | 低频更新，不随每个请求写库 |
 | `created_by`、`updated_by` | 管理操作人，不代表调用身份 |
 
@@ -199,7 +201,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 | Key 无权访问该模型 | 403 | `model_not_allowed` |
 | 公开模型不存在或未启用 | 404 | `model_not_found` |
 | 请求体超过上限 | 413 | `request_too_large` |
-| 触发网关限流或配额（第二阶段） | 429 | 见第 7 节 |
+| 触发限流、并发上限或配额 | 429 | `rate_limit_exceeded`；`concurrency_limit_exceeded`；`insufficient_quota`（第 7 节） |
 | 上游返回 401 / 403 | 502 | `upstream_auth_error`，避免调用方误以为是自己的 Key 有问题 |
 | 上游返回其他 4xx | 原样返回 | 上游的错误体，保留 `Retry-After` |
 | 上游 5xx；连接失败 | 502 | `upstream_error`；`upstream_unreachable` |
@@ -228,21 +230,41 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
   数据量上来之后再加按日汇总表。
 - 保留天数可配置，清理任务在第二阶段提供。停用、撤销 Key 不删除它的历史记录。
 
-## 7. 限额（第二阶段）
+## 7. 限额
+
+限额都是可选的，留空表示不限。没有配置任何限额的请求不经过限额器。
 
 | 维度 | 字段 | 说明 |
 |---|---|---|
 | 单个 Key | `rpm_limit`、`tpm_limit`、`max_parallel_requests` | 每分钟请求数、每分钟 token 数、并发上限 |
-| 单个 Key | `token_quota`、`quota_period` | 按周期重置的 token 配额 |
+| 单个 Key | `token_quota`、`quota_period` | token 配额，按 UTC 自然日（`day`）或自然月（`month`）重置；两个字段必须一起设置 |
 | 单个公开模型 | `rpm_limit`、`tpm_limit`、`max_parallel_requests` | 该模型所有 Key 合计，保护上游容量；多建 Key 不能绕过 |
 
-- 计数放在 Redis，复用 `core/utils/redis_conn.py` 的令牌桶脚本。
-- token 按事后扣减：响应结束后计入，超出后下一个请求被拒绝。不做预留、结算和对账。
-- 限流返回 429，带 `Retry-After` 和 `x-ratelimit-*` 响应头。
-- 配额耗尽返回 429，`code` 为 `insufficient_quota`，不带 `Retry-After`。
-- 推理服务本身的并发上限仍由推理服务保证；网关限制的是准入。
+实现在 `api/model_gateway/limits.py`：
 
-严格预算（不可超支）需要预留、幂等结算和崩溃恢复，属于单独的扩展，不是普通限额的前提。
+- **准入**：请求解析出模型后、转发前检查。先看配额，再看 token 速率、请求速率和并发。
+  任何一项拒绝都不消耗其他项的额度。
+- **token 事后结算**：用量在调用结束时才知道，所以越线的那次调用会完成，下一次被拒绝。
+  不做预留和对账。用量未知的调用不计入 token 速率和配额。
+- **速率窗口**：固定的一分钟窗口。
+- **配额**：进程内计数，每个周期第一次用到时从调用记录里读出已用量，所以重启后配额依然有效。
+  这是软配额：并发请求和落库时机可能带来一两次调用的偏差。
+- **并发**：准入时占位，调用结束时释放，包括上游失败、流中断和客户端断开。
+
+拒绝一律返回 429，并写调用记录：
+
+| 情况 | `type` | `code` | 响应头 |
+|---|---|---|---|
+| 请求速率 | `requests` | `rate_limit_exceeded` | `Retry-After`、`x-ratelimit-limit-requests`、`x-ratelimit-remaining-requests` |
+| token 速率 | `tokens` | `rate_limit_exceeded` | `Retry-After`、`x-ratelimit-limit-tokens`、`x-ratelimit-remaining-tokens` |
+| 并发 | `requests` | `concurrency_limit_exceeded` | `Retry-After: 1` |
+| 配额用完 | `insufficient_quota` | `insufficient_quota` | 无（重置前重试没有意义） |
+
+限制：
+
+- **计数在数据面进程内**。启动多个数据面进程时各自计数；需要全局一致的限额时要换成共享计数（见第 11 节）。
+- 推理服务本身的并发上限仍由推理服务保证；网关限制的是准入。
+- 严格预算（不可超支）需要预留、幂等结算和崩溃恢复，属于单独的扩展。
 
 ## 8. 管理面
 
@@ -257,6 +279,8 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 | `GET /api/v1/model-gateway/usage` | 按 Key、模型、日期或 `end_user` 汇总用量 |
 
 目前只能发布 `chat` 和 `embedding` 两类模型；发布和重新启用时都会校验目标模型可用且厂商在收录范围内。
+限额字段在创建和修改时都可以带；修改时显式传 `null` 表示取消该项限额。Key 列表里的 `quota_used`
+是当前周期的已用 token（没有配额的 Key 为 `null`）。
 调用记录按页查询（每页最多 100 条），用量汇总默认取最近 7 天，日期按 UTC 划分。
 汇总里的 token 只累计用量已知的调用，`usage_unknown` 给出未计入的调用数。
 Web 管理页面属于独立 Web 仓库的后续工作。
@@ -304,7 +328,8 @@ Web 管理页面属于独立 Web 仓库的后续工作。
 | 阶段 | 内容 | 完成证据 |
 |---|---|---|
 | P1 最小闭环（**已实现**） | 三张表和迁移；管理接口；数据面的 `/v1/models`、`/v1/chat/completions`、`/v1/embeddings`；调用记录；Key 的有效期和启停；模型删除保护 | 通用性准则第 1、2 条成立；真实 SDK 完成普通和流式调用，并能按 Key 查到记录 |
-| P2 管控 | 限流、并发和软配额；用量汇总；记录保留与清理；rerank | 限额按维度生效；多把 Key 不能绕过模型级上限 |
+| P2 管控（**限额已实现**） | 限流、并发和软配额；用量汇总 | 限额按维度生效；多把 Key 不能绕过模型级上限；重启后配额仍然有效 |
+| P2 余项（未实现） | 调用记录的保留与清理；rerank | 每项单独验收 |
 | P3 按需 | 非 OpenAI 协议厂商；`/v1/responses`、`/v1/messages`；多部署与回退；正文日志（手动开启）；按日汇总；管理审计；严格预算；Web 页面 | 每项单独立项和验收 |
 
 验证按 [AGENTS.md 的验证表](../../AGENTS.md#验证) 执行：
@@ -327,7 +352,7 @@ Web 管理页面属于独立 Web 仓库的后续工作。
 ## 11. 未决事项
 
 1. 响应里的 `model` 是否改写为公开名。改写流式响应需要逐块解析和重新序列化，与原样转发冲突。
-2. 限流依赖的 Redis 不可用时，默认放行还是拒绝。
+2. 多个数据面进程共享限额计数（例如放到 Redis）是否需要；如果做，共享存储不可用时默认放行还是拒绝。
 3. 调用记录写入失败时，是否需要「拒绝新请求」的严格模式。
 4. 管理接口是否需要自动化凭据（独立于登录态的管理 Key）。
 5. embeddings 的 base64 编码依赖上游支持。上游不支持时，由网关转换还是原样返回上游错误。

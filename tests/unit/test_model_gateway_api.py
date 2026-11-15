@@ -68,6 +68,31 @@ def test_key_creation_is_scoped_to_the_owner_and_returns_the_plaintext_once(enab
     # Only a name is required: everything else is optional metadata or scope.
     body = seen["body"]
     assert (body.description, body.tags, body.expires_at, body.allow_all_models, body.allowed_model_ids) == (None, None, None, False, [])
+    assert (body.rpm_limit, body.tpm_limit, body.max_parallel_requests, body.token_quota, body.quota_period) == (None, None, None, None, None)
+
+
+def test_limits_and_quota_are_passed_to_the_operation(enabled, monkeypatch):
+    seen = {}
+
+    async def create_key(db, tenant_id, actor_id, body):
+        seen["body"] = body
+        return {"id": "k" * 32}
+
+    async def update_key(db, tenant_id, actor_id, key_id, body):
+        seen["patch"] = body.model_dump(exclude_unset=True)
+        return {"id": key_id}
+
+    monkeypatch.setattr(management, "create_key", create_key)
+    monkeypatch.setattr(management, "update_key", update_key)
+
+    created = enabled.post(f"{PREFIX}/keys", json={"name": "runner", "rpm_limit": 60, "tpm_limit": 100000, "max_parallel_requests": 4, "token_quota": 5000000, "quota_period": "month"})
+    cleared = enabled.patch(f"{PREFIX}/keys/{'k' * 32}", json={"rpm_limit": None, "token_quota": None, "quota_period": None})
+
+    assert created.status_code == 200 and cleared.status_code == 200
+    body = seen["body"]
+    assert (body.rpm_limit, body.tpm_limit, body.max_parallel_requests, body.token_quota, body.quota_period) == (60, 100000, 4, 5000000, "month")
+    # Explicit nulls reach the operation, so a limit can be removed again.
+    assert seen["patch"] == {"rpm_limit": None, "token_quota": None, "quota_period": None}
 
 
 @pytest.mark.parametrize(
@@ -84,6 +109,13 @@ def test_key_creation_is_scoped_to_the_owner_and_returns_the_plaintext_once(enab
         ("/models", {"name": "chat-default", "model_id": 0, "model_type": "chat"}),
         ("/models", {"name": "rerank-default", "model_id": 1, "model_type": "rerank"}),
         ("/models", {"name": "chat-default", "model_id": 1, "model_type": "chat", "base_url": "http://elsewhere"}),
+        ("/models", {"name": "chat-default", "model_id": 1, "model_type": "chat", "tpm_limit": -5}),
+        ("/models", {"name": "chat-default", "model_id": 1, "model_type": "chat", "token_quota": 100, "quota_period": "day"}),
+        ("/keys", {"name": "runner", "rpm_limit": 0}),
+        ("/keys", {"name": "runner", "max_parallel_requests": 1.5}),
+        ("/keys", {"name": "runner", "token_quota": 100}),
+        ("/keys", {"name": "runner", "quota_period": "month"}),
+        ("/keys", {"name": "runner", "token_quota": 100, "quota_period": "week"}),
     ],
 )
 def test_invalid_bodies_are_rejected_before_any_operation(enabled, monkeypatch, path, body):

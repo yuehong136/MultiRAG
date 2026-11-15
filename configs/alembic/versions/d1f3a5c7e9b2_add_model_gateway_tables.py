@@ -15,6 +15,7 @@ down_revision: str | None = "c9e1f3a5b7d9"
 branch_labels: str | None = None
 depends_on: str | None = None
 SCHEMA = "usr_ai"
+_LIMITS_CHECK = "(rpm_limit IS NULL OR rpm_limit > 0) AND (tpm_limit IS NULL OR tpm_limit > 0) AND (max_parallel_requests IS NULL OR max_parallel_requests > 0)"
 
 
 def _timestamps(*, index: bool = True) -> list[sa.Column[Any]]:
@@ -38,12 +39,16 @@ def _tables() -> tuple[sa.Table, sa.Table, sa.Table]:
         sa.Column("model_type", sa.String(16), nullable=False),
         sa.Column("status", sa.String(16), nullable=False, server_default="active"),
         sa.Column("description", sa.Text(), nullable=True),
+        sa.Column("rpm_limit", sa.Integer(), nullable=True),
+        sa.Column("tpm_limit", sa.BigInteger(), nullable=True),
+        sa.Column("max_parallel_requests", sa.Integer(), nullable=True),
         sa.Column("created_by", sa.String(32), nullable=False),
         sa.Column("updated_by", sa.String(32), nullable=True),
         *_timestamps(),
         sa.UniqueConstraint("tenant_id", "name", name="uq_gateway_models_tenant_name"),
         sa.CheckConstraint("status IN ('active', 'inactive')", name="ck_gateway_models_status"),
         sa.CheckConstraint("model_type IN ('chat', 'embedding', 'rerank')", name="ck_gateway_models_type"),
+        sa.CheckConstraint(_LIMITS_CHECK, name="ck_gateway_models_limits"),
     )
     keys = sa.Table(
         "t_ai_gateway_keys",
@@ -58,11 +63,21 @@ def _tables() -> tuple[sa.Table, sa.Table, sa.Table]:
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("allow_all_models", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("allowed_model_ids", JSONB(), nullable=False, server_default="[]"),
+        sa.Column("rpm_limit", sa.Integer(), nullable=True),
+        sa.Column("tpm_limit", sa.BigInteger(), nullable=True),
+        sa.Column("max_parallel_requests", sa.Integer(), nullable=True),
+        sa.Column("token_quota", sa.BigInteger(), nullable=True),
+        sa.Column("quota_period", sa.String(8), nullable=True),
         sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_by", sa.String(32), nullable=False),
         sa.Column("updated_by", sa.String(32), nullable=True),
         *_timestamps(),
         sa.CheckConstraint("status IN ('active', 'disabled', 'revoked')", name="ck_gateway_keys_status"),
+        sa.CheckConstraint(_LIMITS_CHECK, name="ck_gateway_keys_limits"),
+        sa.CheckConstraint(
+            "(token_quota IS NULL AND quota_period IS NULL) OR (token_quota IS NOT NULL AND quota_period IS NOT NULL AND token_quota > 0 AND quota_period IN ('day', 'month'))",
+            name="ck_gateway_keys_quota",
+        ),
         sa.Index("uq_gateway_keys_tenant_name_live", "tenant_id", "name", unique=True, postgresql_where=sa.text("status <> 'revoked'")),
     )
     logs = sa.Table(

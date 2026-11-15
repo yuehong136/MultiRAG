@@ -11,13 +11,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import GatewayKey, GatewayModel, GatewayRequestLog, Tenant
 from api.model_gateway import errors
 from api.model_gateway.catalog import ModelUnavailable, UpstreamTarget, resolve_upstream
 from api.model_gateway.keys import parse_key_id, verify_key
+from api.model_gateway.limits import NO_LIMITS, Limits, Quota
 from api.model_gateway.usage import UNAVAILABLE, Usage
 
 # last_used_at is a hint for operators, not an audit trail: refresh it rarely.
@@ -36,6 +37,8 @@ class Caller:
     allow_all_models: bool
     allowed_model_ids: frozenset[str]
     tags: dict[str, Any] | None = None
+    limits: Limits = NO_LIMITS
+    quota: Quota | None = None
 
     def may_use(self, gateway_model_id: str) -> bool:
         return self.allow_all_models or gateway_model_id in self.allowed_model_ids
@@ -55,6 +58,7 @@ class ResolvedModel:
     name: str
     model_type: str
     upstream: UpstreamTarget
+    limits: Limits = NO_LIMITS
 
 
 @dataclass(slots=True)
@@ -92,6 +96,8 @@ class GatewayStore(Protocol):
     async def resolve_model(self, caller: Caller, name: str, model_type: str) -> ResolvedModel: ...
 
     async def record(self, entry: RequestLogEntry) -> None: ...
+
+    async def tokens_used_since(self, key_id: str, since: datetime) -> int: ...
 
 
 def bearer_token(authorization: str | None) -> str | None:
@@ -133,6 +139,8 @@ class SqlGatewayStore:
                 allow_all_models=bool(key.allow_all_models),
                 allowed_model_ids=frozenset(str(item) for item in key.allowed_model_ids or []),
                 tags=dict(key.tags) if key.tags else None,
+                limits=Limits(rpm=key.rpm_limit, tpm=key.tpm_limit, max_parallel=key.max_parallel_requests),
+                quota=Quota(tokens=key.token_quota, period=key.quota_period) if key.token_quota is not None and key.quota_period is not None else None,
             )
 
     async def visible_models(self, caller: Caller) -> list[PublicModel]:
@@ -153,7 +161,19 @@ class SqlGatewayStore:
                 upstream = await resolve_upstream(db, caller.tenant_id, row.model_id, row.model_type)
             except ModelUnavailable:
                 raise errors.model_unavailable(name) from None
-            return ResolvedModel(gateway_model_id=row.id, name=row.name, model_type=row.model_type, upstream=upstream)
+            return ResolvedModel(
+                gateway_model_id=row.id,
+                name=row.name,
+                model_type=row.model_type,
+                upstream=upstream,
+                limits=Limits(rpm=row.rpm_limit, tpm=row.tpm_limit, max_parallel=row.max_parallel_requests),
+            )
+
+    async def tokens_used_since(self, key_id: str, since: datetime) -> int:
+        """Tokens the key has used since ``since``, according to the request logs."""
+        async with self._sessions() as db:
+            used = await db.scalar(select(func.coalesce(func.sum(GatewayRequestLog.total_tokens), 0)).where(GatewayRequestLog.key_id == key_id, GatewayRequestLog.started_at >= since))
+        return int(used or 0)
 
     async def record(self, entry: RequestLogEntry) -> None:
         async with self._sessions() as db:

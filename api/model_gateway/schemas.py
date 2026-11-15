@@ -1,9 +1,9 @@
 """Request bodies of the model gateway management API."""
 
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 _MAX_TAGS = 16
 _MAX_TAG_KEY = 64
@@ -41,6 +41,10 @@ def _future_instant(value: datetime | None) -> datetime | None:
 Tags = Annotated[dict[str, str] | None, AfterValidator(_valid_tags)]
 Expiry = Annotated[datetime | None, AfterValidator(_future_instant)]
 AllowedModelIds = Annotated[list[str], Field(max_length=_MAX_ALLOWED_MODELS)]
+# Limits are positive; leaving one out (or sending null) means unlimited.
+RateLimit = Annotated[int, Field(gt=0, le=2_000_000_000)]
+TokenQuota = Annotated[int, Field(gt=0, le=9_000_000_000_000_000)]
+QuotaPeriod = Literal["day", "month"]
 
 
 class _Body(BaseModel):
@@ -48,20 +52,37 @@ class _Body(BaseModel):
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
 
-class GatewayModelCreate(_Body):
+class _Limits(_Body):
+    rpm_limit: RateLimit | None = None
+    tpm_limit: RateLimit | None = None
+    max_parallel_requests: RateLimit | None = None
+
+
+class _KeyLimits(_Limits):
+    token_quota: TokenQuota | None = None
+    quota_period: QuotaPeriod | None = None
+
+    @model_validator(mode="after")
+    def _quota_and_period_go_together(self) -> Self:
+        if (self.token_quota is None) != (self.quota_period is None):
+            raise ValueError("token_quota and quota_period must be set together")
+        return self
+
+
+class GatewayModelCreate(_Limits):
     name: PublicModelName
     model_id: int = Field(gt=0)
     model_type: ServedModelType
     description: Description | None = None
 
 
-class GatewayModelPatch(_Body):
+class GatewayModelPatch(_Limits):
     name: PublicModelName | None = None
     description: Description | None = None
     status: Literal["active", "inactive"] | None = None
 
 
-class GatewayKeyCreate(_Body):
+class GatewayKeyCreate(_KeyLimits):
     name: KeyName
     description: Description | None = None
     tags: Tags = None
@@ -70,7 +91,7 @@ class GatewayKeyCreate(_Body):
     allowed_model_ids: AllowedModelIds = Field(default_factory=list)
 
 
-class GatewayKeyPatch(_Body):
+class GatewayKeyPatch(_KeyLimits):
     name: KeyName | None = None
     description: Description | None = None
     tags: Tags = None

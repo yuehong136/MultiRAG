@@ -22,7 +22,8 @@ from fastapi.responses import Response, StreamingResponse
 
 from api.model_gateway import errors
 from api.model_gateway.errors import GatewayError
-from api.model_gateway.store import GatewayStore, RequestLogEntry, ResolvedModel
+from api.model_gateway.limits import Limiter, Subject
+from api.model_gateway.store import Caller, GatewayStore, RequestLogEntry, ResolvedModel
 from api.model_gateway.usage import SSEUsageTap, usage_from_payload
 from common.app_config import ModelGatewayConfig
 
@@ -71,12 +72,24 @@ def _upstream_error_code(raw: bytes) -> str | None:
     return str(code)[:64] if isinstance(code, (str, int)) and not isinstance(code, bool) else None
 
 
+def _limited_subjects(caller: Caller, resolved: ResolvedModel) -> list[Subject]:
+    subjects: list[Subject] = []
+    if caller.limits or caller.quota is not None:
+        subjects.append(Subject(kind="key", id=caller.key_id, label="this API key", limits=caller.limits, quota=caller.quota))
+    if resolved.limits:
+        subjects.append(Subject(kind="model", id=resolved.gateway_model_id, label=f"the model '{resolved.name}'", limits=resolved.limits))
+    return subjects
+
+
 class Relay:
-    def __init__(self, client: httpx.AsyncClient, store: GatewayStore, settings: ModelGatewayConfig) -> None:
+    def __init__(self, client: httpx.AsyncClient, store: GatewayStore, settings: ModelGatewayConfig, limiter: Limiter) -> None:
         self._client = client
         self._store = store
         self._settings = settings
+        self._limiter = limiter
         self._background: set[asyncio.Task[None]] = set()
+        # Requests that passed admission and still hold slots, by request id.
+        self._admitted: dict[str, list[Subject]] = {}
 
     async def handle(self, request: Request, *, endpoint: str, model_type: str) -> Response:
         request_id = request_id_of(request)
@@ -106,6 +119,10 @@ class Relay:
             entry.gateway_model_id = resolved.gateway_model_id
             entry.upstream_model_id = resolved.upstream.model_id
             entry.upstream_model_name = resolved.upstream.model_name[:_MAX_END_USER_LENGTH]
+            subjects = _limited_subjects(caller, resolved)
+            if subjects:
+                await self._limiter.admit(request_id, subjects)
+                self._admitted[request_id] = subjects
             return await self._forward(request, payload, resolved, entry, started)
         except GatewayError as error:
             entry.status_code, entry.error_type, entry.error_code = error.status_code, error.error_type, error.code
@@ -263,6 +280,13 @@ class Relay:
 
     async def _finish(self, entry: RequestLogEntry, started: float) -> None:
         entry.duration_ms = _elapsed_ms(started)
+        subjects = self._admitted.pop(entry.id, None)
+        if subjects:
+            # Settle before the log write so a slow database does not hold a slot.
+            try:
+                await self._limiter.settle(entry.id, subjects, entry.usage.total_tokens)
+            except Exception:
+                logger.exception("model gateway: failed to settle limits for request %s", entry.id)
         try:
             await self._store.record(entry)
         except Exception:

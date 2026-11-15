@@ -1,6 +1,7 @@
 """Data plane behaviour against a controlled upstream and an in-memory store."""
 
 import asyncio
+import dataclasses
 import json
 import time
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 from api.model_gateway import errors
 from api.model_gateway.app import create_app
 from api.model_gateway.catalog import UpstreamTarget
+from api.model_gateway.limits import Limits, MemoryLimiter, Quota
 from api.model_gateway.relay import Relay
 from api.model_gateway.store import Caller, PublicModel, RequestLogEntry, ResolvedModel
 from api.model_gateway.usage import UNAVAILABLE, SSEUsageTap
@@ -36,6 +38,7 @@ class FakeStore:
         }
         self.records: list[RequestLogEntry] = []
         self.fail_record = False
+        self.used_tokens = 0
 
     async def authenticate(self, authorization: str | None) -> Caller:
         if authorization != CALLER_KEY:
@@ -60,6 +63,9 @@ class FakeStore:
             raise RuntimeError("log store is down")
         self.records.append(entry)
 
+    async def tokens_used_since(self, key_id: str, since: datetime) -> int:
+        return self.used_tokens
+
 
 class Chunks(httpx.AsyncByteStream):
     def __init__(self, chunks: list[bytes], delay: float = 0.0) -> None:
@@ -75,7 +81,7 @@ class Chunks(httpx.AsyncByteStream):
 class Gateway:
     """The data plane wired to one upstream handler; logs are read after shutdown."""
 
-    def __init__(self, handler, **settings) -> None:
+    def __init__(self, handler, *, limiter=None, **settings) -> None:
         self.store = FakeStore()
         self.upstream_requests: list[httpx.Request] = []
 
@@ -84,7 +90,7 @@ class Gateway:
             result = handler(request)
             return await result if asyncio.iscoroutine(result) else result
 
-        self.app = create_app(store=self.store, transport=httpx.MockTransport(recording), config=ModelGatewayConfig(**settings))
+        self.app = create_app(store=self.store, transport=httpx.MockTransport(recording), config=ModelGatewayConfig(**settings), limiter=limiter)
 
     def call(self, method: str, url: str, **kwargs) -> httpx.Response:
         # Leaving the context runs shutdown, which waits for stream log writes.
@@ -367,7 +373,7 @@ async def test_client_disconnect_mid_stream_is_logged_as_closed():
     store = FakeStore()
     transport = httpx.MockTransport(lambda request: httpx.Response(200, headers=_SSE, stream=Chunks([_DELTA, _DELTA, _USAGE_ONLY, _DONE])))
     async with httpx.AsyncClient(transport=transport) as client:
-        relay = Relay(client, store, ModelGatewayConfig())
+        relay = Relay(client, store, ModelGatewayConfig(), MemoryLimiter())
         response = await client.send(client.build_request("POST", "http://upstream.test/v1/chat/completions"), stream=True)
         entry = RequestLogEntry(id="r" * 32, tenant_id="tenant-1", key_id="k" * 32, key_name="eval-runner", endpoint="chat.completions", started_at=datetime.now(UTC), stream=True)
         started = time.monotonic()
@@ -381,3 +387,126 @@ async def test_client_disconnect_mid_stream_is_logged_as_closed():
     assert (entry.status_code, entry.error_type) == (499, "client_closed")
     assert entry.usage is UNAVAILABLE
     assert store.records == [entry]
+
+
+def _frozen_limiter(store: FakeStore | None = None) -> MemoryLimiter:
+    """A limiter whose clock stays inside one minute, so windows never roll mid-test."""
+    return MemoryLimiter(store.tokens_used_since if store else None, clock=lambda: datetime(2026, 11, 15, 10, 0, 5, tzinfo=UTC))
+
+
+def _limited(handler, **key_changes) -> Gateway:
+    gateway = Gateway(handler, limiter=_frozen_limiter())
+    gateway.store.caller = dataclasses.replace(gateway.store.caller, **key_changes)
+    return gateway
+
+
+_CHAT_BODY = {"model": "chat-default", "messages": []}
+
+
+def test_request_rate_limit_refuses_without_calling_upstream_and_is_logged():
+    gateway = _limited(_completion, limits=Limits(rpm=1))
+    assert gateway.call("POST", CHAT, headers=AUTH, json=_CHAT_BODY).status_code == 200
+
+    response = gateway.call("POST", CHAT, headers=AUTH, json=_CHAT_BODY)
+
+    assert response.status_code == 429
+    assert response.json()["error"] == {"message": "Rate limit reached for this API key: 1 requests per minute.", "type": "requests", "param": None, "code": "rate_limit_exceeded"}
+    assert (response.headers["retry-after"], response.headers["x-ratelimit-limit-requests"], response.headers["x-ratelimit-remaining-requests"]) == ("55", "1", "0")
+    assert response.headers["x-request-id"]
+    assert len(gateway.upstream_requests) == 1
+    assert [(record.status_code, record.error_code) for record in gateway.store.records] == [(200, None), (429, "rate_limit_exceeded")]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_token_rate_limit_counts_usage_reported_when_the_call_ends(stream):
+    gateway = _limited(_stream if stream else _completion, limits=Limits(tpm=5))
+    body = {**_CHAT_BODY, "stream": stream}
+    # The upstream reports 5 tokens: the first call is admitted and uses the whole minute's budget.
+    assert gateway.call("POST", CHAT, headers=AUTH, json=body).status_code == 200
+
+    response = gateway.call("POST", CHAT, headers=AUTH, json=body)
+
+    assert (response.status_code, response.json()["error"]["type"], _error_code(response)) == (429, "tokens", "rate_limit_exceeded")
+    assert response.headers["x-ratelimit-limit-tokens"] == "5"
+    assert len(gateway.upstream_requests) == 1
+
+
+def _server_error(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(500, text="boom")
+
+
+def _refuse_connection(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("connection refused", request=request)
+
+
+@pytest.mark.parametrize("handler", [_completion, _stream, _server_error, _refuse_connection], ids=["completed", "stream", "upstream-error", "unreachable"])
+def test_concurrency_slot_is_released_however_the_call_ends(handler):
+    gateway = _limited(handler, limits=Limits(max_parallel=1))
+
+    for _ in range(3):
+        gateway.call("POST", CHAT, headers=AUTH, json={**_CHAT_BODY, "stream": handler is _stream})
+
+    assert len(gateway.upstream_requests) == 3
+    assert all(record.error_code != "concurrency_limit_exceeded" for record in gateway.store.records)
+
+
+def test_model_limit_applies_to_every_key_of_that_model():
+    gateway = Gateway(_completion, limiter=_frozen_limiter())
+    gateway.store.models["chat-default"] = dataclasses.replace(gateway.store.models["chat-default"], limits=Limits(rpm=1))
+    assert gateway.call("POST", CHAT, headers=AUTH, json=_CHAT_BODY).status_code == 200
+
+    response = gateway.call("POST", CHAT, headers=AUTH, json=_CHAT_BODY)
+
+    assert response.status_code == 429
+    assert response.json()["error"]["message"] == "Rate limit reached for the model 'chat-default': 1 requests per minute."
+    # Another model of the same key is unaffected.
+    assert gateway.call("POST", "/v1/embeddings", headers=AUTH, json={"model": "embed-default", "input": "a"}).status_code == 200
+
+
+def test_spent_quota_refuses_with_no_retry_hint():
+    gateway = Gateway(_completion)
+    gateway.store.used_tokens = 100
+    gateway.store.caller = dataclasses.replace(gateway.store.caller, quota=Quota(100, "day"))
+
+    response = gateway.call("POST", CHAT, headers=AUTH, json=_CHAT_BODY)
+
+    assert (response.status_code, response.json()["error"]["type"], _error_code(response)) == (429, "insufficient_quota", "insufficient_quota")
+    assert "retry-after" not in response.headers
+    assert gateway.upstream_requests == []
+    assert gateway.only_record().error_code == "insufficient_quota"
+
+
+def test_quota_counts_tokens_of_calls_made_through_this_process():
+    gateway = Gateway(_completion)
+    gateway.store.caller = dataclasses.replace(gateway.store.caller, quota=Quota(8, "day"))
+
+    statuses = [gateway.call("POST", CHAT, headers=AUTH, json=_CHAT_BODY).status_code for _ in range(3)]
+
+    # 5 tokens per call against a quota of 8: the second call crosses it, the third is refused.
+    assert statuses == [200, 200, 429]
+
+
+def test_requests_without_limits_never_touch_the_limiter():
+    class Untouchable:
+        async def admit(self, request_id, subjects) -> None:
+            raise AssertionError("limiter must not be consulted")
+
+        async def settle(self, request_id, subjects, tokens) -> None:
+            raise AssertionError("limiter must not be consulted")
+
+    gateway = Gateway(_completion, limiter=Untouchable())
+
+    assert gateway.call("POST", CHAT, headers=AUTH, json=_CHAT_BODY).status_code == 200
+    assert gateway.call("POST", CHAT, headers=AUTH, json={"model": "missing", "messages": []}).status_code == 404
+
+
+def test_failing_limiter_settlement_does_not_change_the_response():
+    class BrokenSettle(MemoryLimiter):
+        async def settle(self, request_id, subjects, tokens) -> None:
+            raise RuntimeError("settlement failed")
+
+    gateway = Gateway(_completion, limiter=BrokenSettle())
+    gateway.store.caller = dataclasses.replace(gateway.store.caller, limits=Limits(rpm=10))
+
+    assert gateway.call("POST", CHAT, headers=AUTH, json=_CHAT_BODY).status_code == 200
+    assert gateway.only_record().status_code == 200

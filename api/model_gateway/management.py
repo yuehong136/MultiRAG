@@ -5,7 +5,7 @@ to one owner tenant; commit, rollback and HTTP mapping stay with the route.
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Integer, and_, case, cast, func, or_, select
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.db.db_models import GatewayKey, GatewayModel, GatewayRequestLog
 from api.model_gateway.catalog import ModelUnavailable, describe_models, resolve_upstream
 from api.model_gateway.keys import issue_key, redact_key
+from api.model_gateway.limits import Quota
 from api.model_gateway.schemas import GatewayKeyCreate, GatewayKeyPatch, GatewayModelCreate, GatewayModelPatch
 
 USAGE_GROUPS = ("key", "model", "day", "end_user")
@@ -47,6 +48,9 @@ def _model_view(row: GatewayModel, described: dict[int, dict[str, Any]]) -> dict
         "model_type": row.model_type,
         "status": row.status,
         "description": row.description,
+        "rpm_limit": row.rpm_limit,
+        "tpm_limit": row.tpm_limit,
+        "max_parallel_requests": row.max_parallel_requests,
         # None when the registered model no longer exists for this owner.
         "target": described.get(row.model_id),
         "created_by": row.created_by,
@@ -56,7 +60,7 @@ def _model_view(row: GatewayModel, described: dict[int, dict[str, Any]]) -> dict
     }
 
 
-def _key_view(row: GatewayKey) -> dict[str, Any]:
+def _key_view(row: GatewayKey, quota_used: int | None = None) -> dict[str, Any]:
     return {
         "id": row.id,
         "name": row.name,
@@ -67,6 +71,13 @@ def _key_view(row: GatewayKey) -> dict[str, Any]:
         "expires_at": _iso(row.expires_at),
         "allow_all_models": row.allow_all_models,
         "allowed_model_ids": list(row.allowed_model_ids or []),
+        "rpm_limit": row.rpm_limit,
+        "tpm_limit": row.tpm_limit,
+        "max_parallel_requests": row.max_parallel_requests,
+        "token_quota": row.token_quota,
+        "quota_period": row.quota_period,
+        # Tokens used in the current period; None for keys without a quota.
+        "quota_used": quota_used,
         "last_used_at": _iso(row.last_used_at),
         "created_by": row.created_by,
         "updated_by": row.updated_by,
@@ -105,6 +116,29 @@ async def _checked_model_ids(db: AsyncSession, tenant_id: str, model_ids: list[s
     return unique
 
 
+async def _quota_usage(db: AsyncSession, rows: list[GatewayKey]) -> dict[str, int]:
+    """Tokens each quota-bearing key has used in its current period, from the request logs."""
+    now = datetime.now(UTC)
+    usage: dict[str, int] = {}
+    for period in ("day", "month"):
+        key_ids = [row.id for row in rows if row.token_quota is not None and row.quota_period == period]
+        if not key_ids:
+            continue
+        since = Quota(tokens=1, period=period).period_start(now)
+        query = (
+            select(GatewayRequestLog.key_id, func.coalesce(func.sum(GatewayRequestLog.total_tokens), 0))
+            .where(GatewayRequestLog.key_id.in_(key_ids), GatewayRequestLog.started_at >= since)
+            .group_by(GatewayRequestLog.key_id)
+        )
+        usage.update(dict.fromkeys(key_ids, 0))
+        usage.update({key_id: int(used) for key_id, used in (await db.execute(query)).all()})
+    return usage
+
+
+async def _key_with_usage(db: AsyncSession, row: GatewayKey) -> dict[str, Any]:
+    return _key_view(row, (await _quota_usage(db, [row])).get(row.id))
+
+
 async def list_models(db: AsyncSession, tenant_id: str) -> list[dict[str, Any]]:
     rows = (await db.scalars(select(GatewayModel).where(GatewayModel.tenant_id == tenant_id).order_by(GatewayModel.name))).all()
     described = await describe_models(db, tenant_id) if rows else {}
@@ -113,7 +147,19 @@ async def list_models(db: AsyncSession, tenant_id: str) -> list[dict[str, Any]]:
 
 async def create_model(db: AsyncSession, tenant_id: str, actor_id: str, body: GatewayModelCreate) -> dict[str, Any]:
     await _servable(db, tenant_id, body.model_id, body.model_type)
-    row = GatewayModel(id=uuid.uuid4().hex, tenant_id=tenant_id, name=body.name, model_id=body.model_id, model_type=body.model_type, status="active", description=body.description, created_by=actor_id)
+    row = GatewayModel(
+        id=uuid.uuid4().hex,
+        tenant_id=tenant_id,
+        name=body.name,
+        model_id=body.model_id,
+        model_type=body.model_type,
+        status="active",
+        description=body.description,
+        rpm_limit=body.rpm_limit,
+        tpm_limit=body.tpm_limit,
+        max_parallel_requests=body.max_parallel_requests,
+        created_by=actor_id,
+    )
     db.add(row)
     await db.flush()
     return _model_view(row, await describe_models(db, tenant_id))
@@ -142,8 +188,9 @@ async def delete_model(db: AsyncSession, tenant_id: str, gateway_model_id: str) 
 
 
 async def list_keys(db: AsyncSession, tenant_id: str) -> list[dict[str, Any]]:
-    rows = (await db.scalars(select(GatewayKey).where(GatewayKey.tenant_id == tenant_id).order_by(GatewayKey.create_time.desc(), GatewayKey.id))).all()
-    return [_key_view(row) for row in rows]
+    rows = list((await db.scalars(select(GatewayKey).where(GatewayKey.tenant_id == tenant_id).order_by(GatewayKey.create_time.desc(), GatewayKey.id))).all())
+    usage = await _quota_usage(db, rows)
+    return [_key_view(row, usage.get(row.id)) for row in rows]
 
 
 async def create_key(db: AsyncSession, tenant_id: str, actor_id: str, body: GatewayKeyCreate) -> dict[str, Any]:
@@ -159,12 +206,17 @@ async def create_key(db: AsyncSession, tenant_id: str, actor_id: str, body: Gate
         expires_at=body.expires_at,
         allow_all_models=body.allow_all_models,
         allowed_model_ids=await _checked_model_ids(db, tenant_id, body.allowed_model_ids),
+        rpm_limit=body.rpm_limit,
+        tpm_limit=body.tpm_limit,
+        max_parallel_requests=body.max_parallel_requests,
+        token_quota=body.token_quota,
+        quota_period=body.quota_period,
         created_by=actor_id,
     )
     db.add(row)
     await db.flush()
     # The only place the plaintext ever leaves the process.
-    return {**_key_view(row), "key": issued.plaintext}
+    return {**_key_view(row, 0 if row.token_quota is not None else None), "key": issued.plaintext}
 
 
 async def update_key(db: AsyncSession, tenant_id: str, actor_id: str, key_id: str, body: GatewayKeyPatch) -> dict[str, Any]:
@@ -179,9 +231,11 @@ async def update_key(db: AsyncSession, tenant_id: str, actor_id: str, key_id: st
         changes["allowed_model_ids"] = await _checked_model_ids(db, tenant_id, changes["allowed_model_ids"])
     for name, value in changes.items():
         setattr(row, name, value)
+    if (row.token_quota is None) != (row.quota_period is None):
+        raise ValueError("token_quota and quota_period must be set together")
     row.updated_by = actor_id
     await db.flush()
-    return _key_view(row)
+    return await _key_with_usage(db, row)
 
 
 async def revoke_key(db: AsyncSession, tenant_id: str, actor_id: str, key_id: str) -> dict[str, Any]:
@@ -189,7 +243,7 @@ async def revoke_key(db: AsyncSession, tenant_id: str, actor_id: str, key_id: st
     row.status = "revoked"
     row.updated_by = actor_id
     await db.flush()
-    return _key_view(row)
+    return await _key_with_usage(db, row)
 
 
 def _failed() -> Any:

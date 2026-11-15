@@ -6,13 +6,14 @@ from typing import Any
 class GatewayError(Exception):
     """A request outcome that maps to one HTTP status and one error body."""
 
-    def __init__(self, status_code: int, message: str, *, error_type: str, code: str, param: str | None = None) -> None:
+    def __init__(self, status_code: int, message: str, *, error_type: str, code: str, param: str | None = None, headers: dict[str, str] | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.message = message
         self.error_type = error_type
         self.code = code
         self.param = param
+        self.headers = dict(headers or {})
 
     def body(self) -> dict[str, Any]:
         return {"error": {"message": self.message, "type": self.error_type, "param": self.param, "code": self.code}}
@@ -65,6 +66,21 @@ def upstream_unreachable() -> GatewayError:
 
 def upstream_timeout() -> GatewayError:
     return GatewayError(504, "The model service did not respond in time.", error_type="upstream_error", code="upstream_timeout")
+
+
+def rate_limit_exceeded(subject: str, unit: str, limit: int, retry_after: int) -> GatewayError:
+    """A per-minute limit on ``requests`` or ``tokens`` is used up until the window ends."""
+    headers = {"retry-after": str(retry_after), f"x-ratelimit-limit-{unit}": str(limit), f"x-ratelimit-remaining-{unit}": "0"}
+    return GatewayError(429, f"Rate limit reached for {subject}: {limit} {unit} per minute.", error_type=unit, code="rate_limit_exceeded", headers=headers)
+
+
+def concurrency_limit_exceeded(subject: str, limit: int) -> GatewayError:
+    return GatewayError(429, f"Too many concurrent requests for {subject}: the limit is {limit}.", error_type="requests", code="concurrency_limit_exceeded", headers={"retry-after": "1"})
+
+
+def insufficient_quota(limit: int, period: str) -> GatewayError:
+    """The key's token budget for the period is spent; retrying before the reset cannot help."""
+    return GatewayError(429, f"This API key has used its quota of {limit} tokens for the current {period}.", error_type="insufficient_quota", code="insufficient_quota")
 
 
 def not_found() -> GatewayError:

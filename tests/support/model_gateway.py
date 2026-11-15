@@ -8,7 +8,7 @@ SDK; only the upstream transport differs between controlled and live runs.
 import asyncio
 import sys
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import GatewayRequestLog, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, get_async_db
 from api.identity.principal import AuthenticatedActor, AuthenticationContext, AuthenticationSource, IdentityAssurance, TenantMembershipEvidence, build_principal_from_authenticated_actor
 from api.model_gateway.app import create_app
+from api.model_gateway.limits import MemoryLimiter
 from api.model_gateway.store import SqlGatewayStore
 from common.app_config import ModelGatewayConfig
 
@@ -91,10 +92,15 @@ def management(engine: Engine, owner: str) -> Iterator[TestClient]:
 
 
 @contextmanager
-def data_plane(engine: Engine, transport: httpx.AsyncBaseTransport | None, **settings: Any) -> Iterator[TestClient]:
-    """The data plane with SQL persistence. ``transport=None`` reaches real upstreams."""
+def data_plane(engine: Engine, transport: httpx.AsyncBaseTransport | None, *, clock: Callable[[], datetime] | None = None, **settings: Any) -> Iterator[TestClient]:
+    """The data plane with SQL persistence. ``transport=None`` reaches real upstreams.
+
+    ``clock`` pins the limiter's time, so limit windows do not roll during a test.
+    """
     async_engine = create_async_engine(engine.url)
-    app = create_app(store=SqlGatewayStore(async_sessionmaker(async_engine, expire_on_commit=False)), transport=transport, config=ModelGatewayConfig(enabled=True, **settings))
+    store = SqlGatewayStore(async_sessionmaker(async_engine, expire_on_commit=False))
+    limiter = MemoryLimiter(usage_since=store.tokens_used_since, clock=clock) if clock is not None else None
+    app = create_app(store=store, transport=transport, config=ModelGatewayConfig(enabled=True, **settings), limiter=limiter)
     with TestClient(app, backend_options=_BACKEND) as client:
         try:
             yield client
