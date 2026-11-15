@@ -395,7 +395,7 @@ def test_search_fields_accept_real_sdk_hit_and_preserve_payload(row_store: tuple
         },
         pk_name="pk",
     )
-    before = copy.deepcopy(hit.data)
+    before = copy.deepcopy(dict(hit))
     fields = store.get_fields([hit], ["tag_kwd", "tag_feas", "_score", "content_with_weight", "q_2_vec"])
     assert fields == {
         "distance": [0.875],
@@ -408,14 +408,14 @@ def test_search_fields_accept_real_sdk_hit_and_preserve_payload(row_store: tuple
             "q_2_vec": [0.25, -0.5],
         },
     }
-    assert hit.data == before
+    assert dict(hit) == before
 
 
 def test_tag_decoder_accepts_mapping_and_enforces_runtime_type_check() -> None:
     hit = Hit({"tag_kwd": '["财务"]', "tag_feas": '{"财务": 0.75}'})
-    before = copy.deepcopy(hit.data)
+    before = copy.deepcopy(dict(hit))
     assert decode_milvus_tag_fields(hit) == {"tag_kwd": ["财务"], "tag_feas": {"财务": 0.75}}
-    assert hit.data == before
+    assert dict(hit) == before
     with pytest.raises(BeartypeCallHintParamViolation):
         decode_milvus_tag_fields([])
 

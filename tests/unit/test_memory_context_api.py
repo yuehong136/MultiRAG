@@ -136,3 +136,13 @@ def test_optional_source_search_preserves_actor_and_legacy_default(client: TestC
     assert old == [{"message_id": 1}]
     assert new[0]["source"]["state"] == "missing"
     assert calls == ["legacy", "enriched"]
+
+
+def test_source_search_bounds_distinct_memories_before_service_calls(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def forbidden(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("oversized scope reached the service")
+
+    monkeypatch.setattr(memory_context_service, "search_with_sources", forbidden)
+    response = client.get("/api/v1/messages/search", params={"memory_id": ",".join(f"memory-{i}" for i in range(101)), "query": "q", "include_sources": "true"})
+    assert response.json()["code"] == int(RetCode.ARGUMENT_ERROR)
+    assert response.json()["message"] == "Invalid bounded source-search parameters."

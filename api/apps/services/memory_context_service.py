@@ -12,10 +12,12 @@ from sqlalchemy.orm import Session
 from api.apps.services.memory_api_service import _accessible_memories, _require_memory_access, _split_filter_values
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from api.db.services.llm_service import LLMBundle, llm_bundle_scope
+from api.db.services.tenant_llm_service import PreparedTenantLLM, TenantLLMService
+from common.asyncio_utils import finish_owned_work
 from common.constants import LLMType
 from common.doc_store.doc_store_base import FusionExpr
 from common.exceptions import NotFoundException
-from common.token_utils import num_tokens_from_string
+from common.token_utils import encoder
 from memory.services.context import ContextBudget, ContextScope, QueryContext, SourceInfo, assemble_query_context, build_source_excerpt, message_in_scope, resolve_message_source
 from memory.services.messages import MessageService, RecentMessagePage
 from memory.services.query import MsgTextQuery, get_vector
@@ -35,6 +37,11 @@ def _binding(memory: Any) -> MemoryReadBinding:
     return MemoryReadBinding(memory.id, memory.tenant_id, memory.embd_id, memory.tenant_embd_id)
 
 
+def _estimate_context_tokens(text: str) -> int:
+    """Count literal source data strictly; tokenizer failures must fail this read."""
+    return len(encoder.encode(text, disallowed_special=()))
+
+
 async def _release_read_transaction(db: AsyncSession) -> None:
     """Return this read endpoint's SQL connection before slower external IO."""
     if db.new or db.dirty or db.deleted:
@@ -52,19 +59,25 @@ async def require_memory(db: AsyncSession, memory_id: str, *, actor_id: str) -> 
 
 async def _visible_bindings(db: AsyncSession, memory_ids: list[str], *, actor_id: str) -> list[MemoryReadBinding]:
     ids = _split_filter_values(memory_ids)
+    if len(ids) > 100:
+        raise ValueError("Source search supports at most 100 distinct memories")
     bindings = await db.run_sync(lambda session: [_binding(memory) for memory in _accessible_memories(session, actor_id, ids)])  # TODO(async-phase4)
     await _release_read_transaction(db)
     return bindings
 
 
-def _embedding_bundle(db: Session, binding: MemoryReadBinding) -> LLMBundle:
+def _prepare_embedding(db: Session, binding: MemoryReadBinding) -> PreparedTenantLLM:
     if binding.tenant_embd_id:
         config = get_model_config_by_id(db, binding.tenant_embd_id, tenant_id=binding.tenant_id, model_type="embedding")
     else:
         config = get_model_config_by_type_and_name(db, binding.tenant_id, LLMType.EMBEDDING.value, binding.embd_id)
-    bundle = LLMBundle(db, binding.tenant_id, config)
-    bundle.db = None
-    return bundle
+    return TenantLLMService.prepare_model_instance(
+        db,
+        binding.tenant_id,
+        config,
+        expected_type=LLMType.EMBEDDING.value,
+        allow_unregistered_builtin=config.get("id") is None and config.get("llm_factory") == "Builtin",
+    )
 
 
 async def _search(
@@ -79,8 +92,9 @@ async def _search(
 ) -> list[dict[str, Any]]:
     if not bindings:
         return []
-    bundle = await db.run_sync(lambda session: _embedding_bundle(session, bindings[0]))  # TODO(async-phase4)
+    prepared = await db.run_sync(lambda session: _prepare_embedding(session, bindings[0]))  # TODO(async-phase4)
     await _release_read_transaction(db)
+    bundle = await finish_owned_work(asyncio.to_thread(LLMBundle.from_prepared, prepared))
 
     def retrieve() -> list[dict[str, Any]]:
         dense = get_vector(query, bundle, topk=top_n, similarity=similarity_threshold)
@@ -97,10 +111,11 @@ async def _search(
             list(dict.fromkeys(binding.tenant_id for binding in bindings)),
             [text, dense, fusion],
             top_n,
+            strict=True,
         )
         return [message for message in messages if message_in_scope(message, scope)][:top_n]
 
-    return await asyncio.to_thread(retrieve)
+    return await finish_owned_work(asyncio.to_thread(retrieve))
 
 
 async def _sources(bindings: list[MemoryReadBinding], candidates: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -206,13 +221,16 @@ async def query_context(
         keywords_similarity_weight=keywords_similarity_weight,
     )
     sources = await _sources([binding], candidates)
-    return assemble_query_context(
-        candidates,
-        sources,
-        scope=scope,
-        budget=ContextBudget(budget_tokens, max_items=max_items, source_excerpt_chars=source_excerpt_chars),
-        count_tokens=num_tokens_from_string,
-        include_sources=include_sources,
+    return await finish_owned_work(
+        asyncio.to_thread(
+            assemble_query_context,
+            candidates,
+            sources,
+            scope=scope,
+            budget=ContextBudget(budget_tokens, max_items=max_items, source_excerpt_chars=source_excerpt_chars),
+            count_tokens=_estimate_context_tokens,
+            include_sources=include_sources,
+        )
     )
 
 

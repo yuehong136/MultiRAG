@@ -547,11 +547,13 @@ class MessageService:
     def search_message(
         cls,
         memory_ids: list[str],
-        condition_dict: dict,
+        condition_dict: dict[str, Any],
         uid_list: list[str],
         match_expressions: list[MatchExpr],
         top_n: int,
-    ):
+        *,
+        strict: bool = False,
+    ) -> list[dict[str, Any]]:
         index_names = [index_name(uid) for uid in uid_list]
         # filter only valid messages by default
         if "status" not in condition_dict:
@@ -559,7 +561,11 @@ class MessageService:
 
         order_by = OrderByExpr()
         order_by.desc("valid_at")
-        res, total_count = settings.msgStoreConn.search(
+        search = settings.msgStoreConn.search
+        strict_search = getattr(settings.msgStoreConn, "search_strict", None) if strict else None
+        if callable(strict_search):
+            search = strict_search
+        res, total_count = search(
             select_fields=[
                 "message_id",
                 "message_type",

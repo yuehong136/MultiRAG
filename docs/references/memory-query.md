@@ -45,7 +45,7 @@ GET /api/v1/memories/{memory_id}/messages?message_type=raw&user_id=subject&statu
 GET /api/v1/messages/search?memory_id={memory_id}&query=project%20decision&include_sources=true
 ```
 
-附带来源的查询要求非空查询、`top_n` 为 1–100，权重与阈值在 0–1。返回结果经过授权范围与精确主体筛选；原始来源读取有数量和摘录长度上限。
+附带来源的查询要求非空查询、最多 100 个不同 Memory ID、`top_n` 为 1–100，权重与阈值在 0–1。返回结果经过授权范围与精确主体筛选；原始来源读取有数量和摘录长度上限。
 
 | `source.state` | 含义 |
 | --- | --- |
@@ -88,7 +88,7 @@ Content-Type: application/json
 
 `query` 必须非空；`budget_tokens` 为 128–32,768，`max_items` 和 `candidate_limit` 为 1–100。请求拒绝未知字段，数值预算不接受布尔值。可选 `user_id`、`agent_id`、`session_id` 精确筛选，不进行空白规范化。当前仅支持 `query` 模式。
 
-服务复用既有 embedding、混合检索与消息存储，逐项核对候选和父 RAW。仅装入当前有效、来源为 `available` 或 `not_applicable` 的完整条目；无法匹配的内容不进入上下文。`include_sources=false` 只隐藏来源摘录，仍执行来源检查。
+服务复用既有 embedding、检索编排与消息存储，逐项核对候选和父 RAW。仅装入当前有效、来源为 `available` 或 `not_applicable` 的完整条目；无法匹配的内容不进入上下文。`include_sources=false` 只隐藏来源摘录，仍执行来源检查。
 
 响应 `data` 包括：
 
@@ -98,7 +98,7 @@ Content-Type: application/json
 - `source_state_counts`：本次候选的来源检查结果。
 - `source_snapshot_only`：检查仅对应本次读取。
 
-预算使用现有 token 估算器，计入完整领域 JSON（正文、来源摘录、身份、计数及 usage 等包装）。HTTP 的 `retcode/retmsg/data` 信封、调用者添加的提示模板及模型协议开销不在这一预算中。调用者应为这些额外内容预留空间，并在目标模型处再次计量。若连空领域响应都放不下，返回 422。
+预算使用项目的 tokenizer 对字面内容计数，特殊 token 标记作为普通来源文本处理；计数失败会让请求失败，不会视为零消耗。计数包含完整领域 JSON（正文、来源摘录、身份、计数及 usage 等包装）。HTTP 的 `retcode/retmsg/data` 信封、调用者添加的提示模板及模型协议开销不在这一预算中。调用者应为这些额外内容预留空间，并在目标模型处再次计量。若连空领域响应都放不下，返回 422。
 
 去重仅针对实际选入的相同结构化条目；不同来源、主体或时间不会仅因正文相似被合并。超预算条目整体省略，不让模型改写其内容。
 

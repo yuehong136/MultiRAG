@@ -455,7 +455,9 @@ def test_native_capability_checks_both_sdk_and_actual_server(
 ) -> None:
     store, module, calls = milvus_recent_store
     version_calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(module, "version", lambda name: sdk)
+    from common.doc_store import milvus_capabilities
+
+    monkeypatch.setattr(milvus_capabilities, "version", lambda name: sdk)
 
     def get_version(**kwargs: Any) -> str:
         version_calls.append(kwargs)
@@ -469,7 +471,9 @@ def test_native_capability_checks_both_sdk_and_actual_server(
 
 def test_native_capability_does_not_hide_server_failure(milvus_recent_store: tuple[Any, Any, list[dict[str, Any]]], monkeypatch: pytest.MonkeyPatch) -> None:
     store, module, _ = milvus_recent_store
-    monkeypatch.setattr(module, "version", lambda name: "3.0.3")
+    from common.doc_store import milvus_capabilities
+
+    monkeypatch.setattr(milvus_capabilities, "version", lambda name: "3.0.3")
 
     def failed_version(**kwargs: Any) -> str:
         raise RuntimeError("unavailable")
@@ -661,3 +665,74 @@ def test_strict_milvus_bounded_error_propagates(milvus_recent_store: tuple[Any, 
     monkeypatch.setattr(module, "Collection", lambda name, using: SimpleNamespace(load=lambda: None, query=unavailable))
     with pytest.raises(RuntimeError, match="bounded query failed"):
         store.query_recent_candidates(["message_id"], {}, "memory_owner", "bank", MAX_RECENT_MESSAGES_SCAN)
+
+
+@pytest.fixture
+def failing_milvus_search(milvus_recent_store: tuple[Any, Any, list[dict[str, Any]]], monkeypatch: pytest.MonkeyPatch) -> Any:
+    import logging
+    from types import SimpleNamespace
+
+    from common.doc_store.doc_store_base import MatchDenseExpr
+
+    store, module, _ = milvus_recent_store
+    store.logger = logging.getLogger("test.memory.strict_search")
+
+    def unavailable(**kwargs: Any) -> list[Any]:
+        raise RuntimeError("private vector storage failure")
+
+    monkeypatch.setattr(module, "Collection", lambda name, using: SimpleNamespace(load=lambda: None, search=unavailable))
+    monkeypatch.setitem(settings.__dict__, "msgStoreConn", store)
+    return MatchDenseExpr("q_2_vec", [1.0, 0.0], "float", "cosine")
+
+
+def test_milvus_search_keeps_legacy_empty_result_but_strict_chain_propagates(failing_milvus_search: Any) -> None:
+    assert MessageService.search_message(["bank"], {}, ["owner"], [failing_milvus_search], 5) == []
+    with pytest.raises(RuntimeError, match="private vector storage failure"):
+        MessageService.search_message(["bank"], {}, ["owner"], [failing_milvus_search], 5, strict=True)
+
+
+def test_strict_search_uses_ordinary_propagating_connector_when_no_hook(store: MessageStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable(**kwargs: Any) -> tuple[list[dict[str, Any]], int]:
+        raise RuntimeError("connector unavailable")
+
+    monkeypatch.setattr(store, "search", unavailable)
+    with pytest.raises(RuntimeError, match="connector unavailable"):
+        MessageService.search_message(["bank"], {}, ["owner"], [], 5, strict=True)
+
+
+def test_new_context_api_reports_real_strict_milvus_failure_as_500(client: Any, failing_milvus_search: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.apps.services import memory_context_service
+    from common.constants import RetCode
+
+    async def retrieve(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        messages = MessageService.search_message(["bank"], {}, ["owner"], [failing_milvus_search], 5, strict=True)
+        return {"items": messages}
+
+    monkeypatch.setattr(memory_context_service, "query_context", retrieve)
+    response = client.post("/api/v1/memories/bank/context", json={"query": "decision"})
+    assert response.status_code == 500
+    assert response.json()["retcode"] == int(RetCode.SERVER_ERROR)
+    assert response.json()["data"] is False
+    assert "private vector storage failure" not in response.text
+
+
+def test_ob_search_sql_failure_already_propagates_through_strict_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    import logging
+    from types import SimpleNamespace
+
+    from common.doc_store.doc_store_base import MatchDenseExpr
+    from memory.utils.ob_conn import OBConnection
+
+    cls = next(cell.cell_contents for cell in OBConnection.__closure__ or [] if isinstance(cell.cell_contents, type))
+    store = object.__new__(cls)
+    store.logger = logging.getLogger("test.memory.ob_search")
+    store._check_table_exists_cached = lambda table: True
+    store._get_filters = lambda condition: []
+
+    def unavailable(sql: str) -> Any:
+        raise RuntimeError("controlled OB SQL failure")
+
+    store.client = SimpleNamespace(perform_raw_text_sql=unavailable)
+    monkeypatch.setitem(settings.__dict__, "msgStoreConn", store)
+    with pytest.raises(RuntimeError, match="controlled OB SQL failure"):
+        MessageService.search_message(["bank"], {}, ["owner"], [MatchDenseExpr("q_2_vec", [1.0, 0.0], "float", "cosine")], 5, strict=True)

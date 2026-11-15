@@ -3,9 +3,7 @@ name = "multirag"
 version = "0.9.9"
 description = "基于RAG、Agent、Workflow体系赋能LLM应用"
 readme = "README.md"
-# 上界 <3.14：CI 矩阵 3.12/3.13、Docker 3.12.10，3.14 无真实消费者；
-# 且 3.14 解析分支会迫使 pymilvus 静默换 3.0.0（grpcio 钉子冲突）——收紧上界
-# 将解析限制在两个经过验证的解释器系列内。
+# CI 矩阵 3.12/3.13、Docker 3.12.10；将解析限制在已有消费者的解释器系列内。
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "aiohttp>=3.9.0,<4.0.0",
@@ -137,8 +135,8 @@ dependencies = [
     "psycopg2-binary>=2.9.11,<3.0.0",
     "pyclipper>=1.4.0,<2.0.0",
     "pycryptodomex==3.20.0",
-    # <3：生产主向量库客户端不敞口大版本；敞口时解析器曾在部分分支静默换 3.0.0
-    "pymilvus>=2.5.11,<3.0.0",
+    # ORM 接口将在 3.1 移除；迁移到 MilvusClient 后再放宽上界。
+    "pymilvus>=3.0.3,<3.1.0",
     "pymssql>=2.3,<3.0.0",
     "pyobvector==0.2.22",
     "pyodbc>=5.2.0,<6.0.0",
