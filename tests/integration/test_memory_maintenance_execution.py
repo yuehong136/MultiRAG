@@ -25,8 +25,8 @@ from memory.maintenance.jobs import JobService
 from memory.revisions.domain import RevisionBusy, RevisionConflict, RevisionNotFound, RevisionPersistenceUnknown
 from memory.revisions.sources import SourceService
 from memory.writes.operators import acknowledge_attempt_quiescence
-from tests.integration.test_memory_maintenance_repository import create, service
-from tests.integration.test_memory_maintenance_repository import environment as environment
+from tests.support.memory_maintenance_repository import create, service
+from tests.support.memory_maintenance_repository import environment as environment
 from tests.support.resource_journal import ResourceJournal
 
 
@@ -380,7 +380,7 @@ async def test_fresh_processes_discover_persisted_work_and_do_not_replay_success
 from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession,create_async_engine,async_sessionmaker
 from tests.support.database import _pg_url
-from tests.integration.test_memory_maintenance_repository import service
+from tests.support.memory_maintenance_repository import service
 from memory.maintenance.execution import process_next
 from memory.maintenance.jobs import JobService
 async def main() -> None:

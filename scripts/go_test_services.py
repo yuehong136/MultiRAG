@@ -76,7 +76,7 @@ if reservation.exists():
     raise SystemExit("Service reservation already exists; inspect before retry")
 run = uuid.uuid4().hex[:10]
 prefix = "multirag-go-align-" + run
-ports = {}
+ports: dict[str, int] = {}
 for name in ("mysql", "redis", "nats", "nats_monitor", "minio", "es", "api", "admin", "infinity", "infinity_http"):
     while True:
         port = 22000 + secrets.randbelow(8000)
@@ -92,7 +92,7 @@ images = {
     "mysql": "mysql:8.0.39",
     "redis": "valkey/valkey:8",
     "nats": "nats:2.14.1",
-    "minio": "minio/minio:RELEASE.2024-12-18T13-15-44Z",
+    "minio": "pgsty/minio:RELEASE.2026-03-25T00-00-00Z",
     "es": "elasticsearch:8.11.3",
     "infinity": "infiniflow/infinity:v0.7.0",
 }

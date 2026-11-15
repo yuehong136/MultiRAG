@@ -7,8 +7,8 @@ import pytest
 from memory.revisions.domain import RevisionConflict
 from memory.writes.admission import close_writer_admissions, writer_drain_snapshot
 from memory.writes.operators import acknowledge_attempt_quiescence
-from tests.integration.test_memory_append_repository import _service
-from tests.integration.test_memory_append_repository import environment as environment
+from tests.support.memory_append_repository import _service
+from tests.support.memory_append_repository import environment as environment
 
 
 async def test_attempt_attestation_is_exact_replayable_and_keeps_publication_pending(environment: dict[str, Any]) -> None:

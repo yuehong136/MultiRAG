@@ -7,12 +7,15 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.orm import Session
 
+from common import resources
 from core.svr import task_executor
+
+pytestmark = pytest.mark.usefixtures("resources_state_guard")
 
 
 @pytest.mark.parametrize("payload", [b"", b"hello"])
 async def test_strict_source_reader_preserves_bytes(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> None:
-    monkeypatch.setattr(task_executor.settings, "STORAGE_IMPL", SimpleNamespace(get_bytes=lambda *_: payload))
+    monkeypatch.setitem(resources._state, "storage", SimpleNamespace(get_bytes=lambda *_: payload))
     assert await task_executor.get_storage_binary("bucket", "key") == payload
 
 
@@ -23,7 +26,7 @@ async def test_source_reader_missing_and_failed_reads_are_safe(monkeypatch: pyte
             raise ValueError("https://user:secret@private/bucket/key")
         return None
 
-    monkeypatch.setattr(task_executor.settings, "STORAGE_IMPL", SimpleNamespace(get_bytes=read))
+    monkeypatch.setitem(resources._state, "storage", SimpleNamespace(get_bytes=read))
     with pytest.raises(FileNotFoundError if missing else RuntimeError) as failure:
         await task_executor.get_storage_binary("private-bucket", "secret-key")
     assert "private" not in str(failure.value) and "secret" not in str(failure.value)
@@ -50,6 +53,6 @@ async def test_storage_timeout_keeps_timeout_semantics(monkeypatch: pytest.Monke
     def read(*args: Any) -> None:
         raise timeout_type("https://user:secret@private/key")
 
-    monkeypatch.setattr(task_executor.settings, "STORAGE_IMPL", SimpleNamespace(get_bytes=read))
+    monkeypatch.setitem(resources._state, "storage", SimpleNamespace(get_bytes=read))
     with pytest.raises(TimeoutError, match=r"^Object storage read timed out[.]$"):
         await task_executor.get_storage_binary("private", "key")

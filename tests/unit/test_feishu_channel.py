@@ -6,6 +6,7 @@ import threading
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -721,8 +722,11 @@ async def test_directory_callback_propagates_only_stable_failure_for_provider_re
     assert "classified-private-api-failure" not in caplog.text
 
 
-def test_message_callback_logs_identity_structure_without_identity_values(caplog: pytest.LogCaptureFixture) -> None:
+def test_message_callback_logs_identity_structure_without_identity_values(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     channel, _ = _channel()
+    logger = logging.getLogger("api.channels.feishu.channel")
+    info = Mock(wraps=logger.info)
+    monkeypatch.setattr(logger, "info", info)
     identity_values = (
         "tenant-secret-sentinel",
         "open-secret-sentinel",
@@ -743,11 +747,17 @@ def test_message_callback_logs_identity_structure_without_identity_values(caplog
 
     assert "channel_event=identity_normalized" in caplog.text
     assert "identity_present=true" in caplog.text
-    assert "tenant_key_present=true" in caplog.text
+    # Root handlers can mask any key-shaped field, including this boolean.
+    # Check the producer's exact metadata while retaining the real log path.
+    identity_call = next(call for call in info.call_args_list if "channel_event=identity_normalized" in call.args[0])
+    identity_message = identity_call.args[0] % identity_call.args[1:]
+    assert "tenant_key_present=true" in identity_message
+    assert "tenant_key_present=" in caplog.text
     assert "identifier_kinds=open_id,user_id,union_id" in caplog.text
     assert "identifier_count=3" in caplog.text
     assert "app-id" not in caplog.text
     for value in identity_values:
+        assert value not in identity_message
         assert value not in caplog.text
         assert hashlib.sha256(value.encode()).hexdigest()[:16] not in caplog.text
 

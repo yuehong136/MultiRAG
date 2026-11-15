@@ -129,9 +129,9 @@ def registered_agent(
         with ExitStack() as stack:
             for module in (llm, agent_with_tools):
                 stack.enter_context(patch.object(module, "db_connection", side_effect=lambda: nullcontext(object())))
-                stack.enter_context(patch.object(module, "resolve_model_type", return_value=["chat"]))
-                stack.enter_context(patch.object(module, "get_model_config_by_type_and_name", return_value={"id": "controlled-model"}))
-                stack.enter_context(patch.object(module, "LLMBundle", return_value=model))
+            stack.enter_context(patch.object(llm, "resolve_model_type", return_value=["chat"]))
+            stack.enter_context(patch.object(llm, "get_model_config_by_type_and_name", return_value={"id": "controlled-model"}))
+            stack.enter_context(patch.object(llm, "LLMBundle", return_value=model))
             stack.enter_context(patch.object(Agent, "_load_tool_obj", return_value=native))
             stack.enter_context(patch.object(agent_with_tools.MCPServerService, "get_by_id", side_effect=lambda _db, server_id: servers[server_id]))
             stack.enter_context(patch.object(agent_with_tools, "resolve_mcp_credential_provider", side_effect=service.bind))

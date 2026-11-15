@@ -15,9 +15,9 @@ from api.db.memory_revision_models import ManagedMemoryState, MemoryMutationOper
 from api.db.memory_writer_models import MemoryWriterAdmission, MemoryWriterFence
 from common import settings
 from memory.services.messages import MessageService, index_name
-from tests.integration.test_memory_writes_http import manage_bank
-from tests.integration.test_memory_writes_http import writes_api as writes_api
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.memory_writes_http import manage_bank
+from tests.support.memory_writes_http import writes_api as writes_api
 from tests.support.resource_journal import ResourceJournal
 from tests.support.web_consumer import pinned_web_checkout, private_consumer_file
 

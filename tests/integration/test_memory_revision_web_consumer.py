@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from tests.integration.test_memory_authorization import memory_api as memory_api
-from tests.integration.test_memory_revisions_http import revision_api as revision_api
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.memory_authorization import memory_api as memory_api
+from tests.support.memory_revisions_http import revision_api as revision_api
 from tests.support.resource_journal import ResourceJournal
 from tests.support.web_consumer import pinned_web_checkout, private_consumer_file
 

@@ -42,10 +42,27 @@ async def contend(limiter: LoopLocalSemaphore) -> asyncio.Semaphore:
 
 @pytest.mark.parametrize("limiter", [chat_limiter, task_executor.task_limiter, task_executor.chunk_limiter, task_executor.embed_limiter, task_executor.minio_limiter, task_executor.kg_limiter])
 def test_module_limiters_wait_in_two_sequential_loops(limiter: LoopLocalSemaphore) -> None:
+    active = {loop: native for loop, native in limiter._semaphores.items() if not loop.is_closed()}
     first = run_in_new_loop(contend(limiter))
     second = run_in_new_loop(contend(limiter))
     assert first is not second
-    assert len(limiter._semaphores) == 1  # old bound loop has been evicted
+    assert set(limiter._semaphores.values()) == {*active.values(), second}
+    assert all(limiter._semaphores[loop] is native for loop, native in active.items())
+
+
+def test_sequential_loops_preserve_another_live_loops_capacity() -> None:
+    limiter = LoopLocalSemaphore(2)
+    live = asyncio.new_event_loop()
+    try:
+        existing = live.run_until_complete(contend(limiter))
+        first = run_in_new_loop(contend(limiter))
+        second = run_in_new_loop(contend(limiter))
+        assert first is not second and existing is not second
+        assert set(limiter._semaphores.values()) == {existing, second}
+        assert live.run_until_complete(contend(limiter)) is existing
+        assert set(limiter._semaphores.values()) == {existing}
+    finally:
+        live.close()
 
 
 def test_concurrent_thread_loops_have_independent_capacity() -> None:

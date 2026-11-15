@@ -52,3 +52,33 @@ regexes = [
     '''YOUR_API_KEY''',
     '''test_key_123456''',
 ]
+
+# 仅排除这些文件内已核对的固定假值；同一路径上的其他密钥仍须报警。
+[[allowlists]]
+description = "Azure 受控 transport 的合成 base64 假值和加密包装器的固定测试 key"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = [
+    '''^tests/integration/test_azure_(storage_protocol|blob_source_sync)\.py$''',
+    '''^tests/integration/test_runtime_cleanup_storage_protocol\.py$''',
+    '''^tests/unit/test_azure_blob_(worker_lifecycle|source_connector)\.py$''',
+    '''^tests/support/search_connector_web_consumer\.ts$''',
+]
+regexTarget = "secret"
+regexes = [
+    '''^0123456789abcdef0123456789abcdef$''',
+    '''^Y29udHJvbGxlZC1rZXk=$''',
+    '''^Zml4dHVyZS1vbmx5LWtleQ==$''',
+]
+
+[[allowlists]]
+description = "固定质量模型的三个公开 tokenizer 文件 SHA-256（非认证材料）"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^scripts/provision_eval_assets\.py$''']
+regexTarget = "secret"
+regexes = [
+    '''^48cea5d44424912a6fd1ea647bf4fe50b55ab8b1e5879c3275f80e339e8fae26$''',
+    '''^e6f3b96db926a37d4039995fbf5ad17de158dfb8f6343d607e4dbaad18d75f5a$''',
+    '''^b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3$''',
+]

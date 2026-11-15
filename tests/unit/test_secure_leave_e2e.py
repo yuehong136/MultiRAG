@@ -1160,11 +1160,17 @@ def test_runtime_argv_matching_accepts_direct_python_service_modules(
     assert e2e._runtime_argv_matches_spec(argv, spec)
 
 
-def test_repository_python_is_pinned_to_the_repository_venv() -> None:
-    launcher = Path(e2e._repository_python(e2e.REPOSITORY_ROOT))
+def test_repository_python_is_pinned_to_the_repository_venv(tmp_path: Path) -> None:
+    interpreter = tmp_path / "base-python"
+    interpreter.write_text("#!/bin/sh\nexit 0\n")
+    interpreter.chmod(0o700)
+    candidate = tmp_path / ".venv/bin/python"
+    candidate.parent.mkdir(parents=True)
+    candidate.symlink_to(interpreter)
+    launcher = Path(e2e._repository_python(tmp_path))
 
-    assert launcher == e2e.REPOSITORY_ROOT / ".venv/bin/python"
-    assert launcher.resolve().is_file()
+    assert launcher == candidate
+    assert launcher.resolve() == interpreter
 
 
 def test_preflight_counts_exact_process_before_port_bind(

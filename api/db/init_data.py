@@ -79,15 +79,15 @@ def init_superuser(
     logging.info(f"Super user initialized. email: {email},A default password has been set; changing the password after login is strongly recommended.")
 
     if tenant["llm_id"]:
-        chat_config = get_model_config_by_type_and_name(db, tenant["id"], LLMType.CHAT.value, tenant["llm_id"])
-        chat_mdl = LLMBundle(db, tenant["id"], chat_config)
+        chat_config = get_model_config_by_type_and_name(db, tenant["tenant_id"], LLMType.CHAT.value, tenant["llm_id"])
+        chat_mdl = LLMBundle(db, tenant["tenant_id"], chat_config)
         msg = asyncio.run(chat_mdl.async_chat(system="", history=[{"role": "user", "content": "Hello!"}], gen_conf={}))
         if msg.find("ERROR: ") == 0:
             logging.error("'{}' doesn't work. {}".format(tenant["llm_id"], msg))
 
     if tenant["embd_id"]:
-        embd_config = get_model_config_by_type_and_name(db, tenant["id"], LLMType.EMBEDDING.value, tenant["embd_id"])
-        embd_mdl = LLMBundle(db, tenant["id"], embd_config)
+        embd_config = get_model_config_by_type_and_name(db, tenant["tenant_id"], LLMType.EMBEDDING.value, tenant["embd_id"])
+        embd_mdl = LLMBundle(db, tenant["tenant_id"], embd_config)
         v, c = embd_mdl.encode(["Hello!"])
         if c == 0:
             logging.error("'{}' doesn't work!".format(tenant["embd_id"]))
