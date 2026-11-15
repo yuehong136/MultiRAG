@@ -107,7 +107,7 @@
 | `gpu` | multirag-gpu | MultiRAG 主服务（GPU 版本） |
 | `elasticsearch` | es01 | Elasticsearch 搜索引擎 |
 | `opensearch` | opensearch01 | OpenSearch 搜索引擎 |
-| `milvus` | milvus-standalone, milvus-etcd, milvus-minio | Milvus 向量数据库集群 (v2.6.7) |
+| `milvus` | milvus-standalone, milvus-etcd, milvus-minio, milvus-volume-init | Milvus 3.0.6 Standalone；volume-init 是一次性卷权限初始化 |
 | `infinity` | infinity | Infinity 向量数据库 |
 | `oceanbase` | oceanbase | OceanBase 向量数据库 |
 | `tei-cpu` | tei-cpu | TEI 服务（CPU 版本） |
@@ -115,6 +115,10 @@
 | `sandbox` | sandbox-executor-manager | 沙箱执行器 |
 | `kibana` | kibana | Elasticsearch 可视化工具 |
 | `channel` | multirag-channel-supervisor | 外部消息渠道（飞书等）的 supervisor，见下方专节 |
+
+已有 Milvus 数据卷在启动新镜像前，先按 [Milvus 升级与恢复](../docs/references/milvus-upgrade.md)
+完成停写边界、独立备份与恢复演练。3.0.6 使用非 root 用户，`milvus-volume-init` 按官方配置
+准备专属数据卷后才启动服务；升级后的卷不能靠换回旧镜像恢复。
 
 ### 快速启动示例
 

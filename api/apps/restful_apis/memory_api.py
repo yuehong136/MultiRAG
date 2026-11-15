@@ -294,7 +294,14 @@ async def search_message(
     if len(memory_id) == 1 and "," in memory_id[0]:
         memory_id = memory_id[0].split(",")
     if include_sources:
-        if not query.strip() or len(query) > 8192 or not 1 <= top_n <= 100 or not 0 <= similarity_threshold <= 1 or not 0 <= keywords_similarity_weight <= 1:
+        if (
+            len(memory_api_service._split_filter_values(memory_id)) > 100
+            or not query.strip()
+            or len(query) > 8192
+            or not 1 <= top_n <= 100
+            or not 0 <= similarity_threshold <= 1
+            or not 0 <= keywords_similarity_weight <= 1
+        ):
             return get_error_argument_result("Invalid bounded source-search parameters.")
         try:
             enriched = await memory_context_service.search_with_sources(

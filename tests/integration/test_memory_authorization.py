@@ -3,6 +3,7 @@
 Only the external embedding model is controlled; no authorization/storage stubs.
 """
 
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import ExitStack
@@ -18,7 +19,9 @@ from api.apps.services import memory_context_service
 from api.db.db_models import Memory, Task, TenantLLM, UserTenant
 from api.db.joint_services import memory_message_service as mms
 from api.db.services.llm_service import LLMBundle
+from api.db.services.tenant_llm_service import TenantLLMService
 from common import settings
+from common.constants import RetCode
 from core.utils.redis_conn import REDIS_CONN
 from memory.services.messages import MessageService
 from tests.support.agent_update_release import release_api as release_api
@@ -34,6 +37,13 @@ class FixedEmbedding(LLMBundle):
 
     def encode(self, texts: list[str]) -> tuple[list[list[float]], int]:
         return [[1.0, 0.0] for _ in texts], 0
+
+
+class FixedContextEmbedding:
+    """Control only the provider; model authorization and bundle lifecycle stay real."""
+
+    def encode_queries(self, text: str) -> tuple[list[float], int]:
+        return [1.0, 0.0], 0
 
 
 @pytest.fixture
@@ -78,7 +88,7 @@ def memory_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
         with Session(env["engine"]) as db:
             db.add(UserTenant(id=uuid4().hex, user_id=member, tenant_id=owner, role="normal", status="1", invited_by=owner))
             for key, mid in memories.items():
-                db.add(Memory(id=mid, tenant_id=tenants[key], name=key, permissions="team" if key == "team" else "me", memory_type=1, embd_id="controlled", llm_id="controlled"))
+                db.add(Memory(id=mid, tenant_id=tenants[key], name=key, permissions="team" if key == "team" else "me", memory_type=1, embd_id="auth-embedding", llm_id="controlled"))
             for label, tenant in [("owner", owner), ("member", member), ("foreign", outsider)]:
                 for kind in ["chat", "embedding"]:
                     model = TenantLLM(tenant_id=tenant, llm_factory="controlled", llm_name=f"auth-{kind}", mdl_type=kind, api_key="unused-test-value")
@@ -159,12 +169,12 @@ def insert_read_messages(env: dict[str, Any], rows: list[dict[str, Any]], *, key
 
 
 def fixed_context_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
-    def bundle(db: Session, binding: memory_context_service.MemoryReadBinding) -> FixedEmbedding:
-        model = FixedEmbedding(db, binding.tenant_id)
-        model.db = None
-        return model
+    def model(cls: type[TenantLLMService], config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> FixedContextEmbedding:
+        assert config["mdl_type"] == "embedding" and config["tenant_id"]
+        assert type(config["id"]) is int and config["id"] > 0
+        return FixedContextEmbedding()
 
-    monkeypatch.setattr(memory_context_service, "_embedding_bundle", bundle)
+    monkeypatch.setattr(TenantLLMService, "model_instance_from_config", classmethod(model))
 
 
 def test_optional_reads_enforce_real_auth_and_have_no_write_effects(memory_api: dict[str, Any]) -> None:
@@ -277,21 +287,48 @@ def test_query_context_returns_sql_connection_before_embedding(memory_api: dict[
     sessions: list[AsyncSession] = []
     build = memory_context_service.query_context
     calls: list[str] = []
+    loop_threads: list[int] = []
+    factory = TenantLLMService.model_instance_from_config
+    get_vector = memory_context_service.get_vector
 
     async def capture(db: AsyncSession, *args: Any, **kwargs: Any) -> dict[str, Any]:
         sessions.append(db)
+        loop_threads.append(threading.get_ident())
         return await build(db, *args, **kwargs)
 
-    def encode(model: FixedEmbedding, query: str) -> tuple[list[float], int]:
+    def construct(cls: type[TenantLLMService], config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> FixedContextEmbedding:
         assert sessions and not sessions[-1].in_transaction()
-        assert model.db is None
+        assert threading.get_ident() != loop_threads[-1]
+        calls.append("construct")
+        return factory(config, lang=lang, **kwargs)
+
+    def vector(query: str, bundle: LLMBundle, **kwargs: Any) -> Any:
+        assert bundle.db is None
+        return get_vector(query, bundle, **kwargs)
+
+    def encode(model: FixedContextEmbedding, query: str) -> tuple[list[float], int]:
+        assert sessions and not sessions[-1].in_transaction()
         calls.append(query)
         return [1.0, 0.0], 0
 
     monkeypatch.setattr(memory_context_service, "query_context", capture)
-    monkeypatch.setattr(FixedEmbedding, "encode_queries", encode)
+    monkeypatch.setattr(TenantLLMService, "model_instance_from_config", classmethod(construct))
+    monkeypatch.setattr(memory_context_service, "get_vector", vector)
+    monkeypatch.setattr(FixedContextEmbedding, "encode_queries", encode)
     assert request(env, "POST", f"/memories/{mid}/context", json={"query": "connection ownership"})["retcode"] == 0
-    assert calls == ["connection ownership"]
+    assert calls == ["construct", "connection ownership"]
+
+
+def test_query_context_storage_schema_failure_returns_500_without_writes(memory_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real Milvus field/dimension rejection must not become an empty success."""
+    env, mid = memory_api, memory_api["memories"]["personal"]
+    fixed_context_embedding(monkeypatch)
+    monkeypatch.setattr(FixedContextEmbedding, "encode_queries", lambda self, query: ([1.0, 0.0, 0.0], 0))
+    before = snapshot(env)
+    response = env["client"].post(env["base"] + f"/api/v1/memories/{mid}/context", json={"query": "dimension mismatch"}, headers={"Authorization": f"Bearer {env['jwts'][1]}"}, timeout=30)
+    assert response.status_code == 500 and response.json()["retcode"] == int(RetCode.SERVER_ERROR), response.text
+    assert response.json()["data"] is False
+    assert snapshot(env) == before
 
 
 def test_visible_count_filters_and_pages(memory_api: dict[str, Any]) -> None:

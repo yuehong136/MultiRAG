@@ -7,7 +7,8 @@ import os
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any
 
@@ -61,6 +62,19 @@ class LLMFactoriesService(CommonService):
 
     def __init__(self):
         super().__init__(TenantLLM)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedTenantLLM:
+    """Request-local server preparation; never accepted from API payloads or cached.
+
+    The preparation method validates the model's tenant and capability before
+    copying credentials. It carries no session, ORM row, or provider instance.
+    """
+
+    tenant_id: str
+    model_config: dict[str, Any] = field(repr=False)
+    langfuse_keys: tuple[str, str, str] | None = field(repr=False)
 
 
 class TenantLLMService(CommonService):
@@ -259,7 +273,7 @@ class TenantLLMService(CommonService):
         return config
 
     @classmethod
-    def model_instance(cls, db: Session, tenant_id: str, model_config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> Any:
+    def resolve_model_instance_config(cls, db: Session, model_config: dict[str, Any]) -> dict[str, Any]:
         if not model_config:
             raise LookupError("Model config is required")
         from api.db.services.provider_model_resolution import resolve_linked_config
@@ -269,6 +283,45 @@ class TenantLLMService(CommonService):
         model_type = model_config.get("mdl_type") or model_config.get("model_type")
         if not model_type:
             raise ValueError("Model config is missing mdl_type/model_type")
+        return model_config
+
+    @classmethod
+    def prepare_model_instance(
+        cls,
+        db: Session,
+        tenant_id: str,
+        model_config: dict[str, Any],
+        *,
+        expected_type: str,
+        allow_unregistered_builtin: bool = False,
+    ) -> PreparedTenantLLM:
+        """Resolve a tenant-owned model and copy only data needed for construction."""
+        raw_tenant = model_config.get("tenant_id")
+        builtin = allow_unregistered_builtin and model_config.get("id") is None and model_config.get("llm_factory") == "Builtin"
+        identifier = model_config.get("id")
+        if not tenant_id:
+            raise LookupError("Tenant is required")
+        if raw_tenant is not None and raw_tenant != tenant_id:
+            raise LookupError("Model does not belong to the requested tenant")
+        if not builtin and (raw_tenant != tenant_id or type(identifier) is not int or identifier <= 0):
+            raise LookupError("A tenant-scoped registered model is required")
+        config = cls.resolve_model_instance_config(db, model_config)
+        if config.get("tenant_id", tenant_id if builtin else None) != tenant_id:
+            raise LookupError("Resolved model does not belong to the requested tenant")
+        if (config.get("mdl_type") or config.get("model_type")) != expected_type:
+            raise LookupError("Model does not support the requested capability")
+        keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=tenant_id)
+        tracing = (keys.public_key, keys.secret_key, keys.host) if keys else None
+        return PreparedTenantLLM(tenant_id, deepcopy(config), tracing)
+
+    @classmethod
+    def model_instance(cls, db: Session, tenant_id: str, model_config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> Any:
+        return cls.model_instance_from_config(cls.resolve_model_instance_config(db, model_config), lang=lang, **kwargs)
+
+    @classmethod
+    def model_instance_from_config(cls, model_config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> Any:
+        """Construct an already-resolved provider without opening any database."""
+        model_type = model_config.get("mdl_type") or model_config.get("model_type")
 
         kwargs.update({"provider": model_config["llm_factory"]})
         if model_type == LLMType.EMBEDDING.value:
@@ -627,13 +680,23 @@ class TenantLLMService(CommonService):
 
 class LLM4Tenant:
     def __init__(self, db: Session | None, tenant_id: str, model_config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> None:
+        kwargs = self._configure(db, tenant_id, model_config, **kwargs)
+        model_config = self.model_config
+
+        if db is None:
+            with db_connection() as init_db:
+                self._initialize(init_db, tenant_id, model_config, lang, **kwargs)
+        else:
+            self._initialize(db, tenant_id, model_config, lang, **kwargs)
+
+    def _configure(self, db: Session | None, tenant_id: str, model_config: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         model_config = TenantLLMService.decode_model_config(model_config)
         self.db = db
         self.tenant_id = tenant_id
         self.model_config = model_config
         self.llm_type = model_config.get("mdl_type") or model_config.get("model_type")
         self.llm_name = model_config.get("llm_name")
-        self.langfuse = None
+        self.langfuse: Any = None
         self.trace_context = dict(kwargs.pop("trace_context", None) or {})
         self.langfuse_session_id = kwargs.pop("langfuse_session_id", None)
         self.langfuse_user_id = kwargs.pop("langfuse_user_id", None)
@@ -641,12 +704,17 @@ class LLM4Tenant:
         self.verbose_tool_use = kwargs.get("verbose_tool_use")
         self._provider_condition = threading.Condition()
         self._provider_closed = False
+        return kwargs
 
-        if db is None:
-            with db_connection() as init_db:
-                self._initialize(init_db, tenant_id, model_config, lang, **kwargs)
-        else:
-            self._initialize(db, tenant_id, model_config, lang, **kwargs)
+    def _initialize_prepared(self, prepared: PreparedTenantLLM, lang: str, **kwargs: Any) -> None:
+        """Build from a server preparation without invoking the legacy DB path."""
+        config = deepcopy(prepared.model_config)
+        kwargs = self._configure(None, prepared.tenant_id, config, **kwargs)
+        self.mdl = TenantLLMService.model_instance_from_config(config, lang=lang, **kwargs)
+        assert self.mdl, f"Can't find model for {prepared.tenant_id}/{self.llm_type}/{self.llm_name}"
+        self.max_length = config.get("max_tokens", 8192)
+        self.is_tools = config.get("is_tools", False)
+        self._initialize_langfuse(prepared.langfuse_keys)
 
     def _resource_condition(self) -> threading.Condition:
         # Legacy subclasses may initialize their provider without calling super.
@@ -730,11 +798,14 @@ class LLM4Tenant:
         self.is_tools = model_config.get("is_tools", False)
 
         langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=tenant_id)
-        if langfuse_keys:
+        self._initialize_langfuse((langfuse_keys.public_key, langfuse_keys.secret_key, langfuse_keys.host) if langfuse_keys else None)
+
+    def _initialize_langfuse(self, keys: tuple[str, str, str] | None) -> None:
+        if keys:
             # 零 preflight：auth_check 是阻塞 HTTP（默认 5s 超时；经 run_sync 构造 LLMBundle 时
             # 会冻结整个事件循环）。凭据有效性在配置写入期校验（langfuse_api_service）；此处 fail-open。
             try:
-                self.langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
+                self.langfuse = Langfuse(public_key=keys[0], secret_key=keys[1], host=keys[2])
                 if not self.trace_context:
                     self.trace_context = {"trace_id": self.langfuse.create_trace_id()}
             except Exception:

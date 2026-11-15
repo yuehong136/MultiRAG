@@ -211,6 +211,9 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
+        if path.name == "test_milvus_query_order.py":
+            required.add("milvus")
+            continue
         if path.name in {"test_agent_lifecycle_source_contracts.py", "test_after4776_web_contracts.py"}:
             required.update(("postgresql", "redis", "minio"))
             continue

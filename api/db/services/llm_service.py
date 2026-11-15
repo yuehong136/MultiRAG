@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import LLM
 from api.db.services.common_service import CommonService
-from api.db.services.tenant_llm_service import LLM4Tenant, TenantLLMService, start_langfuse_observation
+from api.db.services.tenant_llm_service import LLM4Tenant, PreparedTenantLLM, TenantLLMService, start_langfuse_observation
 from common.asyncio_utils import finish_owned_work
 from common.token_utils import num_tokens_from_string
 
@@ -185,6 +185,13 @@ class _TraceObservation:
 
 class LLMBundle(LLM4Tenant):
     def __init__(self, db: Session | None, tenant_id: str, model_config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> None:
+        inherit_trace = self._register_construction(tenant_id, kwargs)
+        super().__init__(db, tenant_id, model_config, lang, **kwargs)
+        if inherit_trace:
+            # Query helpers construct inside their own short sync DB context.
+            self.db = None
+
+    def _register_construction(self, tenant_id: str, kwargs: dict[str, Any]) -> bool:
         bundles = _owned_bundles.get()
         if bundles is not None:
             bundles.append(self)
@@ -194,10 +201,23 @@ class LLMBundle(LLM4Tenant):
             kwargs.setdefault("trace_context", dict(trace.trace_context))
             kwargs.setdefault("langfuse_session_id", trace.session_id)
             kwargs.setdefault("langfuse_user_id", trace.user_id)
-        super().__init__(db, tenant_id, model_config, lang, **kwargs)
-        if inherit_trace:
-            # Query helpers construct inside their own short sync DB context.
-            self.db = None
+        return inherit_trace
+
+    @classmethod
+    def from_prepared(cls, prepared: PreparedTenantLLM, lang: str = "Chinese", **kwargs: Any) -> "LLMBundle":
+        """Construct a server-prepared provider with no database lookup or session.
+
+        Register ownership before construction so cancellation can drain its
+        worker and the surrounding scope can close the returned provider. A
+        provider constructor remains responsible for private resources it
+        allocates and then raises before returning.
+        """
+        if not isinstance(prepared, PreparedTenantLLM):
+            raise TypeError("A server-prepared tenant model is required")
+        bundle = cls.__new__(cls)
+        bundle._register_construction(prepared.tenant_id, kwargs)
+        bundle._initialize_prepared(prepared, lang, **kwargs)
+        return bundle
 
     def _start_langfuse_observation(self, **kwargs: Any) -> _TraceObservation:
         try:
