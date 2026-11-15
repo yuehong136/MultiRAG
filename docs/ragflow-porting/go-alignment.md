@@ -36,7 +36,32 @@ Go 模块版本保持冻结目标。相对主仓合并前版本有 23 项下降�
 `go.sum` 与冻结目标逐字节相同。全部降级、升级及原生工具链关系见
 [依赖版本对照](go-dependencies.md)。
 
-## 验证与边界
+## 当前分支合并与验收
+
+2026-11-15 已将 `5097f2897cfa972ca8b80901acd86f485109f93a` 合入当前分支
+`codex/memory-background-recovery`，合并提交为
+`3649f88e305f4b579490fa0c862c5e0cc2ef54a7`。第一父提交为同时推进的记忆任务
+`07f8ae58c48dc83c5d2c1b83badfbd0c53db242a`；其新增提交完整保留。
+最初 56 项 WIP 先行快照，其中部分随后由原任务提交；实际合并瞬间剩余 29 项 WIP
+无同路径覆盖，合并后逐字节读回一致，未加入本次提交，索引保持清洁。
+
+本次证据根为
+`/Users/xldu/.local/state/multirag/validation/20261115-go-alignment-merge-42a6627fb9/`。
+以下检查在合并后的实际主工作树执行，配置路径为当前 `configs/` 布局。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 生产包、四入口 build 与带 integration 的完整 vet | `961a38751e294072a87e58f20c6525cb`，raw 0；原生 C++ 源与已验证归档逐文件一致，使用对应归档，主仓旧构建归档另行备份。 |
+| 单次完整 Go race | `bcc35126ec9c4028a85bcf33e2453afa`，raw 0；执行 `go test -tags=integration -p 1 -race -count=1 -timeout 600s -json ./internal/...`。35 个有测试的包、2,278 个顶层用例、7,258 个通过事件，0 失败、0 测试跳过；1,230 项输入无漂移。 |
+| 51 项 CI 必需消费者检查 | `f2d75b7ce5ca458194ebd319848d7270`，raw 0；使用本次单次完整输出，无包级拼接。 |
+| 当前二进制、配置默认路径与真实 CLI | `632db2d8807040e7938227089736b888`，raw 0；admin/API/ingestor 冷启动、MySQL 独立读回、鉴权、CLI、停止及端口重新绑定；临时配置与 RSA 放在独有的 `configs/go/` 下。六种 Office 的真实 CLI 由完整 race 覆盖。 |
+| Python 相关检查 | `c5db6d78910e49eab35f3effe08d5036`：96 通过、1 失败。该 SiliconFlow 静态目录断言在准确合并前提交 `07f8ae58` 的原测试与两份原数据上复现：`78a0a71feac64ae8b1b43f2e620e3d91`，raw 1；Python 目录缺少 `Pro/deepseek-ai/DeepSeek-V4-Pro`，原断言保留，未修无关数据或改为 skip。三个目录路径测试 Ruff check/format check 均通过。 |
+| 配置与清理读回 | 72 个受保护 Python 配置字节不变，顶层 `conf/` 不存在；1,028 份 case 日志全部结束且无失败。六容器、六卷、十端口及私密服务配置独立确认已清理；四个运行时私密文件和七十个自有链接已删除，主仓配置及借用原生资源保留。 |
+
+模块版本未另行升降，仍采用[冻结依赖对照](go-dependencies.md)中的版本。
+远程 CI、真实付费供应商和生产部署仍未执行；上述 Go 验收不表示全部 Python 检查通过。
+
+## 源分支历史验收与边界
 
 专项在独立 worktree 执行；主仓的其他提交与未提交改动持续保留。本地完整证据根为
 `/Users/xldu/.local/state/multirag/validation/20261109-go-full-alignment/`。
