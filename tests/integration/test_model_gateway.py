@@ -159,6 +159,12 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
     upstream = _Upstream()
 
     with management(owned_engine, owner) as admin:
+        # Candidates tell the page what can be published before anything is submitted.
+        candidates = {item["model_id"]: item for item in admin.get(f"{_PREFIX}/candidates").json()["data"]}
+        assert set(candidates) == {chat_id, embed_id, hosted_id}
+        assert (candidates[chat_id]["provider"], candidates[chat_id]["model_name"], candidates[chat_id]["publishable_types"]) == ("VLLM", "qwen-upstream___VLLM", ["chat"])
+        assert candidates[embed_id]["publishable_types"] == ["embedding"]
+        assert (candidates[hosted_id]["relayable"], candidates[hosted_id]["publishable_types"]) == (False, [])
         # Publishing: only relay-capable models of this owner, one public name each.
         published = admin.post(f"{_PREFIX}/models", json={"name": "chat-default", "model_id": chat_id, "model_type": "chat"})
         assert published.status_code == 200, published.text

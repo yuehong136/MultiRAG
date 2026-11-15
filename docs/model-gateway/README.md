@@ -273,6 +273,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 
 | 路由 | 用途 |
 |---|---|
+| `GET /api/v1/model-gateway/candidates` | 列出已登记的模型，以及每个模型能以哪些类型发布（不能发布时为空，页面据此置灰） |
 | `GET` / `POST /api/v1/model-gateway/models`，`PATCH` / `DELETE .../models/{id}` | 发布、修改、下线公开模型 |
 | `GET` / `POST /api/v1/model-gateway/keys`，`PATCH .../keys/{id}`，`POST .../keys/{id}/revoke` | 创建、修改元数据和范围、启停、撤销 Key |
 | `GET /api/v1/model-gateway/logs` | 查询调用记录 |
@@ -283,7 +284,9 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 是当前周期的已用 token（没有配额的 Key 为 `null`）。
 调用记录按页查询（每页最多 100 条），用量汇总默认取最近 7 天，日期按 UTC 划分。
 汇总里的 token 只累计用量已知的调用，`usage_unknown` 给出未计入的调用数。
-Web 管理页面属于独立 Web 仓库的后续工作。
+Web 管理页面在独立 Web 仓库的 `src/pages/settings/model-gateway/`，入口是设置里的「模型网关」：
+公开模型、API Key（明文只在创建后的弹窗里显示一次）、调用记录和用量四个分区。
+网关未启用时，页面显示「未启用」而不是错误。
 
 ## 9. 与 RAGFlow 跟进的隔离
 
@@ -330,7 +333,7 @@ Web 管理页面属于独立 Web 仓库的后续工作。
 | P1 最小闭环（**已实现**） | 三张表和迁移；管理接口；数据面的 `/v1/models`、`/v1/chat/completions`、`/v1/embeddings`；调用记录；Key 的有效期和启停；模型删除保护 | 通用性准则第 1、2 条成立；真实 SDK 完成普通和流式调用，并能按 Key 查到记录 |
 | P2 管控（**限额已实现**） | 限流、并发和软配额；用量汇总 | 限额按维度生效；多把 Key 不能绕过模型级上限；重启后配额仍然有效 |
 | P2 余项（未实现） | 调用记录的保留与清理；rerank | 每项单独验收 |
-| P3 按需 | 非 OpenAI 协议厂商；`/v1/responses`、`/v1/messages`；多部署与回退；正文日志（手动开启）；按日汇总；管理审计；严格预算；Web 页面 | 每项单独立项和验收 |
+| P3 按需 | 非 OpenAI 协议厂商；`/v1/responses`、`/v1/messages`；多部署与回退；正文日志（手动开启）；按日汇总；管理审计；严格预算 | 每项单独立项和验收 |
 
 验证按 [AGENTS.md 的验证表](../../AGENTS.md#验证) 执行：
 

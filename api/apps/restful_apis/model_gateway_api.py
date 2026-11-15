@@ -72,6 +72,11 @@ async def write(db: AsyncSession, operation: Callable[[], Awaitable[Any]]) -> di
         return failure(500, "Model gateway operation failed")
 
 
+@router.get("/candidates", summary="列出已登记的模型及其可发布的类型")
+async def list_candidates(db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any]:
+    return result(await management.list_candidates(db, user.id))
+
+
 @router.get("/models", summary="列出已发布的公开模型")
 async def list_models(db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any]:
     return result(await management.list_models(db, user.id))

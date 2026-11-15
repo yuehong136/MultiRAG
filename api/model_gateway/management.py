@@ -12,7 +12,7 @@ from sqlalchemy import Integer, and_, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import GatewayKey, GatewayModel, GatewayRequestLog
-from api.model_gateway.catalog import ModelUnavailable, describe_models, resolve_upstream
+from api.model_gateway.catalog import SUPPORTED_MODEL_TYPES, ModelUnavailable, describe_models, resolve_upstream
 from api.model_gateway.keys import issue_key, redact_key
 from api.model_gateway.limits import Quota
 from api.model_gateway.schemas import GatewayKeyCreate, GatewayKeyPatch, GatewayModelCreate, GatewayModelPatch
@@ -137,6 +137,20 @@ async def _quota_usage(db: AsyncSession, rows: list[GatewayKey]) -> dict[str, in
 
 async def _key_with_usage(db: AsyncSession, row: GatewayKey) -> dict[str, Any]:
     return _key_view(row, (await _quota_usage(db, [row])).get(row.id))
+
+
+async def list_candidates(db: AsyncSession, tenant_id: str) -> list[dict[str, Any]]:
+    """The owner's registered models, each with the types the gateway can publish it as.
+
+    ``publishable_types`` is empty when the provider is outside the relay rules,
+    the model is disabled, or none of its capabilities has a gateway endpoint.
+    """
+    described = await describe_models(db, tenant_id)
+    candidates = []
+    for model_id, details in sorted(described.items(), key=lambda item: (item[1]["provider"], item[1]["model_name"], item[0])):
+        servable = details["relayable"] and details["available"]
+        candidates.append({"model_id": model_id, **details, "publishable_types": sorted(set(details["model_types"]) & SUPPORTED_MODEL_TYPES) if servable else []})
+    return candidates
 
 
 async def list_models(db: AsyncSession, tenant_id: str) -> list[dict[str, Any]]:

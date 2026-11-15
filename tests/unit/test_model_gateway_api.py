@@ -32,7 +32,7 @@ def _sdk_token_principal():
     )
 
 
-@pytest.mark.parametrize(("method", "path"), [("GET", "/models"), ("POST", "/keys"), ("GET", "/logs"), ("GET", "/usage")])
+@pytest.mark.parametrize(("method", "path"), [("GET", "/models"), ("GET", "/candidates"), ("POST", "/keys"), ("GET", "/logs"), ("GET", "/usage")])
 def test_routes_do_not_exist_while_the_gateway_is_disabled(client, monkeypatch, method, path):
     monkeypatch.setattr(management, "list_models", pytest.fail)
 
@@ -49,6 +49,18 @@ def test_sdk_api_token_cannot_manage_the_gateway(enabled, monkeypatch):
 
     assert enabled.get(f"{PREFIX}/keys").status_code == 403
     assert enabled.post(f"{PREFIX}/keys", json={"name": "runner"}).status_code == 403
+
+
+def test_candidates_are_listed_for_the_owner(enabled, monkeypatch):
+    async def list_candidates(db, tenant_id):
+        return [{"model_id": 7, "model_name": "qwen", "publishable_types": ["chat"], "tenant": tenant_id}]
+
+    monkeypatch.setattr(management, "list_candidates", list_candidates)
+
+    response = enabled.get(f"{PREFIX}/candidates")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == [{"model_id": 7, "model_name": "qwen", "publishable_types": ["chat"], "tenant": "user-unit"}]
 
 
 def test_key_creation_is_scoped_to_the_owner_and_returns_the_plaintext_once(enabled, monkeypatch):
