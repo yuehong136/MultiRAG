@@ -42,12 +42,28 @@
 先检查已有进程、监听端口和服务状态，复用可用实例；需要启动时使用以下入口：
 
 ```bash
-make install  # uv sync --group dev --frozen
+make install  # 同步锁定依赖并检查 LiteLLM 安装
 
 docker compose -f docker/docker-compose-base.yml up -d
 uv run python -m api.multirag_server
 uv run python -m core.svr.task_executor -i 1
 ```
+
+### LiteLLM 安装检查
+
+`make install` 与 unit CI 在完整运行时依赖同步后执行
+`uv run --no-sync python -B scripts/check_litellm_installation.py`。
+检查器读取 `uv.lock`，确认唯一的 `litellm` 模块所有者，直接核对原始 wheel `RECORD` 的文件与哈希，
+再用隔离子进程验证真实导入、调用入口和本地价格表，禁止该导入访问网络。它不扫描每次业务请求，也不自动修复环境。
+
+版本登记存在或普通 `import litellm` 成功，仍可能是缺少 `__init__.py` 的残缺 namespace。
+部分 Python 版本的 `Distribution.files` 会过滤缺失文件，因此不能用它代替原始清单检查。
+项目排除的 `unclecode-litellm` 与官方包共享 `litellm/` 目录；不要单独安装该分支包，或绕过项目依赖排除同步 Crawl4AI。
+若检查失败，先保留原始诊断，确认锁定版本与冲突所有者；清除冲突后仅重装锁定的官方包，再复跑检查和相关 LLM 回归。
+不要仅删除 dist-info、忽略缺文件错误，或用临时 `PYTHONPATH` 覆盖代替修复实际运行环境。
+该检查证明安装完整性和离线导入，不证明版本无漏洞或供应商调用兼容。
+
+### worker 与健康检查
 
 worker 的 `-i` / `--index` 默认值为 `0`；旧位置参数已退出。仅支持共享队列的
 `-t common`，索引、consumer 名称与 metrics 的关系见 [worker 入口](../core/svr/README.md)。

@@ -144,6 +144,8 @@ jobs:
             sleep 15
           done
           exit 1
+      - name: Verify LiteLLM installation and offline import
+        run: uv run --no-sync python -B scripts/check_litellm_installation.py
       # rag_tokenizer/synonym 运行时需要 NLTK 语料（与 download_deps.py 清单一致）
       - name: Provision NLTK corpora
         run: uv run --no-sync python -m nltk.downloader punkt punkt_tab wordnet

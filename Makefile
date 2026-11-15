@@ -14,6 +14,7 @@ help: ## 列出全部可用目标
 
 install: ## 同步依赖（dev 组，按锁文件）
 	uv sync --group dev --frozen
+	$(UV) python -B scripts/check_litellm_installation.py
 
 fix: ## 全库修复 lint 并格式化（局部改动请限定路径）
 	$(UV) ruff check --fix .
