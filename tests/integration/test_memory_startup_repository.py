@@ -7,7 +7,9 @@ import pytest
 import sqlalchemy as sa
 
 from api.db.db_models import Base
-from api.db.memory_revision_models import MemoryEntry, MemoryEntryRevision, MemorySourceState
+from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemoryPublicationOutbox, MemoryRevisionSource, MemorySourceState
+from api.db.memory_verification_models import MemoryVerificationHead, MemoryVerificationRecord, MemoryVerificationSource
+from api.db.memory_writer_models import MemoryWriterAdmission
 from memory.revisions.domain import RevisionConflict, RevisionNotFound, RevisionValidationError, content_hash
 from tests.support.memory_maintenance_repository import environment as environment
 from tests.support.memory_startup_repository import ENTRY, check, seed, startup, verification
@@ -203,17 +205,175 @@ async def test_latest_manual_result_change_before_snapshot_has_accurate_omission
     event = await check(env)
     async with env["factory"]() as db:
         owner = startup(db, env)
-        snapshot = owner.verification.snapshot
+        phase = owner._metadata_phase
 
-        async def change_before_snapshot(memory_id: str, entry_id: str, **kwargs: Any) -> dict[str, Any]:
+        async def change_before_snapshot(memory_id: str, entry_ids: list[str], *, stage: Any) -> Any:
+            if stage != "after_first":
+                return await phase(memory_id, entry_ids, stage=stage)
             if result == "revoked":
                 async with env["factory"]() as writer:
                     await verification(writer, env).revoke("bank", event["verification_id"], operation_id="changed-result", expected_head_version="1", reason="重新复核。")
             else:
                 await check(env, result=result, operation_id="changed-result")
-            return await snapshot(memory_id, entry_id, **kwargs)
+            return await phase(memory_id, entry_ids, stage=stage)
 
-        monkeypatch.setattr(owner.verification, "snapshot", change_before_snapshot)
+        monkeypatch.setattr(owner, "_metadata_phase", change_before_snapshot)
         packet = await owner.build("bank", **scope(env))
         expected = "verification_revoked" if result == "revoked" else result
         assert packet["items"] == [] and packet["omitted"]["counts"] == {expected: 1}
+
+
+@pytest.mark.parametrize("admissions", [0, 1, 2])
+@pytest.mark.parametrize("published", [False, True])
+async def test_batch_consolidated_readiness_requires_one_admission_and_ready_projection(environment: dict[str, Any], admissions: int, published: bool) -> None:
+    env = environment
+    await seed(env)
+    await check(env)
+    async with env["factory"]() as db, db.begin():
+        row = await db.get(MemoryEntryRevision, (ENTRY, 1))
+        row.origin = "consolidated"
+        db.add(
+            MemoryPublicationOutbox(
+                id="p" * 32,
+                memory_id="bank",
+                tenant_id="tenant",
+                operation_id="projection",
+                entry_id=ENTRY,
+                revision=1,
+                message_id=100,
+                bank_generation=1,
+                state="ready" if published else "staged",
+                payload={},
+            )
+        )
+        for index in range(admissions):
+            db.add(
+                MemoryWriterAdmission(
+                    memory_id="bank",
+                    operation_id=f"publication-{index}",
+                    tenant_id="tenant",
+                    actor_id="actor",
+                    kind="dream_publish",
+                    request_sha256="0" * 64,
+                    writer_generation=1,
+                    state="finished",
+                    publication_state="ready",
+                    message_ids=[100],
+                )
+            )
+    async with env["factory"]() as db:
+        owner = startup(db, env)
+        if admissions == 1 and published:
+            assert (await owner.build("bank", **scope(env)))["items"][0]["entry_id"] == ENTRY
+            assert (await verification(db, env).snapshot("bank", ENTRY))["current_record"]["valid_for_current"]
+        else:
+            packet = await owner.build("bank", **scope(env))
+            assert packet["items"] == [] and packet["omitted"]["counts"] == {"not_ready": 1}
+            with pytest.raises(RevisionConflict, match="dreaming_target_not_ready"):
+                await verification(db, env).snapshot("bank", ENTRY)
+
+
+async def test_per_entry_source_sentinel_does_not_truncate_or_starve_other_closures(environment: dict[str, Any]) -> None:
+    env = environment
+    await seed(env)
+    await check(env)
+    invalid = "0" * 31 + "1"
+    await seed(env, entry_id=invalid, message_id=101, content="不得作为已完整核验的条目返回。")
+    async with env["factory"]() as db, db.begin():
+        for identity in range(1000, 1032):
+            db.add(
+                MemoryRevisionSource(
+                    entry_id=invalid,
+                    revision=1,
+                    memory_id="bank",
+                    source_message_id=identity,
+                    source_revision=1,
+                    source_generation=1,
+                    content_sha256=content_hash(str(identity)),
+                    locator={"scope": env["scope"]},
+                )
+            )
+    async with env["factory"]() as db:
+        packet = await startup(db, env).build("bank", **scope(env))
+    assert [item["entry_id"] for item in packet["items"]] == [ENTRY]
+    assert packet["omitted"]["counts"] == {"source_closure_limit": 1} and packet["selection"]["physical_reads"] == 4
+    assert "不得作为" not in json.dumps(packet, ensure_ascii=False)
+
+
+async def test_stored_verification_source_binding_is_compared_not_only_record_hash(environment: dict[str, Any]) -> None:
+    env = environment
+    await seed(env)
+    event = await check(env)
+    async with env["factory"]() as db, db.begin():
+        source = await db.get(MemoryVerificationSource, (event["verification_id"], 10))
+        source.projection_sha256 = "0" * 64
+    async with env["factory"]() as db:
+        packet = await startup(db, env).build("bank", **scope(env))
+    assert packet["items"] == [] and packet["omitted"]["counts"] == {"verification_stale": 1}
+
+
+@pytest.mark.parametrize(("changed_phase", "reads"), [("after_first", 2), ("after_second", 4)])
+async def test_batch_fresh_phase_rejects_source_generation_change(environment: dict[str, Any], monkeypatch: pytest.MonkeyPatch, changed_phase: str, reads: int) -> None:
+    env = environment
+    await seed(env)
+    await check(env)
+    env["reads"] = 0
+    async with env["factory"]() as db:
+        owner = startup(db, env)
+        phase = owner._metadata_phase
+
+        async def change(memory_id: str, entry_ids: list[str], *, stage: Any) -> Any:
+            if stage == changed_phase:
+                async with env["factory"]() as writer, writer.begin():
+                    source = await writer.get(MemorySourceState, ("bank", 10))
+                    source.generation += 2
+            return await phase(memory_id, entry_ids, stage=stage)
+
+        monkeypatch.setattr(owner, "_metadata_phase", change)
+        with pytest.raises(RevisionConflict, match="verification_binding_changed"):
+            await owner.build("bank", **scope(env))
+    assert env["reads"] == reads
+
+
+@pytest.mark.parametrize("state", [None, "active", "inactive"])
+async def test_empty_inventory_preserves_unmanaged_and_inactive_bank_contract(environment: dict[str, Any], state: str | None) -> None:
+    env = environment
+    async with env["factory"]() as db, db.begin():
+        bank = await db.get(ManagedMemoryState, "bank")
+        if state is None:
+            await db.delete(bank)
+        else:
+            bank.state = state
+    async with env["factory"]() as db:
+        if state == "inactive":
+            with pytest.raises(RevisionConflict, match="startup_inventory_changed"):
+                await startup(db, env).build("bank", **scope(env))
+        else:
+            packet = await startup(db, env).build("bank", **scope(env))
+            assert packet["items"] == [] and packet["selection"]["physical_reads"] == 0
+
+
+async def test_redaction_after_pre_reservation_does_not_rescan_late_candidates(environment: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.support.memory_startup_scale import seed_inventory
+
+    env = environment
+    identities = await seed_inventory(env, size=65, confirmed=65)
+    env["reads"] = 0
+    async with env["factory"]() as db:
+        owner = startup(db, env)
+        phase = owner._metadata_phase
+
+        async def redact(memory_id: str, entry_ids: list[str], *, stage: Any) -> Any:
+            if stage == "after_first":
+                async with env["factory"]() as writer, writer.begin():
+                    head = await writer.get(MemoryVerificationHead, ("bank", identities[0]))
+                    row = await writer.get(MemoryVerificationRecord, head.verification_id)
+                    row.state, row.notes, row.applicability, row.evidence = "redacted", None, None, []
+            return await phase(memory_id, entry_ids, stage=stage)
+
+        monkeypatch.setattr(owner, "_metadata_phase", redact)
+        packet = await owner.build("bank", **scope(env), inventory_limit=128, max_items=16, budget_tokens=32768)
+    assert [item["entry_id"] for item in packet["items"]] == identities[1:17]
+    assert packet["selection"]["physical_reads"] == env["reads"] == 254
+    assert packet["selection"]["read_limited"] and not packet["selection"]["selection_complete"]
+    assert packet["omitted"]["counts"] == {"verification_redacted": 1, "max_items": 47, "physical_read_limit": 1}

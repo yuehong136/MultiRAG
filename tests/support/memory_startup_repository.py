@@ -102,7 +102,7 @@ def verification(db: AsyncSession, env: dict[str, Any], *, actor_id: str = "acto
 
     store = cast(ManagedMessageStore, Storage())
     snapshots = MaintenanceSnapshots(db, tenant_id="tenant", storage=store, count_tokens=len)
-    return VerificationService(db, tenant_id="tenant", actor_id=actor_id, authorize=jobs.authorize, storage=store, ready_entry=snapshots._ready_entry)
+    return VerificationService(db, tenant_id="tenant", actor_id=actor_id, authorize=jobs.authorize, storage=store, ready_entry=snapshots._ready_entry, ready_entries=snapshots._ready_entries)
 
 
 async def check(env: dict[str, Any], *, entry_id: str = ENTRY, result: str = "human_confirmed", operation_id: str = "human-check") -> dict[str, Any]:

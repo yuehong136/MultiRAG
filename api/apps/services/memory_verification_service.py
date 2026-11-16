@@ -18,4 +18,6 @@ async def verifications(db: AsyncSession, memory_id: str, *, actor_id: str) -> V
     store = ManagedMessageStore(binding.tenant_id, memory_id)
     permissions = MemoryWriteProviders(db, tenant_id=binding.tenant_id, actor_id=actor_id)
     snapshots = MaintenanceSnapshots(db, tenant_id=binding.tenant_id, storage=store, count_tokens=len)
-    return VerificationService(db, tenant_id=binding.tenant_id, actor_id=actor_id, authorize=permissions.authorize, storage=store, ready_entry=snapshots._ready_entry)
+    return VerificationService(
+        db, tenant_id=binding.tenant_id, actor_id=actor_id, authorize=permissions.authorize, storage=store, ready_entry=snapshots._ready_entry, ready_entries=snapshots._ready_entries
+    )

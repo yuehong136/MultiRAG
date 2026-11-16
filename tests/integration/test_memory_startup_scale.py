@@ -46,7 +46,7 @@ async def observe(env: dict[str, Any], *, inventory_limit: int, max_items: int =
     assert not writes and env["reads"] == packet["selection"]["physical_reads"] <= 256
     assert packet["usage"]["estimated_tokens"] <= budget_tokens
     assert len(packet["items"]) <= max_items
-    assert len(statements) <= inventory_limit * 100 + 100
+    assert len(statements) <= 100
     observation = {
         "inventory_limit": inventory_limit,
         "max_items": max_items,
@@ -64,6 +64,7 @@ async def observe(env: dict[str, Any], *, inventory_limit: int, max_items: int =
         "production_sla": False,
     }
     ResourceJournal("startup_scale").event("scale-observation", **observation)
+    env.setdefault("scale_observations", []).append(observation)
     print("STARTUP_SCALE_OBSERVATION " + json.dumps(observation, sort_keys=True))
     return packet
 
@@ -79,6 +80,8 @@ async def test_inventory_32_64_128_is_scope_first_bounded_read_only_and_has_hone
         assert not packet["selection"]["selection_complete"]
         assert "foreign" not in json.dumps(packet, ensure_ascii=False)
     assert packet["selection"]["read_limited"] and packet["omitted"]["counts"]["physical_read_limit"] == 6
+    sql_counts = [observation["sql_statement_count"] for observation in env["scale_observations"]]
+    assert max(sql_counts) - min(sql_counts) <= 20
 
 
 async def test_multiple_source_closures_count_every_actual_read_and_keep_complete_provenance(environment: dict[str, Any]) -> None:

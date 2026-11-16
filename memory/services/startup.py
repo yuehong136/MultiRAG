@@ -6,17 +6,17 @@ import json
 from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select
 
 from api.db.db_models import Memory
 from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemorySourceState
-from api.db.memory_verification_models import MemoryVerificationHead, MemoryVerificationRecord
-from memory.revisions.domain import RevisionConflict, RevisionNotFound, RevisionValidationError, content_hash, is_active, message_scope, positive_int, request_hash
+from memory.revisions.domain import RevisionConflict, RevisionValidationError, content_hash, is_active, message_scope, positive_int, request_hash
 from memory.services.context import ContextScope, build_source_excerpt
 from memory.verification.domain import identifier
 from memory.verification.service import VerificationService, _public_binding, _ReadLimit, _without_projection
+from memory.verification.startup_reads import StartupEntryRead, load_startup_entries
 from memory.writes.providers import release_sql
 
 PHYSICAL_READ_LIMIT = 256
@@ -142,72 +142,91 @@ class StartupService:
         finally:
             await release_sql(self.db)
         omissions = [{"entry_id": identity, "reason": "scope_mismatch"} for identity in sorted(set(entry_ids or []) - set(found))]
+        initial = await self._metadata_phase(memory_id, selected, stage="before")
         items, pins, reads = [], {}, [PHYSICAL_READ_LIMIT]
         limited = False
+        work: list[str] = []
+        reserved = 0
         for identity in selected:
-            await self.verification._idle()
-            try:
-                await self.verification.authorize(self.db, memory_id)
-                try:
-                    metadata, _ = await self.verification._metadata(memory_id, identity)
-                except RevisionNotFound:
-                    omissions.append({"entry_id": identity, "reason": "entry_unavailable"})
-                    continue
-                except RevisionConflict as error:
-                    reason = "source_unavailable" if "source" in error.code else "not_ready" if "ready" in error.code else "entry_unavailable"
-                    omissions.append({"entry_id": identity, "reason": reason})
-                    continue
-                except RevisionValidationError as error:
+            state = initial[identity]
+            if state.error is not None:
+                error = state.error
+                if isinstance(error, RevisionValidationError):
                     if error.code != "verification_source_closure_limit":
-                        raise
-                    omissions.append({"entry_id": identity, "reason": "source_closure_limit"})
-                    continue
-                if not all(_in_scope(source["scope"], scope) for source in metadata["sources"]):
-                    omissions.append({"entry_id": identity, "reason": "source_scope_mismatch"})
-                    continue
-                head = await self.db.get(MemoryVerificationHead, (memory_id, identity), populate_existing=True)
-                record = await self.db.get(MemoryVerificationRecord, head.verification_id, populate_existing=True) if head is not None else None
-                if record is None:
-                    omissions.append({"entry_id": identity, "reason": "unverified"})
-                    continue
-                if record.state != "active" or record.result != "human_confirmed":
-                    reason = "verification_" + record.state if record.state != "active" else record.result
-                    omissions.append({"entry_id": identity, "reason": reason})
-                    continue
-                revision = await self.db.get(MemoryEntryRevision, (identity, metadata["entry"]["revision"]), populate_existing=True)
-                if revision is None:
-                    raise RevisionConflict("startup_inventory_changed")
-                extra = {key: deepcopy(revision.message_snapshot.get(key)) for key in ("message_type", "valid_at", "invalid_at")}
-                extra["assessment"] = {key: revision.assessment.get(key) for key in ("kind", "verification_status")}
-            finally:
-                await release_sql(self.db)
-            if reads[0] < 2 * (len(metadata["sources"]) + 1):
+                        raise error
+                    reason = "source_closure_limit"
+                else:
+                    reason = "source_unavailable" if "source" in error.code else "not_ready" if "ready" in error.code else "entry_unavailable"
+                omissions.append({"entry_id": identity, "reason": reason})
+                continue
+            if not all(_in_scope(source["scope"], scope) for source in state.binding["sources"]):
+                omissions.append({"entry_id": identity, "reason": "source_scope_mismatch"})
+                continue
+            record = state.record
+            if record is None or record["state"] != "active" or record["result"] != "human_confirmed":
+                reason = "unverified" if record is None else "verification_" + record["state"] if record["state"] != "active" else record["result"]
+                omissions.append({"entry_id": identity, "reason": reason})
+                continue
+            cost = 2 * (len(state.binding["sources"]) + 1)
+            if reserved + cost > PHYSICAL_READ_LIMIT:
                 omissions.append({"entry_id": identity, "reason": "physical_read_limit"})
                 limited = True
                 continue
+            work.append(identity)
+            reserved += cost
+        first: dict[str, dict[str, Any]] = {}
+        for identity in work:
+            state = initial[identity]
+            first[identity] = await self.verification._physical_binding(memory_id, state.binding, state.projection, physical_budget=reads)
+        middle = await self._metadata_phase(memory_id, work, stage="after_first")
+        physical: dict[str, dict[str, Any]] = {}
+        for identity in work:
+            state = middle[identity]
+            if state.error is not None:
+                raise state.error
+            if state.binding != initial[identity].binding:
+                raise RevisionConflict("verification_binding_changed")
+            if state.record is None or state.record_redacted:
+                continue
             try:
-                snapshot = await self.verification.snapshot(memory_id, identity, physical_budget=reads)
+                physical[identity] = await self.verification._physical_binding(memory_id, state.binding, state.projection, physical_budget=reads)
             except _ReadLimit as error:
                 raise RevisionConflict("startup_inventory_changed") from error
-            current = snapshot["current_record"]
-            if current is None or not current["valid_for_current"] or current["effective_status"] != "human_confirmed":
-                status = current["effective_status"] if current is not None else "unverified"
-                reason = {"disputed": "disputed", "needs_review": "needs_review", "revoked": "verification_revoked", "redacted": "verification_redacted", "unverified": "unverified"}.get(
-                    status, "verification_stale"
+            if physical[identity] != first[identity]:
+                raise RevisionConflict("verification_projection_changed")
+        after = await self._metadata_phase(memory_id, work, stage="after_second")
+        for identity in work:
+            state, latest = middle[identity], after[identity]
+            if latest.error is not None:
+                raise latest.error
+            if latest.binding != state.binding:
+                raise RevisionConflict("verification_binding_changed")
+            if latest.head != state.head or latest.record != state.record or latest.stored_binding != state.stored_binding or latest.record_redacted != state.record_redacted:
+                raise RevisionConflict("startup_verification_changed")
+            record = state.record
+            if record is None or state.record_redacted or record["state"] != "active" or record["result"] != "human_confirmed":
+                reason = (
+                    "unverified" if record is None else "verification_redacted" if state.record_redacted else "verification_" + record["state"] if record["state"] != "active" else record["result"]
                 )
                 omissions.append({"entry_id": identity, "reason": reason})
                 continue
-            if not isinstance(current["applicability"], str) or not current["applicability"].strip():
+            binding = physical[identity]
+            if state.stored_binding != binding or request_hash(binding) != record["binding_sha256"]:
+                omissions.append({"entry_id": identity, "reason": "verification_stale"})
+                continue
+            if not isinstance(record["applicability"], str) or not record["applicability"].strip():
                 raise RevisionConflict("startup_verification_changed")
-            if not _in_scope(snapshot["binding"]["entry"]["scope"], scope) or not all(_in_scope(source["scope"], scope) for source in snapshot["binding"]["sources"]):
+            if not _in_scope(binding["entry"]["scope"], scope) or not all(_in_scope(source["scope"], scope) for source in binding["sources"]):
                 raise RevisionConflict("startup_inventory_changed")
-            if _public_binding(metadata) != _without_projection(snapshot["binding"]):
-                raise RevisionConflict("startup_inventory_changed")
-            binding = snapshot["binding"]
+            current = {key: deepcopy(record[key]) for key in ("verification_id", "result", "applicability", "method", "checked_at_is_user_reported", "actor_id", "binding_sha256")}
+            current.update(head_version=str(state.head[0]), record_version=str(record["record_version"]))
+            current.update({key: record[key].isoformat() if record[key] is not None else None for key in ("checked_at", "recorded_at")})
+            binding = _public_binding(binding)
             item = {
                 **binding["entry"],
-                **extra,
-                "content": snapshot["entry_content"],
+                **{key: deepcopy(initial[identity].projection.get(key)) for key in ("message_type", "valid_at", "invalid_at")},
+                "assessment": {key: initial[identity].assessment.get(key) for key in ("kind", "verification_status")},
+                "content": state.content,
                 "verification": {
                     **{
                         key: current[key]
@@ -231,7 +250,14 @@ class StartupService:
                 "sources": [{**source, "locator": {"kind": "memory_message", "memory_id": memory_id, "message_id": source["source_id"]}} for source in binding["sources"]],
             }
             items.append(item)
-            pins[identity] = snapshot
+            pins[identity] = {
+                "entry_id": identity,
+                "binding": binding,
+                "head_version": str(state.head[0]),
+                "current_record": current,
+                "record_snapshot": state.record,
+                "stored_binding": state.stored_binding,
+            }
         selection = {
             "mode": "explicit" if explicit else "inventory",
             "order": "entry_id_asc",
@@ -247,32 +273,23 @@ class StartupService:
         return result
 
     async def _closing(self, memory_id: str, snapshots: list[dict[str, Any]]) -> None:
+        current = await self._metadata_phase(memory_id, [snapshot["entry_id"] for snapshot in snapshots], stage="closing")
+        for snapshot in snapshots:
+            state = current[snapshot["entry_id"]]
+            if state.error is not None or _public_binding(state.binding) != _without_projection(snapshot["binding"]):
+                raise RevisionConflict("startup_inventory_changed")
+            if (
+                state.head != (int(snapshot["head_version"]), snapshot["current_record"]["verification_id"])
+                or state.record != snapshot["record_snapshot"]
+                or state.stored_binding != snapshot["stored_binding"]
+                or state.record_redacted
+            ):
+                raise RevisionConflict("startup_verification_changed")
+
+    async def _metadata_phase(self, memory_id: str, entry_ids: list[str], *, stage: Literal["before", "after_first", "after_second", "closing"]) -> dict[str, StartupEntryRead]:
         await self.verification._idle()
         try:
-            await self.db.scalar(select(Memory.id).where(Memory.id == memory_id, Memory.tenant_id == self.verification.tenant_id).with_for_update(read=True))
-            await self.verification.authorize(self.db, memory_id)
-            bank = await self.db.scalar(
-                select(ManagedMemoryState).where(ManagedMemoryState.memory_id == memory_id, ManagedMemoryState.tenant_id == self.verification.tenant_id).with_for_update(read=True)
-            )
-            if (bank is not None and bank.state != "active") or (snapshots and bank is None):
-                raise RevisionConflict("startup_inventory_changed")
-            for snapshot in sorted(snapshots, key=lambda value: value["entry_id"]):
-                metadata, _ = await self.verification._metadata(memory_id, snapshot["entry_id"])
-                if _public_binding(metadata) != _without_projection(snapshot["binding"]):
-                    raise RevisionConflict("startup_inventory_changed")
-                head = await self.db.get(MemoryVerificationHead, (memory_id, snapshot["entry_id"]), populate_existing=True)
-                current = snapshot["current_record"]
-                if head is None or (head.verification_id, str(head.head_version)) != (current["verification_id"], snapshot["head_version"]):
-                    raise RevisionConflict("startup_verification_changed")
-                record = await self.db.get(MemoryVerificationRecord, head.verification_id, populate_existing=True)
-                if (
-                    record is None
-                    or record.state != "active"
-                    or record.result != "human_confirmed"
-                    or record.applicability != current["applicability"]
-                    or record.binding_sha256 != snapshot["binding_sha256"]
-                ):
-                    raise RevisionConflict("startup_verification_changed")
+            return await load_startup_entries(self.verification, memory_id, entry_ids, closing=stage == "closing")
         finally:
             await release_sql(self.db)
 

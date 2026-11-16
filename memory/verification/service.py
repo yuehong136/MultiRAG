@@ -25,6 +25,7 @@ from memory.writes.providers import release_sql
 from memory.writes.types import Authorize
 
 ReadyEntry = Callable[[MemoryEntry, MemoryEntryRevision], Awaitable[None]]
+ReadyEntries = Callable[[list[tuple[MemoryEntry, MemoryEntryRevision]]], Awaitable[set[tuple[str, int]]]]
 
 
 class _ReadLimit(Exception):
@@ -49,8 +50,11 @@ def _without_projection(binding: dict[str, Any]) -> dict[str, Any]:
 
 
 class VerificationService:
-    def __init__(self, db: AsyncSession, *, tenant_id: str, actor_id: str, authorize: Authorize, storage: ManagedMessageStore, ready_entry: ReadyEntry) -> None:
+    def __init__(
+        self, db: AsyncSession, *, tenant_id: str, actor_id: str, authorize: Authorize, storage: ManagedMessageStore, ready_entry: ReadyEntry, ready_entries: ReadyEntries | None = None
+    ) -> None:
         self.db, self.tenant_id, self.actor_id, self.authorize, self.storage, self.ready_entry = db, tenant_id, actor_id, authorize, storage, ready_entry
+        self.ready_entries = ready_entries
 
     async def _idle(self) -> None:
         await release_sql(self.db)
@@ -143,14 +147,9 @@ class VerificationService:
         }
         return binding, revision.content
 
-    async def _snapshot(self, memory_id: str, entry_id: str, *, physical_budget: list[int] | None = None) -> tuple[dict[str, Any], str]:
-        await self._idle()
-        try:
-            binding, content = await self._metadata(memory_id, entry_id)
-            revision = await self.db.get(MemoryEntryRevision, (entry_id, binding["entry"]["revision"]), populate_existing=True)
-            expected_projection = deepcopy(revision.message_snapshot) if revision is not None else {}
-        finally:
-            await release_sql(self.db)
+    async def _physical_binding(self, memory_id: str, binding: dict[str, Any], expected_projection: dict[str, Any], *, physical_budget: list[int] | None = None) -> dict[str, Any]:
+        """Read a complete binding with no SQL transaction or cached projections."""
+        binding = deepcopy(binding)
         if physical_budget is not None and physical_budget[0] < len(binding["sources"]) + 1:
             raise _ReadLimit
         for expected in [*binding["sources"], binding["entry"]]:
@@ -185,6 +184,17 @@ class VerificationService:
                     if not equal:
                         raise RevisionConflict("verification_projection_changed")
             expected["projection_sha256"] = projection_digest(message)
+        return binding
+
+    async def _snapshot(self, memory_id: str, entry_id: str, *, physical_budget: list[int] | None = None) -> tuple[dict[str, Any], str]:
+        await self._idle()
+        try:
+            binding, content = await self._metadata(memory_id, entry_id)
+            revision = await self.db.get(MemoryEntryRevision, (entry_id, binding["entry"]["revision"]), populate_existing=True)
+            expected_projection = deepcopy(revision.message_snapshot) if revision is not None else {}
+        finally:
+            await release_sql(self.db)
+        binding = await self._physical_binding(memory_id, binding, expected_projection, physical_budget=physical_budget)
         await self._idle()
         try:
             fresh, _ = await self._metadata(memory_id, entry_id)

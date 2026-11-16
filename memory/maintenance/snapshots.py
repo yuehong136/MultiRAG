@@ -11,8 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import Memory
-from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemoryPublicationOutbox, MemoryRevisionSource, MemorySourceState
-from api.db.memory_writer_models import MemoryWriterAdmission
+from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemoryRevisionSource, MemorySourceState
 from memory.maintenance.segments import split_source, validate_fragment
 from memory.revisions.domain import RevisionConflict, RevisionNotFound, RevisionValidationError, content_hash, is_active, message_scope
 from memory.revisions.storage import ManagedMessageStore
@@ -61,37 +60,17 @@ class MaintenanceSnapshots:
             raise RevisionConflict("dreaming_requires_managed_memory")
 
     async def _ready_entry(self, entry: MemoryEntry, revision: MemoryEntryRevision) -> None:
+        from memory.maintenance.readiness import ready_entry_pairs
+
         if entry.state != "active" or revision.content is None:
             raise RevisionConflict("dreaming_target_not_active")
-        if revision.origin == "consolidated":
-            admissions = list(
-                await self.db.scalars(
-                    select(MemoryWriterAdmission).where(
-                        MemoryWriterAdmission.memory_id == entry.memory_id,
-                        MemoryWriterAdmission.tenant_id == self.tenant_id,
-                        MemoryWriterAdmission.kind == "dream_publish",
-                        MemoryWriterAdmission.message_ids.contains([revision.message_id]),
-                        MemoryWriterAdmission.publication_state == "ready",
-                    )
-                )
-            )
-            ready = await self.db.scalar(
-                select(MemoryPublicationOutbox.id).where(
-                    MemoryPublicationOutbox.entry_id == entry.entry_id, MemoryPublicationOutbox.revision == revision.revision, MemoryPublicationOutbox.state == "ready"
-                )
-            )
-            if len(admissions) == 1 and ready is not None:
-                return
+        if (entry.entry_id, revision.revision) not in await ready_entry_pairs(self.db, self.tenant_id, [(entry, revision)]):
             raise RevisionConflict("dreaming_target_not_ready")
-        if revision.parent_revision is None:
-            return
-        ready = await self.db.scalar(
-            select(MemoryPublicationOutbox.id).where(
-                MemoryPublicationOutbox.entry_id == entry.entry_id, MemoryPublicationOutbox.revision == revision.revision, MemoryPublicationOutbox.state == "ready"
-            )
-        )
-        if ready is None:
-            raise RevisionConflict("dreaming_target_not_ready")
+
+    async def _ready_entries(self, pairs: list[tuple[MemoryEntry, MemoryEntryRevision]]) -> set[tuple[str, int]]:
+        from memory.maintenance.readiness import ready_entry_pairs
+
+        return await ready_entry_pairs(self.db, self.tenant_id, pairs)
 
     async def _evidence(self, memory_id: str, source_ids: list[int], entry_ids: list[str]) -> dict[str, Any]:
         await release_sql(self.db)
