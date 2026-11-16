@@ -309,9 +309,17 @@ class RevisionService:
         if not refs:
             raise RevisionConflict("source_manifest_missing")
         target = await self._revision(entry_id, revision)
+        from memory.source_provenance import source_receipts
+
+        receipts = await source_receipts(
+            self.db, memory_id=target.memory_id, tenant_id=self.tenant_id, source_ids=[ref.source_message_id for ref in refs if ref.locator.get("source_provenance_sha256") is not None]
+        )
         expected_scope = message_scope(target.message_snapshot, target.memory_id)
         for ref in refs:
             reference_scope = ref.locator.get("scope", expected_scope)
+            receipt_pin = ref.locator.get("source_provenance_sha256")
+            if receipt_pin is not None and receipts.get(ref.source_message_id, {}).get("provenance_sha256") != receipt_pin:
+                raise RevisionConflict("source_provenance_changed")
             if not isinstance(reference_scope, dict) or set(reference_scope) != {"user_id", "agent_id", "session_id"}:
                 raise RevisionConflict("source_scope_invalid")
             statement = select(MemorySourceState).where(

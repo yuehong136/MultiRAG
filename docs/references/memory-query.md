@@ -3,6 +3,7 @@
 Memory 提供结构化检索、原始来源摘录和有预算的查询上下文。所有入口使用服务器认证的用户身份检查个人所有权或当前 team 成员权限；请求中的 `user_id`、`agent_id`、`session_id` 只缩小内容范围，不授予访问权。完整权限规则见 [Memory HTTP 权限](memory-api-authorization.md)。
 
 这些读取操作不会修改记忆、生成新摘要或触发后台提取。
+需要保留分段角色、事件时间和认证提交凭据时，使用可选的[结构化来源](memory-structured-sources.md)入口，旧 RAW 合同保持原样。
 
 ## 最近消息
 

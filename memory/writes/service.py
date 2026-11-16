@@ -123,7 +123,9 @@ class AppendService(WriterCoordinator):
         self.storage, self.embedder, self.extractor = storage, embedder, extractor
         self.fifo_evict, self.ensure_index, self.queue_submit = fifo_evict, ensure_index, queue_submit
 
-    async def append_raw(self, memory_id: str, *, operation_id: str, content: str, scope: dict[str, str], valid_at: str, enqueue_extraction: bool = True) -> dict[str, Any]:
+    async def append_raw(
+        self, memory_id: str, *, operation_id: str, content: str, scope: dict[str, str], valid_at: str, enqueue_extraction: bool = True, structured_received_at: str | None = None
+    ) -> dict[str, Any]:
         _content(content, self.count_tokens)
         if set(scope) != {"user_id", "agent_id", "session_id"} or any(not isinstance(value, str) for value in scope.values()) or type(enqueue_extraction) is not bool:
             raise RevisionValidationError("invalid_append_scope")
@@ -133,9 +135,18 @@ class AppendService(WriterCoordinator):
             datetime.fromisoformat(valid_at)
         except ValueError as error:
             raise RevisionValidationError("invalid_append_receipt_time") from error
-        await self.admit(
-            memory_id, operation_id=operation_id, kind="append_raw", request={"content": content, "scope": scope, "enqueue_extraction": enqueue_extraction}, server_metadata={"valid_at": valid_at}
-        )
+        metadata = {"valid_at": valid_at}
+        request = {"content": content, "scope": scope, "enqueue_extraction": enqueue_extraction}
+        if structured_received_at is not None:
+            from memory.structured_sources import SOURCE_FORMAT, declared_event_time, parse_registered_source
+
+            parse_registered_source(content)
+            received = declared_event_time(structured_received_at)
+            if received is None or enqueue_extraction:
+                raise RevisionValidationError("structured_source_requires_explicit_maintenance")
+            metadata.update(source_format=SOURCE_FORMAT, received_at=received, envelope_sha256=content_hash(content), submitted_by=self.actor_id, submission_operation_id=operation_id)
+            request["source_format"] = SOURCE_FORMAT
+        await self.admit(memory_id, operation_id=operation_id, kind="append_raw", request=request, server_metadata=metadata)
         return await self.reconcile(memory_id, operation_id)
 
     async def extract_source(self, memory_id: str, *, operation_id: str, task_id: str, source_id: int) -> dict[str, Any]:
@@ -243,6 +254,11 @@ class AppendService(WriterCoordinator):
             }
             outbox.payload = {**outbox.payload, "source_binding": binding}
             row.request_metadata = {**row.request_metadata, "source_content_sha256": binding["content_sha256"]}
+            from memory.source_provenance import source_receipts
+
+            metadata = (await source_receipts(self.db, memory_id=memory_id, tenant_id=self.tenant_id, source_ids=[source_id])).get(source_id)
+            if metadata is not None:
+                raw = {**raw, "source_metadata": metadata}
         return raw
 
     async def _minimum_message_id(self, memory_id: str) -> int:

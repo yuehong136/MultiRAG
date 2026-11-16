@@ -193,7 +193,7 @@ async def finalize_writer_deletion(db: AsyncSession, *, memory_id: str, tenant_i
         raise RevisionBusy("memory_writers_not_drained")
     for row in await _admissions(db, memory_id, tenant_id, lock=True):
         row.publication_state, row.state = "canceled", "canceled"
-        row.request_metadata = {key: value for key, value in row.request_metadata.items() if key in {"content_sha256", "source_content_sha256"}}
+        row.request_metadata = {key: value for key, value in row.request_metadata.items() if key in {"content_sha256", "source_content_sha256", "source_format", "server_metadata_sha256"}}
         row.receipt = {key: value for key, value in row.receipt.items() if key in {"finished_tokens", "outcome", "cancellation_requested", "operator_quiescence_attestations"}}
     fence.state, fence.updated_at = "deleted", datetime.now(UTC)
     fence.reserved_bytes = 0
@@ -268,7 +268,7 @@ async def invalidate_source_writers(db: AsyncSession, *, memory_id: str, tenant_
             row.state = "canceled"
         row.receipt = {**row.receipt, "cancellation_requested": True}
         if permanent:
-            row.request_metadata = {key: value for key, value in row.request_metadata.items() if key in {"content_sha256", "source_content_sha256"}}
+            row.request_metadata = {key: value for key, value in row.request_metadata.items() if key in {"content_sha256", "source_content_sha256", "source_format", "server_metadata_sha256"}}
         outbox = await db.scalar(select(MemoryPublicationOutbox).where(MemoryPublicationOutbox.memory_id == memory_id, MemoryPublicationOutbox.operation_id == row.operation_id).with_for_update())
         if outbox is not None:
             if row.active_token is not None and row.active_token not in outbox.receipt.get("active_attempts", []):
@@ -412,7 +412,9 @@ class WriterCoordinator:
                     message_ids=[],
                     task_id=task_id,
                     source_message_id=source_id,
-                    request_metadata={},
+                    request_metadata={"source_format": server_metadata["source_format"], "server_metadata_sha256": request_hash(server_metadata)}
+                    if server_metadata and server_metadata.get("source_format")
+                    else {},
                     receipt={},
                 )
                 self.db.add(row)

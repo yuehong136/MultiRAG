@@ -236,8 +236,13 @@ class MemoryWriteProviders:
         settings, prepared = await self._prepared(memory_id, LLMType.CHAT.value)
         await release_sql(self.db)
         fingerprint = self._chat_fingerprint(settings, prepared)
+        source_content = source["content"]
+        if source.get("source_metadata") is not None:
+            from memory.structured_sources import evidence_snapshot
+
+            source_content = json.dumps(evidence_snapshot(source_content, source["source_metadata"]), ensure_ascii=False, separators=(",", ":"))
         prompts = [{"role": "user", "content": settings.user_prompt}] if settings.user_prompt else []
-        prompts.append({"role": "user", "content": PromptAssembler.assemble_user_prompt(source["content"], reference_time)})
+        prompts.append({"role": "user", "content": PromptAssembler.assemble_user_prompt(source_content, reference_time)})
         async with llm_bundle_scope():
             bundle = await finish_owned_work(asyncio.to_thread(LLMBundle.from_prepared, prepared))
             response = await finish_owned_work(

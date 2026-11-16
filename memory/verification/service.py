@@ -145,6 +145,10 @@ class VerificationService:
             },
             "sources": sources,
         }
+        from memory.source_provenance import bind_submission_receipts, source_receipts
+
+        receipts = await source_receipts(self.db, memory_id=memory_id, tenant_id=self.tenant_id, source_ids=[ref.source_message_id for ref in refs])
+        bind_submission_receipts(binding, receipts)
         return binding, revision.content
 
     async def _physical_binding(self, memory_id: str, binding: dict[str, Any], expected_projection: dict[str, Any], *, physical_budget: list[int] | None = None) -> dict[str, Any]:

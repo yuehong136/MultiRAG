@@ -65,6 +65,15 @@ def publication_selections(candidates: list[dict[str, Any]]) -> list[dict[str, A
     return sorted(result, key=lambda item: item["candidate_id"])
 
 
+def publication_evidence_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Keep receipt pins for fresh validation, without copying source bodies."""
+    value = deepcopy(manifest)
+    for item in value["inputs"]:
+        metadata = item["snapshot"].get("source_metadata")
+        item["snapshot"] = {"source_metadata": metadata} if metadata is not None else {}
+    return value
+
+
 class PublicationService(WriterCoordinator):
     def __init__(
         self,
@@ -213,8 +222,7 @@ class PublicationService(WriterCoordinator):
                 }
             )
             candidate.state, candidate.publication_operation_id = "publishing", row.operation_id
-        for item in manifest["inputs"]:
-            item["snapshot"] = {}
+        manifest = publication_evidence_manifest(manifest)
         outbox = await self._outbox(row)
         outbox.bank_generation = bank.generation
         outbox.payload = {
@@ -491,6 +499,7 @@ class PublicationService(WriterCoordinator):
                                 "message_id": source["source_id"],
                                 "scope": deepcopy(source["scope"]),
                                 **({"fragment": deepcopy(source["fragment"])} if source.get("fragment") else {}),
+                                **({"source_provenance_sha256": source["source_provenance_sha256"]} if source.get("source_provenance_sha256") else {}),
                             },
                         )
                     )
@@ -562,6 +571,14 @@ class PublicationService(WriterCoordinator):
                 source_state = "stale"
             elif source.state != "active" and source_state != "stale":
                 source_state = "pending"
+        if source_state == "active":
+            from memory.source_provenance import source_receipts
+
+            receipts = await source_receipts(self.db, memory_id=memory_id, tenant_id=self.tenant_id, source_ids=[ref["source_id"] for ref in item["sources"]])
+            for ref in item["sources"]:
+                pin = ref.get("source_provenance_sha256")
+                if pin is not None and receipts.get(ref["source_id"], {}).get("provenance_sha256") != pin:
+                    raise RevisionConflict("source_provenance_changed")
         entry = await self.db.scalar(
             select(MemoryEntry).where(MemoryEntry.entry_id == item["entry_id"], MemoryEntry.memory_id == memory_id).execution_options(populate_existing=True).with_for_update()
         )

@@ -17,7 +17,7 @@ from memory.revisions.domain import RevisionConflict, RevisionNotFound, Revision
 from memory.revisions.storage import ManagedMessageStore
 from memory.writes.providers import release_sql
 
-ANALYSIS_INPUT_CONTRACT = "source_json_with_target_input_closure"
+ANALYSIS_INPUT_CONTRACT = "source_json_with_target_input_closure_and_submission_receipt"
 
 
 def analysis_payload(manifest: dict[str, Any], policy: str) -> dict[str, Any]:
@@ -83,6 +83,9 @@ class MaintenanceSnapshots:
             )
             if len(source_rows) != len(source_ids):
                 raise RevisionConflict("source_adoption_required")
+            from memory.source_provenance import source_receipts
+
+            receipts = await source_receipts(self.db, memory_id=memory_id, tenant_id=self.tenant_id, source_ids=source_ids)
             inputs: list[dict[str, Any]] = []
             for row in source_rows:
                 if row.tenant_id != self.tenant_id or row.state != "active":
@@ -148,11 +151,13 @@ class MaintenanceSnapshots:
                 or message_scope(physical, memory_id) != item["scope"]
             ):
                 raise RevisionConflict("dreaming_source_projection_changed")
+            from memory.structured_sources import evidence_snapshot
+
             item.update(
                 valid_at=physical.get("valid_at"),
                 coverage="included",
                 defer_reason=None,
-                snapshot={"content": physical["content"], "message_type": "raw", "origin": "legacy_combined", "role_status": "role_unknown"},
+                snapshot=evidence_snapshot(physical["content"], receipts.get(item["source_id"])),
             )
         return manifest
 
@@ -243,6 +248,9 @@ class MaintenanceSnapshots:
             raise RuntimeError("Maintenance validation requires its owning session")
         await self._bank(memory_id)
         inputs = sorted(manifest["inputs"], key=lambda item: item["source_id"])
+        from memory.source_provenance import source_receipts
+
+        receipts = await source_receipts(db, memory_id=memory_id, tenant_id=self.tenant_id, source_ids=[item["source_id"] for item in inputs])
         for item in inputs:
             row = await db.scalar(
                 select(MemorySourceState)
@@ -257,6 +265,8 @@ class MaintenanceSnapshots:
                 or (row.source_revision, row.generation, row.content_sha256, row.scope) != (item["source_revision"], item["source_generation"], item["content_sha256"], item["scope"])
             ):
                 raise RevisionConflict("dreaming_source_changed")
+            if item["coverage"] in {"included", "analyzed"} and item["snapshot"].get("source_metadata") != receipts.get(item["source_id"]):
+                raise RevisionConflict("dreaming_source_receipt_changed")
         for target in sorted(manifest["entries"], key=lambda item: item["entry_id"]):
             entry = await db.scalar(
                 select(MemoryEntry)

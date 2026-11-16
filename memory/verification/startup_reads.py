@@ -132,6 +132,9 @@ async def load_startup_entries(service: VerificationService, memory_id: str, ent
         if source_ids
         else {}
     )
+    from memory.source_provenance import bind_submission_receipts, source_receipts
+
+    receipts = await source_receipts(db, memory_id=memory_id, tenant_id=tenant_id, source_ids=sorted(identity for identity, source in states.items() if source.state == "active"))
     for entry, revision in pairs:
         item, refs = result[entry.entry_id], references[entry.entry_id]
         if (entry.entry_id, revision.revision) not in ready:
@@ -175,6 +178,7 @@ async def load_startup_entries(service: VerificationService, memory_id: str, ent
             },
             "sources": sources,
         }
+        bind_submission_receipts(item.binding, receipts)
         item.content, item.projection, item.assessment = revision.content, deepcopy(revision.message_snapshot), deepcopy(revision.assessment)
         head = heads.get(entry.entry_id)
         item.head = (head.head_version, head.verification_id) if head is not None else (0, None)

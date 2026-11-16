@@ -104,13 +104,17 @@ def validate_manifest(manifest: dict[str, Any], request: dict[str, Any], count_t
             raise RevisionValidationError("invalid_maintenance_reference_time")
         if item["coverage"] == "included":
             snapshot = item["snapshot"]
-            if (
-                not isinstance(snapshot, dict)
-                or set(snapshot) != {"content", "message_type", "origin", "role_status"}
-                or snapshot["message_type"] != "raw"
-                or snapshot["origin"] != "legacy_combined"
-                or snapshot["role_status"] != "role_unknown"
-            ):
+            if not isinstance(snapshot, dict) or snapshot.get("message_type") != "raw":
+                raise RevisionValidationError("invalid_maintenance_origin")
+            if snapshot.get("origin") == "authenticated_submission":
+                from memory.structured_sources import validate_submission_metadata
+
+                if set(snapshot) != {"content", "message_type", "origin", "role_status", "source_metadata"} or snapshot.get("role_status") != "caller_declared":
+                    raise RevisionValidationError("invalid_maintenance_origin")
+                checked = validate_submission_metadata(snapshot["source_metadata"])
+                if checked["envelope_sha256"] != item["content_sha256"]:
+                    raise RevisionValidationError("invalid_maintenance_origin")
+            elif set(snapshot) != {"content", "message_type", "origin", "role_status"} or snapshot.get("origin") != "legacy_combined" or snapshot.get("role_status") != "role_unknown":
                 raise RevisionValidationError("invalid_maintenance_origin")
             if item.get("fragment") is not None:
                 if not isinstance(snapshot.get("content"), str) or not snapshot["content"] or len(snapshot["content"].encode("utf-8")) > 65535:
@@ -206,6 +210,8 @@ def assemble_candidates(proposals: list[dict[str, Any]], manifest: dict[str, Any
         for reference, original in zip(candidate["sources"], selected, strict=True):
             if original.get("fragment") is not None:
                 reference["fragment"] = deepcopy(original["fragment"])
+            if original["snapshot"].get("source_metadata") is not None:
+                reference["source_provenance_sha256"] = original["snapshot"]["source_metadata"]["provenance_sha256"]
         if action == "add":
             if not isinstance(proposal["message_type"], str) or proposal["message_type"] not in {"semantic", "episodic", "procedural"}:
                 raise RevisionValidationError("invalid_maintenance_message_type")

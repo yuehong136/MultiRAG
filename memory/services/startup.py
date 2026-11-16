@@ -28,6 +28,18 @@ def _text(items: list[dict[str, Any]]) -> str:
     return "\n\n".join(f"Entry {item['entry_id']}\nContent:\n{item['content']}\nHuman applicability:\n{item['verification']['applicability']}" for item in items)
 
 
+def startup_source_locators(memory_id: str, binding: dict[str, Any]) -> list[dict[str, Any]]:
+    pins = binding["entry"].get("source_provenance_sha256", {})
+    return [
+        {
+            **deepcopy(source),
+            "locator": {"kind": "memory_message", "memory_id": memory_id, "message_id": source["source_id"]},
+            **({"provenance_sha256": pins[str(source["source_id"])]} if str(source["source_id"]) in pins else {}),
+        }
+        for source in binding["sources"]
+    ]
+
+
 def assemble_startup_package(
     memory_id: str,
     scope: dict[str, str | None],
@@ -259,7 +271,7 @@ class StartupService:
                     "locator": {"memory_id": memory_id, "verification_id": current["verification_id"]},
                     "snapshot_only": True,
                 },
-                "sources": [{**source, "locator": {"kind": "memory_message", "memory_id": memory_id, "message_id": source["source_id"]}} for source in binding["sources"]],
+                "sources": startup_source_locators(memory_id, binding),
             }
             items.append(item)
             pins[identity] = {

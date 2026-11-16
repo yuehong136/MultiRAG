@@ -80,6 +80,23 @@ async def memory_capabilities(memory_id: str, db: AsyncSession = Depends(get_asy
             {
                 "recent_messages": {"filters": ["message_type", "user_id", "agent_id", "session_id", "status"], **recent},
                 "sources": {"verification": "provenance_only", "snapshot_only": True, "max_excerpt_chars": 8192, "continuation_requires_authorization": True},
+                "structured_sources": {
+                    "supported": recent.get("coordinated_writes_supported", False),
+                    "schema_version": 1,
+                    "max_segments": 32,
+                    "max_content_bytes": 65535,
+                    "max_content_tokens": 8192,
+                    "declared_roles": ["user", "assistant", "tool", "unknown"],
+                    "roles_are_caller_declared": True,
+                    "submitter_identity_is_authenticated": True,
+                    "speaker_identity_is_verified": False,
+                    "content_is_verified": False,
+                    "automatic_extraction": False,
+                    "provenance_default_includes_segments": False,
+                    "legacy_roles": "role_unknown",
+                    "event_time_is_caller_declared": True,
+                    "snapshot_only": True,
+                },
                 "context": {"modes": ["query"], "max_budget_tokens": 32768, "max_candidates": 100, "token_count_is_estimate": True, "mutates_memory": False},
                 "startup_context": {
                     "supported": recent.get("coordinated_writes_supported", False),

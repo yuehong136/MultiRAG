@@ -103,6 +103,7 @@ def job_view(job: MemoryMaintenanceJob, inputs: list[MemoryMaintenanceInput]) ->
             {
                 **{name: deepcopy(getattr(item, name)) for name in ("input_id", "source_id", "source_revision", "source_generation", "content_sha256", "scope", "coverage", "defer_reason")},
                 **({"fragment": deepcopy(item.fragment)} if item.fragment is not None else {}),
+                **({"source_provenance_sha256": item.snapshot["source_metadata"]["provenance_sha256"]} if item.snapshot.get("source_metadata") is not None else {}),
             }
             for item in inputs
         ],

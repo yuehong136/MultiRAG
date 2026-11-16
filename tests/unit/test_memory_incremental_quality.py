@@ -180,6 +180,7 @@ async def test_production_snapshot_whole_defers_over_budget_source(cases: dict[s
     db.in_transaction.return_value = False
     db.scalar = AsyncMock(side_effect=["tenant", "active"])
     db.scalars = AsyncMock(return_value=rows)
+    db.execute = AsyncMock(return_value=SimpleNamespace(all=lambda: []))  # Legacy sources have no structured submission receipts.
     storage = Mock(spec=ManagedMessageStore)
     storage.read = AsyncMock(side_effect=lambda identity: deepcopy(physical[identity]))
     snapshots = MaintenanceSnapshots(cast(AsyncSession, db), tenant_id="tenant", storage=cast(ManagedMessageStore, storage), count_tokens=character_estimate)

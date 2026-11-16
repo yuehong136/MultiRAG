@@ -226,6 +226,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_memory_startup_milvus_scale.py",
                 "test_memory_startup_milvus_workload.py",
                 "test_memory_source_int64_http.py",
+                "test_memory_structured_sources_http.py",
                 "test_shared_chunk_owner_contract.py",
                 "test_sandbox_provider_settings.py",
             )
@@ -270,12 +271,14 @@ def required_services(paths: list[Path]) -> set[str]:
             "test_memory_workload.py",
             "test_memory_startup_longitudinal.py",
             "test_memory_target_longitudinal.py",
+            "test_memory_structured_sources_live.py",
             "test_memory_targets_http.py",
             "test_memory_verification_http.py",
             "test_memory_startup_http.py",
             "test_memory_startup_milvus_scale.py",
             "test_memory_startup_milvus_workload.py",
             "test_memory_source_int64_http.py",
+            "test_memory_structured_sources_http.py",
             "test_memory_dreaming_web_consumer.py",
             "test_memory_maintenance_worker_cli.py",
         }:

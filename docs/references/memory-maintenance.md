@@ -64,8 +64,10 @@ tenant、actor、模型行、可信状态不能由请求或模型覆盖，权限
 任务提供 selected/included/analyzed/deferred 覆盖量，只有实际送入并成功完成分析的输入才计入 analyzed。
 单个手动任务不维护全局完成水位。后续新增来源、新来源版本或新范围需要新的任务；
 跨任务的版本覆盖由[增量整理账本](memory-incremental.md)提供，不根据上次时间猜测全量已经处理。
-RAW 作为 `legacy_combined` / `role_unknown` 使用，不解析正文中的 `User Input:` 等字样来重建可信角色，
+旧 RAW 作为 `legacy_combined` / `role_unknown` 使用，不解析正文中的 `User Input:` 等字样来重建可信角色，
 也不把模型或历史 Agent 的自述当成实际工具验证结果。
+新的[结构化来源](memory-structured-sources.md)保留声明角色、事件时间和独立提交凭据；这些声明不证明说话者或事实。
+快照、候选和发布绑定提交凭据摘要，完整包装计入预算。
 
 ### 候选选择与修订
 
