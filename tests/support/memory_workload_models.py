@@ -83,20 +83,23 @@ def _mapping(value: Any) -> dict[str, Any]:
 class ProviderObserver:
     """Capture each actual SDK request, including known failed-attempt usage."""
 
-    def __init__(self, journal: ResourceJournal, *, max_attempts: int = 48) -> None:
+    def __init__(self, journal: ResourceJournal, *, max_attempts: int = 48, capture_synthetic_content: bool = False) -> None:
         self.journal = journal
         self.max_attempts = max_attempts
+        self.capture_synthetic_content = capture_synthetic_content
         self.attempts: list[dict[str, Any]] = []
         self.stage = "source_embedding"
+        self.phase = ""
         self.lock = threading.RLock()
         self.embedding_reference = ""
         self.embedding_config = ""
 
-    def set_stage(self, stage: str) -> None:
-        if stage not in STAGES:
+    def set_stage(self, stage: str, *, phase: str = "") -> None:
+        if stage not in STAGES or not isinstance(phase, str) or len(phase) > 96:
             raise ValueError("invalid_workload_stage")
         with self.lock:
             self.stage = stage
+            self.phase = phase
 
     def _start(self, model: str, config_reference: str) -> dict[str, Any]:
         with self.lock:
@@ -105,6 +108,7 @@ class ProviderObserver:
             row: dict[str, Any] = {
                 "attempt_id": uuid4().hex,
                 "stage": self.stage,
+                "workload_phase": self.phase,
                 "model_reference": model,
                 "config_reference": config_reference,
                 "state": "unknown",
@@ -126,8 +130,13 @@ class ProviderObserver:
             raise RuntimeError("workload_unbounded_chat_request")
         return maximum
 
-    @staticmethod
-    def _chat_usage(row: dict[str, Any], response: Any) -> None:
+    def _chat_usage(self, row: dict[str, Any], response: Any) -> None:
+        if self.capture_synthetic_content:
+            choices = _mapping(response).get("choices")
+            if isinstance(choices, list) and choices:
+                content = _mapping(_mapping(choices[0]).get("message")).get("content")
+                if isinstance(content, str) and len(content.encode("utf-8")) <= 65535:
+                    row["synthetic_response_content"] = content
         raw = _mapping(getattr(response, "usage", None))
         details = raw.get("prompt_tokens_details") or {}
         cached = details.get("cached_tokens") if isinstance(details, dict) else None

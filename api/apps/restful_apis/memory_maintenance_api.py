@@ -10,6 +10,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.apps.restful_apis.memory_revision_api import MemoryCommand, RevisionNumber, _command_error, _result
+from api.apps.services.memory_target_schemas import TargetPreconditions
 from api.db.db_models import get_async_db
 from api.utils.api_utils import Principal, async_current_user
 
@@ -32,6 +33,7 @@ class CreateMaintenanceRequest(MemoryCommand):
     policy: Literal["general", "preferences", "decisions", "procedures"] = "general"
     input_budget_tokens: int = Field(default=16384, ge=1024, le=32768, strict=True)
     output_budget_tokens: int = Field(default=4096, ge=256, le=8192, strict=True)
+    target_preconditions: TargetPreconditions | None = None
 
 
 class ReviewCandidateRequest(MemoryCommand):

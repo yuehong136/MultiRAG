@@ -35,7 +35,7 @@ def memory_live_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     env = release_api
     tenant = env["owners"][0]
     journal = ResourceJournal("memory-real-workload")
-    observer = ProviderObserver(journal)
+    observer = ProviderObserver(journal, capture_synthetic_content=os.environ.get("MULTIRAG_MEMORY_CAPTURE_SYNTHETIC_RESPONSES") == "1")
     identifiers = {"chat": int(os.environ["MULTIRAG_MEMORY_CHAT_MODEL_ID"]), "embedding": int(os.environ["MULTIRAG_MEMORY_EMBEDDING_MODEL_ID"])}
     configs = configured_models(identifiers)
     assert configs["chat"]["llm_name"] == "qwen-flash"

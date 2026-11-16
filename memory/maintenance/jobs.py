@@ -18,6 +18,7 @@ from api.db.memory_revision_models import ManagedMemoryState, MemoryMutationOper
 from api.db.memory_writer_models import MemoryWriterAdmission, MemoryWriterFence
 from common.asyncio_utils import finish_owned_work
 from memory.maintenance.domain import ASSESSMENT, assemble_candidates, canonical_request, identifier, validate_manifest
+from memory.maintenance.target_conditions import TargetConditions, canonical_target_preconditions, public_conditions
 from memory.maintenance.types import AnalysisResult, Analyzer, Authorize, InputValidator, Snapshotter
 from memory.revisions.domain import RevisionBusy, RevisionConflict, RevisionNotFound, RevisionValidationError, positive_int, request_hash, validate_operation_id
 from memory.writes.admission import WriterCoordinator
@@ -108,6 +109,8 @@ def job_view(job: MemoryMaintenanceJob, inputs: list[MemoryMaintenanceInput]) ->
         created_at=_iso(job.created_at),
         updated_at=_iso(job.updated_at),
     )
+    if job.receipt.get("target_preconditions") is not None:
+        value["target_preconditions"] = public_conditions(job.receipt["target_preconditions"])
     return value
 
 
@@ -126,11 +129,13 @@ class JobService(WriterCoordinator):
         validate_binding: Callable[[MemoryMaintenanceJob, dict[str, Any]], Awaitable[None]] | None = None,
         checkpoint: Callable[[MemoryMaintenanceJob, list[MemoryMaintenanceInput], AnalysisResult], Awaitable[None]] | None = None,
         segment_snapshotter: Callable[[str, list[int], list[str], int, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+        target_conditions: TargetConditions | None = None,
     ) -> None:
         super().__init__(db, tenant_id=tenant_id, actor_id=actor_id, authorize=authorize)
         self.snapshotter, self.validate_inputs, self.analyzer, self.count_tokens = snapshotter, validate_inputs, analyzer, count_tokens
         self.validate_binding, self.checkpoint = validate_binding, checkpoint
         self.segment_snapshotter = segment_snapshotter
+        self.target_conditions = target_conditions
 
     async def _memory_fence(self, memory_id: str) -> tuple[Any, MemoryWriterFence]:
         memory, fence = await super()._memory_fence(memory_id)
@@ -218,9 +223,13 @@ class JobService(WriterCoordinator):
         output_budget_tokens: int = 4096,
         job_id: str | None = None,
         fragment: dict[str, Any] | None = None,
+        target_preconditions: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         validate_operation_id(operation_id)
         request = canonical_request(source_ids, entry_ids, policy, input_budget_tokens, output_budget_tokens)
+        expected_targets = canonical_target_preconditions(target_preconditions)
+        if expected_targets is not None:
+            request["target_preconditions"] = expected_targets
         if fragment is not None:
             request["fragment"] = deepcopy(fragment)
         digest = request_hash({"memory_id": memory_id, "tenant_id": self.tenant_id, "actor_id": self.actor_id, **request})
@@ -234,6 +243,10 @@ class JobService(WriterCoordinator):
                 return await self._job_view(previous, await self._inputs(previous))
         finally:
             await self.db.rollback()
+        if expected_targets is not None:
+            if self.target_conditions is None:
+                raise RevisionValidationError("target_recommendations_unsupported")
+            await self.target_conditions.validate_physical(memory_id, expected_targets)
         if fragment is not None:
             if self.segment_snapshotter is None:
                 raise RevisionValidationError("maintenance_segmentation_unsupported")
@@ -244,6 +257,8 @@ class JobService(WriterCoordinator):
         async with self._write(operation_id):
             await self._memory_fence(memory_id)
             await self.validate_inputs(self.db, memory_id, manifest)
+            if expected_targets is not None and self.target_conditions is not None:
+                await self.target_conditions.validate_sql(memory_id, expected_targets, source_ids=request["source_ids"], entry_ids=request["entry_ids"], lock=True)
             previous = await self.db.scalar(select(MemoryMaintenanceJob).where(MemoryMaintenanceJob.memory_id == memory_id, MemoryMaintenanceJob.operation_id == operation_id).with_for_update())
             if previous is not None:
                 if previous.request_sha256 != digest or previous.tenant_id != self.tenant_id:
@@ -265,7 +280,7 @@ class JobService(WriterCoordinator):
                 input_budget_tokens=input_budget_tokens,
                 output_budget_tokens=output_budget_tokens,
                 estimated_input_tokens=manifest["estimated_input_tokens"],
-                receipt={},
+                receipt={"target_preconditions": expected_targets} if expected_targets is not None else {},
             )
             if self.validate_binding is not None:
                 await self.validate_binding(job, manifest)

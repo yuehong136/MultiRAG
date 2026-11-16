@@ -18,13 +18,28 @@ from memory.revisions.domain import RevisionConflict, RevisionNotFound, Revision
 from memory.revisions.storage import ManagedMessageStore
 from memory.writes.providers import release_sql
 
+ANALYSIS_INPUT_CONTRACT = "source_json_with_target_input_closure"
+
 
 def analysis_payload(manifest: dict[str, Any], policy: str) -> dict[str, Any]:
     """The token estimate and model use exactly the same included evidence body."""
+    source_inputs: dict[int, str] = {}
+    for item in manifest["inputs"]:
+        source_id, input_id = item["source_id"], item["input_id"]
+        if source_id in source_inputs and source_inputs[source_id] != input_id:
+            raise RevisionValidationError("maintenance_target_input_mapping_ambiguous")
+        source_inputs[source_id] = input_id
+    entries = []
+    for entry in manifest["entries"]:
+        try:
+            required = sorted({source_inputs[source_id] for source_id in entry["source_ids"]})
+        except KeyError as error:
+            raise RevisionValidationError("maintenance_target_input_mapping_incomplete") from error
+        entries.append({**deepcopy(entry), "required_source_input_ids": required})
     value = {
         "policy": policy,
-        "inputs": [item for item in manifest["inputs"] if item["coverage"] in {"included", "analyzed"}],
-        "entries": manifest["entries"],
+        "inputs": [deepcopy(item) for item in manifest["inputs"] if item["coverage"] in {"included", "analyzed"}],
+        "entries": entries,
     }
     if any(item.get("fragment") is not None for item in manifest["inputs"]):
         value["evidence_window"] = (

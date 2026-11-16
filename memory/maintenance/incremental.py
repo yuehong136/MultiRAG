@@ -24,6 +24,7 @@ from memory.maintenance.fragment_coverage import fragment_inventory
 from memory.maintenance.jobs import JobService
 from memory.maintenance.segments import MAX_TOTAL_FRAGMENTS, segmentation_request
 from memory.maintenance.selection import MAX_BATCH_SOURCES, MAX_DISCOVERY_SOURCES, MAX_SUBMIT_BATCHES, canonical_scope, partition_sources, public_source, source_identity, source_key
+from memory.maintenance.target_conditions import canonical_target_preconditions, public_conditions
 from memory.revisions.domain import RevisionConflict, RevisionNotFound, RevisionPersistenceUnknown, RevisionValidationError, message_scope, request_hash, validate_operation_id
 from memory.writes.admission import WriterCoordinator
 
@@ -48,17 +49,25 @@ def selection_request(
     input_budget_tokens: int = 16384,
     output_budget_tokens: int = 4096,
     segmentation: dict[str, Any] | None = None,
+    target_preconditions: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     common = canonical_request([1], entry_ids or [], policy, input_budget_tokens, output_budget_tokens)
     if type(batch_size) is not int or not 1 <= batch_size <= MAX_BATCH_SOURCES or type(max_sources) is not int or not 1 <= max_sources <= MAX_DISCOVERY_SOURCES:
         raise RevisionValidationError("invalid_incremental_limits")
     configuration = segmentation_request(segmentation)
+    expected_targets = canonical_target_preconditions(target_preconditions)
+    normalized_scope = canonical_scope(scope)
+    if expected_targets is not None:
+        principal = expected_targets["inputs"][0]["scope"]
+        if any(normalized_scope[name] != principal[name] for name in ("user_id", "agent_id")):
+            raise RevisionValidationError("target_scope_mismatch")
     return {
-        "scope": canonical_scope(scope),
+        "scope": normalized_scope,
         **{name: common[name] for name in ("policy", "entry_ids", "input_budget_tokens", "output_budget_tokens")},
         "batch_size": batch_size,
         "max_sources": max_sources,
         **({"segmentation": configuration} if configuration is not None else {}),
+        **({"target_preconditions": expected_targets} if expected_targets is not None else {}),
     }
 
 
@@ -93,6 +102,10 @@ class DiscoveryService(WriterCoordinator):
             raise RevisionConflict("incremental_requires_active_managed_memory")
 
     async def _profile(self, memory_id: str, request: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+        if request.get("target_preconditions") is not None:
+            if self.jobs.target_conditions is None:
+                raise RevisionValidationError("target_recommendations_unsupported")
+            await self.jobs.target_conditions.validate_sql(memory_id, request["target_preconditions"], entry_ids=request["entry_ids"])
         identity = await self.identity(memory_id)
         contexts: dict[int, dict[str, Any]] = {}
         entries = []
@@ -214,6 +227,10 @@ class DiscoveryService(WriterCoordinator):
         ]
         more = len(selected) > request["max_sources"]
         sources = [{key: value for key, value in row.items() if key != "coverage_state"} for row in selected[: request["max_sources"]]]
+        if request.get("target_preconditions") is not None:
+            input_ids = {item["source_id"] for item in request["target_preconditions"]["inputs"]}
+            if not input_ids <= {item["source_id"] for item in [*sources, *contexts]}:
+                raise RevisionConflict("target_input_not_selected")
         batches = [] if segmented else partition_sources(sources, contexts, entries, batch_size=request["batch_size"])
         counts.update(selected_primary=len(sources), context=len(contexts))
         frozen = {"request": request, "profile": profile, "sources": sources, "batches": batches, "counts": counts, "has_more": more}
@@ -221,6 +238,10 @@ class DiscoveryService(WriterCoordinator):
 
     async def _prepared_preview(self, memory_id: str, request: dict[str, Any]) -> dict[str, Any]:
         value = await self._preview(memory_id, request)
+        if request.get("target_preconditions") is not None:
+            if self.jobs.target_conditions is None:
+                raise RevisionValidationError("target_recommendations_unsupported")
+            await self.jobs.target_conditions.validate_physical(memory_id, request["target_preconditions"])
         if not request.get("segmentation"):
             return value
         if self.segment_planner is None:
@@ -305,6 +326,8 @@ class DiscoveryService(WriterCoordinator):
                     "analyzed_parts": sum(item["fragment"]["fragment_id"] in completed for item in value["all_fragments"]),
                 },
             )
+        if value["request"].get("target_preconditions") is not None:
+            result["target_preconditions"] = public_conditions(value["request"]["target_preconditions"])
         return result
 
     async def preview(self, memory_id: str, **selection: Any) -> dict[str, Any]:
@@ -498,6 +521,8 @@ class DiscoveryService(WriterCoordinator):
                     "analyzed_parts": sum(row["completed"] or 0 for row in rows),
                 },
             )
+        if discovery.request.get("target_preconditions") is not None:
+            result["target_preconditions"] = public_conditions(discovery.request["target_preconditions"])
         return result
 
     async def get(self, memory_id: str, discovery_id: str) -> dict[str, Any]:
@@ -528,7 +553,7 @@ class DiscoveryService(WriterCoordinator):
         request = selection_request(**selection)
         digest = request_hash({"selection": request, "expected_preview_sha256": expected_preview_sha256})
         prepared: dict[str, Any] | None = None
-        if request.get("segmentation"):
+        if request.get("segmentation") or request.get("target_preconditions"):
             await self._idle()
             try:
                 await self._read_bank(memory_id)
@@ -552,7 +577,7 @@ class DiscoveryService(WriterCoordinator):
                     raise RevisionConflict("operation_request_mismatch")
                 return await self._discovery_view(previous)
             observed = await self._preview(memory_id, request)
-            expected_selection = prepared["selection_sha256"] if prepared is not None else expected_preview_sha256
+            expected_selection = prepared.get("selection_sha256", prepared["preview_sha256"]) if prepared is not None else expected_preview_sha256
             if observed["preview_sha256"] != expected_selection:
                 raise RevisionConflict("incremental_preview_changed")
             preview = prepared if prepared is not None else observed
@@ -585,7 +610,7 @@ class DiscoveryService(WriterCoordinator):
                 counts=preview["counts"],
                 has_more=preview["has_more"],
                 state="planned",
-                receipt={"sources": preview["sources"], "blocked_sources": preview["blocked_sources"], "all_fragments": preview["all_fragments"]} if prepared is not None else {},
+                receipt={"sources": preview["sources"], "blocked_sources": preview["blocked_sources"], "all_fragments": preview["all_fragments"]} if request.get("segmentation") else {},
             )
             self.db.add(discovery)
             await self.db.flush()
