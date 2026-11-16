@@ -1,3 +1,5 @@
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from api.db.services.llm_service import LLMService
@@ -26,16 +28,19 @@ def _supports_model_type(db: Session, tenant_model: object, model_type: LLMType)
 def ensure_tenant_model_id_for_params(
     db: Session,
     tenant_id: str,
-    param_dict: dict,
+    param_dict: dict[str, Any],
     *,
     strict: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     for key in _KEY_TO_MODEL_TYPE:
         tenant_key = f"tenant_{key}"
         if key not in param_dict:
             continue
         if param_dict[key] and not param_dict.get(tenant_key):
             model_type = _KEY_TO_MODEL_TYPE[key]
+            llm_setting = param_dict.get("llm_setting")
+            if key == "llm_id" and isinstance(llm_setting, dict) and llm_setting.get("model_type") == LLMType.IMAGE2TEXT.value:
+                model_type = LLMType.IMAGE2TEXT
             tenant_model = TenantLLMService.get_api_key(db, tenant_id, param_dict[key], model_type)
             if not tenant_model and model_type == LLMType.CHAT:
                 fallback_model = TenantLLMService.get_api_key(db, tenant_id, param_dict[key])

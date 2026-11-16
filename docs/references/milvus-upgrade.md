@@ -41,6 +41,9 @@
 
 ## SDK 与应用检查
 
+无向量的行查询统一使用 `Strong` 读取，包括不支持原生排序时的应用侧排序回退；
+更新成功后立即刷新必须读到新内容。原生排序及 count 请求继续使用相同的一致性要求。
+
 [pyproject.toml](../../pyproject.toml) 使用 `pymilvus>=3.0.3,<3.1.0`，锁文件固定 3.0.3。
 本次解析保留 grpcio 1.67.1 / protobuf 5.29.6；PyMilvus 不再默认安装 Milvus Lite 和 ujson，
 不把它们作为远程服务端运行所需依赖。

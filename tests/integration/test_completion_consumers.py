@@ -39,6 +39,7 @@ def web_run(env: dict[str, Any], identifier: str, token: str, mode: str) -> dict
     return json.loads(completed.stdout.splitlines()[-1])
 
 
+@pytest.mark.external_consumer
 def test_actual_web_agent_plural(release_api: dict[str, Any]) -> None:
     env = release_api
     created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "Web completions", "dsl": message_dsl("published web reply")}, timeout=30).json()
@@ -56,6 +57,7 @@ def test_actual_web_agent_plural(release_api: dict[str, Any]) -> None:
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 
 
+@pytest.mark.external_consumer
 def test_actual_web_search_and_admin_chat(metadata_http: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     env = metadata_http
     with Session(env["engine"]) as db:
@@ -74,9 +76,13 @@ def test_actual_web_search_and_admin_chat(metadata_http: dict[str, Any], monkeyp
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "admin/client"))
     admin = importlib.import_module("multirag_client")
     http = importlib.import_module("http_client")
+    from api.apps import manager
+
+    assert manager is not None
     address = urlsplit(env["base"])
     transport = http.HttpClient(host=address.hostname, port=address.port)
-    transport.login_token = env["api_key"]
+    # The actual CLI login path stores the complete Authorization header.
+    transport.login_token = "Bearer " + manager.create_access_token(data={"sub": f"{env['owners'][1]}@upload.test"})
     client = admin.MultiRAGClient(transport, "user")
     client.chat_on_session({"chat_name": "Metadata chat", "session_id": session_id, "message": "real CLI question"})
     assert "Answer" in capsys.readouterr().out

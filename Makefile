@@ -67,8 +67,8 @@ acceptance-api: ## 仅隔离 API 产品验收（不代表页面或视觉检查�
 	$(UV) python scripts/run_product_acceptance.py --api-only
 
 mcp-compat: ## EIM-F2：隔离 MCP 1/2 解释器，运行双方向真实协议兼容矩阵
-	uv lock --check --script tests/compat/mcp/legacy_server.py
-	uv lock --check --script tests/compat/mcp/modern_server.py
+	uv --no-config lock --check --script tests/compat/mcp/legacy_server.py
+	uv --no-config lock --check --script tests/compat/mcp/modern_server.py
 	$(UV) python scripts/check_mcp_compat.py
 
 verify: lint typecheck test ## 显式 Python 全量检查（Tier 0+1+2；非每次本地 commit 前置）
