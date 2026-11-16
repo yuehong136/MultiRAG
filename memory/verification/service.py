@@ -194,14 +194,14 @@ class VerificationService:
             await release_sql(self.db)
         return binding, content
 
-    async def snapshot(self, memory_id: str, entry_id: str) -> dict[str, Any]:
+    async def snapshot(self, memory_id: str, entry_id: str, *, physical_budget: list[int] | None = None) -> dict[str, Any]:
         identifier(entry_id)
-        binding, content = await self._snapshot(memory_id, entry_id)
+        binding, content = await self._snapshot(memory_id, entry_id, physical_budget=physical_budget)
         await self.authorize(self.db, memory_id)
         head = await self.db.get(MemoryVerificationHead, (memory_id, entry_id), populate_existing=True)
         version, current_id = (head.head_version, head.verification_id) if head is not None else (0, None)
         await release_sql(self.db)
-        current = await self._view(memory_id, current_id) if current_id is not None else None
+        current = await self._view(memory_id, current_id, physical_budget=physical_budget) if current_id is not None else None
         await self._idle()
         try:
             closing, _ = await self._metadata(memory_id, entry_id)

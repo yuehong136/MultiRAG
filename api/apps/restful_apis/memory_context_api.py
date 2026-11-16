@@ -81,6 +81,22 @@ async def memory_capabilities(memory_id: str, db: AsyncSession = Depends(get_asy
                 "recent_messages": {"filters": ["message_type", "user_id", "agent_id", "session_id", "status"], **recent},
                 "sources": {"verification": "provenance_only", "snapshot_only": True, "max_excerpt_chars": 8192, "continuation_requires_authorization": True},
                 "context": {"modes": ["query"], "max_budget_tokens": 32768, "max_candidates": 100, "token_count_is_estimate": True, "mutates_memory": False},
+                "startup_context": {
+                    "supported": recent.get("coordinated_writes_supported", False),
+                    "request_generated": True,
+                    "persistent_cache": False,
+                    "model_calls": False,
+                    "requires_human_confirmed": True,
+                    "scope_is_exact": True,
+                    "budget_tokens_min": 1024,
+                    "budget_tokens_max": 32768,
+                    "max_items": 16,
+                    "max_entry_ids": 32,
+                    "max_inventory_limit": 128,
+                    "physical_read_limit": 256,
+                    "version_bound_sources": True,
+                    "source_offset_unit": "unicode_codepoint",
+                },
                 "verification": {
                     "supported": recent.get("coordinated_writes_supported", False),
                     "requires_managed_entry": True,
@@ -220,9 +236,36 @@ async def source_excerpt(
     user_id: str | None = Query(default=None, max_length=256),
     agent_id: str | None = Query(default=None, max_length=256),
     session_id: str | None = Query(default=None, max_length=256),
+    expected_source_revision: int | None = Query(default=None, ge=1, le=2**63 - 1),
+    expected_source_generation: int | None = Query(default=None, ge=1, le=2**63 - 1),
     db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
+    version_bound = expected_source_revision is not None or expected_source_generation is not None
+    if version_bound:
+        from api.apps.restful_apis.memory_revision_api import _command_error
+        from api.apps.restful_apis.memory_startup_api import no_store
+        from api.apps.services.memory_startup_service import startup
+        from memory.revisions.domain import RevisionValidationError
+
+        try:
+            if expected_source_revision is None or expected_source_generation is None or content_sha256 is None or user_id is None or agent_id is None or session_id is None:
+                raise RevisionValidationError("startup_source_preconditions_incomplete")
+            bound_result = await (await startup(db, memory_id, actor_id=user.id)).source_excerpt(
+                memory_id,
+                source_id,
+                expected_source_revision=expected_source_revision,
+                expected_source_generation=expected_source_generation,
+                content_sha256=content_sha256,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                offset=offset,
+                limit=limit,
+            )
+            return no_store(_result(bound_result))
+        except Exception as error:
+            return no_store(_command_error(error))
     try:
         result = await memory_context_service.source_excerpt(
             db, memory_id, source_id, actor_id=user.id, offset=offset, limit=limit, content_sha256=content_sha256, subject_id=user_id, agent_id=agent_id, session_id=session_id

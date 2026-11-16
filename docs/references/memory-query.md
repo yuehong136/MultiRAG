@@ -88,6 +88,7 @@ Content-Type: application/json
 ```
 
 `query` 必须非空；`budget_tokens` 为 128–32,768，`max_items` 和 `candidate_limit` 为 1–100。请求拒绝未知字段，数值预算不接受布尔值。可选 `user_id`、`agent_id`、`session_id` 精确筛选，不进行空白规范化。当前仅支持 `query` 模式。
+无需查询词的小份背景使用独立的[只读启动上下文](memory-startup.md)，不改变本接口的默认行为。
 
 服务复用既有 embedding、检索编排与消息存储，逐项核对候选和父 RAW。仅装入当前有效、来源为 `available` 或 `not_applicable` 的完整条目；无法匹配的内容不进入上下文。`include_sources=false` 只隐藏来源摘录，仍执行来源检查。
 
