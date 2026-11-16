@@ -1,6 +1,7 @@
 """Transactional numeric default repair, including late legacy OCR imports."""
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -10,35 +11,30 @@ from sqlalchemy import event, func, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Base, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.model_backfill import backfill, backfill_tenant_defaults
 from api.db.model_contract import DEFAULT_MODEL_FIELDS
-from tests.support.database import _alembic_config
+from tests.support.database import _alembic_config, scratch_database
 from tests.support.resource_journal import ResourceJournal
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def defaults_engine(pg_scratch_engine: Engine) -> Iterator[Engine]:
-    journal = ResourceJournal("model-defaults-sql")
+def defaults_engine(tmp_path: Path) -> Iterator[Engine]:
+    # A session scratch engine also hosts unrelated tables with foreign keys to
+    # the model catalog. Each backfill scenario needs its own complete schema.
+    with scratch_database(tmp_path) as engine:
+        journal = ResourceJournal("model-defaults-sql")
 
-    def reserve(_connection: Any, _cursor: Any, statement: str, _parameters: Any, _context: Any, _many: bool) -> None:
-        journal.event("reserve-sql", database=pg_scratch_engine.url.database, statement_kind=statement.lstrip().split(maxsplit=1)[0])
+        def reserve(_connection: Any, _cursor: Any, statement: str, _parameters: Any, _context: Any, _many: bool) -> None:
+            journal.event("reserve-sql", database=engine.url.database, statement_kind=statement.lstrip().split(maxsplit=1)[0])
 
-    event.listen(pg_scratch_engine, "before_cursor_execute", reserve)
-    tables = [
-        Base.metadata.tables[f"usr_ai.{name}"]
-        for name in ("t_ai_llm_factories", "t_ai_llms", "t_ai_tenants", "t_ai_tenant_llms", "t_ai_tenant_model_providers", "t_ai_tenant_model_instances", "t_ai_tenant_models")
-    ]
-    Base.metadata.create_all(pg_scratch_engine, tables=tables)
-    try:
-        yield pg_scratch_engine
-    finally:
+        event.listen(engine, "before_cursor_execute", reserve)
         try:
-            Base.metadata.drop_all(pg_scratch_engine, tables=tables)
+            yield engine
         finally:
-            event.remove(pg_scratch_engine, "before_cursor_execute", reserve)
+            event.remove(engine, "before_cursor_execute", reserve)
 
 
 def add_tenant(db: Session, **values: Any) -> Tenant:

@@ -10,6 +10,7 @@ import redis
 import sqlalchemy as sa
 import xxhash
 from minio import Minio
+from minio.error import S3Error
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Document, DocumentMetadata, Knowledgebase, Task, Tenant
@@ -41,13 +42,21 @@ class ScratchStorage:
     def __init__(self, client: Minio) -> None:
         self.client = client
 
-    def get(self, bucket: str, name: str) -> bytes:
-        response = self.client.get_object(bucket, name)
+    def get_bytes(self, bucket: str, name: str) -> bytes | None:
+        response = None
         try:
+            response = self.client.get_object(bucket, name)
             return response.read()
+        except S3Error as error:
+            if error.code in {"NoSuchKey", "NoSuchBucket", "ResourceNotFound"}:
+                return None
+            raise
         finally:
-            response.close()
-            response.release_conn()
+            if response is not None:
+                try:
+                    response.close()
+                finally:
+                    response.release_conn()
 
 
 @pytest.mark.parametrize("kind", ["schema", "legacy_list", "typed_list", "invalid_properties", "builtin_only", "empty"])

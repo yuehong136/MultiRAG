@@ -195,7 +195,7 @@ async def test_worker_single_probe_real_dimension_and_failure_side_effects(worke
         schema = env["reader"].describe_collection(env["collection"])
         dimensions = {field["name"]: field["params"]["dim"] for field in schema["fields"] if field["name"] in {"vector", "q_5_vec"}}
         assert dimensions == {"vector": 5, "q_5_vec": 5}
-        rows = env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*", "vector", "q_5_vec"], consistency_level="Strong")
+        rows = list(env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*", "vector", "q_5_vec"], consistency_level="Strong"))
     with Session(env["engine"]) as reader:
         doc, kb, state = reader.get(Document, env["document"]), reader.get(Knowledgebase, env["dataset"]), reader.get(Task, env["task"])
         assert doc is not None and kb is not None and state is not None
@@ -228,7 +228,7 @@ async def test_worker_single_probe_real_dimension_and_failure_side_effects(worke
             assert await task_executor.collect(db) == (None, None)
         acknowledged.assert_called_once()
         assert task_executor.DONE_TASKS == 1 and calls == [["ok"], ["title"], ["body"]]
-        after = env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*", "vector", "q_5_vec"], consistency_level="Strong")
+        after = list(env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*", "vector", "q_5_vec"], consistency_level="Strong"))
         with Session(env["engine"]) as db:
             doc, kb, state = db.get(Document, env["document"]), db.get(Knowledgebase, env["dataset"]), db.get(Task, env["task"])
             assert doc is not None and kb is not None and state is not None
@@ -259,7 +259,7 @@ async def test_raptor_checkpoint_keeps_sql_progress_nonterminal(worker_index: di
         )
         == []
     )
-    before = env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*"], consistency_level="Strong")
+    before = list(env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*"], consistency_level="Strong"))
     with Session(env["engine"]) as db:
         state = db.get(Task, env["task"])
         assert state is not None
@@ -276,7 +276,7 @@ async def test_raptor_checkpoint_keeps_sql_progress_nonterminal(worker_index: di
             db=db,
         )
         assert output == ([], 0, {})
-    after = env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*"], consistency_level="Strong")
+    after = list(env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*"], consistency_level="Strong"))
     with Session(env["engine"]) as db:
         state = db.get(Task, env["task"])
         assert state is not None and state.progress == pytest.approx(0.4)

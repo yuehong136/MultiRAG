@@ -120,7 +120,9 @@ async def test_failed_replacement_preserves_history(migration: dict[str, Any], m
     before = copy.deepcopy(_read(env))
     other = copy.deepcopy(_read(env, env["other"]))
     task, chunks, previous = await _generate(env, "psi")
-    original_insert, original_delete = env["store"].insert, env["store"].delete
+    native = env["store"]._get_connection()
+    assert env["store"]._get_connection() is native
+    original_insert, original_delete = env["store"].insert, native.delete
     injected = False
 
     def insert(*args: Any, **kwargs: Any) -> Any:
@@ -137,17 +139,18 @@ async def test_failed_replacement_preserves_history(migration: dict[str, Any], m
         receipt = original_delete(*args, **kwargs)
         if failure == "delete-receipt" and not injected:
             injected = True
-            return None
+            return SimpleNamespace(delete_count=None)
         return receipt
 
     if failure == "delete-receipt":
-        monkeypatch.setattr(env["store"], "delete", delete)
+        monkeypatch.setattr(native, "delete", delete)
     else:
         monkeypatch.setattr(env["store"], "insert", insert)
     if failure == "cancel-after-insert":
         monkeypatch.setattr(task_executor, "has_canceled", lambda task_id: injected)
     with pytest.raises((RuntimeError, TaskCanceledException)):
         _commit(env, task, chunks, previous)
+    assert injected
     assert _read(env) == before and _read(env, env["other"]) == other
     env["record"]["readbacks"].append({"fault": failure, "preserved": True, "rows": before})
     env["save"]()

@@ -1,11 +1,14 @@
 import logging
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import create_autospec
 
 import pytest
+from pymilvus.client.grpc_handler import GrpcHandler
 from pymilvus.orm.types import DataType
 
 import core.utils.milvus_conn as milvus_conn_module
-from common.doc_store.doc_store_base import OrderByExpr
+from common.doc_store.doc_store_base import MatchDenseExpr, OrderByExpr
 from common.doc_store.milvus_conn_base import MilvusConnectionBase
 
 
@@ -38,6 +41,43 @@ class _FakeSchemaConn:
                 {"name": "chunk_order_int"},
             ]
         }
+
+
+@pytest.mark.parametrize("method", ["dense", "native"])
+def test_vector_queries_bind_actual_grpc_search_signature(monkeypatch: pytest.MonkeyPatch, method: str) -> None:
+    connection = create_autospec(GrpcHandler, instance=True)
+    # The old MilvusClient positional order binds the fourth argument to limit
+    # on the actual GrpcHandler returned by _get_connection.
+    with pytest.raises(TypeError, match=r"multiple values.*limit"):
+        connection.search("chunks", [[0.1, 0.2]], "q_2_vec", {"metric_type": "COSINE"}, limit=7)
+    hit = SimpleNamespace(distance=0.9, to_dict=lambda: {"id": "chunk-1", "distance": 0.9})
+    connection.search.return_value = [[hit]]
+    store = object.__new__(_DummyMilvusStore)
+    store.logger = logging.getLogger("test.milvus.grpc")
+    monkeypatch.setattr(store, "_get_connection", lambda using=None: connection)
+    monkeypatch.setattr(store, "_filter_collection_output_fields", lambda *_args: ["pk"])
+    options = {"metric_type": "COSINE", "params": {"nprobe": 10}}
+    if method == "dense":
+        expression = MatchDenseExpr("q_2_vec", [0.1, 0.2], "float", "cosine", 7)
+        rows, scores, count = store._execute_dense_query(["chunks"], expression, 'kb_id == "owned"', ["pk"], 3, 2)
+        assert rows == [{"id": "chunk-1", "distance": 0.9}] and scores == {"chunk-1": 0.9} and count == 1
+    else:
+        rows = store.search_by_milvus("chunks", [[0.1, 0.2]], filter='kb_id == "owned"', limit=7, output_fields=["pk"], search_params=options, anns_field="q_2_vec")
+        assert rows == [{"id": "chunk-1", "distance": 0.9}]
+    actual = connection.search.call_args
+    assert not actual.args
+    assert (
+        actual.kwargs.items()
+        >= {
+            "collection_name": "chunks",
+            "data": [[0.1, 0.2]],
+            "anns_field": "q_2_vec",
+            "param": options,
+            "limit": 7,
+            "expression": 'kb_id == "owned"',
+            "output_fields": ["pk"],
+        }.items()
+    )
 
 
 NATIVE_SORT_SCHEMA_FIELDS = {

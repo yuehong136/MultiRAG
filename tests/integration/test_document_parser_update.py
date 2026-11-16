@@ -629,7 +629,9 @@ def test_faults_restore_full_sql_native_vectors_and_exact_image_bytes(parser_api
     env = parser_api
     before = snapshot(env)
     once = False
-    original_delete = settings.docStoreConn.delete
+    import common.doc_store.document_history as history_store
+
+    original_delete = history_store._delete_history_rows
     original_rm = env["storage"].rm
     original_set = ingest_service._set_document
 
@@ -671,7 +673,7 @@ def test_faults_restore_full_sql_native_vectors_and_exact_image_bytes(parser_api
 
     with monkeypatch.context() as fault_scope:
         if fault.startswith("delete_"):
-            fault_scope.setattr(settings.docStoreConn, "delete", store_delete)
+            fault_scope.setattr(history_store, "_delete_history_rows", store_delete)
         elif fault.startswith("object_"):
             fault_scope.setattr(env["storage"], "rm", object_rm)
         elif fault == "late_sql":
@@ -685,6 +687,8 @@ def test_faults_restore_full_sql_native_vectors_and_exact_image_bytes(parser_api
         finally:
             if fault == "commit_before":
                 sa.event.remove(Session, "before_commit", before_commit)
+    if fault.startswith("delete_"):
+        assert once, "the native history deletion boundary was not exercised"
     assert body["code"] == "DOCUMENT_UPDATE_FAILED" and body["details"]["outcome"] == "unchanged"
     assert snapshot(env) == before
     assert not REDIS_CONN.REDIS.exists(recovery_key(env["docs"]["a"]))

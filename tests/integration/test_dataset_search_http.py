@@ -329,11 +329,10 @@ def test_actual_web_client_against_scratch_http(search_api: dict[str, Any]) -> N
     import subprocess
     from pathlib import Path
 
-    root = Path(os.environ.get("WEB_DATASET_CHECKOUT", str(Path(__file__).resolve().parents[3] / "web")))
+    root = Path(os.environ["WEB_DATASET_CHECKOUT"])
     runner = tsx_runner(root)
     script = root / "scripts/verify-dataset-retrieval.ts"
-    if not runner.exists() or not script.exists():
-        pytest.skip("Independent Web checkout unavailable; select WEB_DATASET_CHECKOUT for live consumer acceptance")
+    assert runner.is_file() and script.is_file(), "WEB_DATASET_CHECKOUT must select the installed independent Web consumer"
     env = search_api
     execution = subprocess.run(
         [str(runner), "--tsconfig", str(root / "tsconfig.app.json"), str(script)],

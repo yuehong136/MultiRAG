@@ -454,6 +454,7 @@ def milvus_recent_store(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any, list
         ("3.0.3", "3.0.6", True),
         ("3.0.3", "v3.0.6", True),
         ("3.0.3", "3.0-20261110-63100f8f5b4", True),
+        ("3.0.3", "3.0-20261110-63100f8f5b", True),
         ("3.0.3", "3.0.0-beta", False),
         ("3.0.3", "3.0.6garbage", False),
         ("3.0.3", "3.0-20261110-unknown", False),

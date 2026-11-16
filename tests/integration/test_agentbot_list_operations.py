@@ -158,9 +158,9 @@ def test_agentbot_beta_auth_rejections_do_not_run(agentbot_api: dict[str, Any], 
     assert response.status_code == 200
     if stream:
         events = sse_events(response.text)
-        assert len(events) == 1 and events[0]["code"] != 0 and "do not own" in events[0]["message"]
+        assert len(events) == 1 and events[0]["code"] != 0 and events[0]["message"] == "Agent does not belong to the authenticated tenant."
     else:
-        assert response.json()["code"] != 0 and "do not own" in response.json()["message"] and "data" not in response.json()
+        assert response.json()["code"] != 0 and response.json()["message"] == "Agent does not belong to the authenticated tenant." and "data" not in response.json()
     with Session(env["engine"]) as db:
         assert db.scalar(sa.select(sa.func.count()).select_from(API4Conversation).where(API4Conversation.dialog_id == agent_id)) == 0
     assert env["task_ids"] == tasks

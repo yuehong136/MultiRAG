@@ -16,10 +16,11 @@ from sqlalchemy.orm import Session
 
 from api.apps.services import dataset_api_service
 from api.db import FileType
-from api.db.db_models import LLM, Document, DocumentMetadata, File, File2Document, Knowledgebase, LLMFactories, Tenant, TenantLLM
+from api.db.db_models import Document, DocumentMetadata, File, File2Document, Knowledgebase, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.services import document_ingest_service, knowledgebase_service
-from common import settings
+from common import resources, settings
 from common.constants import FileSource
+from core.utils.encrypted_storage import EncryptedStorageWrapper
 from tests.support.database import scratch_database
 from tests.support.dataset_contract_cases import CREATE_INVALID_PARSER_CASES, CREATE_VALID_PARSER_CASES, UPDATE_INVALID_PARSER_CASES, UPDATE_VALID_PARSER_CASES
 from tests.support.dataset_management_http import management_api as management_api
@@ -37,7 +38,7 @@ def pg_scratch_engine() -> Iterator[sa.Engine]:
 def contracts(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     env = management_api
     record_path = env["record_path"].with_suffix(".contracts.json")
-    record: dict[str, Any] = {"datasets": env["datasets"], "files": [], "links": [], "models": [], "database": env["engine"].url.database}
+    record: dict[str, Any] = {"datasets": env["datasets"], "files": [], "links": [], "models": [], "model_providers": [], "model_instances": [], "database": env["engine"].url.database}
 
     def save() -> None:
         record_path.write_text(json.dumps(record))
@@ -64,12 +65,31 @@ def contracts(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -
         yield env
     finally:
         with env["engine"].begin() as db:
-            for model, ids in [(DocumentMetadata, env["documents"]), (File2Document, record["links"]), (File, record["files"]), (TenantLLM, record["models"])]:
+            if record["models"]:
+                db.execute(sa.update(Tenant).where(Tenant.tenant_embd_id.in_(record["models"])).values(embd_id="", tenant_embd_id=None))
+                db.execute(sa.update(Knowledgebase).where(Knowledgebase.tenant_embd_id.in_(record["models"])).values(embd_id="", tenant_embd_id=None))
+            for model, ids in [
+                (DocumentMetadata, env["documents"]),
+                (File2Document, record["links"]),
+                (File, record["files"]),
+                (TenantModel, record["models"]),
+                (TenantLLM, record["models"]),
+                (TenantModelInstance, record["model_instances"]),
+                (TenantModelProvider, record["model_providers"]),
+            ]:
                 db.execute(sa.delete(model).where(model.id.in_(ids)))
         with env["engine"].connect() as db:
             remaining = {
                 model.__tablename__: db.scalar(sa.select(sa.func.count()).select_from(model).where(model.id.in_(ids)))
-                for model, ids in [(DocumentMetadata, env["documents"]), (File2Document, record["links"]), (File, record["files"]), (TenantLLM, record["models"])]
+                for model, ids in [
+                    (DocumentMetadata, env["documents"]),
+                    (File2Document, record["links"]),
+                    (File, record["files"]),
+                    (TenantModel, record["models"]),
+                    (TenantLLM, record["models"]),
+                    (TenantModelInstance, record["model_instances"]),
+                    (TenantModelProvider, record["model_providers"]),
+                ]
             }
         assert not any(remaining.values()), remaining
         record["remaining"] = remaining
@@ -334,30 +354,52 @@ def test_embedding_authorization_and_indexed_switch_real_sql(contracts: dict[str
     factory = "Ollama"
     model_names = ["contract_" + uuid4().hex for _ in range(3)]
     env["contract_record"]["model_names"] = model_names
+    provider_ids = [uuid4().hex for _ in range(2)]
+    instance_ids = [uuid4().hex for _ in range(2)]
+    env["contract_record"]["model_providers"] += provider_ids
+    env["contract_record"]["model_instances"] += instance_ids
     env["save_record"]()
+    references: list[str] = []
     with Session(env["engine"]) as db:
-        db.merge(LLMFactories(name=factory, tags="EMBEDDING", status="1"))
+        for index, owner in enumerate(env["users"][:2]):
+            db.add(TenantModelProvider(id=provider_ids[index], tenant_id=owner, provider_name=factory, status="active"))
+        db.flush()
+        for index, provider_id in enumerate(provider_ids):
+            db.add(TenantModelInstance(id=instance_ids[index], provider_id=provider_id, instance_name="contract", api_key="controlled-local-only", base_url="http://127.0.0.1:1", status="active"))
+        db.flush()
         for i, model in enumerate(model_names):
-            db.add(LLM(fid=factory, llm_name=model, mdl_type="embedding", tags="EMBEDDING"))
-            row = TenantLLM(tenant_id=env["users"][1 if i == 2 else 0], llm_factory=factory, llm_name=model, mdl_type="embedding", api_key="controlled-local-only")
+            owner_index = 1 if i == 2 else 0
+            row = TenantLLM(tenant_id=env["users"][owner_index], llm_factory=factory, llm_name="model:" + uuid4().hex, mdl_type="embedding", api_key="controlled-local-only")
             db.add(row)
             db.flush()
+            db.add(TenantModel(id=row.id, instance_id=instance_ids[owner_index], model_name=model, model_types=["embedding"], is_tools=False))
             env["contract_record"]["models"].append(row.id)
-        db.execute(sa.update(Tenant).where(Tenant.id == env["users"][0]).values(embd_id=model_names[0] + "@" + factory))
+            references.append(str(row.id))
+        db.execute(sa.update(Tenant).where(Tenant.id == env["users"][0]).values(embd_id=references[0], tenant_embd_id=int(references[0])))
         db.commit()
-    data = create(env, embedding_model=model_names[0] + "@" + factory)
+    data = create(env, embedding_model=references[0])
     dataset = data["id"]
     with env["engine"].begin() as db:
         db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(chunk_num=5))
-    result = api(env, "PUT", "/datasets/" + dataset, {"embedding_model": model_names[1] + "@" + factory})["data"]
-    assert result["embedding_model"] == stored(env, dataset)["embd_id"] == model_names[1] + "@" + factory
+    result = api(env, "PUT", "/datasets/" + dataset, {"embedding_model": references[1]})["data"]
+    assert result["embedding_model"] == stored(env, dataset)["embd_id"] == references[1]
+    assert stored(env, dataset)["tenant_embd_id"] == int(references[1])
     assert stored(env, dataset)["chunk_num"] == 5
-    for model, fragment in [(model_names[2] + "@" + factory, "Unauthorized model"), ("missing@UnknownContractProvider", "Unsupported model")]:
+    for model in [references[2], "missing@UnknownContractProvider"]:
         for method, path, payload in [("POST", "/datasets", {"name": "model-denied", "embedding_model": model}), ("PUT", "/datasets/" + dataset, {"embedding_model": model})]:
             before = sql_state(env)
             response = request_api(env, method, path, credential=env["keys"][0], payload=payload)
-            assert response.status_code == 200 and response.json()["code"] == 102 and fragment in response.json()["message"], response.text
+            assert response.status_code == 200 and response.json() == {"code": 102, "message": "Embedding model is unavailable for this tenant"}, response.text
             assert sql_state(env) == before
+    with env["engine"].begin() as db:
+        db.execute(sa.update(TenantModelInstance).where(TenantModelInstance.id == instance_ids[0]).values(status="inactive"))
+    before = sql_state(env)
+    for method, path, payload in [("POST", "/datasets", {"name": "model-denied", "embedding_model": references[0]}), ("PUT", "/datasets/" + dataset, {"embedding_model": references[0]})]:
+        response = request_api(env, method, path, credential=env["keys"][0], payload=payload)
+        assert response.status_code == 200 and response.json() == {"code": 102, "message": "Embedding model is unavailable for this tenant"}, response.text
+        assert sql_state(env) == before
+    with env["engine"].begin() as db:
+        db.execute(sa.update(TenantModelInstance).where(TenantModelInstance.id == instance_ids[0]).values(status="active"))
     before = stored(env, dataset)
     api(env, "PUT", "/datasets/" + dataset, {"embedding_model": None})
     assert stored(env, dataset)["embd_id"] == before["embd_id"]
@@ -390,7 +432,7 @@ def test_pagerank_zero_store_scope_and_infinity_denial(contracts: dict[str, Any]
     assert sql_state(env) == before and len(calls) == 3
 
 
-def test_delete_contract_real_sql_objects_and_indexes(contracts: dict[str, Any]) -> None:
+def test_delete_contract_real_sql_objects_and_indexes(contracts: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     import io
 
     from minio import Minio
@@ -413,8 +455,16 @@ def test_delete_contract_real_sql_objects_and_indexes(contracts: dict[str, Any])
     cfg = CONFIGS["minio"]
     object_reader = Minio(cfg["host"], access_key=cfg["user"], secret_key=cfg["password"], secure=bool(cfg.get("secure", False)))
     assert settings.docStoreConn.db_type() == "milvus"
-    # This fixture owns physical buckets; shared-bucket deployments have separate tests.
-    assert not cfg.get("bucket"), "This physical bucket acceptance requires a local multi-bucket MinIO configuration"
+    # Select the production adapter's physical multi-bucket mode only for this
+    # owned case; shared configuration and other service namespaces stay intact.
+    source = settings.STORAGE_IMPL
+    storage = copy.copy(source)
+    adapter = copy.copy(source.storage_impl) if isinstance(source, EncryptedStorageWrapper) else storage
+    if isinstance(source, EncryptedStorageWrapper):
+        storage.storage_impl = adapter
+    adapter.conn, adapter.bucket, adapter.prefix_path = object_reader, None, None
+    monkeypatch.setitem(resources._state, "storage", storage)
+    assert adapter.bucket is None and adapter.prefix_path is None
     try:
         with Session(env["engine"]) as db:
             db.execute(sa.update(Knowledgebase).where(Knowledgebase.id.in_(targets)).values(name=name))

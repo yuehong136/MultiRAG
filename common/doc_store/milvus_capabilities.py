@@ -15,7 +15,7 @@ def supports_verified_milvus_3(using: str) -> bool:
     if re.fullmatch(r"3\.\d+\.\d+", version("pymilvus")) is None:
         return False
     server_version = utility.get_server_version(using=using, timeout=5)
-    return re.fullmatch(r"v?3\.\d+\.\d+", server_version) is not None or server_version == "3.0-20261110-63100f8f5b4"
+    return re.fullmatch(r"v?3\.\d+\.\d+", server_version) is not None or server_version in {"3.0-20261110-63100f8f5b", "3.0-20261110-63100f8f5b4"}
 
 
 def supports_native_query_order_by(using: str) -> bool:

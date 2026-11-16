@@ -172,7 +172,8 @@ def graphrag_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 
 
 def native_rows(env: dict[str, Any]) -> list[dict[str, Any]]:
-    return env["reader"].query(env["collection"], filter=f"kb_id == {json.dumps(env['kb'])}", output_fields=["*"], consistency_level="Strong", limit=1000)
+    rows = env["reader"].query(env["collection"], filter=f"kb_id == {json.dumps(env['kb'])}", output_fields=["*"], consistency_level="Strong", limit=1000)
+    return sorted((dict(row) for row in rows), key=lambda row: row["pk"])
 
 
 def observe(env: dict[str, Any], label: str) -> dict[str, Any]:
