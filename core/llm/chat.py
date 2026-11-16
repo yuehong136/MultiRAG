@@ -126,6 +126,12 @@ def _apply_model_family_policies(
             apply_claude_sampling_policy(model_name_lower, sanitized_gen_conf, sanitized_kwargs)
 
         if provider in {SupportedLiteLLMProvider.OpenAI, SupportedLiteLLMProvider.Azure_OpenAI} and any(family in model_name_lower for family in ("gpt-5", "gpt-6")):
+            modern_limit = "max_completion_tokens" in sanitized_gen_conf or "max_completion_tokens" in sanitized_kwargs
+            for options in (sanitized_gen_conf, sanitized_kwargs):
+                if "max_tokens" in options:
+                    legacy_limit = options.pop("max_tokens")
+                    if not modern_limit:
+                        options["max_completion_tokens"] = legacy_limit
             for key in ("temperature", "top_p", "logprobs", "top_logprobs"):
                 sanitized_gen_conf.pop(key, None)
                 sanitized_kwargs.pop(key, None)
@@ -1442,13 +1448,18 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                 hist.insert(0, {"role": "system", "content": system})
 
         logging.info("[HISTORY]" + json.dumps(hist, ensure_ascii=False, indent=2))
-        gen_conf = self._clean_conf(gen_conf)
-        _, kwargs = _apply_model_family_policies(
+        modern_openai_limit = self.provider in {SupportedLiteLLMProvider.OpenAI, SupportedLiteLLMProvider.Azure_OpenAI} and any(family in self.model_name.lower() for family in ("gpt-5", "gpt-6"))
+        if not modern_openai_limit:
+            gen_conf = self._clean_conf(gen_conf)
+        policy_conf, kwargs = _apply_model_family_policies(
             self.model_name,
             backend="litellm",
             provider=self.provider,
+            gen_conf=gen_conf if modern_openai_limit else None,
             request_kwargs=kwargs,
         )
+        if modern_openai_limit:
+            gen_conf = self._clean_conf(policy_conf)
 
         completion_args = self._construct_completion_args(history=hist, stream=False, tools=False, **{**gen_conf, **kwargs})
 

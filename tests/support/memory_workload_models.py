@@ -131,8 +131,10 @@ class ProviderObserver:
         return maximum
 
     def _chat_usage(self, row: dict[str, Any], response: Any) -> None:
+        choices = _mapping(response).get("choices")
+        if isinstance(choices, list) and choices:
+            row["finish_reason"] = _mapping(choices[0]).get("finish_reason")
         if self.capture_synthetic_content:
-            choices = _mapping(response).get("choices")
             if isinstance(choices, list) and choices:
                 content = _mapping(_mapping(choices[0]).get("message")).get("content")
                 if isinstance(content, str) and len(content.encode("utf-8")) <= 65535:
@@ -141,20 +143,53 @@ class ProviderObserver:
         details = raw.get("prompt_tokens_details") or {}
         cached = details.get("cached_tokens") if isinstance(details, dict) else None
         gross = raw.get("prompt_tokens")
+        valid_cache = type(gross) is int and gross >= 0 and type(cached) is int and 0 <= cached <= gross
         row.update(
             state="completed",
             provider_total_tokens=raw.get("total_tokens"),
             provider_usage_raw=raw,
             provider_prompt_tokens=gross,
             provider_model=getattr(response, "model", None),
+            reasoning_tokens=(raw.get("completion_tokens_details") or {}).get("reasoning_tokens"),
+            reasoning_tokens_included_in_output=True,
             usage={
-                "input_tokens": gross - cached if type(gross) is int and type(cached) is int and 0 <= cached <= gross else None,
+                "input_tokens": cast(int, gross) - cast(int, cached) if valid_cache else None,
                 "output_tokens": raw.get("completion_tokens"),
-                "cache_read_input_tokens": cached,
-                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": cached if valid_cache else None,
+                "cache_creation_input_tokens": None,
             },
-            usage_basis="OpenAI-compatible prompt total includes cached reads; no explicit cache creation requested",
+            usage_basis="OpenAI-compatible prompt total includes cached reads; unreported cache-write usage remains unknown",
         )
+
+    def observe_openai_embedding(self, bundle: LLMBundle, reference: str, fingerprint: str) -> None:
+        """Observe the real SDK boundary without substituting vectors or usage."""
+        client = bundle.mdl.client
+        client.max_retries = 0
+        original = client.embeddings.create
+
+        def observed(*args: Any, **options: Any) -> Any:
+            row, started = self._start(reference, fingerprint), time.monotonic()
+            row["request_model"] = options.get("model")
+            try:
+                response = original(*args, **options)
+                raw = _mapping(getattr(response, "usage", None))
+                total = raw.get("total_tokens")
+                row.update(
+                    state="completed",
+                    provider_total_tokens=total,
+                    provider_usage_raw=raw,
+                    provider_model=getattr(response, "model", None),
+                    usage={"input_tokens": total, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+                    usage_basis="OpenAI embedding input-only response usage; no context-cache creation requested",
+                )
+                return response
+            except BaseException as error:
+                row.update(state="failed", error_code=type(error).__name__)
+                raise
+            finally:
+                self._finish(row, started)
+
+        client.embeddings.create = observed
 
     @contextmanager
     def install(self, patch: pytest.MonkeyPatch, scratch: sa.Engine, allowed_model_ids: set[int]) -> Iterator[None]:
@@ -188,6 +223,8 @@ class ProviderObserver:
             fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()
             if config["mdl_type"] == "embedding":
                 self.embedding_reference, self.embedding_config = reference, fingerprint
+                if config["llm_factory"] == "OpenAI":
+                    self.observe_openai_embedding(bundle, reference, fingerprint)
             else:
                 client = getattr(bundle.mdl, "async_client", None)
                 if hasattr(bundle.mdl, "_completion"):

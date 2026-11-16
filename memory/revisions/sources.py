@@ -283,7 +283,7 @@ class SourceService:
         if entry_ids is not None:
             query = query.where(MemoryPublicationOutbox.entry_id.in_(entry_ids))
         if source_id is not None:
-            query = query.where(MemoryPublicationOutbox.payload["source_id"].as_integer() == source_id)
+            query = query.where(MemoryPublicationOutbox.payload["source_id"].as_string() == str(source_id))
         return [row.id for row in await self.db.scalars(query.execution_options(populate_existing=True))]
 
     async def _tracked_source_targets(self, memory_id: str, source_id: int) -> tuple[list[int], list[str]]:

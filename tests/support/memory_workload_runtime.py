@@ -36,11 +36,18 @@ def memory_live_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     tenant = env["owners"][0]
     journal = ResourceJournal("memory-real-workload")
     observer = ProviderObserver(journal, capture_synthetic_content=os.environ.get("MULTIRAG_MEMORY_CAPTURE_SYNTHETIC_RESPONSES") == "1")
+    observer.set_stage("source_embedding", phase="bank-initialization")
     identifiers = {"chat": int(os.environ["MULTIRAG_MEMORY_CHAT_MODEL_ID"]), "embedding": int(os.environ["MULTIRAG_MEMORY_EMBEDDING_MODEL_ID"])}
     configs = configured_models(identifiers)
-    assert configs["chat"]["llm_name"] == "qwen-flash"
-    assert configs["embedding"]["llm_name"] == "text-embedding-v4"
-    assert all(config["llm_factory"] == "Tongyi-Qianwen" for config in configs.values())
+    provider_factory = os.environ.get("MULTIRAG_MEMORY_LIVE_PROVIDER", "Tongyi-Qianwen")
+    if provider_factory == "OpenAI":
+        assert configs["chat"]["llm_name"] == "gpt-6.1-terra"
+        assert configs["embedding"]["llm_name"] in {"text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"}
+    else:
+        assert provider_factory == "Tongyi-Qianwen"
+        assert configs["chat"]["llm_name"] == "qwen-flash"
+        assert configs["embedding"]["llm_name"] == "text-embedding-v4"
+    assert all(config["llm_factory"] == provider_factory for config in configs.values())
     identities: dict[str, int] = {}
     counter = "memory-live-ids-" + uuid4().hex
     queue = "memory-live-queue-" + uuid4().hex
@@ -70,7 +77,12 @@ def memory_live_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
                     "POST",
                     "/memories",
                     actor=0,
-                    json={"name": "Synthetic real-provider memory workload", "memory_type": ["raw"], "embd_id": "text-embedding-v4@Tongyi-Qianwen", "llm_id": "qwen-flash@Tongyi-Qianwen"},
+                    json={
+                        "name": "Synthetic real-provider memory workload",
+                        "memory_type": ["raw"],
+                        "embd_id": f"{configs['embedding']['llm_name']}@{provider_factory}",
+                        "llm_id": f"{configs['chat']['llm_name']}@{provider_factory}",
+                    },
                 )
             )
             mid = record["id"]
