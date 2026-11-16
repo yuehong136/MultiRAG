@@ -4744,6 +4744,7 @@ from api.db import memory_execution_models as _memory_execution_models  # noqa: 
 from api.db import memory_incremental_models as _memory_incremental_models  # noqa: F401
 from api.db import memory_maintenance_models as _memory_maintenance_models  # noqa: F401
 from api.db import memory_revision_models as _memory_revision_models  # noqa: F401
+from api.db import memory_verification_models as _memory_verification_models  # noqa: F401
 from api.db import memory_writer_models as _memory_writer_models  # noqa: F401
 
 

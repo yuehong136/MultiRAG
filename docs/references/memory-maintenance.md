@@ -4,6 +4,8 @@ Dreaming 将显式选择的来源和当前记忆整理成候选，供用户查�
 相关旧记忆可先通过[有界目标推荐](memory-targets.md)审查并明确选入，推荐不自动改写当前记忆。
 候选保存在独立 SQL 表中，不参与普通消息检索；批准后仍须显式发布，才能成为当前记忆。
 人工批准只表示允许采用该候选，`assessment` 仍是 `hypothesis` / `unverified`，不代表事实已验证。
+需要记录对已发布版本的人工判断时，使用独立的[人工核验与争议待办](memory-verification.md)；
+核验不代替候选批准或显式发布，也不改变原 `assessment`。
 
 本功能面向 Python 后端及配套 Web，不依赖上层应用。它不提供 Wiki、上下文压缩、定时夜间运行、
 消费者历史抓取或任意工具执行；模型只有受限的候选输出，没有修改记忆、执行代码或联网的工具。
@@ -95,7 +97,7 @@ job 的原 `state` 与后台 `execution.state` 分开：
 | `succeeded` | 候选保存与后台执行结算均已确认，不表示候选已发布 |
 | `failed` | 本次失败；允许的重试必须显式使用原操作，并重新核验来源、权限及次数上限 |
 | `canceled` | 已取消并结算；已发布记忆仍按原发布协议保留 |
-| `needs_reconciliation` | 状态或实际 IO 未能确认，需要恢复或独立人工核验 |
+| `needs_reconciliation` | 状态或实际 IO 未能确认，需要恢复或由管理员独立核对实际 IO |
 
 execution 只返回状态、尝试次数、时间和安全错误码，不返回 worker/claim/writer token。
 metadata 领取超时只允许重新领取尚未进入真实工作的派发；running 的实际 token 不能靠心跳或租约过期清除。
@@ -111,7 +113,7 @@ metadata 领取超时只允许重新领取尚未进入真实工作的派发；ru
 列出公开操作句柄和安全 metadata，不列 Dreaming 内部发布子操作。库删除后沿最小审计权限仅提供原删除操作，不依赖 Memory 配置仍存在。
 
 `can_reconcile` 表达当前用户是否可显式对账；它不是授权凭证，POST 仍检查当前权限和原操作 actor。
-团队成员能阅读的操作不一定能代替原 actor 执行。`writer_busy=true` 或需要人工核验时，不提供直接重放入口。
+团队成员能阅读的操作不一定能代替原 actor 执行。`writer_busy=true` 或需要管理员核对实际 IO 时，不提供直接重放入口。
 RAW 已存但 `queue_state` 尚未 submitted/not_required，或实际 writer 未结算时，不能仅凭 ready 状态显示整体完成。
 
 Web 通过服务端待办与 URL 中的 job/operation ID 恢复选择；独立操作页支持原库删除后的审计读取。

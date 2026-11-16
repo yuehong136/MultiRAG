@@ -153,6 +153,10 @@ async def _redact_jobs(
 
 async def invalidate_for_source(db: AsyncSession, *, memory_id: str, tenant_id: str, source_id: int, permanent: bool) -> dict[str, list[Any]]:
     """Caller holds bank/source locks; include even a nonanchor analysis source."""
+    if permanent:
+        from memory.verification.lifecycle import redact_for_source
+
+        await redact_for_source(db, memory_id=memory_id, tenant_id=tenant_id, source_id=source_id)
     job_ids = sorted(
         set(
             await db.scalars(
@@ -169,6 +173,9 @@ async def invalidate_for_source(db: AsyncSession, *, memory_id: str, tenant_id: 
 
 async def invalidate_for_bank(db: AsyncSession, *, memory_id: str, tenant_id: str) -> None:
     """Deletion has already closed the common writer fence before this callback."""
+    from memory.verification.lifecycle import redact_for_bank
+
+    await redact_for_bank(db, memory_id=memory_id, tenant_id=tenant_id)
     job_ids = list(
         await db.scalars(
             select(MemoryMaintenanceJob.job_id).where(MemoryMaintenanceJob.memory_id == memory_id, MemoryMaintenanceJob.tenant_id == tenant_id).order_by(MemoryMaintenanceJob.job_id).limit(1001)
@@ -180,6 +187,10 @@ async def invalidate_for_bank(db: AsyncSession, *, memory_id: str, tenant_id: st
 
 
 async def invalidate_for_entry(db: AsyncSession, *, memory_id: str, tenant_id: str, entry_id: str, permanent: bool) -> dict[str, list[Any]]:
+    if permanent:
+        from memory.verification.lifecycle import redact_for_entry
+
+        await redact_for_entry(db, memory_id=memory_id, tenant_id=tenant_id, entry_id=entry_id)
     selected = set(
         await db.scalars(
             select(MemoryMaintenanceJob.job_id)

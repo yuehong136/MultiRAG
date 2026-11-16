@@ -106,6 +106,8 @@ reason 最多 1,024 字符。
 人工修订标记 `origin=manual`、`assessment.kind=user_asserted`、`verification_status=unverified`，
 保存 actor 和 operation。保留 RAW 引用只说明上下文关系，不证明人工新正文受到原文支持。
 客户端及模型不能通过该入口直接写入 verified。
+对当前版本的人工核验结论通过独立的[核验记录](memory-verification.md)保存；
+正文或必要来源变化后旧核验不再适用于当前版本，原修订的 `assessment` 保持不变。
 
 ## 操作状态、幂等与恢复
 
@@ -126,7 +128,8 @@ GET 和页面轮询本身不会自动推进修订或清理。Dreaming 分析由�
 不换 ID 重发、也不以异常证明“没有写入”。配置指纹不保存凭据正文。
 
 每次外部执行都有 attempt/lease。**租约过期不代表旧 IO 已结束。**
-旧 active attempt 未排空时返回 busy；`publication_needs_operator_reconciliation` 表示需要人工核验。
+旧 active attempt 未排空时返回 busy；`publication_needs_operator_reconciliation` 表示需要管理员核对实际 IO 与排空证据，
+不能通过提交人工核验记录解除该状态。
 正常取消会等待本次 IO 排空后释放 attempt；硬崩溃留下的未知 attempt 不自动放行重放。
 SQL 与消息库不提供分布式原子事务，恢复能力不能解释为任意崩溃都能无人干预完成。
 
