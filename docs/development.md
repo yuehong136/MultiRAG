@@ -49,6 +49,8 @@ uv run python -m api.multirag_server
 uv run python -m core.svr.task_executor -i 1
 ```
 
+锁定依赖的专项修复与临时来源见 [Python 依赖修复记录](references/python-dependency-repairs.md)。
+
 ### LiteLLM 安装检查
 
 `make install` 与 unit CI 在完整运行时依赖同步后执行

@@ -3,6 +3,9 @@
 # dependencies = [
 #   "fastmcp==3.4.7",
 # ]
+# [[tool.uv.index]]
+# url = "https://mirrors.aliyun.com/pypi/simple"
+# default = true
 # ///
 """Hermetic MCP SDK 1 / FastMCP 3 compatibility fixture for EIM-F2."""
 
