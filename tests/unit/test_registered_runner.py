@@ -93,6 +93,35 @@ class RegisteredRunnerTest(CaseRootTest):
             self.assert_clean(events)
         self.assertEqual({event["raw_exit"] for event in self.events() if event["event"] == "finished"}, {0, 7})
 
+    def test_separate_stderr_keeps_json_evidence_and_raw_failure(self) -> None:
+        from scripts.ci_checks import audit_go
+
+        events = [
+            {"Action": "start", "Package": "owned/package"},
+            {"Action": "pass", "Package": "owned/package", "Test": "TestActualConsumer"},
+            {"Action": "pass", "Package": "owned/package"},
+        ]
+        output = "\n".join(json.dumps(event) for event in events) + "\n"
+        diagnostic = "go: downloading owned/module\ncompiler diagnostic\n"
+        for code in (0, 7):
+            program = f"import os,sys; os.write(1, {output.encode()!r}); os.write(2, {diagnostic.encode()!r}); sys.exit({code})"
+            command = self.command(program)
+            command.insert(command.index("--"), "--separate-stderr")
+            result = subprocess.run(command, capture_output=True)
+            self.assertEqual(result.returncode, code, result.stderr)
+            receipt = json.loads(result.stdout)
+            stdout_path = self.root / (receipt["run_id"] + ".output")
+            stderr_path = self.root / (receipt["run_id"] + ".stderr")
+            self.assertEqual(stdout_path.read_text(), output)
+            self.assertEqual(stderr_path.read_text(), diagnostic)
+            self.assertEqual(stderr_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(audit_go(stdout_path), {"counts": {"pass_test": 1, "pass_package": 1}})
+            history = [event for event in self.events() if event.get("run_id") == receipt["run_id"]]
+            reserve = next(event for event in history if event["event"] == "reserve-process")
+            self.assertEqual(reserve["stderr"], str(stderr_path))
+            self.assertEqual(receipt["raw_exit"], code)
+            self.assert_clean(history)
+
     def test_cancel_kills_descendant_and_removes_partial_model(self) -> None:
         ready = self.root / "ready"
         program = f'import os,pathlib,subprocess,sys,time; subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"]); pathlib.Path(os.environ["HF_HOME"]).joinpath("partial").write_text("x"); pathlib.Path({str(ready)!r}).touch(); time.sleep(60)'

@@ -19,9 +19,9 @@ from api.db.memory_maintenance_models import MemoryMaintenanceCandidate, MemoryM
 from api.db.memory_revision_models import MemoryEntry
 from memory.revisions.domain import content_hash
 from memory.revisions.storage import ManagedMessageStore
-from tests.integration.test_memory_dreaming_http import wait_job
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.memory_dreaming_http import dreaming_api as dreaming_api
+from tests.support.memory_dreaming_http import wait_job
 from tests.support.memory_writes_http import WriteChat, api_request, result
 from tests.support.memory_writes_http import writes_api as writes_api
 from tests.support.resource_journal import ResourceJournal

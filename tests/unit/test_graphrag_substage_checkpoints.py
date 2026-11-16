@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 import networkx as nx
 import pytest
 
-from core.graphrag import checkpoints
+from common.asyncio_utils import LoopLocalSemaphore
+from core.graphrag import checkpoints, entity_resolution
 from core.graphrag.checkpoints import StageCheckpoints, community_checkpoint_key, fingerprint, resolution_checkpoint_key, stage_revision
 from core.graphrag.entity_resolution import EntityResolution
 from core.graphrag.general import community_reports_extractor as community
@@ -211,11 +212,22 @@ async def test_entry_envelope_cannot_be_swapped_within_scope(monkeypatch: pytest
 
 @pytest.mark.parametrize("stage", ["resolution", "community"])
 async def test_cancellation_drains_all_model_children(model_boundary: None, monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
-    started, settled = asyncio.Event(), []
+    started = asyncio.Event()
+    entered: list[str] = []
+    settled: list[str] = []
+    children: list[asyncio.Task[Any]] = []
     model = Model()
+    limiter = LoopLocalSemaphore(2)
+    monkeypatch.setattr(entity_resolution, "chat_limiter", limiter)
+    monkeypatch.setattr(community, "chat_limiter", limiter)
 
     async def chat(system: str, *args: Any) -> str:
-        started.set()
+        child = asyncio.current_task()
+        assert child is not None
+        children.append(child)
+        entered.append(system)
+        if len(entered) == 2:
+            started.set()
         try:
             await asyncio.Event().wait()
         finally:
@@ -228,9 +240,21 @@ async def test_cancellation_drains_all_model_children(model_boundary: None, monk
         operation = community.CommunityReportsExtractor(model)(graph())
     else:
         operation = EntityResolution(model)(graph(), set(graph()), callback=lambda **kwargs: None)
+    baseline_tasks = asyncio.all_tasks()
     task = asyncio.create_task(operation)
-    await started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert len(settled) == 2
+    try:
+        # Cache lookups run in the thread pool: the first model call starting
+        # does not mean the second worker has reached its model call yet.
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert len(entered) == len(set(entered)) == 2
+        assert all(not child.done() for child in children)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert len(settled) == 2 and set(settled) == set(entered)
+        assert all(child.done() and child.cancelled() for child in children)
+        assert not asyncio.all_tasks() - baseline_tasks
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

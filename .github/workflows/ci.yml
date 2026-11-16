@@ -263,7 +263,7 @@ jobs:
           import json, shutil, subprocess
           from pathlib import Path
           root=Path('.test-results/go')
-          result=subprocess.run(['python3','scripts/run_registered.py','--evidence-root',str(root),'--label','go-canonical-race','--input','go.mod','--input','go.sum','--input','scripts/go_test_services.py','--','go','test','-tags=integration','-race','-count=1','-json','./internal/...'],capture_output=True,text=True)
+          result=subprocess.run(['python3','scripts/run_registered.py','--evidence-root',str(root),'--label','go-canonical-race','--separate-stderr','--input','go.mod','--input','go.sum','--input','scripts/go_test_services.py','--','go','test','-tags=integration','-race','-count=1','-json','./internal/...'],capture_output=True,text=True)
           print(result.stdout,end='')
           print(result.stderr,end='')
           receipt=json.loads(result.stdout.splitlines()[-1])

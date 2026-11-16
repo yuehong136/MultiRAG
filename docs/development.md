@@ -185,6 +185,8 @@ python3 -B scripts/run_registered.py \
 `--borrowed` 只填非秘密资源身份。命令参数和输出会保留，不在参数中传凭据。
 Go 和 Web 使用同一入口，将 `--` 后命令替换为绝对路径的 `go test ...` 或包管理器命令；
 使用已有运行时，不为此入口安装依赖。使用 `uv` 时传 `--no-sync`，避免修改借用的环境。
+Go `-json` 等机器输出使用 `--separate-stderr`：原始 stdout 保存在 `<run_id>.output`，
+原始 stderr 保存在同一身份的 `.stderr` 文件。JSON 审计仍严格检查原始 stdout 中的失败、跳过与完整性。
 
 入口用 `-B` 禁止解释器启动阶段的字节码缓存；runner 也在导入本地 helper 前禁用该进程的字节码写入。
 父进程必须成功创建、追加并 fsync journal，才会启动子进程；子进程还须追加、fsync

@@ -21,9 +21,10 @@ import stat
 import subprocess
 import time
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 from types import FrameType
-from typing import Any
+from typing import Any, BinaryIO
 
 from resource_journal import Journal
 
@@ -87,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence-root", type=Path, required=True, help="Existing private evidence directory")
     parser.add_argument("--label", required=True)
+    parser.add_argument("--separate-stderr", action="store_true", help="Retain stderr separately so stdout can remain a machine-readable stream")
     parser.add_argument("--allow-model-download", action="store_true", help="Allow model downloads only into registered cache paths")
     parser.add_argument("--input", action="append", type=Path, required=True, help="Source/config/lock/consumer inputs to hash")
     parser.add_argument("--borrowed", action="append", default=[], help="Non-secret borrowed resource identity; never deleted")
@@ -170,13 +172,20 @@ def main(argv: list[str] | None = None) -> int:
         if not options.allow_model_download:
             env["HF_HUB_OFFLINE"] = "1"
             env["TRANSFORMERS_OFFLINE"] = "1"
-        journal.event("reserve-process", run_id=run_id, parent_pid=os.getpid(), session="new session, pgid=child pid", output=str(root / (run_id + ".output")))
-        with (root / (run_id + ".output")).open("xb") as output:
+        stderr_path = root / (run_id + ".stderr") if options.separate_stderr else None
+        journal.event(
+            "reserve-process", run_id=run_id, parent_pid=os.getpid(), session="new session, pgid=child pid", output=str(root / (run_id + ".output")), stderr=str(stderr_path) if stderr_path else None
+        )
+        with ExitStack() as streams:
+            output = streams.enter_context((root / (run_id + ".output")).open("xb"))
+            error_output: int | BinaryIO = subprocess.STDOUT
+            if stderr_path is not None:
+                stderr_file = streams.enter_context(stderr_path.open("xb"))
+                os.fchmod(stderr_file.fileno(), 0o600)
+                error_output = stderr_file
             blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
             try:
-                process = subprocess.Popen(
-                    [sys.executable, str(Path(__file__).resolve()), "--child", str(journal_path), *command], env=env, stdout=output, stderr=subprocess.STDOUT, start_new_session=True
-                )
+                process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--child", str(journal_path), *command], env=env, stdout=output, stderr=error_output, start_new_session=True)
             finally:
                 signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
             journal.event("spawned", run_id=run_id, pid=process.pid, pgid=process.pid)

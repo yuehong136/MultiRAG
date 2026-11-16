@@ -2,7 +2,6 @@
 
 import asyncio
 import threading
-import time
 from typing import Any
 
 import pytest
@@ -16,7 +15,7 @@ from memory.revisions.domain import RevisionStorageUnknown, content_hash
 from memory.revisions.storage import ManagedMessageStore
 from memory.services.messages import MessageService
 from tests.support.agent_update_release import release_api as release_api
-from tests.support.memory_dreaming_http import _TARGET
+from tests.support.memory_dreaming_http import _TARGET, wait_job
 from tests.support.memory_dreaming_http import dreaming_api as dreaming_api
 from tests.support.memory_maintenance_worker import maintenance_worker
 from tests.support.memory_writes_http import api_request, result
@@ -38,18 +37,6 @@ def analyze(env: dict[str, Any], job: dict[str, Any]) -> list[dict[str, Any]]:
     completed = wait_job(env, jid)
     assert completed["state"] == "ready", completed
     return result(api_request(env, "GET", f"/memories/{mid}/maintenance-jobs/{jid}/candidates"))["candidates"]
-
-
-def wait_job(env: dict[str, Any], job_id: str, *, execution_terminal: bool = True) -> dict[str, Any]:
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        assert not env.get("worker_errors"), env.get("worker_errors")
-        view = result(api_request(env, "GET", f"/memories/{env['memory_id']}/maintenance-jobs/{job_id}"))
-        execution = view.get("execution") or {}
-        if view["state"] not in {"pending", "running", "cancel_requested"} and (not execution_terminal or execution.get("state") not in {"queued", "claimed", "running"}):
-            return view
-        time.sleep(0.05)
-    raise AssertionError("maintenance execution did not settle")
 
 
 def approve(env: dict[str, Any], job: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:

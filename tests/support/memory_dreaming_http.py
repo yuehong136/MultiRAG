@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -19,6 +20,18 @@ from tests.support.memory_writes_http import WriteChat, api_request, manage_bank
 from tests.support.memory_writes_http import writes_api as writes_api
 
 _TARGET = "The project uses port 80. Keep the backup policy."
+
+
+def wait_job(env: dict[str, Any], job_id: str, *, execution_terminal: bool = True) -> dict[str, Any]:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        assert not env.get("worker_errors"), env.get("worker_errors")
+        view = result(api_request(env, "GET", f"/memories/{env['memory_id']}/maintenance-jobs/{job_id}"))
+        execution = view.get("execution") or {}
+        if view["state"] not in {"pending", "running", "cancel_requested"} and (not execution_terminal or execution.get("state") not in {"queued", "claimed", "running"}):
+            return view
+        time.sleep(0.05)
+    raise AssertionError("maintenance execution did not settle")
 
 
 @pytest.fixture
