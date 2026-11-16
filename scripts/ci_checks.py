@@ -193,7 +193,8 @@ def main() -> int:
         report.mkdir(parents=True, exist_ok=True)
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         (report / "partition.json").write_text(json.dumps({"sha": sha, "index": args.index, "count": CORE_SHARDS, "paths": paths}, indent=2))
-        return run(["--suite", "core", "--workers", "0", "--report-dir", str(report), "--", *paths, "-q"])
+        diagnostics = ["-vv", "-o", "faulthandler_timeout=180"] if args.index == 2 else ["-q"]
+        return run(["--suite", "core", "--workers", "0", "--report-dir", str(report), "--", *paths, *diagnostics])
     elif args.command == "audit":
         audit_core(args.reports, os.environ["GITHUB_SHA"])
     elif args.command == "go-audit":
