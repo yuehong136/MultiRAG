@@ -37,8 +37,8 @@ def source_identity(source: dict[str, Any]) -> dict[str, Any]:
     return {name: deepcopy(source[name]) for name in ("source_id", "source_revision", "source_generation", "content_sha256")}
 
 
-def public_source(source: dict[str, Any]) -> dict[str, str]:
-    return {name: str(value) for name, value in source_identity(source).items()}
+def public_source(source: dict[str, Any]) -> dict[str, Any]:
+    return {name: str(value) for name, value in source_identity(source).items()} | ({"fragment": deepcopy(source["fragment"])} if source.get("fragment") is not None else {})
 
 
 def source_key(memory_id: str, profile_sha256: str, source: dict[str, Any]) -> str:

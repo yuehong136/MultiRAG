@@ -24,6 +24,21 @@ class DiscoveryScope(BaseModel):
     session_id: str | None = Field(default=None, max_length=256)
 
 
+class WholeSegmentation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["whole"] = "whole"
+
+
+class BoundedSegmentation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["segmented"]
+    fragment_token_limit: int = Field(default=2048, ge=256, le=8192, strict=True)
+    max_parts_per_source: int = Field(default=32, ge=1, le=64, strict=True)
+
+
+SegmentationSelection = WholeSegmentation | BoundedSegmentation
+
+
 class DiscoverySelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope: DiscoveryScope = Field(default_factory=DiscoveryScope)
@@ -33,6 +48,7 @@ class DiscoverySelection(BaseModel):
     max_sources: int = Field(default=128, ge=1, le=256, strict=True)
     input_budget_tokens: int = Field(default=16384, ge=1024, le=32768, strict=True)
     output_budget_tokens: int = Field(default=4096, ge=256, le=8192, strict=True)
+    segmentation: SegmentationSelection | None = None
 
 
 class CreateDiscoveryRequest(DiscoverySelection, MemoryCommand):

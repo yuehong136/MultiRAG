@@ -485,7 +485,13 @@ class PublicationService(WriterCoordinator):
                             source_generation=source["source_generation"],
                             content_sha256=source["content_sha256"],
                             relation="context",
-                            locator={"kind": "memory_message", "memory_id": memory_id, "message_id": source["source_id"], "scope": deepcopy(source["scope"])},
+                            locator={
+                                "kind": "memory_message",
+                                "memory_id": memory_id,
+                                "message_id": source["source_id"],
+                                "scope": deepcopy(source["scope"]),
+                                **({"fragment": deepcopy(source["fragment"])} if source.get("fragment") else {}),
+                            },
                         )
                     )
                 self.db.add(

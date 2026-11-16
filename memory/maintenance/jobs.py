@@ -31,8 +31,11 @@ def manifest_for_job(job: MemoryMaintenanceJob, inputs: list[MemoryMaintenanceIn
     return {
         "inputs": [
             {
-                name: deepcopy(getattr(item, name))
-                for name in ("input_id", "source_id", "source_revision", "source_generation", "content_sha256", "scope", "valid_at", "snapshot", "coverage", "defer_reason")
+                **({"fragment": deepcopy(item.fragment)} if item.fragment is not None else {}),
+                **{
+                    name: deepcopy(getattr(item, name))
+                    for name in ("input_id", "source_id", "source_revision", "source_generation", "content_sha256", "scope", "valid_at", "snapshot", "coverage", "defer_reason")
+                },
             }
             for item in inputs
         ],
@@ -96,7 +99,10 @@ def job_view(job: MemoryMaintenanceJob, inputs: list[MemoryMaintenanceInput]) ->
             "deferred": sum(item.coverage == "deferred" for item in inputs),
         },
         inputs=[
-            {name: deepcopy(getattr(item, name)) for name in ("input_id", "source_id", "source_revision", "source_generation", "content_sha256", "scope", "coverage", "defer_reason")}
+            {
+                **{name: deepcopy(getattr(item, name)) for name in ("input_id", "source_id", "source_revision", "source_generation", "content_sha256", "scope", "coverage", "defer_reason")},
+                **({"fragment": deepcopy(item.fragment)} if item.fragment is not None else {}),
+            }
             for item in inputs
         ],
         created_at=_iso(job.created_at),
@@ -119,10 +125,12 @@ class JobService(WriterCoordinator):
         count_tokens: Callable[[str], int],
         validate_binding: Callable[[MemoryMaintenanceJob, dict[str, Any]], Awaitable[None]] | None = None,
         checkpoint: Callable[[MemoryMaintenanceJob, list[MemoryMaintenanceInput], AnalysisResult], Awaitable[None]] | None = None,
+        segment_snapshotter: Callable[[str, list[int], list[str], int, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         super().__init__(db, tenant_id=tenant_id, actor_id=actor_id, authorize=authorize)
         self.snapshotter, self.validate_inputs, self.analyzer, self.count_tokens = snapshotter, validate_inputs, analyzer, count_tokens
         self.validate_binding, self.checkpoint = validate_binding, checkpoint
+        self.segment_snapshotter = segment_snapshotter
 
     async def _memory_fence(self, memory_id: str) -> tuple[Any, MemoryWriterFence]:
         memory, fence = await super()._memory_fence(memory_id)
@@ -209,9 +217,12 @@ class JobService(WriterCoordinator):
         input_budget_tokens: int = 16384,
         output_budget_tokens: int = 4096,
         job_id: str | None = None,
+        fragment: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         validate_operation_id(operation_id)
         request = canonical_request(source_ids, entry_ids, policy, input_budget_tokens, output_budget_tokens)
+        if fragment is not None:
+            request["fragment"] = deepcopy(fragment)
         digest = request_hash({"memory_id": memory_id, "tenant_id": self.tenant_id, "actor_id": self.actor_id, **request})
         await self._idle()
         try:
@@ -223,7 +234,13 @@ class JobService(WriterCoordinator):
                 return await self._job_view(previous, await self._inputs(previous))
         finally:
             await self.db.rollback()
-        manifest = validate_manifest(await finish_owned_work(self.snapshotter(memory_id, request["source_ids"], request["entry_ids"], input_budget_tokens)), request, self.count_tokens)
+        if fragment is not None:
+            if self.segment_snapshotter is None:
+                raise RevisionValidationError("maintenance_segmentation_unsupported")
+            captured = await finish_owned_work(self.segment_snapshotter(memory_id, request["source_ids"], request["entry_ids"], input_budget_tokens, fragment))
+        else:
+            captured = await finish_owned_work(self.snapshotter(memory_id, request["source_ids"], request["entry_ids"], input_budget_tokens))
+        manifest = validate_manifest(captured, request, self.count_tokens)
         async with self._write(operation_id):
             await self._memory_fence(memory_id)
             await self.validate_inputs(self.db, memory_id, manifest)

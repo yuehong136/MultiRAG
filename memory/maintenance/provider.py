@@ -42,7 +42,16 @@ class MaintenanceAnalyst:
         body = json.dumps(analysis_payload(manifest, policy), ensure_ascii=False, separators=(",", ":"))
         async with llm_bundle_scope():
             bundle = await finish_owned_work(asyncio.to_thread(LLMBundle.from_prepared, prepared))
-            response = await finish_owned_work(bundle.async_chat(_SYSTEM, [{"role": "user", "content": body}], {"temperature": 0, "max_tokens": output_budget_tokens}))
+            generation: dict[str, Any] = {"temperature": 0, "max_tokens": output_budget_tokens}
+            request_options: dict[str, Any] = {}
+            cleaner = getattr(getattr(bundle, "mdl", None), "_clean_conf", None)
+            if callable(cleaner):
+                cleaned = cleaner(dict(generation))
+                # Some adapters remove the limit; native adapters may retain or
+                # translate it, and must receive only one request-level copy.
+                if isinstance(cleaned, dict) and not {"max_tokens", "max_completion_tokens", "max_output_tokens", "max_new_tokens"}.intersection(cleaned):
+                    request_options["max_tokens"] = output_budget_tokens
+            response = await finish_owned_work(bundle.async_chat(_SYSTEM, [{"role": "user", "content": body}], generation, **request_options))
         current, current_prepared = await self.provider._prepared(memory_id, LLMType.CHAT.value)
         await release_sql(self.provider.db)
         if self.provider._chat_fingerprint(current, current_prepared) != fingerprint:

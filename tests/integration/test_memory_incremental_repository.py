@@ -12,7 +12,7 @@ from alembic.operations import Operations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.memory_execution_models import MemoryMaintenanceExecution
-from api.db.memory_incremental_models import MEMORY_INCREMENTAL_MODELS, MemoryMaintenanceBatch, MemoryMaintenanceCoverage, MemoryMaintenanceDiscovery
+from api.db.memory_incremental_models import MEMORY_INCREMENTAL_MODELS, MemoryMaintenanceBatch, MemoryMaintenanceCoverage, MemoryMaintenanceDiscovery, MemoryMaintenanceFragmentCoverage
 from api.db.memory_maintenance_models import MemoryMaintenanceCandidate, MemoryMaintenanceJob
 from api.db.memory_revision_models import MemoryEntry, MemoryEntryRevision, MemoryRevisionSource, MemorySourceState
 from api.db.memory_writer_models import MemoryWriterAdmission
@@ -416,6 +416,7 @@ async def test_incremental_migration_is_idempotent_and_rejects_incompatible_tabl
     spec.loader.exec_module(module)
     engine = environment["engine"]
     with engine.begin() as connection:
+        cast(sa.Table, MemoryMaintenanceFragmentCoverage.__table__).drop(connection)
         for model in reversed(MEMORY_INCREMENTAL_MODELS):
             cast(sa.Table, model.__table__).drop(connection)
         with Operations.context(MigrationContext.configure(connection)):

@@ -70,6 +70,7 @@ class MemoryMaintenanceInput(Base):
     scope: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     valid_at: Mapped[str | None] = mapped_column(String(64))
     snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    fragment: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     coverage: Mapped[str] = mapped_column(String(24), nullable=False, default="included")
     defer_reason: Mapped[str | None] = mapped_column(String(64))
 

@@ -1,0 +1,95 @@
+[
+  {
+    "case_id": "unicode_original_spans",
+    "title": "Unicode code points and original whitespace survive every core span",
+    "sources": [{"source_id": 8011, "content": "🙂é中\n\n前后空格  保持原样。\r\n", "repeat": 40, "suffix": "最终约定：离线导出保留原始文本。", "user_id": "alice", "agent_id": "assistant", "session_id": "unicode"}],
+    "entries": [],
+    "gold_facts": [{"fact_id": "export_original", "source_id": 8011, "statement": "最终约定：离线导出保留原始文本。"}],
+    "expected": {"minimum_parts": 3, "normalization_performed": false},
+    "upstream_basis": ["https://github.com/infiniflow/ragflow/blob/92d44744861f95def95a7e47d2e69b7b634bf828/internal/ingestion/component/chunker/token_delim_lossless_boundary_test.go#L42", "https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/tests/test_chunking_streams.py#L164"],
+    "semantic_review": "Exact reconstruction proves code-point coverage, not that a model will retain the export decision. Combining marks remain distinct code points; no grapheme or NFC guarantee is claimed.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "condition_negation_overlap",
+    "title": "A permission condition and its negation stay visible across a hard core boundary",
+    "sources": [{"source_id": 37, "prefix": "填", "prefix_repeat": 180, "content": "只有值班工程师批准时才允许重启。未经批准不得重启；但只读健康检查始终可用。", "suffix": "补充说明保持不变。补充说明保持不变。补充说明保持不变。补充说明保持不变。补充说明保持不变。", "user_id": "alice", "agent_id": "assistant", "session_id": "boundary"}],
+    "entries": [],
+    "gold_facts": [{"fact_id": "conditional_restart", "source_id": 37, "statement": "只有值班工程师批准时才允许重启。未经批准不得重启；"}, {"fact_id": "readonly_sibling", "source_id": 37, "statement": "但只读健康检查始终可用。"}],
+    "reference_proposals": [{"action": "add", "content": "重启仅在值班工程师批准后允许；未经批准不得重启。只读健康检查始终可用。", "message_type": "procedural", "source_input_ids": ["source-37"], "reason": "Preserve the condition, explicit negation and independent read-only exception."}],
+    "expected": {"minimum_parts": 2, "first_core_end": 192},
+    "upstream_basis": ["https://github.com/infiniflow/ragflow/blob/92d44744861f95def95a7e47d2e69b7b634bf828/internal/ingestion/component/chunker/token_overlap_test.go#L9", "https://github.com/openclaw/openclaw/blob/ea8bbbb3b672b7df04d3747941d75cf7345a37fc/extensions/memory-core/src/dreaming-snippet-dedupe.ts#L14"],
+    "semantic_review": "The authored reference proposal preserves a condition and a negation. It is not executed and cannot grant tool permission; every candidate remains an unverified hypothesis.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "many_facts_late_fragment",
+    "title": "Consuming an early part cannot erase the immutable remaining fragment inventory",
+    "sources": [{"source_id": 1103, "content": "入口端口8080。维护时间周日。备份每天02:00。", "repeat": 32, "suffix": "最终补充：审计归档保存45天。", "user_id": "alice", "agent_id": "assistant", "session_id": "large"}],
+    "entries": [],
+    "gold_facts": [{"fact_id": "port", "source_id": 1103, "statement": "入口端口8080。"}, {"fact_id": "maintenance", "source_id": 1103, "statement": "维护时间周日。"}, {"fact_id": "backup", "source_id": 1103, "statement": "备份每天02:00。"}, {"fact_id": "late_needle", "source_id": 1103, "statement": "最终补充：审计归档保存45天。"}],
+    "expected": {"minimum_parts": 4, "consumed_parts": [0], "whole_source_covered": false},
+    "upstream_basis": ["https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/tests/test_subbatch_multichunk_coverage.py#L1", "https://github.com/openclaw/openclaw/blob/ea8bbbb3b672b7df04d3747941d75cf7345a37fc/extensions/memory-core/src/session-ingestion.test.ts#L96"],
+    "semantic_review": "This pure test proves a complete stable plan still contains the late source statement after an early part is consumed. It does not persist or certify the SQL fragment-completion ledger.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "identical_text_distinct_locations",
+    "title": "Repeated source text has distinct positional fragment identities",
+    "sources": [{"source_id": 97, "content": "重复状态：只读接口可用。", "repeat": 120, "suffix": "末尾新事实：写接口仍关闭。", "user_id": "alice", "agent_id": "assistant", "session_id": "repeated"}],
+    "entries": [],
+    "gold_facts": [{"fact_id": "readonly_repeated", "source_id": 97, "statement": "重复状态：只读接口可用。"}, {"fact_id": "writer_closed", "source_id": 97, "statement": "末尾新事实：写接口仍关闭。"}],
+    "expected": {"minimum_parts": 4, "deduplicate_fragment_inventory_by_text_hash": false},
+    "upstream_basis": ["https://github.com/agentscope-ai/ReMe/blob/b13034ba2ff7339bb03df4fa4ee130b47a731c6c/reme/schema/file_chunk.py#L20", "https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/hindsight_api/engine/chunk_ids.py#L1"],
+    "semantic_review": "Text similarity may help later candidate review, but it cannot remove distinct source positions from the planned coverage inventory.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "explicit_prior_entry_correction",
+    "title": "A later fragment patches one prior assertion while preserving its sibling fact",
+    "sources": [{"source_id": 2201, "content": "入口端口8080。备份每天02:00。", "user_id": "alice", "agent_id": "assistant", "session_id": "prior"}, {"source_id": 2202, "prefix": "填", "prefix_repeat": 180, "content": "更正：入口端口改为8081，备份时间不变。", "suffix": "来源仍需人工复核。来源仍需人工复核。来源仍需人工复核。来源仍需人工复核。来源仍需人工复核。", "user_id": "alice", "agent_id": "assistant", "session_id": "later"}],
+    "entries": [{"entry_id": "entry-port", "content": "入口端口8080。备份每天02:00。", "source_ids": [2201]}],
+    "gold_facts": [{"fact_id": "corrected_port", "source_ids": [2201, 2202], "statement": "入口端口8081。"}, {"fact_id": "backup_sibling", "source_id": 2201, "statement": "备份每天02:00。"}],
+    "reference_proposals": [{"action": "patch", "target_entry_id": "entry-port", "patch": {"old_text": "入口端口8080。", "new_text": "入口端口8081。"}, "source_input_ids": ["source-2201", "source-2202"], "reason": "Apply the explicit correction only to the unique port assertion."}],
+    "expected": {"candidate_content": "入口端口8081。备份每天02:00。", "missing_target_error": "maintenance_target_out_of_scope", "missing_closure_error": "maintenance_target_evidence_mismatch"},
+    "upstream_basis": ["https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/tests/test_consolidation_same_day_amendment_5938.py#L42"],
+    "semantic_review": "The old entry and its complete required source closure are explicitly supplied. The test does not claim automatic old-entry retrieval, cross-batch semantic merging or publication.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "older_decision_imported_later",
+    "title": "Host validity does not make a late imported older rule the current decision",
+    "sources": [{"source_id": 19, "content": "10:48定案：每月超额前25单位免费，之后每50单位向上取整。备份仍每天02:00。", "valid_at": "2026-10-21 10:48:00", "user_id": "alice", "agent_id": "assistant", "session_id": "newer"}, {"source_id": 99001, "content": "09:48旧规则：超额没有免费额度，每50单位向上取整。", "valid_at": "2026-10-21 09:48:00", "user_id": "alice", "agent_id": "assistant", "session_id": "older-imported-late"}],
+    "entries": [{"entry_id": "entry-overage", "content": "每月超额前25单位免费，之后每50单位向上取整。备份仍每天02:00。", "source_ids": [19]}],
+    "gold_facts": [{"fact_id": "newer_grace_is_current", "source_id": 19, "statement": "每月超额前25单位免费，之后每50单位向上取整。"}, {"fact_id": "backup_sibling", "source_id": 19, "statement": "备份仍每天02:00。"}],
+    "reference_proposals": [{"action": "noop", "source_input_ids": ["source-19", "source-99001"], "reason": "The later imported statement describes an older rule; preserve the newer decision."}],
+    "known_wrong_host_valid_proposals": [{"action": "patch", "target_entry_id": "entry-overage", "patch": {"old_text": "每月超额前25单位免费，之后每50单位向上取整。", "new_text": "超额没有免费额度，每50单位向上取整。"}, "source_input_ids": ["source-19", "source-99001"], "reason": "An intentionally wrong arrival-order interpretation used only to show the host validator's limits."}],
+    "expected": {"reference_action": "noop", "automatic_semantic_rejection": false, "wrong_record": "超额没有免费额度，每50单位向上取整。备份仍每天02:00。"},
+    "upstream_basis": ["https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/tests/test_consolidation_same_day_amendment_5938.py#L1", "https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/hindsight_api/engine/consolidation/prompts.py#L140"],
+    "semantic_review": "The authored noop is semantically appropriate. A literal but wrong patch can still be host-valid; that explicit negative control remains unverified and requires human rejection, rather than pretending automatic temporal reasoning is implemented.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "source_version_and_part_limit",
+    "title": "Changed source versions invalidate fragment identities and oversized plans do not return a successful prefix",
+    "sources": [{"source_id": 73, "content": "记录必须完整分析后才能确认覆盖。", "repeat": 60, "suffix": "末尾要求：不把未知结果当作零成本。", "user_id": "alice", "agent_id": "assistant", "session_id": "versioned"}],
+    "entries": [],
+    "gold_facts": [{"fact_id": "full_analysis", "source_id": 73, "statement": "记录必须完整分析后才能确认覆盖。"}, {"fact_id": "unknown_not_free", "source_id": 73, "statement": "末尾要求：不把未知结果当作零成本。"}],
+    "expected": {"minimum_parts": 3, "max_one_part_error": "segment_parts_limit", "no_read_span_fits_error": "segment_no_fragment_fits"},
+    "upstream_basis": ["https://github.com/agentscope-ai/ReMe/blob/b13034ba2ff7339bb03df4fa4ee130b47a731c6c/tests/unit/test_dream_checkpoint_versions.py#L238", "https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/tests/test_subbatch_multichunk_coverage.py#L18"],
+    "semantic_review": "Pure plan failures return no prefix as a completed whole-source plan. Actual persisted retries, coverage and cost remain the responsibility of separately exercised SQL/provider integration.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "fragment_payload_provenance",
+    "title": "A candidate carries the full-source identity and exact bounded read-span provenance",
+    "sources": [{"source_id": 46, "content": "项目状态仍需人工核验。", "repeat": 45, "suffix": "独立事实：原始日志保留30天。", "user_id": "alice", "agent_id": "assistant", "session_id": "provenance"}],
+    "entries": [],
+    "gold_facts": [{"fact_id": "log_retention", "source_id": 46, "statement": "独立事实：原始日志保留30天。"}],
+    "reference_proposals": [{"action": "add", "content": "原始日志保留30天。", "message_type": "semantic", "source_input_ids": ["source-46"], "reason": "An authored reference proposal tied to the exact final read span."}],
+    "expected": {"minimum_parts": 3, "tamper_error": "maintenance_fragment_hash_mismatch"},
+    "upstream_basis": ["https://github.com/agentscope-ai/ReMe/blob/b13034ba2ff7339bb03df4fa4ee130b47a731c6c/reme/schema/file_chunk.py#L20", "https://github.com/openclaw/openclaw/blob/ea8bbbb3b672b7df04d3747941d75cf7345a37fc/extensions/memory-core/src/session-ingestion.test.ts#L137"],
+    "semantic_review": "The candidate is an unverified authored proposal. Provenance proves which source bytes were presented, not the truth of retention policy or the model's semantic accuracy.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  }
+]

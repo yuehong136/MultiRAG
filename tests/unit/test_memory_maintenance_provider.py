@@ -1,6 +1,8 @@
 """Actual analyst request boundaries; controlled responses are not quality evidence."""
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any, cast
@@ -60,9 +62,9 @@ async def analyze(
         dependencies = Provider(db, drift=drift)
 
         class Bundle:
-            async def async_chat(self, system: str, history: list[dict[str, Any]], settings: dict[str, Any]) -> Any:
+            async def async_chat(self, system: str, history: list[dict[str, Any]], settings: dict[str, Any], **kwargs: Any) -> Any:
                 assert not db.in_transaction()
-                calls.append({"system": system, "history": deepcopy(history), "settings": deepcopy(settings)})
+                calls.append({"system": system, "history": deepcopy(history), "settings": deepcopy(settings), "request_kwargs": kwargs})
                 return response
 
         monkeypatch.setattr(provider.LLMBundle, "from_prepared", staticmethod(lambda prepared: Bundle()))
@@ -77,12 +79,75 @@ async def test_complete_source_text_is_sent_with_empty_entries_and_one_bounded_c
     original = deepcopy(manifest)
     result, calls = await analyze(monkeypatch, manifest, '{"proposals":[]}')
     assert len(calls) == 1 and calls[0]["settings"] == {"temperature": 0, "max_tokens": 512}
+    assert calls[0]["request_kwargs"] == {}
     payload = json.loads(calls[0]["history"][0]["content"])
     assert payload == analysis_payload(manifest, "general")
     assert payload["inputs"][0]["snapshot"]["content"] == text and payload["entries"] == []
     assert "Empty entries permits add" in calls[0]["system"] and "source-reported preference or decision" in calls[0]["system"]
     assert result["proposals"] == [] and result["config_reference"] == "same"
     assert result["usage"]["output_budget_tokens"] == 512 and manifest == original
+
+
+async def test_output_budget_reaches_litellm_request_after_generation_config_cleaning(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.llm.chat import LiteLLMBase
+    from memory.maintenance import provider
+
+    model = LiteLLMBase("unused-owned-key", "qwen-flash", max_retries=0)
+    requests: list[dict[str, Any]] = []
+
+    @asynccontextmanager
+    async def completion(options: dict[str, Any]) -> AsyncIterator[Any]:
+        requests.append(options)
+        yield SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"proposals":[]}'), finish_reason="stop")], usage=SimpleNamespace(total_tokens=10))
+
+    monkeypatch.setattr(model, "_completion", completion)
+
+    class Bundle:
+        mdl = model
+
+        async def async_chat(self, system: str, history: list[dict[str, Any]], settings: dict[str, Any], **kwargs: Any) -> str:
+            text, _ = await model.async_chat(system, history, settings, **kwargs)
+            return str(text)
+
+    monkeypatch.setattr(provider.LLMBundle, "from_prepared", staticmethod(lambda prepared: Bundle()))
+    manifest = {"inputs": [evidence(41, "来源报告：保留测量条件。")], "entries": [], "estimated_input_tokens": 80}
+    async with AsyncSession() as db:
+        await MaintenanceAnalyst(cast(MemoryWriteProviders, Provider(db))).analyze("bank", manifest, "general", 512)
+    assert len(requests) == 1 and requests[0]["max_tokens"] == 512 and requests[0]["num_retries"] == 0
+
+
+async def test_native_cleaner_keeps_a_single_output_limit_without_duplicate_request_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import MethodType
+
+    from core.llm.chat import Base, MistralChat
+    from memory.maintenance import provider
+
+    model = Base("unused-owned-key", "fixture", "https://fixture.invalid", max_retries=0)
+    monkeypatch.setattr(model, "_clean_conf", MethodType(MistralChat._clean_conf, model))
+    requests: list[dict[str, Any]] = []
+
+    async def create(**options: Any) -> Any:
+        requests.append(options)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"proposals":[]}'), finish_reason="stop")], usage=SimpleNamespace(total_tokens=10))
+
+    monkeypatch.setattr(model.async_client.chat.completions, "create", create)
+
+    class Bundle:
+        mdl = model
+
+        async def async_chat(self, system: str, history: list[dict[str, Any]], settings: dict[str, Any], **kwargs: Any) -> str:
+            text, _ = await model.async_chat(system, history, settings, **kwargs)
+            return str(text)
+
+    monkeypatch.setattr(provider.LLMBundle, "from_prepared", staticmethod(lambda prepared: Bundle()))
+    manifest = {"inputs": [evidence(41, "来源报告：保留测量条件。")], "entries": [], "estimated_input_tokens": 80}
+    try:
+        async with AsyncSession() as db:
+            await MaintenanceAnalyst(cast(MemoryWriteProviders, Provider(db))).analyze("bank", manifest, "general", 512)
+        assert len(requests) == 1 and requests[0]["max_tokens"] == 512
+    finally:
+        await model.async_client.close()
+        model.client.close()
 
 
 async def test_same_subject_cross_session_inputs_keep_both_sources_and_unverified_assessment(monkeypatch: pytest.MonkeyPatch) -> None:

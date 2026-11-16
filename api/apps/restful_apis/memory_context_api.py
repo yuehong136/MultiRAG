@@ -103,6 +103,16 @@ async def memory_capabilities(memory_id: str, db: AsyncSession = Depends(get_asy
                         "max_runs_per_request": 8,
                         "expected_preview_hash_required": True,
                         "token_fit": "not_checked",
+                        "segmentation": {
+                            "supported": recent.get("coordinated_writes_supported", False),
+                            "default_mode": "whole",
+                            "splitter_version": "unicode-boundary-v1",
+                            "fragment_token_limit": {"min": 256, "max": 8192, "default": 2048},
+                            "max_parts_per_source": {"min": 1, "max": 64, "default": 32},
+                            "max_total_fragments": 256,
+                            "context_codepoints": 64,
+                            "offset_unit": "unicode_codepoint",
+                        },
                     },
                 },
                 "revisions": {

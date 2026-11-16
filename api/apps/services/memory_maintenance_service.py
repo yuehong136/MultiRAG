@@ -58,6 +58,7 @@ def _jobs(provider: MemoryWriteProviders, snapshots: MaintenanceSnapshots) -> Jo
         count_tokens=count_tokens,
         validate_binding=checkpoints.validate,
         checkpoint=checkpoints.checkpoint,
+        segment_snapshotter=snapshots.segment_snapshot,
     )
 
 
@@ -67,7 +68,7 @@ async def discoveries(db: AsyncSession, memory_id: str, *, actor_id: str) -> Dis
     async def identity(mid: str) -> dict[str, str]:
         return await analysis_identity(provider, mid)
 
-    return DiscoveryService(db, jobs=_jobs(provider, snapshots), identity=identity, validate_entry=snapshots._ready_entry)
+    return DiscoveryService(db, jobs=_jobs(provider, snapshots), identity=identity, validate_entry=snapshots._ready_entry, segment_planner=snapshots.plan_segments)
 
 
 async def executions(db: AsyncSession, memory_id: str, *, actor_id: str) -> ExecutionService:

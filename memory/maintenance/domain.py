@@ -9,6 +9,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
+from memory.maintenance.segments import validate_fragment
 from memory.revisions.domain import RevisionConflict, RevisionValidationError, content_hash, positive_int, request_hash, revised_content
 
 MAX_SOURCES = 32
@@ -76,7 +77,18 @@ def validate_manifest(manifest: dict[str, Any], request: dict[str, Any], count_t
         raise RevisionValidationError("maintenance_manifest_scope_mismatch")
     input_ids, sources = set(), set()
     for item in inputs:
-        if not isinstance(item, dict) or set(item) != {"input_id", "source_id", "source_revision", "source_generation", "content_sha256", "scope", "valid_at", "snapshot", "coverage", "defer_reason"}:
+        if not isinstance(item, dict) or set(item) - {"fragment"} != {
+            "input_id",
+            "source_id",
+            "source_revision",
+            "source_generation",
+            "content_sha256",
+            "scope",
+            "valid_at",
+            "snapshot",
+            "coverage",
+            "defer_reason",
+        }:
             raise RevisionValidationError("invalid_maintenance_input")
         input_id = identifier(item["input_id"])
         source_id = positive_int(item["source_id"], "invalid_source_id")
@@ -100,7 +112,11 @@ def validate_manifest(manifest: dict[str, Any], request: dict[str, Any], count_t
                 or snapshot["role_status"] != "role_unknown"
             ):
                 raise RevisionValidationError("invalid_maintenance_origin")
-            if content_hash(_snapshot_text(snapshot["content"])) != item["content_sha256"]:
+            if item.get("fragment") is not None:
+                if not isinstance(snapshot.get("content"), str) or not snapshot["content"] or len(snapshot["content"].encode("utf-8")) > 65535:
+                    raise RevisionValidationError("invalid_maintenance_snapshot_content")
+                validate_fragment(item["fragment"], content=snapshot["content"])
+            elif content_hash(_snapshot_text(snapshot["content"])) != item["content_sha256"]:
                 raise RevisionConflict("maintenance_input_hash_mismatch")
             if item["defer_reason"] is not None:
                 raise RevisionValidationError("invalid_maintenance_coverage")
@@ -187,6 +203,9 @@ def assemble_candidates(proposals: list[dict[str, Any]], manifest: dict[str, Any
             "reason": reason,
             "assessment": dict(ASSESSMENT),
         }
+        for reference, original in zip(candidate["sources"], selected, strict=True):
+            if original.get("fragment") is not None:
+                reference["fragment"] = deepcopy(original["fragment"])
         if action == "add":
             if not isinstance(proposal["message_type"], str) or proposal["message_type"] not in {"semantic", "episodic", "procedural"}:
                 raise RevisionValidationError("invalid_maintenance_message_type")

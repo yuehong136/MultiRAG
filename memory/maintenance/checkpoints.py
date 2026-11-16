@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.memory_incremental_models import MemoryMaintenanceBatch, MemoryMaintenanceCoverage, MemoryMaintenanceDiscovery
+from api.db.memory_incremental_models import MemoryMaintenanceBatch, MemoryMaintenanceCoverage, MemoryMaintenanceDiscovery, MemoryMaintenanceFragmentCoverage
 from api.db.memory_maintenance_models import MemoryMaintenanceInput, MemoryMaintenanceJob
 from memory.maintenance.selection import source_identity
 from memory.maintenance.types import AnalysisResult
@@ -53,6 +53,8 @@ class IncrementalCheckpoints:
         actual = {item["source_id"]: item for item in manifest["inputs"]}
         if set(expected) != set(actual) or any(source_identity(expected[key]) != source_identity(actual[key]) or expected[key]["scope"] != actual[key]["scope"] for key in expected):
             raise RevisionConflict("incremental_source_version_changed")
+        if any(expected[key].get("fragment") != actual[key].get("fragment") for key in expected):
+            raise RevisionConflict("incremental_fragment_version_changed")
         context_ids = {int(item["source_id"]) for item in profile["context_sources"]} & set(expected)
         if any(actual[key]["coverage"] not in {"included", "analyzed"} for key in context_ids):
             raise RevisionValidationError("incremental_context_deferred")
@@ -66,6 +68,21 @@ class IncrementalCheckpoints:
         if request_hash(profile) != discovery.profile_sha256:
             raise RevisionConflict("incremental_profile_binding_changed")
         primary = {item["source_id"]: item for item in batch.primary_sources}
+        if profile.get("segmentation"):
+            rows = list(await self.db.scalars(select(MemoryMaintenanceFragmentCoverage).where(MemoryMaintenanceFragmentCoverage.batch_id == batch.batch_id).with_for_update()))
+            fragments = {item["fragment"]["fragment_id"]: item for item in batch.primary_sources if item.get("fragment")}
+            if {row.fragment_id for row in rows} != set(fragments) or any(row.job_id != job.job_id or row.fragment != fragments[row.fragment_id]["fragment"] for row in rows):
+                raise RevisionConflict("incremental_checkpoint_owner_changed")
+            for row in rows:
+                parent = await self.db.get(MemoryMaintenanceCoverage, row.coverage_key, with_for_update=True, populate_existing=True)
+                if (
+                    parent is None
+                    or parent.profile_sha256 != discovery.profile_sha256
+                    or source_identity(parent.__dict__) != source_identity(fragments[row.fragment_id])
+                    or parent.expected_fragments != row.part_count
+                ):
+                    raise RevisionConflict("incremental_checkpoint_owner_changed")
+            return
         coverage = list(
             await self.db.scalars(select(MemoryMaintenanceCoverage).where(MemoryMaintenanceCoverage.batch_id == batch.batch_id).order_by(MemoryMaintenanceCoverage.source_id).with_for_update())
         )
@@ -77,7 +94,13 @@ class IncrementalCheckpoints:
     async def checkpoint(self, job: MemoryMaintenanceJob, inputs: list[MemoryMaintenanceInput], result: AnalysisResult) -> None:
         """Called only after complete candidate validation, inside _save_analysis."""
         manifest = {
-            "inputs": [{name: getattr(item, name) for name in ("source_id", "source_revision", "source_generation", "content_sha256", "scope", "coverage")} for item in inputs],
+            "inputs": [
+                {
+                    **{name: getattr(item, name) for name in ("source_id", "source_revision", "source_generation", "content_sha256", "scope", "coverage")},
+                    **({"fragment": item.fragment} if item.fragment is not None else {}),
+                }
+                for item in inputs
+            ],
             "entries": job.entry_snapshots,
         }
         await self.validate(job, manifest)
@@ -87,6 +110,14 @@ class IncrementalCheckpoints:
         batch, discovery = binding
         if result["model_reference"] != discovery.profile["model_reference"] or result["config_reference"] != discovery.profile["config_reference"]:
             raise RevisionConflict("incremental_analysis_profile_changed")
+        if discovery.profile.get("segmentation"):
+            fragments = list(await self.db.scalars(select(MemoryMaintenanceFragmentCoverage).where(MemoryMaintenanceFragmentCoverage.batch_id == batch.batch_id).with_for_update()))
+            analyzed = {item.fragment["fragment_id"] for item in inputs if item.fragment is not None and item.coverage == "analyzed"}
+            for fragment in fragments:
+                fragment.state, fragment.error_code, fragment.updated_at = ("analyzed", None, datetime.now(UTC)) if fragment.fragment_id in analyzed else ("blocked", "input_budget", datetime.now(UTC))
+            blocked = any(item.state == "blocked" for item in fragments)
+            batch.state, batch.error_code, batch.updated_at = "blocked" if blocked else "analyzed", "input_budget" if blocked else None, datetime.now(UTC)
+            return
         primary = {item["source_id"] for item in batch.primary_sources}
         rows = list(
             await self.db.scalars(select(MemoryMaintenanceCoverage).where(MemoryMaintenanceCoverage.batch_id == batch.batch_id).order_by(MemoryMaintenanceCoverage.source_id).with_for_update())
