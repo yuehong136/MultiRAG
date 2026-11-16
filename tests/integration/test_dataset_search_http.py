@@ -1314,7 +1314,7 @@ def test_http_embedding_provider_errors_cross_real_bundle_without_writes(search_
                 assert response.json() == {"code": RetCode.EXCEPTION_ERROR, "message": f"Embedding provider request failed (HTTP {status})", "data": {"retryable": status == 429}}
                 assert secret not in response.text and "fixture-key" not in response.text
                 assert len(calls) == prior_calls + 1
-                assert calls[-1] == {"path": "/v1/embeddings", "body": {"model": model_name, "input": "availability", "encoding_format": "float"}, "status": status}
+                assert calls[-1] == {"path": "/v1/embeddings", "body": {"model": model_name, "input": ["availability"], "encoding_format": "float"}, "status": status}
                 assert len(bundles) == len(calls) and bundles[-1].model_config["id"] == model_id
                 assert sql_snapshot() == before_sql
                 assert index_snapshot() == before_indexes
