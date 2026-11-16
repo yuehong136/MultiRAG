@@ -12,6 +12,10 @@
   六处模型下载回退删除新版 Hub 已移除的 `local_dir_use_symlinks` 参数。
   `test_embedding_dependency_compatibility.py` 用自行生成的 tinyBERT 权重实际运行两种文件格式的
   embedding、query、rerank 与 CrossEncoder；`test_model_snapshot_download_contract.py` 验证六条回退。
+- XGBoost 从 1.6.0 修到移除旧资源导入的 1.7 线最终补丁 1.7.6。
+  这是明确的依赖缺陷修复，冻结目标仍使用 1.6.0。真实历史 DeepDOC booster 的
+  72 组输入在 Python 3.12 / NumPy 1.26 与 Python 3.13 / NumPy 2.1 环境中预测逐值一致；
+  隔离环境不提供 `pkg_resources`，原 DeepDOC 回归也通过。没有加入资源加载 shim。
 - Infinity SDK 保持 0.7.0；其 setuptools 上界与实际源码使用不符，覆盖为 `>=84.1,<85`。
   适配经过该 SDK 实际导入及真实 Infinity 读写合同验证，不据此放宽 SDK 的其他版本范围。
 - Accelerate 暂时固定到公开 PR 的不可变提交

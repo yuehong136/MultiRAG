@@ -4828,7 +4828,7 @@ requires-dist = [
     { name = "webdriver-manager", specifier = "==4.0.1" },
     { name = "wikipedia", specifier = "==1.4.0" },
     { name = "word2number", specifier = "==1.1" },
-    { name = "xgboost", specifier = "==1.6.0" },
+    { name = "xgboost", specifier = "==1.7.6" },
     { name = "xpinyin", specifier = "==0.7.6" },
     { name = "xxhash", specifier = ">=3.5.0,<4.0.0" },
     { name = "yfinance", specifier = "==0.2.65" },
@@ -12050,20 +12050,20 @@ wheels = [
 
 [[package]]
 name = "xgboost"
-version = "1.6.0"
+version = "1.7.6"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "numpy", version = "1.26.4", source = { registry = "https://mirrors.aliyun.com/pypi/simple" }, marker = "python_full_version < '3.13'" },
     { name = "numpy", version = "2.1.3", source = { registry = "https://mirrors.aliyun.com/pypi/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "scipy" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/77/89/92b399140a7688443fc182b54240822c903e906121d63446eb2f84350e99/xgboost-1.6.0.tar.gz", hash = "sha256:9c944c2495cb426b8a365021565755c39ee0b53156cf5e53a4346bdad2e3b734" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/19/fe/327b4a56ef3e3843b97537ff60381cc4d57a8be7ee99375a8710ee690cb2/xgboost-1.7.6.tar.gz", hash = "sha256:1c527554a400445e0c38186039ba1a00425dcdb4e40b37eed0e74cb39a159c47" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/f1/71/abca2240b5d19aa3e90c8228cf307962fc9f598acc3c623fb49db83b4092/xgboost-1.6.0-py3-none-macosx_10_15_x86_64.macosx_11_0_x86_64.macosx_12_0_x86_64.whl", hash = "sha256:5f7fd61024c41d0c424a8272dfd27797a0393a616b717c05c0f981a49a47b4fd" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/49/d0/85c9c40e7ca1a4bc05278c1e57a89c43ab846be4cb5227871ca7605921a6/xgboost-1.6.0-py3-none-macosx_12_0_arm64.whl", hash = "sha256:ad27c6a72f6abef6d20e67f957fb25553bb09a6d1c4eaf08cb8ee7efca288255" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/c3/be/18970943eb7e9d9ded5e37e87c1dc02c8a961416f725f2734629f26d69d5/xgboost-1.6.0-py3-none-manylinux2014_aarch64.whl", hash = "sha256:b1d532b8d548dd3acb4bd5f56632339e48167d9e2ec0eda2d8d6b4cd772e03b4" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/bf/64/c467a20848adc3d1c3f45d60df9c7cd0c40a548fd534a9f842a35114039d/xgboost-1.6.0-py3-none-manylinux2014_x86_64.whl", hash = "sha256:640b9649104f22f0dc43c7202d22cde5531cc303801a9c75cad3f2b6e413dcf7" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/64/51/3e33a4df0ca66474e7f4e357328a5c7b35fb52cbc48b312c64d276d37da8/xgboost-1.6.0-py3-none-win_amd64.whl", hash = "sha256:e2f9baca0b7cbc208ad4fbafa4cd70b50b292717ee8ba817a3ba7a0fe49de958" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/94/41/143e80c1f48f7e826380f382dff6caf93a698c77bf2e9e38290bbbfbfe42/xgboost-1.7.6-py3-none-macosx_10_15_x86_64.macosx_11_0_x86_64.macosx_12_0_x86_64.whl", hash = "sha256:4c34675b4d2678c624ddde5d45361e7e16046923e362e4e609b88353e6b87124" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/91/fd/fc99c8a63b4bae794d8c2ec9af17b80de1e4084fa4a0b17fb3d6161b6184/xgboost-1.7.6-py3-none-macosx_12_0_arm64.whl", hash = "sha256:59b4b366d2cafc7f645e87d897983a5b59be02876194b1d213bd8d8b811d8ce8" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/7e/67/499fbd8b5b3a8ee2196463567acff913491f10268f9f67f51fe3370e80e2/xgboost-1.7.6-py3-none-manylinux2014_aarch64.whl", hash = "sha256:281c3c6f4fbed2d36bf95cd02a641afa95e72e9abde70064056da5e76233e8df" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/8c/3a/c9c5d4d5c49b132ef15ac7b5ccf56ef1c82efe36cd19414771762e97c00e/xgboost-1.7.6-py3-none-manylinux2014_x86_64.whl", hash = "sha256:b1d5db49b199152d62bd9217c98760207d3de86d2b9d243260c573ffe638f80a" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/75/dd/9afe0d9d0f61a5384c3932626a022e38c396a5d88e6f5345ad2f7b576747/xgboost-1.7.6-py3-none-win_amd64.whl", hash = "sha256:127cf1f5e2ec25cd41429394c6719b87af1456ce583e89f0bffd35d02ad18bcb" },
 ]
 
 [[package]]

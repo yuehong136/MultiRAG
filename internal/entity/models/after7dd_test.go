@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"strings"
 	"testing"
@@ -87,6 +88,10 @@ func TestAfter7ddMiniMaxProbeAndTrim(t *testing.T) {
 func TestAfter7ddXiaomiMedia(t *testing.T) {
 	name, key := "mimo", " secret "
 	api := &APIConfig{ApiKey: &key}
+	inputMIME := mime.TypeByExtension(".wav")
+	if inputMIME == "" {
+		inputMIME = http.DetectContentType([]byte("abc"))
+	}
 	for _, tts := range []bool{false, true} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprint(tts, stream), func(t *testing.T) {
@@ -118,7 +123,7 @@ func TestAfter7ddXiaomiMedia(t *testing.T) {
 							t.Error(b)
 						}
 						input := m["content"].([]any)[0].(map[string]any)["input_audio"].(map[string]any)["data"].(string)
-						if input != "data:audio/x-wav;base64,YWJj" {
+						if input != fmt.Sprintf("data:%s;base64,YWJj", inputMIME) {
 							t.Error(input)
 						}
 					}
@@ -181,6 +186,54 @@ func TestAfter7ddXiaomiMedia(t *testing.T) {
 				}
 			})
 		}
+	}
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mime_override_%t", stream), func(t *testing.T) {
+			d := xiaomiFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("api-key") != "secret" {
+					t.Error("auth")
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body["model"] != "mimo" || (body["stream"] == true) != stream || body["asr_options"].(map[string]any)["language"] != "fr" || body["mime_type"] != nil || body["mime"] != nil {
+					t.Error(body)
+				}
+				message := body["messages"].([]any)[0].(map[string]any)
+				input := message["content"].([]any)[0].(map[string]any)
+				if message["role"] != "user" || input["type"] != "input_audio" || input["input_audio"].(map[string]any)["data"] != "data:audio/flac;base64,YWJj" {
+					t.Error(body)
+				}
+				if stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"words\"}}]}\n\ndata: [DONE]\n\n")
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{"choices":[{"message":{"content":"words"}}]}`)
+				}
+			})
+			asr := &ASRConfig{Params: map[string]any{"mime_type": " audio/flac ", "mime": "audio/ogg", "language": "fr"}}
+			if stream {
+				calls := 0
+				if err := d.TranscribeAudioWithSender(&name, modelFixtureFile(t, []byte("abc")), api, asr, func(value, _ *string) error {
+					if value != nil && *value != "[DONE]" {
+						calls++
+						if *value != "words" {
+							t.Error(*value)
+						}
+					}
+					return nil
+				}); err != nil || calls != 1 {
+					t.Fatal(err, calls)
+				}
+			} else {
+				response, err := d.TranscribeAudio(&name, modelFixtureFile(t, []byte("abc")), api, asr)
+				if err != nil || response == nil || response.Text != "words" {
+					t.Fatal(response, err)
+				}
+			}
+		})
 	}
 }
 
