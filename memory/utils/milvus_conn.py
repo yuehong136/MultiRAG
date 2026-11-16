@@ -30,6 +30,7 @@ from common.decorator import singleton
 from common.doc_store.doc_store_base import MatchDenseExpr, MatchExpr, OrderByExpr
 from common.doc_store.milvus_capabilities import supports_native_query_order_by, supports_verified_milvus_3
 from common.doc_store.milvus_conn_base import MilvusConnectionBase
+from memory.utils.milvus_read_preparation import MilvusReadPreparation, SourceQuery
 
 
 def _message_collection_name(index_name: str | list[str], memory_id: str) -> str:
@@ -204,6 +205,32 @@ class MilvusConnection(MilvusConnectionBase):
             limit=limit,
             consistency_level="Strong",
         )
+
+    def prepare_source_reads(self, select_fields: list[str], index_name: str, memory_id: str) -> MilvusReadPreparation:
+        """Create a lazy one-pass reader using only public Collection APIs."""
+        if not index_name or not memory_id:
+            raise ValueError("An owning index and memory are required")
+        collection_name = _message_collection_name(index_name, memory_id)
+        requested, using = select_fields.copy(), self._using
+
+        def prepare() -> SourceQuery | None:
+            if not utility.has_collection(collection_name, using=using):
+                return None
+            collection = Collection(collection_name, using=using)
+            collection.load()
+            output_fields = self._prepare_output_fields(collection, requested)
+
+            def query(message_ids: list[int]) -> list[dict[str, Any]]:
+                return collection.query(
+                    expr=self._build_filter_expr({"message_id": message_ids}, memory_id, hide_forgotten=False),
+                    output_fields=output_fields.copy(),
+                    limit=len(message_ids) + 1,
+                    consistency_level="Strong",
+                )
+
+            return query
+
+        return MilvusReadPreparation(prepare)
 
     def index_exists_strict(self, index_name: str, memory_id: str) -> bool:
         """Check physical absence without treating a failed metadata RPC as absence."""
@@ -831,7 +858,7 @@ class MilvusConnection(MilvusConnectionBase):
             return []
         return []
 
-    def get_fields(self, res, fields: list[str]) -> dict[str, dict]:
+    def get_fields(self, res: Any, fields: list[str]) -> dict[str, dict[str, Any]]:
         """
         Get fields from results, converting to message format.
 
@@ -839,7 +866,7 @@ class MilvusConnection(MilvusConnectionBase):
         :param fields: Fields to extract
         :return: Dict mapping document ID to field values
         """
-        result = {}
+        result: dict[str, dict[str, Any]] = {}
         results = self._extract_results(res)
 
         for doc in results:
@@ -848,7 +875,7 @@ class MilvusConnection(MilvusConnectionBase):
             doc_id = message.get("id")
             if doc_id:
                 # Extract requested fields
-                field_dict = {}
+                field_dict: dict[str, Any] = {}
                 for f in fields:
                     if f in message:
                         v = message[f]

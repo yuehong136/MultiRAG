@@ -35,9 +35,9 @@ SCOPE = {"user_id": "startup-milvus-scale-subject", "agent_id": "existing-agent"
 VERIFICATION_TABLES = (MemoryVerificationSource, MemoryVerificationOperation, MemoryVerificationHead, MemoryVerificationRecord)
 
 
-def seed_inventory(env: dict[str, Any], *, size: int, confirmed: int) -> list[str]:
+def seed_inventory(env: dict[str, Any], *, size: int, confirmed: int, vector_size: int = 2, source_count: int = 1, long_text: bool = False) -> list[str]:
     """Author synthetic inventory; real verification reads bind actual Milvus rows."""
-    if not 1 <= size <= 130 or not 0 <= confirmed <= size:
+    if not 1 <= size <= 130 or not 0 <= confirmed <= size or vector_size not in (2, 1536) or not 1 <= source_count <= 3:
         raise ValueError("invalid_milvus_scale_inventory")
     mid, tenant, journal = env["memory_id"], env["tenants"]["personal"], env["journal"]
     scope = {**SCOPE, "session_id": "scale-session"}
@@ -47,6 +47,8 @@ def seed_inventory(env: dict[str, Any], *, size: int, confirmed: int) -> list[st
         memory_id=mid,
         tenant_id=tenant,
         source_id=SOURCE_ID,
+        source_ids=[SOURCE_ID + index for index in range(source_count)],
+        vector_size=vector_size,
         entry_ids=identities,
         message_ids=[MESSAGE_BASE + index for index in range(size)],
         verification_tables=[model.__tablename__ for model in VERIFICATION_TABLES],
@@ -58,14 +60,19 @@ def seed_inventory(env: dict[str, Any], *, size: int, confirmed: int) -> list[st
         "message_type": "raw",
         "source_id": 0,
         "content": "原始演练依据🧭：规则只用于隔离内网，不能批准生产访问。",
-        "content_embed": [1.0, 0.0],
+        "content_embed": [1.0, *([0.0] * (vector_size - 1))],
         "status": True,
         "valid_at": None,
         "invalid_at": None,
         "forget_at": None,
         **scope,
     }
-    assert MessageService.insert_message([raw], tenant, mid) == []
+    if long_text:
+        raw["content"] += "\n" + "隔离环境的记录保留完整上下文🧭；范围只限合成演练，不授予生产访问或修改权限。\n" * 22
+    sources = [
+        {**raw, "id": f"{mid}_{SOURCE_ID + index}", "message_id": SOURCE_ID + index, "content": raw["content"] + (f"\n依据编号{index}" if source_count > 1 else "")} for index in range(source_count)
+    ]
+    assert MessageService.insert_message(sources, tenant, mid) == []
     messages = [
         {
             **raw,
@@ -77,12 +84,21 @@ def seed_inventory(env: dict[str, Any], *, size: int, confirmed: int) -> list[st
         }
         for index in range(size)
     ]
+    if long_text:
+        for message in messages:
+            message["content"] += "\n" + "完整适用条件：只处理隔离网内的合成数据；如来源或版本改变，先重新核验，不能据此批准生产操作。\n" * 20
     assert MessageService.insert_message(messages, tenant, mid) == []
     manage_bank(env)
-    registered = result(
-        api_request(env, "POST", f"/memories/{mid}/sources/{SOURCE_ID}/adoptions", json={"operation_id": "scale-source-registration", "expected_content_sha256": content_hash(raw["content"])})
-    )
-    assert registered["index_sync_status"] == "ready"
+    for index, source in enumerate(sources):
+        registered = result(
+            api_request(
+                env,
+                "POST",
+                f"/memories/{mid}/sources/{source['message_id']}/adoptions",
+                json={"operation_id": f"scale-source-registration-{index}", "expected_content_sha256": content_hash(source["content"])},
+            )
+        )
+        assert registered["index_sync_status"] == "ready"
     template = asyncio.run(ManagedMessageStore(tenant, mid).read(MESSAGE_BASE))
     assert template is not None and template["content"] == messages[0]["content"]
     with Session(env["engine"]) as db:
@@ -120,19 +136,20 @@ def seed_inventory(env: dict[str, Any], *, size: int, confirmed: int) -> list[st
             )
         db.flush()
         for entry_id in identities:
-            db.add(
-                MemoryRevisionSource(
-                    entry_id=entry_id,
-                    revision=1,
-                    memory_id=mid,
-                    source_message_id=SOURCE_ID,
-                    source_revision=1,
-                    source_generation=1,
-                    content_sha256=content_hash(raw["content"]),
-                    relation="context",
-                    locator={"scope": scope},
+            for source in sources:
+                db.add(
+                    MemoryRevisionSource(
+                        entry_id=entry_id,
+                        revision=1,
+                        memory_id=mid,
+                        source_message_id=source["message_id"],
+                        source_revision=1,
+                        source_generation=1,
+                        content_sha256=content_hash(source["content"]),
+                        relation="context",
+                        locator={"scope": scope},
+                    )
                 )
-            )
         db.commit()
     for index, entry_id in enumerate(identities[:confirmed]):
         prefix = f"/memories/{mid}/entries/{entry_id}"
@@ -155,7 +172,7 @@ def seed_inventory(env: dict[str, Any], *, size: int, confirmed: int) -> list[st
             )
         )
         assert observed["record"]["valid_for_current"] is True
-    env["scale_entry_ids"], env["scale_messages"] = identities, messages
+    env["scale_entry_ids"], env["scale_messages"], env["scale_sources"] = identities, messages, sources
     return identities
 
 
@@ -195,7 +212,7 @@ class _RPC:
 
 
 @contextmanager
-def observe_reads(env: dict[str, Any], patch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
+def observe_reads(env: dict[str, Any], patch: pytest.MonkeyPatch, *, concurrent: bool = False) -> Iterator[dict[str, Any]]:
     """Observe real SQL and same-collection wire RPCs; never replace read results."""
     database = env["engine"].url.database
     collection = index_name(env["tenants"]["personal"]) + "_" + env["memory_id"]
@@ -241,7 +258,8 @@ def observe_reads(env: dict[str, Any], patch: pytest.MonkeyPatch) -> Iterator[di
             with lock:
                 observation["physical_reads"] += 1
                 observation["sql_transaction_at_io"].append(len(active))
-                assert not active, "A scoped SQL connection remained in a transaction across physical IO"
+                if not concurrent:
+                    assert not active, "A scoped SQL connection remained in a transaction across physical IO"
             return await original_read(identity)
 
         patch.setattr(service.storage, "read", read)

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import Any, Literal
 
@@ -98,6 +99,15 @@ class StartupService:
     def __init__(self, verification: VerificationService, *, count_tokens: Callable[[str], int]) -> None:
         self.verification, self.db, self.count_tokens = verification, verification.db, count_tokens
 
+    @asynccontextmanager
+    async def _physical_pass(self) -> AsyncIterator[None]:
+        prepare = getattr(self.verification.storage, "prepared_read_pass", None)
+        if callable(prepare):
+            async with prepare():
+                yield
+        else:
+            yield
+
     async def build(
         self,
         memory_id: str,
@@ -175,25 +185,27 @@ class StartupService:
             work.append(identity)
             reserved += cost
         first: dict[str, dict[str, Any]] = {}
-        for identity in work:
-            state = initial[identity]
-            first[identity] = await self.verification._physical_binding(memory_id, state.binding, state.projection, physical_budget=reads)
+        async with self._physical_pass():
+            for identity in work:
+                state = initial[identity]
+                first[identity] = await self.verification._physical_binding(memory_id, state.binding, state.projection, physical_budget=reads)
         middle = await self._metadata_phase(memory_id, work, stage="after_first")
         physical: dict[str, dict[str, Any]] = {}
-        for identity in work:
-            state = middle[identity]
-            if state.error is not None:
-                raise state.error
-            if state.binding != initial[identity].binding:
-                raise RevisionConflict("verification_binding_changed")
-            if state.record is None or state.record_redacted:
-                continue
-            try:
-                physical[identity] = await self.verification._physical_binding(memory_id, state.binding, state.projection, physical_budget=reads)
-            except _ReadLimit as error:
-                raise RevisionConflict("startup_inventory_changed") from error
-            if physical[identity] != first[identity]:
-                raise RevisionConflict("verification_projection_changed")
+        async with self._physical_pass():
+            for identity in work:
+                state = middle[identity]
+                if state.error is not None:
+                    raise state.error
+                if state.binding != initial[identity].binding:
+                    raise RevisionConflict("verification_binding_changed")
+                if state.record is None or state.record_redacted:
+                    continue
+                try:
+                    physical[identity] = await self.verification._physical_binding(memory_id, state.binding, state.projection, physical_budget=reads)
+                except _ReadLimit as error:
+                    raise RevisionConflict("startup_inventory_changed") from error
+                if physical[identity] != first[identity]:
+                    raise RevisionConflict("verification_projection_changed")
         after = await self._metadata_phase(memory_id, work, stage="after_second")
         for identity in work:
             state, latest = middle[identity], after[identity]
