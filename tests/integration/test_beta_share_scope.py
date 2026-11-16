@@ -25,7 +25,7 @@ from tests.support.resource_journal import ResourceJournal
 def test_beta_share_credentials_and_resource_scope(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from api.apps import app, datav_app, manager
     from api.apps.restful_apis import bot as route
-    from api.db.services import task_service
+    from api.db.services import dialog_service, task_service
 
     engine = bootstrapped_engine
     monkeypatch.setattr(engine, "hide_parameters", True)
@@ -109,15 +109,20 @@ def test_beta_share_credentials_and_resource_scope(bootstrapped_engine: sa.Engin
     monkeypatch.setattr(route.KnowledgebaseService, "accessible", dataset_visible)
     fetch = Mock(return_value=[{"title": "Owned candidate"}])
     mindmap = AsyncMock(return_value={"id": "controlled-root"})
+    ask = Mock(wraps=route.async_ask)
     forbidden = Mock(side_effect=AssertionError("Denied shared request reached provider, retrieval or queue"))
     monkeypatch.setattr(datav_app, "fetch_persondata_list", fetch)
     monkeypatch.setattr(route, "gen_mindmap", mindmap)
-    for name in ["async_ask", "LLMBundle", "get_model_config_by_type_and_name", "get_tenant_default_model_by_type", "build_named_bundle_async", "build_bundle_by_id_async"]:
+    monkeypatch.setattr(route, "async_ask", ask)
+    for name in ["LLMBundle", "get_model_config_by_type_and_name", "get_tenant_default_model_by_type", "build_named_bundle_async", "build_bundle_by_id_async"]:
         monkeypatch.setattr(route, name, forbidden)
+    for name in ["_resolve_model_config", "detached_bundle"]:
+        monkeypatch.setattr(dialog_service, name, forbidden)
     monkeypatch.setattr(task_service, "queue_tasks", forbidden)
     storage = Mock()
     monkeypatch.setitem(resources._state, "storage", storage)
     monkeypatch.setitem(resources._state, "retriever", forbidden)
+    monkeypatch.setitem(resources._state, "kg_retriever", forbidden)
     client: TestClient | None = None
     conditions = [
         (APIToken, APIToken.name == names),
@@ -179,6 +184,7 @@ def test_beta_share_credentials_and_resource_scope(bootstrapped_engine: sa.Engin
                 assert readback() == before and not writes and not business_reads
                 fetch.assert_not_called()
                 mindmap.assert_not_awaited()
+                ask.assert_not_called()
                 forbidden.assert_not_called()
                 assert not storage.mock_calls
                 report["checks"].append({"case": label, "method": method, "status": 401, "code": 109, "sql_unchanged": True, "handler_io": 0})
@@ -198,16 +204,35 @@ def test_beta_share_credentials_and_resource_scope(bootstrapped_engine: sa.Engin
                 assert response.status_code == 200 and response.json()["code"] == 109, response.text
                 assert "text/event-stream" not in response.headers["content-type"]
                 report["checks"].append({"case": role + "-search", "method": method, "code": 109, "provider_calls": 0})
-        for selected in [[], [datasets["foreign"]], [datasets["owner"], datasets["foreign"]]]:
-            for path in ["ask", "mindmap"]:
-                response = client.post("/api/v1/searchbots/" + path, json={"question": "q", "kb_ids": selected}, headers=headers)
-                assert response.status_code == 200 and response.json()["code"] == 109, response.text
-                assert "text/event-stream" not in response.headers["content-type"]
-                report["checks"].append({"case": path + "-denied-datasets", "count": len(selected), "code": 109, "provider_calls": 0})
+        for path, selected in [
+            ("mindmap", []),
+            ("ask", [datasets["foreign"]]),
+            ("mindmap", [datasets["foreign"]]),
+            ("ask", [datasets["owner"], datasets["foreign"]]),
+            ("mindmap", [datasets["owner"], datasets["foreign"]]),
+        ]:
+            response = client.post("/api/v1/searchbots/" + path, json={"question": "q", "kb_ids": selected}, headers=headers)
+            assert response.status_code == 200 and response.json()["code"] == 109, response.text
+            assert "text/event-stream" not in response.headers["content-type"]
+            report["checks"].append({"case": path + "-denied-datasets", "count": len(selected), "code": 109, "provider_calls": 0})
         forbidden.assert_not_called()
         fetch.assert_not_called()
         mindmap.assert_not_awaited()
+        ask.assert_not_called()
         assert readback() == before and not writes and not storage.mock_calls
+        response = client.post("/api/v1/searchbots/ask", json={"question": "q", "kb_ids": []}, headers=headers)
+        assert response.status_code == 200 and "text/event-stream" in response.headers["content-type"]
+        events = [json.loads(event.removeprefix("data:")) for event in response.text.split("\n\n") if event.startswith("data:")]
+        assert events == [
+            {"code": 0, "message": "", "data": {"answer": "**ERROR**: No KB selected", "reference": {}, "final": True}},
+            {"code": 0, "message": "", "data": True},
+        ]
+        ask.assert_called_once()
+        assert ask.call_args.args[1:4] == ("q", [], owners["owner"])
+        assert readback() == before and not writes and not forbidden.mock_calls and not storage.mock_calls
+        fetch.assert_not_called()
+        mindmap.assert_not_awaited()
+        report["checks"].append({"case": "ask-empty-selection", "events": events, "sql_unchanged": True, "provider_calls": 0, "retrieval_calls": 0, "queue_calls": 0})
         response = client.get(f"/api/v1/searchbots/detail?search_id={searches['owner']}", headers=headers)
         assert response.status_code == 200 and response.json()["retcode"] == 0 and response.json()["data"]["id"] == searches["owner"]
         response = client.get(f"/api/v1/agentbots/{agents['owner']}/persondataList", headers=headers)
@@ -219,6 +244,7 @@ def test_beta_share_credentials_and_resource_scope(bootstrapped_engine: sa.Engin
         assert mindmap.call_args.args[2:4] == ([datasets["owner"]], owners["owner"])
         assert readback() == before and not writes and not storage.mock_calls
         forbidden.assert_not_called()
+        assert not forbidden.mock_calls
         report.update(request_sql_unchanged=True, sql_hash=before, controlled_persondata_calls=fetch.call_count, controlled_mindmap_calls=mindmap.await_count)
     finally:
         if client is not None:
