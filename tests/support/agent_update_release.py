@@ -264,12 +264,25 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
         def close_listener() -> None:
             port = listener.getsockname()[1] if listener.fileno() != -1 else report.get("port")
             listener.close()
+            assert listener.fileno() == -1
             if port:
-                with socket.socket() as probe:
+                with ExitStack() as probes:
+                    probe = probes.enter_context(socket.socket())
+                    probe.bind(("127.0.0.1", 0))
+                    if probe.getsockname()[1] == port:
+                        # Keep this source port reserved while choosing another.
+                        # Linux can connect a TCP socket to its own source address
+                        # without any listening socket on the destination port.
+                        probe = probes.enter_context(socket.socket())
+                        probe.bind(("127.0.0.1", 0))
                     probe.settimeout(1)
-                    assert probe.connect_ex(("127.0.0.1", port)) != 0
+                    source = probe.getsockname()
+                    assert source[1] != port
+                    result = probe.connect_ex(("127.0.0.1", port))
+                    assert result != 0, {"source": source, "destination": ("127.0.0.1", port)}
+                    report["cleanup"]["listener_probe_source"] = source
             report["cleanup"]["listener_absent"] = True
-            journal.event("listener-cleanup-readback", host="127.0.0.1", port=port, absent=True)
+            journal.event("listener-cleanup-readback", host="127.0.0.1", port=port, absent=True, original_socket_closed=listener.fileno() == -1)
 
         cleanup.callback(close_listener)
         for attempt in range(32):

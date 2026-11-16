@@ -38,7 +38,7 @@ def rest_documents(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
     datasets = [uuid4().hex for _ in range(2)]
     name = "rest_contract_" + journal.run_id
     queue = "rest-doc:" + journal.run_id + ":queue"
-    port = 20000 + int(journal.run_id[:4], 16) % 30000
+    port = 0
     journal.event("reserve", database=database, bucket=bucket, owners=owners, datasets=datasets, dataset_name=name, queue=queue, port=port)
     admin = sa.create_engine(_pg_url(CONFIGS["postgresql"]["dbname"]), isolation_level="AUTOCOMMIT")
     with ExitStack() as cleanup:
@@ -165,7 +165,9 @@ def rest_documents(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
         monkeypatch.setattr(app_module, "SessionLocal", lambda: Session(engine))
         listener = socket.socket()
         cleanup.callback(listener.close)
-        listener.bind(("127.0.0.1", port))
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        journal.event("listener-bound", host="127.0.0.1", port=port)
         server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error"))
         thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
 
@@ -174,10 +176,21 @@ def rest_documents(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
             if thread.ident is not None:
                 thread.join(timeout=15)
             listener.close()
-            with socket.socket() as probe:
+            assert listener.fileno() == -1
+            with ExitStack() as probes:
+                probe = probes.enter_context(socket.socket())
+                probe.bind(("127.0.0.1", 0))
+                if probe.getsockname()[1] == port:
+                    # Hold the accidental destination reservation while choosing
+                    # a distinct source, preventing Linux TCP self-connections.
+                    probe = probes.enter_context(socket.socket())
+                    probe.bind(("127.0.0.1", 0))
+                probe.settimeout(1)
+                source = probe.getsockname()
+                assert source[1] != port
                 closed = probe.connect_ex(("127.0.0.1", port)) != 0
-            journal.event("listener-cleanup", port=port, thread_stopped=not thread.is_alive(), closed=closed)
-            assert closed and not thread.is_alive()
+            journal.event("listener-cleanup", port=port, thread_stopped=not thread.is_alive(), closed=closed, original_socket_closed=listener.fileno() == -1, probe_source=source)
+            assert closed and not thread.is_alive(), {"source": source, "destination": ("127.0.0.1", port)}
 
         cleanup.callback(stop)
         thread.start()

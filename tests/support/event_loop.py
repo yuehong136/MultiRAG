@@ -11,8 +11,8 @@ UVICORN_LOOP = "asyncio:SelectorEventLoop" if sys.platform == "win32" else "auto
 
 
 def run[T](coroutine: Coroutine[Any, Any, T]) -> T:
-    """``asyncio.run()`` for sync tests whose coroutine uses async psycopg."""
-    if sys.platform != "win32":
-        return asyncio.run(coroutine)
+    """Own and drain a selector loop without replacing an installed outer loop."""
+    # Agent imports can patch asyncio.run() to reuse an existing loop. Runner
+    # still closes this driver's loop, including its SDK logging children.
     with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
         return runner.run(coroutine)
