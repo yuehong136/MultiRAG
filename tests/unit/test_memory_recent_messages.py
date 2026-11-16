@@ -601,7 +601,7 @@ def test_strict_milvus_source_batch_uses_exact_ids_and_keeps_lifecycle_state(mil
     assert result == [{"id": "bank_1", "message_id": 1}]
     assert calls[0]["expr"] == 'memory_id == "bank\\" or true" and message_id in [1, 2]'
     assert "forget_at" not in calls[0]["expr"] and "status_int" not in calls[0]["expr"]
-    assert calls[0]["consistency_level"] == "Strong" and calls[0]["limit"] == 2
+    assert calls[0]["consistency_level"] == "Strong" and calls[0]["limit"] == 3
 
 
 def test_strict_milvus_source_error_propagates(milvus_recent_store: tuple[Any, Any, list[dict[str, Any]]], monkeypatch: pytest.MonkeyPatch) -> None:

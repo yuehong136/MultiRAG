@@ -167,7 +167,11 @@ class MilvusConnection(MilvusConnectionBase):
         )
 
     def query_source_rows(self, select_fields: list[str], message_ids: list[int], index_name: str, memory_id: str) -> list[dict[str, Any]]:
-        """Fetch a bounded source batch without hiding inactive/forgotten rows or errors."""
+        """Strict source read with one sentinel row to expose duplicate scalar IDs.
+
+        message_id is not the primary key. A canonical row and a legacy alias
+        must both reach the caller's binding validator rather than be truncated.
+        """
         if not index_name or not memory_id or not 1 <= len(message_ids) <= 100:
             raise ValueError("An owning index, memory and bounded source-message batch are required")
         if any(type(message_id) is not int or not 0 < message_id <= 2**63 - 1 for message_id in message_ids):
@@ -181,7 +185,7 @@ class MilvusConnection(MilvusConnectionBase):
         return collection.query(
             expr=self._build_filter_expr({"message_id": unique_ids}, memory_id, hide_forgotten=False),
             output_fields=self._prepare_output_fields(collection, select_fields),
-            limit=len(unique_ids),
+            limit=len(unique_ids) + 1,
             consistency_level="Strong",
         )
 
