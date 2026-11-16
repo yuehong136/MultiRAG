@@ -9,8 +9,9 @@ Go 当前的原实现、路径和边界见 [Go Skills](GO_CORE.md)，不以本�
 
 - `SKILLS_API_PROTOCOL` 选择 `/api/v1/skills` 的别名：`multirag-assets-v1`（默认）或
   `ragflow-skills-v1`；非法值阻止启动。固定两个 namespace 的语义不随别名变化。
-- Web 用 `VITE_SKILLS_API_PROTOCOL` 明确选择消费协议；CLI `skills` 使用资产扩展，
-  `skill-core` 与 `ls/search/cat skills/...`、`install-skill/uninstall-skill` 使用核心。
+- Web 用 `VITE_SKILLS_API_PROTOCOL` 明确选择消费协议。Go CLI 使用原
+  `ls/search/cat skills/...`、`install-skill/uninstall-skill`，Python 部署须显式选择
+  `SKILLS_API_PROTOCOL=ragflow-skills-v1`；自定义 `skill-core` 与 `skills` 命令已退役。
 - `GET /api/v1/skill-protocols` 描述部署能力。没有启用的引擎必须声明不可用并拒绝写入，
   不允许持久化一个假成功状态。
 - 两后端必须使用独立数据库，包括 File、租户和模型绑定。可共用基础设施集群，但对象
@@ -41,6 +42,9 @@ JSON 成功为 `{code:0,message:...,data:...}`；消费者同时检查HTTP与业
 | POST /reindex | space_id,embd_id? | indexed_count,total_skills,version,failed_count |
 | GET /models | — | models（本地模型身份适配，额外端点） |
 
+增量 `/index` 的 `indexed_count` 是本次请求的去重技能目录数；内部重建时保留的旧技能不计入本次回执。
+`/reindex` 的数量覆盖整批实际目录，原有完整索引与失败保护保持一致。
+
 `space` 为 id,tenant_id,name,folder_id,top_k,status，以及可选description、embd_id、
 rerank_id、时间字段。**HTTP status 是 active/deleting/deleted**。
 删除失败保持对外deleting并给可消费错误；不把失败标成deleted。成功后GET为404。
@@ -54,6 +58,10 @@ rerank_id、时间字段。**HTTP status 是 active/deleting/deleted**。
 核心rerank配置保存/返回，当前不宣称执行；Python扩展协议另提供严格实际rerank。
 
 ## 文件、版本与一致性
+
+新建核心空间位于同租户普通根目录的唯一 `skills/<空间名>` 下，已有普通 `skills` 目录会被复用。
+同名文件、受管目录、多个 namespace 或已有同名空间目录返回409，保持事务零写入。
+历史根级空间在切换当前 CLI 前需单独迁移，保持 folder ID，并拒绝目录冲突；本轮验证不操作生产数据。
 
 空间目录下为技能目录、版本目录和文件；支持已有无版本目录。重建选择最高三段数字
 版本；这不等于显式活动版本或不可变发布。多个版本的真实字节均可读取。

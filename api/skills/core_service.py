@@ -96,7 +96,15 @@ class SkillCoreService:
         if root is None:
             root = folder(tenant, "/", None, "")
             self.db.add(root)
-        tree = folder(tenant, request.name, root.id, CORE_SOURCE)
+        namespaces = list(await self.db.scalars(select(File).where(File.tenant_id == tenant, File.parent_id == root.id, File.name == "skills")))
+        if len(namespaces) > 1 or any(entry.type != "folder" or entry.source_type in (*SKILL_SOURCES, CORE_SOURCE) for entry in namespaces):
+            raise SkillError(409, "RESOURCE_CONFLICT", "The skills namespace is not an ordinary unambiguous folder")
+        namespace = namespaces[0] if namespaces else folder(tenant, "skills", root.id, "")
+        if not namespaces:
+            self.db.add(namespace)
+        if await self.db.scalar(select(File.id).where(File.tenant_id == tenant, File.parent_id == namespace.id, File.name == request.name)):
+            raise SkillError(409, "RESOURCE_CONFLICT", "The skill space directory already exists")
+        tree = folder(tenant, request.name, namespace.id, CORE_SOURCE)
         row = PythonSkillCoreSpace(id=new_id(), tenant_id=tenant, name=request.name, folder_id=tree.id, description=request.description, state="active", revision=1, cleanup={})
         self.db.add_all([tree, row])
         await self.db.flush()
@@ -303,7 +311,9 @@ class SkillCoreService:
         }
         space.revision += 1
         await self.db.commit()
-        result = {"indexed_count": len(documents)}
+        # A full generation also retains earlier skills. Acknowledge only the
+        # unique folders requested by an incremental write, not that total.
+        result = {"indexed_count": len(documents) if rebuild else len({skill.folder_id or skill.id for skill in request.skills})}
         if rebuild:
             result.update(total_skills=len(documents), failed_count=0, version=settings["index_version"])
         return result

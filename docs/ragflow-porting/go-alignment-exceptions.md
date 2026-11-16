@@ -6,6 +6,12 @@
 
 ## 具体问题修复
 
+远程 CI 跟进时，真实 Python 消费者还暴露了 `internal/cli/parser.go` 的一处明确缺陷：
+严格尾部校验错误拒绝了 filesystem 命令的合法参数，且既有安装/卸载处理函数未接入分派。
+在原 `parseFileSystemCommand` 消费完整参数，并由原 `isCECommand` 接通当前命令；
+保留 SQL 尾部、分号、NUL、未闭合引号和 admin 模式拒绝，不恢复自定义 `skill-core` 或 `skills` 命令。
+`internal/cli/filesystem_parser_test.go` 与真实 CLI 消费者覆盖该修复。
+
 | 位置 | 问题与最小修复 | 验证 |
 | --- | --- | --- |
 | `internal/entity/base.go` | JSON 扫描丢失大整数、吞坏数据；保留数字精度，拒绝非法与尾随 JSON。时间戳尊重显式创建值，保存时更新修改时间。 | 真实 SQL 扫描、保存与失败读回。 |

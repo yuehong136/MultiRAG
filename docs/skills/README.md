@@ -10,8 +10,8 @@ MySQL 和 `/api/v1/skills` 路线实现，见[Go Skills](GO_CORE.md)。两者使
 
 | 能力 | 固定 API | CLI | 合同 |
 |---|---|---|---|
-| Python 核心：空间、Files 目录、最高版本、同步索引与搜索 | `/api/v1/skill-core` | `skill-core`、`ls/search/cat skills/...`、`install-skill` | [核心合同](CORE_CONTRACT.md) |
-| Python 资产增强：不可变版本、活动发布、持久任务、严格 rerank | `/api/v1/skill-assets` | `skills` | [资产合同](CONTRACT.md) |
+| Python 核心：空间、Files 目录、最高版本、同步索引与搜索 | `/api/v1/skill-core` | `ls/search/cat skills/...`、`install-skill/uninstall-skill`（部署选择核心别名） | [核心合同](CORE_CONTRACT.md) |
+| Python 资产增强：不可变版本、活动发布、持久任务、严格 rerank | `/api/v1/skill-assets` | Web / HTTP | [资产合同](CONTRACT.md) |
 
 `SKILLS_API_PROTOCOL` 选择 `/api/v1/skills` 的部署别名，允许 `multirag-assets-v1`（默认）
 或 `ragflow-skills-v1`。固定 namespace 不随别名改变；非法配置拒绝启动。

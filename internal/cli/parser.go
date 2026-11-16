@@ -53,7 +53,12 @@ func (p *Parser) Parse(cliMode CommandLineMode) (*Command, error) {
 	scan := NewLexer(p.original)
 	terminated := false
 	for {
+		scan.skipWhitespace()
+		quoted := scan.ch == '\'' || scan.ch == '"'
 		token := scan.NextToken()
+		if quoted && token.Type == TokenIllegal {
+			return nil, fmt.Errorf("unterminated quoted argument")
+		}
 		if token.Type == TokenEOF {
 			if scan.pos < len(scan.input) {
 				return nil, fmt.Errorf("invalid command input")
@@ -269,6 +274,9 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 		// For context engine
 		return p.parseFileSystemCommand()
 	default:
+		if isCECommand(p.curToken.Value) {
+			return p.parseFileSystemCommand()
+		}
 		return nil, fmt.Errorf("unknown command: %s", p.curToken.Value)
 	}
 }
@@ -315,7 +323,7 @@ func isKeyword(tokenType int) bool {
 func isCECommand(s string) bool {
 	upper := strings.ToUpper(s)
 	switch upper {
-	case "LS", "LIST", "SEARCH":
+	case "LS", "LIST", "CAT", "SEARCH", "INSTALL-SKILL", "UNINSTALL-SKILL":
 		return true
 	}
 	return false
@@ -433,10 +441,14 @@ func tokenTypeToString(t int) string {
 }
 
 func (p *Parser) parseFileSystemCommand() (*Command, error) {
-	p.nextToken() // consume COMMAND
-
+	// The filesystem route parses its own path/options from the original input.
+	// Consume that complete argument span so the outer EOF check still rejects
+	// extra SQL commands without treating legitimate filesystem arguments as SQL.
+	for p.curToken.Type != TokenEOF && p.curToken.Type != TokenSemicolon {
+		p.nextToken()
+	}
 	cmd := NewCommand("file_system_command")
-	cmd.Params["command"] = p.original
+	cmd.Params["command"] = strings.TrimSuffix(strings.TrimSpace(p.original), ";")
 
 	return cmd, nil
 }

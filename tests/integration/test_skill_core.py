@@ -25,7 +25,15 @@ from tests.support.skills_http import (
 )
 
 
-def test_core_shared_http_cli_contract(skill_http: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_core_shared_http_cli_contract(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    if os.environ.get("SKILLS_API_PROTOCOL") != "ragflow-skills-v1":
+        from tests.support.skill_core_contract import exercise_core_protocol_process
+
+        exercise_core_protocol_process()
+        return
+    skill_http = request.getfixturevalue("skill_http")
     from api.apps import app
     from api.skills import core_runtime
     from api.skills.core_runtime import PythonCoreSearch, PythonCoreStore, get_core_search
@@ -36,10 +44,25 @@ def test_core_shared_http_cli_contract(skill_http: dict[str, Any], tmp_path: Pat
     monkeypatch.setitem(app.dependency_overrides, get_core_search, lambda: runtime)
     monkeypatch.setattr(core_runtime, "_search", runtime)
     sessions = async_sessionmaker(env["async_engine"], expire_on_commit=False)
+    from tests.support.resource_journal import ResourceJournal
+
+    journal = ResourceJournal("canonical-python-core-cli")
+    from api.skills.core_schemas import CoreIndexRequest
+    from api.skills.core_service import SkillCoreService
+
+    actual_index = SkillCoreService.index
+
+    async def observe_index(self: SkillCoreService, tenant: str, body: CoreIndexRequest, *, rebuild: bool = False) -> dict[str, Any]:
+        result = await actual_index(self, tenant, body, rebuild=rebuild)
+        journal.event("core-cli-real-index-response", space_id=body.space_id, requested_skills=len(body.skills), rebuild=rebuild, response=result)
+        return result
+
+    monkeypatch.setattr(SkillCoreService, "index", observe_index)
     names: list[str] = []
     create = runtime.store.create
 
     def tracked_create(name: str, dimension: int) -> None:
+        journal.event("reserve-core-cli-index", name=name, dimension=dimension, database=env["engine"].url.database)
         names.append(name)
         create(name, dimension)
 
@@ -75,6 +98,7 @@ def test_core_shared_http_cli_contract(skill_http: dict[str, Any], tmp_path: Pat
         for name in names:
             runtime.store.delete(name)
             assert not env["skill_reader"].has_collection(name)
+            journal.event("core-cli-index-cleanup-readback", name=name, absent=True)
 
 
 def test_core_requires_explicit_space_without_effects(skill_http: dict[str, Any]) -> None:
@@ -171,3 +195,100 @@ def test_core_zero_vector_weight_matches_default_threshold_without_embedding(ski
         for name in names:
             runtime.store.delete(name)
             assert not env["skill_reader"].has_collection(name)
+
+
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_core_space_uses_one_owned_skills_namespace(skill_http: dict[str, Any], preexisting: bool) -> None:
+    import requests
+    import sqlalchemy as sa
+    from sqlalchemy.orm import Session
+
+    from api.db.db_models import File, PythonSkillCoreSpace
+    from tests.support.resource_journal import ResourceJournal
+
+    env = skill_http
+    owner = env["ids"]["owner"]
+    headers = {"Authorization": "Bearer " + env["skill_api_token"]}
+    journal = ResourceJournal("core-space-namespace")
+    journal.event("reserve-core-space-http", database=env["engine"].url.database, tenant=owner, names=["first-space", "second-space"], preexisting=preexisting)
+    namespace_id = None
+    if preexisting:
+        response = requests.post(env["base"] + "/api/v1/files", headers=headers, json={"name": "skills", "type": "folder"}, timeout=30)
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        namespace_id = response.json()["data"]["id"]
+    spaces = []
+    for name in ("first-space", "second-space"):
+        response = requests.post(env["base"] + "/api/v1/skill-core/spaces", headers=headers, json={"name": name}, timeout=30)
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        spaces.append(response.json()["data"])
+        # Read only after HTTP success, using a separate SQL connection.
+        with Session(env["engine"]) as db:
+            stored = db.get(PythonSkillCoreSpace, spaces[-1]["id"])
+            assert stored is not None and stored.tenant_id == owner and stored.folder_id == spaces[-1]["folder_id"]
+            directory = db.get(File, stored.folder_id)
+            assert directory is not None and directory.type == "folder" and directory.tenant_id == owner and directory.name == name
+            namespace = db.get(File, directory.parent_id)
+            assert namespace is not None and namespace.name == "skills" and namespace.type == "folder" and namespace.tenant_id == owner
+            assert namespace.source_type == ""
+            root = db.get(File, namespace.parent_id)
+            assert root is not None and root.id == root.parent_id and root.tenant_id == owner
+            assert namespace_id in (None, namespace.id)
+            namespace_id = namespace.id
+            assert list(db.scalars(sa.select(File.id).where(File.tenant_id == owner, File.parent_id == root.id, File.name == "skills"))) == [namespace_id]
+        fetched = requests.get(env["base"] + "/api/v1/skill-core/spaces/" + spaces[-1]["id"], headers=headers, timeout=30)
+        assert fetched.status_code == 200 and fetched.json()["data"]["folder_id"] == spaces[-1]["folder_id"], fetched.text
+    with Session(env["engine"]) as db:
+        assert set(db.scalars(sa.select(File.id).where(File.tenant_id == owner, File.parent_id == namespace_id))) == {space["folder_id"] for space in spaces}
+    journal.event("core-space-directory-readback", database=env["engine"].url.database, namespace=namespace_id, space_ids=[space["id"] for space in spaces], same_tenant_root=True)
+
+
+@pytest.mark.parametrize("conflict", ["duplicate", "nonfolder", "managed", "child"])
+def test_core_namespace_conflicts_and_foreign_mutations_have_zero_effects(skill_http: dict[str, Any], conflict: str) -> None:
+    from uuid import uuid4
+
+    import requests
+    import sqlalchemy as sa
+    from sqlalchemy.orm import Session
+
+    from api.db.db_models import File, PythonSkillCoreConfig, PythonSkillCoreSpace
+    from tests.support.resource_journal import ResourceJournal
+
+    env = skill_http
+    owner, other = env["ids"]["owner"], env["ids"]["other"]
+    headers = {"Authorization": "Bearer " + env["skill_api_token"]}
+    journal = ResourceJournal("core-space-namespace-conflict")
+    response = requests.post(env["base"] + "/api/v1/skill-core/spaces", headers=headers, json={"name": "owned-space"}, timeout=30)
+    assert response.status_code == 200 and response.json()["code"] == 0, response.text
+    space = response.json()["data"]
+
+    def snapshot() -> dict[str, list[dict[str, Any]]]:
+        with env["engine"].connect() as db:
+            return {
+                model.__tablename__: [dict(row) for row in db.execute(sa.select(model.__table__).where(model.tenant_id.in_([owner, other])).order_by(model.id)).mappings()]
+                for model in (File, PythonSkillCoreSpace, PythonSkillCoreConfig)
+            }
+
+    before = snapshot()
+    foreign_headers = {"Authorization": "Bearer " + env["tokens"]["other"]}
+    response = requests.put(env["base"] + "/api/v1/skill-core/spaces/" + space["id"], headers=foreign_headers, json={"name": "foreign-rename"}, timeout=30)
+    assert response.status_code == 404 and response.json()["data"]["error_code"] == "NOT_FOUND", response.text
+    assert snapshot() == before
+    with Session(env["engine"]) as db:
+        namespace = db.get(File, db.get(File, space["folder_id"]).parent_id)
+        assert namespace is not None
+        identifier = uuid4().hex
+        journal.event("reserve-core-namespace-conflict", database=env["engine"].url.database, tenant=owner, kind=conflict, namespace=namespace.id, extra_file_id=identifier)
+        if conflict == "duplicate":
+            db.add(File(id=identifier, tenant_id=owner, parent_id=namespace.parent_id, created_by=owner, name="skills", type="folder", source_type=""))
+        elif conflict == "nonfolder":
+            namespace.type = "other"
+        elif conflict == "managed":
+            namespace.source_type = "python_skill_space_core"
+        else:
+            db.add(File(id=identifier, tenant_id=owner, parent_id=namespace.id, created_by=owner, name="new-space", type="folder", source_type=""))
+        db.commit()
+    before = snapshot()
+    response = requests.post(env["base"] + "/api/v1/skill-core/spaces", headers=headers, json={"name": "new-space"}, timeout=30)
+    assert response.status_code == 409 and response.json()["data"]["error_code"] == "RESOURCE_CONFLICT", response.text
+    assert snapshot() == before
+    journal.event("core-namespace-rejections-readback", foreign_status=404, conflict_status=409, full_owned_sql_unchanged=True)
