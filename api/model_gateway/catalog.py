@@ -9,14 +9,36 @@ URL (for self-hosted servers, versioned by ``ensure_api_version``) and the
 driver change that moves the address shows up there.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.services import model_provider_service
 from common.url_utils import ensure_api_version
+
+_DASHSCOPE_COMPATIBLE_ROOT = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+def _dashscope_compatible_root(configured: str) -> str:
+    """DashScope's OpenAI-compatible root for a Tongyi-Qianwen registration.
+
+    The chat driver sends a compatible root to the OpenAI protocol as is, and
+    uses the same default when the registration is empty. The embedding driver
+    uses the native ``/api/v1`` API of the same host instead, so a native root
+    on an Alibaba Cloud host is moved to that host's compatible root. A native
+    root elsewhere (a private proxy) has no known compatible root.
+    """
+    base_url = configured.rstrip("/") or _DASHSCOPE_COMPATIBLE_ROOT
+    parsed = urlsplit(base_url)
+    host = parsed.hostname or ""
+    if host.endswith(".aliyuncs.com") and (parsed.path == "" or parsed.path.endswith("/api/v1")):
+        return urlunsplit(parsed._replace(path=parsed.path.removesuffix("/api/v1") + "/compatible-mode/v1"))
+    if parsed.path.endswith("/api/v1"):
+        raise ModelUnavailable("unsupported_base_url")
+    return base_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,10 +49,12 @@ class _AddressRule:
     default_base_url: str = ""
     # Self-hosted servers are often registered without ``/v1``; their drivers add it.
     ensure_version: bool = True
+    # A provider-specific mapping of the stored base URL; replaces the two fields above.
+    root: Callable[[str], str] | None = None
 
 
-# Providers that speak the OpenAI ``/v1/...`` protocol. Others are added one by
-# one together with their address rule and a contract test.
+# Providers reachable over the OpenAI ``/v1/...`` protocol. Others are added one
+# by one together with their address rule and a contract test.
 _RELAY_RULES: dict[str, _AddressRule] = {
     "VLLM": _AddressRule(),
     "OpenAI-API-Compatible": _AddressRule(),
@@ -39,6 +63,7 @@ _RELAY_RULES: dict[str, _AddressRule] = {
     "LM-Studio": _AddressRule(),
     # The driver uses the configured base URL verbatim and has a default.
     "OpenAI": _AddressRule(default_base_url="https://api.openai.com/v1", ensure_version=False),
+    "Tongyi-Qianwen": _AddressRule(root=_dashscope_compatible_root),
 }
 RELAY_FACTORIES: frozenset[str] = frozenset(_RELAY_RULES)
 _ENDPOINT_PATHS: dict[str, str] = {"chat": "chat/completions", "embedding": "embeddings"}
@@ -78,8 +103,12 @@ def upstream_from_config(config: Mapping[str, Any], model_id: int) -> UpstreamTa
     rule = _RELAY_RULES.get(factory)
     if rule is None:
         raise ModelUnavailable("provider_not_supported")
-    configured = str(config.get("api_base") or "").strip() or rule.default_base_url
-    base_url = ensure_api_version(configured) if rule.ensure_version else configured.rstrip("/")
+    configured = str(config.get("api_base") or "").strip()
+    if rule.root is not None:
+        base_url = rule.root(configured)
+    else:
+        configured = configured or rule.default_base_url
+        base_url = ensure_api_version(configured) if rule.ensure_version else configured.rstrip("/")
     if not base_url:
         raise ModelUnavailable("missing_base_url")
     model_name = str(config.get("llm_name") or "").split("___")[0]

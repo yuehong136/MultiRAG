@@ -1,7 +1,7 @@
 # MultiRAG 模型网关（Model Gateway）
 
 > 状态：**P1 最小闭环与 P2 限额已实现；调用记录清理、rerank 与 P3 尚未实现**（见第 10 节）
-> 最后核验：2026-11-15
+> 最后核验：2026-11-17
 > 维护范围：把已登记的模型以标准模型接口对外提供、API Key、调用记录与用量、限额
 
 本目录是模型网关的权威文档入口。它不替代模型连接与目录的合同
@@ -157,10 +157,13 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 |---|---|
 | `VLLM`、`OpenAI-API-Compatible`、`Xinference`、`LocalAI`、`LM-Studio` | 登记的地址经 `common/url_utils.py` 的 `ensure_api_version()` 补上版本段 |
 | `OpenAI` | 登记的地址原样使用；留空时为 `https://api.openai.com/v1` |
+| `Tongyi-Qianwen` | DashScope 的 OpenAI 兼容根地址，聊天和向量都走它：留空时为 `https://dashscope.aliyuncs.com/compatible-mode/v1`；阿里云主机（`*.aliyuncs.com`）上的原生地址（裸主机或 `/api/v1`）换成同一主机的 `/compatible-mode/v1`；其他地址原样使用；其他主机上的 `/api/v1` 只支持原生协议，不能发布 |
 
 - 上游模型名去掉登记时追加的 `___` 后缀。
 - 这些规则与 `core/llm` 里对应驱动的现有行为一致，用契约测试钉住
   （`tests/unit/test_model_gateway_catalog.py`）：同一条模型配置，网关算出的地址和模型名必须与驱动一致。
+  通义千问的驱动本身分两条路：聊天驱动在兼容根地址上走 OpenAI 协议，地址与网关逐字一致；
+  向量驱动和原生地址上的聊天驱动走 DashScope 原生接口，契约测试钉住的是同一主机和同一模型名。
 - 网关不改写请求参数。驱动为某些模型做的参数裁剪（例如去掉不被支持的采样参数）不会发生在网关里；
   上游拒绝时，它的错误原样返回给调用方。
 - rerank 的上游路径各厂商不一致，逐个收录。

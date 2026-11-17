@@ -4,14 +4,16 @@ The gateway does not call ``core/llm``; it must nevertheless reach the same
 address with the same model name as the driver of the same provider would.
 """
 
+from urllib.parse import urlsplit
+
 import pytest
 
 from api.model_gateway.catalog import RELAY_FACTORIES, ModelUnavailable, upstream_from_config
 
 _BASE_URLS = ["http://models.internal:8000", "http://models.internal:8000/", "http://models.internal:8000/v1", "http://models.internal:8000/serving/v1/", "http://models.internal:8000/proxy"]
 _OPENAI_BASE_URLS = ["", "https://api.openai.com/v1", "https://api.openai.com/v1/", "https://relay.internal/openai/v1", "https://relay.internal/custom"]
-# OpenAI has its own rule (default URL, base used verbatim) and its own driver shape.
-_SELF_HOSTED = sorted(RELAY_FACTORIES - {"OpenAI"})
+# OpenAI and Tongyi-Qianwen have their own rules and driver shapes, tested below.
+_SELF_HOSTED = sorted(RELAY_FACTORIES - {"OpenAI", "Tongyi-Qianwen"})
 # Providers whose driver strips the ``___<suffix>`` appended at registration time.
 _CHAT_STRIPS_SUFFIX = {"VLLM", "OpenAI-API-Compatible"}
 _EMBEDDING_STRIPS_SUFFIX = {"VLLM", "OpenAI-API-Compatible", "LocalAI"}
@@ -51,7 +53,9 @@ def test_credential_is_not_printed():
     ("config", "reason"),
     [
         (_config("Anthropic", "https://api.anthropic.com"), "provider_not_supported"),
-        (_config("Tongyi-Qianwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"), "provider_not_supported"),
+        (_config("Gemini", ""), "provider_not_supported"),
+        # A native-only DashScope proxy has no OpenAI-compatible root to relay to.
+        (_config("Tongyi-Qianwen", "https://dashscope-proxy.internal/api/v1"), "unsupported_base_url"),
         (_config("VLLM", ""), "missing_base_url"),
         (_config("VLLM", "http://h", name=""), "missing_model_name"),
         (_config("VLLM", "http://h", name="___VLLM"), "missing_model_name"),
@@ -134,3 +138,74 @@ def test_openai_embedding_address_matches_the_embedding_driver(api_base):
     target = upstream_from_config(_config("OpenAI", api_base, "embedding-served"), 1)
 
     assert (target.base_url, target.model_name) == _driver_address(driver)
+
+
+# Tongyi-Qianwen: both capabilities are relayed to DashScope's OpenAI-compatible root.
+_DASHSCOPE = "https://dashscope.aliyuncs.com"
+_TONGYI_COMPATIBLE_BASE_URLS = [
+    "",
+    f"{_DASHSCOPE}/compatible-mode/v1",
+    f"{_DASHSCOPE}/compatible-mode/v1/",
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "https://relay.internal/dashscope/compatible-mode/v1",
+]
+_TONGYI_NATIVE_BASE_URLS = [f"{_DASHSCOPE}/api/v1", "https://dashscope-intl.aliyuncs.com/api/v1/", "https://dashscope-us.aliyuncs.com/api/v1"]
+
+
+@pytest.mark.parametrize(
+    ("api_base", "root"),
+    [
+        ("", f"{_DASHSCOPE}/compatible-mode/v1"),
+        (f"{_DASHSCOPE}/compatible-mode/v1/", f"{_DASHSCOPE}/compatible-mode/v1"),
+        (_DASHSCOPE, f"{_DASHSCOPE}/compatible-mode/v1"),
+        (f"{_DASHSCOPE}/api/v1", f"{_DASHSCOPE}/compatible-mode/v1"),
+        ("https://dashscope-intl.aliyuncs.com/api/v1/", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+        ("https://dashscope-us.aliyuncs.com/api/v1", "https://dashscope-us.aliyuncs.com/compatible-mode/v1"),
+        ("https://relay.internal/dashscope/compatible-mode/v1", "https://relay.internal/dashscope/compatible-mode/v1"),
+    ],
+)
+def test_tongyi_registrations_relay_to_the_compatible_root(api_base, root):
+    target = upstream_from_config(_config("Tongyi-Qianwen", api_base, "qwen-flash"), 3)
+
+    assert target.base_url == root
+    assert target.endpoint_url("chat") == f"{root}/chat/completions"
+    assert target.endpoint_url("embedding") == f"{root}/embeddings"
+    assert target.model_name == "qwen-flash"
+
+
+@pytest.mark.parametrize("api_base", _TONGYI_COMPATIBLE_BASE_URLS)
+def test_tongyi_chat_address_matches_the_chat_driver(api_base):
+    from core.llm import ChatModel
+
+    driver = ChatModel["Tongyi-Qianwen"](key="upstream-key", model_name="qwen-flash", base_url=api_base, provider="Tongyi-Qianwen")
+    target = upstream_from_config(_config("Tongyi-Qianwen", api_base, "qwen-flash"), 1)
+
+    # On a compatible root the driver speaks the OpenAI protocol through LiteLLM.
+    assert driver.prefix == "openai/"
+    assert (target.base_url, target.model_name) == (driver.base_url, driver.model_name.removeprefix(driver.prefix))
+
+
+@pytest.mark.parametrize("api_base", _TONGYI_NATIVE_BASE_URLS)
+def test_tongyi_native_chat_registration_is_relayed_on_the_same_host(api_base):
+    from core.llm import ChatModel
+
+    driver = ChatModel["Tongyi-Qianwen"](key="upstream-key", model_name="qwen-flash", base_url=api_base, provider="Tongyi-Qianwen")
+    target = upstream_from_config(_config("Tongyi-Qianwen", api_base, "qwen-flash"), 1)
+
+    # The driver uses the native protocol here; the gateway uses the same host's compatible root.
+    assert driver.prefix == "dashscope/"
+    assert urlsplit(target.base_url).hostname == urlsplit(driver.base_url).hostname
+    assert target.model_name == driver.model_name.removeprefix(driver.prefix)
+
+
+@pytest.mark.parametrize("api_base", [*_TONGYI_COMPATIBLE_BASE_URLS[:4], _DASHSCOPE, *_TONGYI_NATIVE_BASE_URLS])
+def test_tongyi_embedding_is_relayed_on_the_embedding_driver_host(api_base):
+    from core.llm import EmbeddingModel
+
+    driver = EmbeddingModel["Tongyi-Qianwen"](key="upstream-key", model_name="text-embedding-v4", base_url=api_base)
+    target = upstream_from_config(_config("Tongyi-Qianwen", api_base, "text-embedding-v4"), 1)
+
+    # The driver calls the native API, by default on the SDK's own host.
+    native = driver._dashscope_http_api_url or f"{_DASHSCOPE}/api/v1"
+    assert urlsplit(target.base_url).hostname == urlsplit(native).hostname
+    assert target.model_name == driver.model_name
