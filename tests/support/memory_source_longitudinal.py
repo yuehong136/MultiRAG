@@ -50,6 +50,8 @@ from tests.support.memory_workload_review import call, write_private
 from tests.support.memory_writes_http import api_request, result
 
 Answerer = Callable[[dict[str, Any], dict[str, Any], dict[str, Any] | None, str], Coroutine[Any, Any, dict[str, Any]]]
+SourceProducer = Callable[[dict[Branch, dict[str, Any]], pytest.MonkeyPatch, dict[str, Any], Branch, str, dict[str, Any]], dict[str, Any] | None]
+SourcePairValidator = Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], None]
 
 
 def validate_case(value: Any) -> dict[str, Any]:
@@ -364,14 +366,14 @@ def publish_once(env: dict[str, Any], case: dict[str, Any], branch: Branch, phas
     return current
 
 
-def startup(env: dict[str, Any], entry_id: str) -> dict[str, Any]:
+def startup(env: dict[str, Any], entry_id: str, *, subject: str = SUBJECT, agent_id: str = AGENT) -> dict[str, Any]:
     before, attempts = fingerprint(env), len(env["observer"].attempts)
     response = api_request(
         env,
         "POST",
         f"/memories/{env['memory_id']}/startup-context",
         actor=0,
-        json={"user_id": SUBJECT, "agent_id": AGENT, "session_id": None, "entry_ids": [entry_id], "budget_tokens": 8192, "max_items": 1},
+        json={"user_id": subject, "agent_id": agent_id, "session_id": None, "entry_ids": [entry_id], "budget_tokens": 8192, "max_items": 1},
     )
     assert response.headers.get("cache-control") == "no-store"
     packet = result(response)
@@ -380,7 +382,9 @@ def startup(env: dict[str, Any], entry_id: str) -> dict[str, Any]:
     return packet
 
 
-def query_answer(env: dict[str, Any], case: dict[str, Any], branch: Branch, phase: str, packet: dict[str, Any], state: dict[str, Any], answerer: Answerer) -> None:
+def query_answer(
+    env: dict[str, Any], case: dict[str, Any], branch: Branch, phase: str, packet: dict[str, Any], state: dict[str, Any], answerer: Answerer, *, subject: str = SUBJECT, agent_id: str = AGENT
+) -> None:
     label = case["id"] + "-" + branch + "-" + phase
     env["observer"].set_stage("retrieval_embedding", phase=label + "-query")
     question = case["questions"][phase]
@@ -395,21 +399,38 @@ def query_answer(env: dict[str, Any], case: dict[str, Any], branch: Branch, phas
             "max_items": 8,
             "candidate_limit": 24,
             "source_excerpt_chars": 0,
-            "user_id": SUBJECT,
-            "agent_id": AGENT,
+            "user_id": subject,
+            "agent_id": agent_id,
             "session_id": None,
             "similarity_threshold": 0,
         },
     )
-    assert all(item["memory_id"] == env["memory_id"] and item["user_id"] == SUBJECT and item["agent_id"] == AGENT for item in context["items"]), "cross_bank_or_subject_context"
+    assert all(item["memory_id"] == env["memory_id"] and item["user_id"] == subject and item["agent_id"] == agent_id for item in context["items"]), "cross_bank_or_subject_context"
     state.update(context=context, context_sha256=digest(context), question=question, startup=packet)
     env["observer"].set_stage("answer", phase=label + "-answer")
     state["answer"] = asyncio.run(answerer(env, context, packet, question))
 
 
-def run_lifecycle(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any], case_index: int, directory: Path, *, answerer: Answerer = answer) -> dict[str, Any]:
+def run_lifecycle(
+    env: dict[str, Any],
+    patch: pytest.MonkeyPatch,
+    case: dict[str, Any],
+    case_index: int,
+    directory: Path,
+    *,
+    answerer: Answerer = answer,
+    source_producer: SourceProducer | None = None,
+    source_pair_validator: SourcePairValidator = verify_source_pair,
+    subject: str = SUBJECT,
+    agent_id: str = AGENT,
+    source_generation_calls: int = 0,
+) -> dict[str, Any]:
     """Candidates stay unverified; external decisions are mandatory at every gate."""
     calls = planned_calls(case)
+    if type(source_generation_calls) is not int or not 0 <= source_generation_calls <= 2 or (source_generation_calls and source_producer is None):
+        raise ValueError("invalid_longitudinal_source_generation_plan")
+    if source_generation_calls:
+        calls["source_generation"] = source_generation_calls
     env["observer"].max_attempts = sum(calls.values())
     env["comparison_requests"] = []
     report: dict[str, Any] = {
@@ -443,14 +464,14 @@ def run_lifecycle(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str
                     if not progress["active"]:
                         state["state"] = "skipped_after_decline_or_failure"
                         continue
-                    source = append_source(banks[name], patch, case, name, phase, state)
+                    source = append_source(banks[name], patch, case, name, phase, state) if source_producer is None else source_producer(banks, patch, case, name, phase, state)
                     if source is None:
                         progress["active"] = False
                         continue
                     progress["sources"].append(source)
                     analyze_sources(banks[name], patch, case, name, phase, progress["sources"], progress["entry"], state)
                 if all(phase_outcomes[name].get("source") is not None for name in BRANCHES):
-                    verify_source_pair(case["initial" if phase == "initial" else "correction"], phase_outcomes["legacy"]["source"], phase_outcomes["structured"]["source"])
+                    source_pair_validator(case["initial" if phase == "initial" else "correction"], phase_outcomes["legacy"]["source"], phase_outcomes["structured"]["source"])
                 if not any(item["state"] == "succeeded" for item in phase_outcomes.values()):
                     for name in BRANCHES:
                         report["branches"][name]["active"] = False
@@ -471,16 +492,16 @@ def run_lifecycle(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str
                         progress["active"] = False
                         continue
                     progress["entry"] = current
-                    unconfirmed = startup(banks[name], current["entry_id"])
+                    unconfirmed = startup(banks[name], current["entry_id"], subject=subject, agent_id=agent_id)
                     assert unconfirmed["items"] == [], "Publication or revision alone cannot substitute for current human confirmation"
                     state["startup_before_confirmation"] = unconfirmed
                     state["confirmation"] = judgment(
                         banks[name], current["entry_id"], "human_confirmed", case["id"] + "-" + name + "-" + phase + "-confirm", case["applicability"], directory, review_timeout_seconds=600
                     )
-                    packet = startup(banks[name], current["entry_id"])
+                    packet = startup(banks[name], current["entry_id"], subject=subject, agent_id=agent_id)
                     assert [item["entry_id"] for item in packet["items"]] == [current["entry_id"]]
                     assert packet["items"][0]["assessment"]["verification_status"] == "unverified"
-                    query_answer(banks[name], case, name, phase, packet, state, answerer)
+                    query_answer(banks[name], case, name, phase, packet, state, answerer, subject=subject, agent_id=agent_id)
                     state["state"] = "answered"
             for name in branch_order(case_index):
                 progress = report["branches"][name]
@@ -503,9 +524,9 @@ def run_lifecycle(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str
                     },
                 )
                 assert state["withdrawal"]["stop_supply"] == "withdrawn"
-                packet = startup(banks[name], entry["entry_id"])
+                packet = startup(banks[name], entry["entry_id"], subject=subject, agent_id=agent_id)
                 assert packet["items"] == []
-                query_answer(banks[name], case, name, "withdrawn", packet, state, answerer)
+                query_answer(banks[name], case, name, "withdrawn", packet, state, answerer, subject=subject, agent_id=agent_id)
                 # Surviving independent sources are retained in the query context.
                 forbidden_ids = {str(entry["current_message_id"]), str(identity)}
                 assert all(str(item["message_id"]) not in forbidden_ids for item in state["context"]["items"])

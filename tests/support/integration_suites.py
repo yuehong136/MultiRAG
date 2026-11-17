@@ -229,6 +229,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_memory_structured_sources_http.py",
                 "test_memory_source_entry_http.py",
                 "test_message_memory_web_consumer.py",
+                "test_memory_message_recovery_web.py",
                 "test_shared_chunk_owner_contract.py",
                 "test_sandbox_provider_settings.py",
             )
@@ -276,6 +277,7 @@ def required_services(paths: list[Path]) -> set[str]:
             "test_memory_structured_sources_live.py",
             "test_memory_source_comparison.py",
             "test_memory_source_longitudinal.py",
+            "test_memory_message_longitudinal.py",
             "test_memory_targets_http.py",
             "test_memory_verification_http.py",
             "test_memory_startup_http.py",
@@ -286,6 +288,7 @@ def required_services(paths: list[Path]) -> set[str]:
             "test_memory_source_entry_http.py",
             "test_message_memory_producer.py",
             "test_message_memory_web_consumer.py",
+            "test_memory_message_recovery_web.py",
             "test_memory_dreaming_web_consumer.py",
             "test_memory_maintenance_worker_cli.py",
         }:
