@@ -95,6 +95,23 @@ Message 节点沿用 `memory_ids` 选择目标库，新增 `structured_memory` �
 操作未完成或结果未知时保留 `memory_error`，可通过现有操作页查询并显式对账；消息已显示不等于记忆已保存。
 入口权限等异常继续使用既有节点错误处理，不把拒绝显示为保存成功。
 
+### 原生模型节点的保存边界
+
+`Begin → LLM → Message` 使用现有 Python `LLM` 节点，不需要新增生成组件。
+保存的是选中 Message 最终渲染出的正文，包括模板和包装；不能用 LLM 裸输出、未选中的上游输出或流式中间片段替代。
+同一模型输出被重复引用时，不因此重复请求模型。取消发生在模型输出期间时，不保存尚未完成的 Message。
+默认旧 RAW 写入继续按库配置排队提取；结构化开关开启时只保存结构化 RAW，不新增自动提取或发布。
+
+固定集成回归从已认证的 Agent API 执行真实 Canvas、LLM 和 Message，覆盖流式、非流式及模板的两种写入方式，
+并独立读回默认提取任务、派生条目到 RAW 的绑定和未知写入的原操作恢复。
+LLM 在下游为 Message 时产生延迟消费的模型流，因此这里的“非流式”指 Message 的消费方式，
+不能声称覆盖了供应商 SDK 的非流式生成接口。真实模型与费用边界另见[原生路径评估](memory-evaluation.md#原生-llmmessage-与严格语义回归)。
+
+本轮核对了 RAGFlow 当时最新提交
+[`cbffd018` 的 Message 实现](https://github.com/infiniflow/ragflow/blob/cbffd01860ba441acb2c2d5c472c64f4a8a118d4/internal/agent/component/message.go#L497)
+及[最终正文、未选上游的测试](https://github.com/infiniflow/ragflow/blob/cbffd01860ba441acb2c2d5c472c64f4a8a118d4/internal/agent/component/message_test.go#L429)。
+借鉴其选择和最终正文边界，验证本项目现有 Python 消费链；不引入另一套运行时或保存协议，也未运行上游测试套件。
+
 取消在写入前及各目标库之间检查；已经受理的 IO 按原 writer 排空和恢复协议处理。
 多库写入分别返回结果，不作为跨库原子事务。未知结果继续使用原操作确认，不通过换 ID 重发。
 Web 开关、记忆库选择、DSL 保存回载和导入导出保持同一参数合同；旧 DSL 缺少该字段时保持关闭。

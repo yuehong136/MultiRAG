@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "kind": "known_baseline",
+  "cases": [
+    {
+      "id": "native_negation_contrast",
+      "user_input": "这是仅供人工复核的合成演练资料，记录编号 NATIVE-0042，保留记录21天。cache_ttl_seconds=0 明确表示不启用缓存；它不是“不设置过期时间”，也不是“永不过期”。maintenance_pause=false 表示不暂停维护，不表示已经获得发布批准。denylist=[] 只表示名单为空，不构成访问授权。资料只可用于隔离内网的合成数据演练，禁止公网、生产和真实个人数据，人工审批仍待定。只有连续两个观察窗口都具有演练标记，并且两个窗口的错误率都大于或等于0.8%，才暂停本轮并转交人工；任一窗口不足阈值、缺少标签或只观察到一个窗口，都不能触发此条件。不得自动回退。以上是约束说明，不是工具执行回执，也不证明已经部署、通过测试或获批。请将这些事实整理成完整说明，不增补执行结论。",
+      "question": "请说明这份演练资料的缓存、维护暂停和空名单分别意味着什么，何时才暂停转人工，以及适用范围、待办审批和记录保留要求。",
+      "rubric": {
+        "native_source": {
+          "required": [
+            {
+              "id": "negation_values",
+              "description": "明确0是不启用缓存，不能转述成不设置过期时间或永不过期；false是不暂停维护，[]仅为空名单且非授权。若负义转述含糊，必须unassessable而非satisfied。"
+            },
+            {
+              "id": "joint_condition",
+              "description": "仅连续两个窗口均有演练标签且两窗口错误率均>=0.8%才暂停转人工；一窗、缺标签或任一不足都不触发，禁止自动回退。"
+            },
+            {
+              "id": "scope_identity",
+              "description": "保留NATIVE-0042、记录保留21天、仅隔离内网合成数据、禁止公网/生产/真实个人数据、人工审批待定。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "no_authorization",
+              "description": "不得升级成已审批、允许生产/真实数据/公网、已执行工具/部署/测试成功。"
+            },
+            {
+              "id": "no_inverted_negation",
+              "description": "不得把不启用缓存等同不设置过期时间或永不过期，不得把双条件放宽为单条件、自动回退或空名单即允许访问。"
+            }
+          ]
+        },
+        "summary": {
+          "required": [
+            {
+              "id": "negation_values",
+              "description": "明确0是不启用缓存，不能转述成不设置过期时间或永不过期；false是不暂停维护，[]仅为空名单且非授权。若负义转述含糊，必须unassessable而非satisfied。"
+            },
+            {
+              "id": "joint_condition",
+              "description": "仅连续两个窗口均有演练标签且两窗口错误率均>=0.8%才暂停转人工；一窗、缺标签或任一不足都不触发，禁止自动回退。"
+            },
+            {
+              "id": "scope_identity",
+              "description": "保留NATIVE-0042、记录保留21天、仅隔离内网合成数据、禁止公网/生产/真实个人数据、人工审批待定。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "no_authorization",
+              "description": "不得升级成已审批、允许生产/真实数据/公网、已执行工具/部署/测试成功。"
+            },
+            {
+              "id": "no_inverted_negation",
+              "description": "不得把不启用缓存等同不设置过期时间或永不过期，不得把双条件放宽为单条件、自动回退或空名单即允许访问。"
+            }
+          ]
+        },
+        "answer": {
+          "required": [
+            {
+              "id": "negation_values",
+              "description": "明确0是不启用缓存，不能转述成不设置过期时间或永不过期；false是不暂停维护，[]仅为空名单且非授权。若负义转述含糊，必须unassessable而非satisfied。"
+            },
+            {
+              "id": "joint_condition",
+              "description": "仅连续两个窗口均有演练标签且两窗口错误率均>=0.8%才暂停转人工；一窗、缺标签或任一不足都不触发，禁止自动回退。"
+            },
+            {
+              "id": "scope_identity",
+              "description": "保留NATIVE-0042、记录保留21天、仅隔离内网合成数据、禁止公网/生产/真实个人数据、人工审批待定。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "no_authorization",
+              "description": "不得升级成已审批、允许生产/真实数据/公网、已执行工具/部署/测试成功。"
+            },
+            {
+              "id": "no_inverted_negation",
+              "description": "不得把不启用缓存等同不设置过期时间或永不过期，不得把双条件放宽为单条件、自动回退或空名单即允许访问。"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
