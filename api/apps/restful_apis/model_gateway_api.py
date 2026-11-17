@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.db.db_models import get_async_db
 from api.identity.principal import AuthenticationSource
 from api.model_gateway import management
-from api.model_gateway.schemas import GatewayKeyCreate, GatewayKeyPatch, GatewayModelCreate, GatewayModelPatch
+from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewaySettingsPatch
 from api.utils.api_utils import Principal, async_current_user
 from common.app_config import get_app_config
 
@@ -72,29 +72,32 @@ async def write(db: AsyncSession, operation: Callable[[], Awaitable[Any]]) -> di
         return failure(500, "Model gateway operation failed")
 
 
-@router.get("/candidates", summary="列出已登记的模型及其可发布的类型")
-async def list_candidates(db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any]:
-    return result(await management.list_candidates(db, user.id))
+@router.get("/catalog", summary="列出全部已登记模型的网关状态与调用名")
+async def catalog_view(db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any]:
+    return result(await management.catalog_view(db, user.id))
 
 
-@router.get("/models", summary="列出已发布的公开模型")
-async def list_models(db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any]:
-    return result(await management.list_models(db, user.id))
+@router.patch("/catalog/models/{model_id}", summary="开放或关闭模型，设置别名、首选和模型级限额", response_model=None)
+async def update_catalog_model(model_id: int, body: CatalogModelPatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
+    return await write(db, lambda: management.update_catalog_model(db, user.id, user.id, model_id, body))
 
 
-@router.post("/models", summary="把已登记的模型发布为公开模型", response_model=None)
-async def create_model(body: GatewayModelCreate, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
-    return await write(db, lambda: management.create_model(db, user.id, user.id, body))
+@router.patch("/catalog/instances/{instance_id}", summary="开放或关闭一个连接下的全部模型", response_model=None)
+async def update_catalog_instance(instance_id: str, body: CatalogInstancePatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
+    return await write(db, lambda: management.update_catalog_instance(db, user.id, user.id, instance_id, body))
 
 
-@router.patch("/models/{gateway_model_id}", summary="修改公开模型的名称、说明或启停状态", response_model=None)
-async def update_model(gateway_model_id: str, body: GatewayModelPatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
-    return await write(db, lambda: management.update_model(db, user.id, user.id, gateway_model_id, body))
+@router.patch("/settings", summary="设置新接入模型的默认开放状态", response_model=None)
+async def update_settings(body: GatewaySettingsPatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
+    return await write(db, lambda: management.update_settings(db, user.id, user.id, body))
 
 
-@router.delete("/models/{gateway_model_id}", summary="删除公开模型", response_model=None)
-async def delete_model(gateway_model_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
-    return await write(db, lambda: management.delete_model(db, user.id, gateway_model_id))
+@router.get("/overview", summary="接入地址、数据面状态与近期用量概览")
+async def overview(days: int = 7, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any]:
+    if days not in management.OVERVIEW_DAYS:
+        raise HTTPException(status_code=422, detail="days must be one of 1, 7 or 30")
+    config = get_app_config().model_gateway
+    return result(await management.overview(db, user.id, days=days, config=config, data_plane=await management.data_plane_status(config)))
 
 
 @router.get("/keys", summary="列出 API Key（不含明文）")
@@ -107,7 +110,7 @@ async def create_key(body: GatewayKeyCreate, db: AsyncSession = Depends(get_asyn
     return await write(db, lambda: management.create_key(db, user.id, user.id, body))
 
 
-@router.patch("/keys/{key_id}", summary="修改 API Key 的元数据、模型范围、有效期或启停状态", response_model=None)
+@router.patch("/keys/{key_id}", summary="修改 API Key 的元数据、可调用范围、有效期或启停状态", response_model=None)
 async def update_key(key_id: str, body: GatewayKeyPatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
     return await write(db, lambda: management.update_key(db, user.id, user.id, key_id, body))
 

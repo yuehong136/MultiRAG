@@ -30,11 +30,11 @@ _SSE = {"content-type": "text/event-stream"}
 
 class FakeStore:
     def __init__(self) -> None:
-        self.caller = Caller(key_id="k" * 32, tenant_id="tenant-1", key_name="eval-runner", allow_all_models=False, allowed_model_ids=frozenset({"gm-chat", "gm-embed"}), tags={"purpose": "eval"})
+        self.caller = Caller(key_id="k" * 32, tenant_id="tenant-1", key_name="eval-runner", allow_all_models=False, allowed_model_ids=frozenset({11, 12}), tags={"purpose": "eval"})
         self.models = {
-            "chat-default": ResolvedModel("gm-chat", "chat-default", "chat", UpstreamTarget(11, "VLLM", "qwen-upstream", "http://upstream.test/v1", "upstream-key")),
-            "embed-default": ResolvedModel("gm-embed", "embed-default", "embedding", UpstreamTarget(12, "Xinference", "bge-upstream", "http://upstream.test/v1", "x")),
-            "restricted": ResolvedModel("gm-other", "restricted", "chat", UpstreamTarget(13, "VLLM", "other", "http://upstream.test/v1", "upstream-key")),
+            "chat-default": ResolvedModel(11, "chat-default", "chat", UpstreamTarget(11, "VLLM", "qwen-upstream", "http://upstream.test/v1", "upstream-key")),
+            "embed-default": ResolvedModel(12, "embed-default", "embedding", UpstreamTarget(12, "Xinference", "bge-upstream", "http://upstream.test/v1", "x")),
+            "restricted": ResolvedModel(13, "restricted", "chat", UpstreamTarget(13, "VLLM", "other", "http://upstream.test/v1", "upstream-key")),
         }
         self.records: list[RequestLogEntry] = []
         self.fail_record = False
@@ -46,13 +46,13 @@ class FakeStore:
         return self.caller
 
     async def visible_models(self, caller: Caller) -> list[PublicModel]:
-        return [PublicModel(model.gateway_model_id, model.name, model.model_type, 1700000000) for model in self.models.values() if caller.may_use(model.gateway_model_id)]
+        return [PublicModel(model.name, 1700000000) for model in self.models.values() if caller.may_use(model.model_id, "instance-1")]
 
     async def resolve_model(self, caller: Caller, name: str, model_type: str) -> ResolvedModel:
         model = self.models.get(name)
         if model is None:
             raise errors.model_not_found(name)
-        if not caller.may_use(model.gateway_model_id):
+        if not caller.may_use(model.model_id, "instance-1"):
             raise errors.model_not_allowed(name)
         if model.model_type != model_type:
             raise errors.invalid_request("wrong endpoint", param="model", code="model_endpoint_mismatch")
@@ -167,7 +167,7 @@ def test_completed_call_is_logged_with_reported_usage_and_no_body():
     entry = gateway.only_record()
     assert entry.id == response.headers["x-request-id"]
     assert (entry.tenant_id, entry.key_id, entry.key_name, entry.tags) == ("tenant-1", "k" * 32, "eval-runner", {"purpose": "eval"})
-    assert (entry.model, entry.gateway_model_id, entry.upstream_model_id, entry.upstream_model_name) == ("chat-default", "gm-chat", 11, "qwen-upstream")
+    assert (entry.model, entry.upstream_model_id, entry.upstream_model_name) == ("chat-default", 11, "qwen-upstream")
     assert (entry.endpoint, entry.stream, entry.status_code, entry.error_type, entry.end_user) == ("chat.completions", False, 200, None, "job-7")
     assert (entry.usage.prompt_tokens, entry.usage.completion_tokens, entry.usage.total_tokens, entry.usage.source) == (3, 2, 5, "reported")
     assert entry.started_at.tzinfo is not None and entry.duration_ms >= 0

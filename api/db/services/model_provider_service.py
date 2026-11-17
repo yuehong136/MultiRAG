@@ -344,6 +344,13 @@ async def models_for_owner(db: AsyncSession, tenant_id: str) -> list[tuple[Tenan
     return sorted(rows, key=lambda item: (*provider_order(item[3].provider_name), item[2].instance_name, item[1].model_name, item[0].id))
 
 
+async def instances_for_owner(db: AsyncSession, tenant_id: str) -> list[tuple[TenantModelInstance, TenantModelProvider]]:
+    """Every instance of the owner, including those without models, in provider order."""
+    query = select(TenantModelInstance, TenantModelProvider).join(TenantModelProvider, TenantModelInstance.provider_id == TenantModelProvider.id).where(TenantModelProvider.tenant_id == tenant_id)
+    rows = [tuple(row) for row in (await db.execute(query)).all()]
+    return sorted(rows, key=lambda item: (*provider_order(item[1].provider_name), item[0].instance_name))
+
+
 async def require_unreferenced(db: AsyncSession, rows: list[tuple[TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider]]) -> None:
     """Apply the project policy at one seam before the lifecycle deletes rows."""
     references = await collect_blocking_model_references(db, rows)

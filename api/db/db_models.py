@@ -4376,31 +4376,35 @@ class SkillOperation(BaseModel):
     revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default="1")
 
 
-class GatewayModel(BaseModel):
-    """MultiRAG-owned public model name served by the model gateway.
+class GatewayModelSetting(BaseModel):
+    """How the model gateway serves one registered model, when someone changed it.
 
-    ``model_id`` is the numeric TenantLLM identity. It is deliberately not a
-    foreign key: deletion protection for active rows lives in
-    ``model_deletion_policy``, and inactive rows may outlive their model.
+    Every registered model of a connected provider is in the gateway catalog;
+    a row exists only once its switch, alias, preference or limits were set.
+    Without a row the model follows ``GatewaySetting.new_models_enabled``.
+    ``model_id`` is the numeric TenantLLM identity and deliberately not a
+    foreign key: a deleted model leaves an inert row behind.
     """
 
-    __tablename__ = "t_ai_gateway_models"
+    __tablename__ = "t_ai_gateway_model_settings"
     __table_args__ = (
-        sa.UniqueConstraint("tenant_id", "name", name="uq_gateway_models_tenant_name"),
-        sa.CheckConstraint("status IN ('active', 'inactive')", name="ck_gateway_models_status"),
-        sa.CheckConstraint("model_type IN ('chat', 'embedding', 'rerank')", name="ck_gateway_models_type"),
+        sa.UniqueConstraint("tenant_id", "model_id", name="uq_gateway_model_settings_tenant_model"),
         sa.CheckConstraint(
-            "(rpm_limit IS NULL OR rpm_limit > 0) AND (tpm_limit IS NULL OR tpm_limit > 0) AND (max_parallel_requests IS NULL OR max_parallel_requests > 0)", name="ck_gateway_models_limits"
+            "(rpm_limit IS NULL OR rpm_limit > 0) AND (tpm_limit IS NULL OR tpm_limit > 0) AND (max_parallel_requests IS NULL OR max_parallel_requests > 0)",
+            name="ck_gateway_model_settings_limits",
         ),
+        sa.Index("uq_gateway_model_settings_tenant_alias", "tenant_id", "alias", unique=True, postgresql_where=text("alias IS NOT NULL")),
         {"schema": "usr_ai"},
     )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
     tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
-    model_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    model_type: Mapped[str] = mapped_column(String(16), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    model_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sa.true())
+    # An extra name callers may use; NULL means the generated names only.
+    alias: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Owns the bare and provider-qualified names among models sharing a name.
+    preferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Limits shared by every key that uses this model; NULL means unlimited.
     rpm_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -4410,12 +4414,34 @@ class GatewayModel(BaseModel):
     updated_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
+class GatewaySetting(BaseModel):
+    """Tenant-wide model gateway settings; a missing row means the defaults."""
+
+    __tablename__ = "t_ai_gateway_settings"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", name="uq_gateway_settings_tenant"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Whether models without their own switch are open to the gateway.
+    new_models_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sa.true())
+    updated_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
 class GatewayKey(BaseModel):
     """MultiRAG-owned caller credential for the model gateway.
 
     Only the SHA-256 digest of the key is stored. ``id`` is the public key
     identifier that request logs refer to; names are unique among keys that
     have not been revoked, so a rotated key can reuse its name.
+
+    Scope: ``allow_all_models`` covers every open model; otherwise the key may
+    call the open models of ``allowed_instance_ids`` (whole connections,
+    including models opened later) and ``allowed_model_ids`` (numeric
+    registered model ids, a snapshot). Ids are kept after their target is
+    deleted so the management page can show them as stale.
     """
 
     __tablename__ = "t_ai_gateway_keys"
@@ -4442,6 +4468,7 @@ class GatewayKey(BaseModel):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     allow_all_models: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
     allowed_model_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    allowed_instance_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     # NULL means unlimited. The quota is a token budget per UTC day or month.
     rpm_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tpm_limit: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -4482,6 +4509,7 @@ class GatewayRequestLog(BaseModel):
     key_id: Mapped[str] = mapped_column(String(32), nullable=False)
     key_name: Mapped[str] = mapped_column(String(128), nullable=False)
     model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Published-model id of calls made before the catalog replaced publishing; NULL since.
     gateway_model_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     upstream_model_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     upstream_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

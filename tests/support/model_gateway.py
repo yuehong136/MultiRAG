@@ -43,18 +43,18 @@ def manager(owner: str) -> Any:
     )
 
 
-def register_model(db: Session, owner: str, factory: str, model_name: str, model_type: str, base_url: str, api_key: str) -> int:
-    """Insert a model the way model management stores it, reusing the owner's provider."""
+def register_model(db: Session, owner: str, factory: str, model_name: str, model_type: str, base_url: str, api_key: str, *, instance_name: str = "default") -> int:
+    """Insert a model the way model management stores it, reusing the owner's provider and instance."""
     provider = db.scalar(sa.select(TenantModelProvider).where(TenantModelProvider.tenant_id == owner, TenantModelProvider.provider_name == factory))
     if provider is None:
         provider = TenantModelProvider(id=uuid.uuid4().hex, tenant_id=owner, provider_name=factory)
         db.add(provider)
         db.flush()
-        instance = TenantModelInstance(id=uuid.uuid4().hex, provider_id=provider.id, instance_name="default", api_key=api_key, base_url=base_url)
+    instance = db.scalar(sa.select(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id, TenantModelInstance.instance_name == instance_name))
+    if instance is None:
+        instance = TenantModelInstance(id=uuid.uuid4().hex, provider_id=provider.id, instance_name=instance_name, api_key=api_key, base_url=base_url)
         db.add(instance)
         db.flush()
-    else:
-        instance = db.scalars(sa.select(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id, TenantModelInstance.instance_name == "default")).one()
     row = TenantLLM(tenant_id=owner, llm_factory=factory, mdl_type=model_type, llm_name=model_name, api_key=api_key, api_base=base_url, status="1")
     db.add(row)
     db.flush()
@@ -135,3 +135,12 @@ def logs(engine: Engine) -> list[GatewayRequestLog]:
     """Request logs read back on an independent connection, oldest first."""
     with Session(engine) as reader:
         return list(reader.scalars(sa.select(GatewayRequestLog).order_by(GatewayRequestLog.started_at, GatewayRequestLog.create_time)).all())
+
+
+def instance_id(db: Session, owner: str, factory: str, instance_name: str = "default") -> str:
+    """The id of one of the owner's provider instances (connections)."""
+    return db.scalars(
+        sa.select(TenantModelInstance.id)
+        .join(TenantModelProvider, TenantModelInstance.provider_id == TenantModelProvider.id)
+        .where(TenantModelProvider.tenant_id == owner, TenantModelProvider.provider_name == factory, TenantModelInstance.instance_name == instance_name)
+    ).one()

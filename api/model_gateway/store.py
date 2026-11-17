@@ -14,9 +14,10 @@ from typing import Any, Protocol, runtime_checkable
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import GatewayKey, GatewayModel, GatewayRequestLog, Tenant
+from api.db.db_models import GatewayKey, GatewayRequestLog, Tenant
 from api.model_gateway import errors
 from api.model_gateway.catalog import ModelUnavailable, UpstreamTarget, resolve_upstream
+from api.model_gateway.directory import CALLABLE, load_directory
 from api.model_gateway.keys import parse_key_id, verify_key
 from api.model_gateway.limits import NO_LIMITS, Limits, Quota
 from api.model_gateway.usage import UNAVAILABLE, Usage
@@ -35,26 +36,27 @@ class Caller:
     tenant_id: str
     key_name: str
     allow_all_models: bool
-    allowed_model_ids: frozenset[str]
+    allowed_model_ids: frozenset[int] = frozenset()
+    allowed_instance_ids: frozenset[str] = frozenset()
     tags: dict[str, Any] | None = None
     limits: Limits = NO_LIMITS
     quota: Quota | None = None
 
-    def may_use(self, gateway_model_id: str) -> bool:
-        return self.allow_all_models or gateway_model_id in self.allowed_model_ids
+    def may_use(self, model_id: int, instance_id: str) -> bool:
+        return self.allow_all_models or model_id in self.allowed_model_ids or instance_id in self.allowed_instance_ids
 
 
 @dataclass(frozen=True, slots=True)
 class PublicModel:
-    id: str
     name: str
-    model_type: str
     created: int
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedModel:
-    gateway_model_id: str
+    """A registered model a request may call; ``name`` is its call name."""
+
+    model_id: int
     name: str
     model_type: str
     upstream: UpstreamTarget
@@ -73,7 +75,6 @@ class RequestLogEntry:
     started_at: datetime
     tags: dict[str, Any] | None = None
     model: str | None = None
-    gateway_model_id: str | None = None
     upstream_model_id: int | None = None
     upstream_model_name: str | None = None
     stream: bool = False
@@ -137,7 +138,8 @@ class SqlGatewayStore:
                 tenant_id=key.tenant_id,
                 key_name=key.name,
                 allow_all_models=bool(key.allow_all_models),
-                allowed_model_ids=frozenset(str(item) for item in key.allowed_model_ids or []),
+                allowed_model_ids=frozenset(int(item) for item in key.allowed_model_ids or []),
+                allowed_instance_ids=frozenset(str(item) for item in key.allowed_instance_ids or []),
                 tags=dict(key.tags) if key.tags else None,
                 limits=Limits(rpm=key.rpm_limit, tpm=key.tpm_limit, max_parallel=key.max_parallel_requests),
                 quota=Quota(tokens=key.token_quota, period=key.quota_period) if key.token_quota is not None and key.quota_period is not None else None,
@@ -145,29 +147,24 @@ class SqlGatewayStore:
 
     async def visible_models(self, caller: Caller) -> list[PublicModel]:
         async with self._sessions() as db:
-            rows = (await db.scalars(select(GatewayModel).where(GatewayModel.tenant_id == caller.tenant_id, GatewayModel.status == "active").order_by(GatewayModel.name))).all()
-        return [PublicModel(id=row.id, name=row.name, model_type=row.model_type, created=int((row.create_time or 0) // 1000)) for row in rows if caller.may_use(row.id)]
+            directory = await load_directory(db, caller.tenant_id)
+        return [PublicModel(name=model.call_name, created=model.created // 1000) for model in directory.models if model.state == CALLABLE and caller.may_use(model.model_id, model.instance_id)]
 
     async def resolve_model(self, caller: Caller, name: str, model_type: str) -> ResolvedModel:
         async with self._sessions() as db:
-            row = await db.scalar(select(GatewayModel).where(GatewayModel.tenant_id == caller.tenant_id, GatewayModel.name == name))
-            if row is None or row.status != "active":
+            model = (await load_directory(db, caller.tenant_id)).lookup(name)
+            # A closed model is as invisible to callers as an unknown name.
+            if model is None or not model.enabled:
                 raise errors.model_not_found(name)
-            if not caller.may_use(row.id):
+            if not caller.may_use(model.model_id, model.instance_id):
                 raise errors.model_not_allowed(name)
-            if row.model_type != model_type:
+            if model_type not in model.model_types:
                 raise errors.invalid_request(f"The model '{name}' is not available on this endpoint.", param="model", code="model_endpoint_mismatch")
             try:
-                upstream = await resolve_upstream(db, caller.tenant_id, row.model_id, row.model_type)
+                upstream = await resolve_upstream(db, caller.tenant_id, model.model_id, model_type)
             except ModelUnavailable:
                 raise errors.model_unavailable(name) from None
-            return ResolvedModel(
-                gateway_model_id=row.id,
-                name=row.name,
-                model_type=row.model_type,
-                upstream=upstream,
-                limits=Limits(rpm=row.rpm_limit, tpm=row.tpm_limit, max_parallel=row.max_parallel_requests),
-            )
+            return ResolvedModel(model_id=model.model_id, name=model.call_name, model_type=model_type, upstream=upstream, limits=model.limits)
 
     async def tokens_used_since(self, key_id: str, since: datetime) -> int:
         """Tokens the key has used since ``since``, according to the request logs."""
@@ -184,7 +181,6 @@ class SqlGatewayStore:
                     key_id=entry.key_id,
                     key_name=entry.key_name,
                     model=entry.model,
-                    gateway_model_id=entry.gateway_model_id,
                     upstream_model_id=entry.upstream_model_id,
                     upstream_model_name=entry.upstream_model_name,
                     endpoint=entry.endpoint,

@@ -1,7 +1,7 @@
 """Live check of the model gateway against a real OpenAI-protocol model service.
 
 Not collected by pytest. The script creates a scratch database, registers the
-model named by the environment, publishes it, issues a key, and calls it with
+model named by the environment, names it in the catalog, issues a key, and calls it with
 the OpenAI SDK through the gateway. The scratch database, which briefly holds
 the upstream credential, is dropped at the end. No credential is printed.
 
@@ -50,14 +50,14 @@ def main() -> int:
             db.commit()
 
         with management(engine, owner) as admin:
-            published = []
-            for name, (model_id, model_type) in registered.items():
-                response = admin.post(f"{MANAGEMENT_PREFIX}/models", json={"name": name, "model_id": model_id, "model_type": model_type})
-                if response.status_code != 200:
-                    print(f"publish {name}: HTTP {response.status_code} {response.json().get('message')}", file=sys.stderr)
+            # Registered models are in the catalog already; the alias only gives them a stable name here.
+            for name, (model_id, _model_type) in registered.items():
+                response = admin.patch(f"{MANAGEMENT_PREFIX}/catalog/models/{model_id}", json={"alias": name})
+                if response.status_code != 200 or response.json()["data"]["state"] != "callable":
+                    print(f"catalog {name}: HTTP {response.status_code} {response.json()}", file=sys.stderr)
                     return 1
-                published.append(response.json()["data"]["id"])
-            gateway_key = admin.post(f"{MANAGEMENT_PREFIX}/keys", json={"name": "live-check", "allowed_model_ids": published}).json()["data"]["key"]
+            allowed = [model_id for model_id, _model_type in registered.values()]
+            gateway_key = admin.post(f"{MANAGEMENT_PREFIX}/keys", json={"name": "live-check", "allowed_model_ids": allowed}).json()["data"]["key"]
 
         with data_plane(engine, None) as gateway:
             client = sdk(gateway, gateway_key)

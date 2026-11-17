@@ -128,19 +128,60 @@ async def resolve_upstream(db: AsyncSession, tenant_id: str, model_id: int, mode
     return upstream_from_config(config, model_id)
 
 
-async def describe_models(db: AsyncSession, tenant_id: str) -> dict[int, dict[str, Any]]:
-    """Display metadata of the owner's registered models, keyed by numeric model id."""
-    described: dict[int, dict[str, Any]] = {}
+@dataclass(frozen=True, slots=True)
+class RegisteredModel:
+    """One registered model as the gateway catalog shows it."""
+
+    model_id: int
+    model_name: str
+    provider: str
+    instance_id: str
+    instance_name: str
+    model_types: tuple[str, ...]
+    # The model, its connection and its provider are all enabled.
+    available: bool
+    # The provider is in the relay rules.
+    relayable: bool
+    # Registration time in milliseconds, for ``/v1/models``.
+    created: int
+
+
+@dataclass(frozen=True, slots=True)
+class Connection:
+    """One provider instance (connection) of the owner, with or without models."""
+
+    instance_id: str
+    instance_name: str
+    provider: str
+
+
+async def registered_models(db: AsyncSession, tenant_id: str) -> list[RegisteredModel]:
+    """Every model the owner registered, in model management's order."""
+    models = []
     for row, model, instance, provider in await model_provider_service.models_for_owner(db, tenant_id):
         if row.id is None:
             continue
         projection = model_provider_service.model_projection(row, model, instance, provider)
-        described[row.id] = {
-            "model_name": model.model_name,
-            "provider": provider.provider_name,
-            "instance": instance.instance_name,
-            "model_types": list(model.model_types),
-            "available": projection["effective_status"] == "active",
-            "relayable": row.llm_factory in RELAY_FACTORIES,
-        }
-    return described
+        models.append(
+            RegisteredModel(
+                model_id=row.id,
+                # The upstream name: the registration suffix is not part of it.
+                model_name=model.model_name.split("___")[0],
+                provider=provider.provider_name,
+                instance_id=instance.id,
+                instance_name=instance.instance_name,
+                model_types=tuple(model.model_types),
+                available=projection["effective_status"] == "active",
+                relayable=row.llm_factory in RELAY_FACTORIES,
+                created=int(row.create_time or 0),
+            )
+        )
+    return models
+
+
+async def connections(db: AsyncSession, tenant_id: str) -> list[Connection]:
+    """Every connection of the owner, including those without models."""
+    return [
+        Connection(instance_id=instance.id, instance_name=instance.instance_name, provider=provider.provider_name)
+        for instance, provider in await model_provider_service.instances_for_owner(db, tenant_id)
+    ]

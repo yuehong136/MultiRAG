@@ -68,7 +68,7 @@ async def collect_blocking_model_references(db: AsyncSession, rows: list[tuple[T
     """
     if not rows:
         return []
-    from api.db.db_models import Document, GatewayModel, PythonSkillCoreConfig, SkillSearchConfig
+    from api.db.db_models import Document, PythonSkillCoreConfig, SkillSearchConfig
 
     identifiers = {str(row.id) for row, *_ in rows}
     owners = {row.tenant_id for row, *_ in rows}
@@ -104,7 +104,6 @@ async def collect_blocking_model_references(db: AsyncSession, rows: list[tuple[T
         Search,
         SkillSearchConfig,
         PythonSkillCoreConfig,
-        GatewayModel,
     ):
         query = select(entity)
         if entity is UserCanvasVersion:
@@ -117,9 +116,6 @@ async def collect_blocking_model_references(db: AsyncSession, rows: list[tuple[T
             if isinstance(item, UserCanvas):
                 canvases[item.id] = item
             if getattr(item, "status", None) == "0":
-                continue
-            # Only a published name that is being served protects its model.
-            if isinstance(item, GatewayModel) and item.status != "active":
                 continue
             if isinstance(item, Document):
                 dataset = datasets.get(item.kb_id)

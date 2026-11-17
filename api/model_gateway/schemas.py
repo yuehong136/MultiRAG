@@ -8,13 +8,12 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstra
 _MAX_TAGS = 16
 _MAX_TAG_KEY = 64
 _MAX_TAG_VALUE = 256
-_MAX_ALLOWED_MODELS = 200
+_MAX_ALLOWED_MODELS = 500
+_MAX_ALLOWED_INSTANCES = 200
 
-PublicModelName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$")]
+ModelAlias = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$")]
 KeyName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
 Description = Annotated[str, StringConstraints(max_length=2000)]
-# Rerank joins once its per-provider upstream path is covered by the relay.
-ServedModelType = Literal["chat", "embedding"]
 
 
 def _valid_tags(tags: dict[str, str] | None) -> dict[str, str] | None:
@@ -40,7 +39,9 @@ def _future_instant(value: datetime | None) -> datetime | None:
 
 Tags = Annotated[dict[str, str] | None, AfterValidator(_valid_tags)]
 Expiry = Annotated[datetime | None, AfterValidator(_future_instant)]
-AllowedModelIds = Annotated[list[str], Field(max_length=_MAX_ALLOWED_MODELS)]
+# Registered model ids, and connection (instance) ids whose models are all allowed.
+AllowedModelIds = Annotated[list[Annotated[int, Field(gt=0)]], Field(max_length=_MAX_ALLOWED_MODELS)]
+AllowedInstanceIds = Annotated[list[Annotated[str, StringConstraints(min_length=1, max_length=64)]], Field(max_length=_MAX_ALLOWED_INSTANCES)]
 # Limits are positive; leaving one out (or sending null) means unlimited.
 RateLimit = Annotated[int, Field(gt=0, le=2_000_000_000)]
 TokenQuota = Annotated[int, Field(gt=0, le=9_000_000_000_000_000)]
@@ -69,17 +70,21 @@ class _KeyLimits(_Limits):
         return self
 
 
-class GatewayModelCreate(_Limits):
-    name: PublicModelName
-    model_id: int = Field(gt=0)
-    model_type: ServedModelType
+class CatalogModelPatch(_Limits):
+    """Gateway settings of one registered model; omitted fields stay as they are."""
+
+    enabled: bool | None = None
+    alias: ModelAlias | None = None
+    preferred: bool | None = None
     description: Description | None = None
 
 
-class GatewayModelPatch(_Limits):
-    name: PublicModelName | None = None
-    description: Description | None = None
-    status: Literal["active", "inactive"] | None = None
+class CatalogInstancePatch(_Body):
+    enabled: bool
+
+
+class GatewaySettingsPatch(_Body):
+    new_models_enabled: bool
 
 
 class GatewayKeyCreate(_KeyLimits):
@@ -89,6 +94,7 @@ class GatewayKeyCreate(_KeyLimits):
     expires_at: Expiry = None
     allow_all_models: bool = False
     allowed_model_ids: AllowedModelIds = Field(default_factory=list)
+    allowed_instance_ids: AllowedInstanceIds = Field(default_factory=list)
 
 
 class GatewayKeyPatch(_KeyLimits):
@@ -98,4 +104,5 @@ class GatewayKeyPatch(_KeyLimits):
     expires_at: Expiry = None
     allow_all_models: bool | None = None
     allowed_model_ids: AllowedModelIds | None = None
+    allowed_instance_ids: AllowedInstanceIds | None = None
     status: Literal["active", "disabled"] | None = None

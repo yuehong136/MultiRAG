@@ -77,7 +77,7 @@ def _limited_subjects(caller: Caller, resolved: ResolvedModel) -> list[Subject]:
     if caller.limits or caller.quota is not None:
         subjects.append(Subject(kind="key", id=caller.key_id, label="this API key", limits=caller.limits, quota=caller.quota))
     if resolved.limits:
-        subjects.append(Subject(kind="model", id=resolved.gateway_model_id, label=f"the model '{resolved.name}'", limits=resolved.limits))
+        subjects.append(Subject(kind="model", id=str(resolved.model_id), label=f"the model '{resolved.name}'", limits=resolved.limits))
     return subjects
 
 
@@ -116,7 +116,6 @@ class Relay:
             end_user = payload.get("user")
             entry.end_user = end_user[:_MAX_END_USER_LENGTH] if isinstance(end_user, str) and end_user else None
             resolved = await self._store.resolve_model(caller, model_name, model_type)
-            entry.gateway_model_id = resolved.gateway_model_id
             entry.upstream_model_id = resolved.upstream.model_id
             entry.upstream_model_name = resolved.upstream.model_name[:_MAX_END_USER_LENGTH]
             subjects = _limited_subjects(caller, resolved)

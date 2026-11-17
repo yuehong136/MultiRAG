@@ -2,30 +2,32 @@
 
 Every function works inside the caller's transaction and scopes its queries
 to one owner tenant; commit, rollback and HTTP mapping stay with the route.
+There is no publishing: the catalog lists every registered model, and an
+operator only switches models off, names them or limits them.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Integer, and_, case, cast, func, or_, select
+import httpx
+from sqlalchemy import Integer, and_, case, cast, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import GatewayKey, GatewayModel, GatewayRequestLog
-from api.model_gateway.catalog import SUPPORTED_MODEL_TYPES, ModelUnavailable, describe_models, resolve_upstream
+from api.db.db_models import GatewayKey, GatewayModelSetting, GatewayRequestLog, GatewaySetting
+from api.model_gateway import catalog
+from api.model_gateway.directory import CALLABLE, Directory, DirectoryModel, load_directory
 from api.model_gateway.keys import issue_key, redact_key
 from api.model_gateway.limits import Quota
-from api.model_gateway.schemas import GatewayKeyCreate, GatewayKeyPatch, GatewayModelCreate, GatewayModelPatch
+from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewaySettingsPatch
+from common.app_config import ModelGatewayConfig
 
 USAGE_GROUPS = ("key", "model", "day", "end_user")
-
-_UNAVAILABLE_REASONS = {
-    "provider_not_supported": "The model's provider cannot be served through the gateway yet",
-    "endpoint_not_supported": "This model type cannot be served through the gateway yet",
-    "missing_base_url": "The model has no base URL configured",
-    "missing_model_name": "The model has no name configured",
-    "model_not_available": "The model does not exist, is disabled, or lacks this capability",
-}
+OVERVIEW_DAYS = (1, 7, 30)
+_RECENT_WINDOW = timedelta(days=7)
+_WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})
+_HEALTH_TIMEOUT_SECONDS = 1.0
 
 
 class GatewayNotFound(LookupError):
@@ -40,24 +42,120 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def _model_view(row: GatewayModel, described: dict[int, dict[str, Any]]) -> dict[str, Any]:
+# --- catalog ---------------------------------------------------------------
+
+
+def _catalog_model_view(model: DirectoryModel, requests: dict[int, int]) -> dict[str, Any]:
     return {
-        "id": row.id,
-        "name": row.name,
-        "model_id": row.model_id,
-        "model_type": row.model_type,
-        "status": row.status,
-        "description": row.description,
-        "rpm_limit": row.rpm_limit,
-        "tpm_limit": row.tpm_limit,
-        "max_parallel_requests": row.max_parallel_requests,
-        # None when the registered model no longer exists for this owner.
-        "target": described.get(row.model_id),
-        "created_by": row.created_by,
-        "updated_by": row.updated_by,
-        "create_time": row.create_time,
-        "update_time": row.update_time,
+        "model_id": model.model_id,
+        "model_name": model.model_name,
+        "provider": model.provider,
+        "instance_id": model.instance_id,
+        "instance_name": model.instance_name,
+        "model_types": list(model.model_types),
+        "servable_types": list(model.servable_types),
+        "state": model.state,
+        "reason": model.reason,
+        "enabled": model.enabled,
+        "enabled_by_default": model.enabled_by_default,
+        "call_name": model.call_name,
+        "names": list(model.names),
+        "alias": model.alias,
+        "preferred": model.preferred,
+        "shares_name": model.shares_name,
+        "description": model.description,
+        "rpm_limit": model.limits.rpm,
+        "tpm_limit": model.limits.tpm,
+        "max_parallel_requests": model.limits.max_parallel,
+        "requests_7d": requests.get(model.model_id, 0),
     }
+
+
+async def _requests_by_model(db: AsyncSession, tenant_id: str, since: datetime) -> dict[int, int]:
+    log = GatewayRequestLog
+    query = select(log.upstream_model_id, func.count()).where(log.tenant_id == tenant_id, log.started_at >= since, log.upstream_model_id.is_not(None)).group_by(log.upstream_model_id)
+    return {int(model_id): int(count) for model_id, count in (await db.execute(query)).all()}
+
+
+async def _catalog_of(db: AsyncSession, tenant_id: str, directory: Directory) -> dict[str, Any]:
+    requests = await _requests_by_model(db, tenant_id, datetime.now(UTC) - _RECENT_WINDOW)
+    return {
+        "new_models_enabled": directory.new_models_enabled,
+        "connections": [{"instance_id": item.instance_id, "instance_name": item.instance_name, "provider": item.provider} for item in directory.connections],
+        "models": [_catalog_model_view(model, requests) for model in directory.models],
+    }
+
+
+async def catalog_view(db: AsyncSession, tenant_id: str) -> dict[str, Any]:
+    return await _catalog_of(db, tenant_id, await load_directory(db, tenant_id, with_connections=True))
+
+
+async def _settings_rows(db: AsyncSession, tenant_id: str, actor_id: str, models: list[DirectoryModel]) -> dict[int, GatewayModelSetting]:
+    """Each model's settings row, created with its current state where missing."""
+    if models:
+        values = [{"id": uuid.uuid4().hex, "tenant_id": tenant_id, "model_id": model.model_id, "enabled": model.enabled, "created_by": actor_id} for model in models]
+        await db.execute(insert(GatewayModelSetting).values(values).on_conflict_do_nothing(index_elements=["tenant_id", "model_id"]))
+    ids = [model.model_id for model in models]
+    rows = (
+        await db.scalars(
+            select(GatewayModelSetting).where(GatewayModelSetting.tenant_id == tenant_id, GatewayModelSetting.model_id.in_(ids)).with_for_update().execution_options(populate_existing=True)
+        )
+    ).all()
+    return {row.model_id: row for row in rows}
+
+
+async def update_catalog_model(db: AsyncSession, tenant_id: str, actor_id: str, model_id: int, body: CatalogModelPatch) -> dict[str, Any]:
+    directory = await load_directory(db, tenant_id)
+    model = directory.model(model_id)
+    if model is None:
+        raise GatewayNotFound(str(model_id))
+    changes = body.model_dump(exclude_unset=True)
+    for required in ("enabled", "preferred"):
+        if changes.get(required) is None:
+            changes.pop(required, None)
+    alias = changes.get("alias")
+    if alias is not None:
+        holder = directory.lookup(alias)
+        if holder is not None and holder.model_id != model_id:
+            raise GatewayConflict("Another model already answers to this name")
+    row = (await _settings_rows(db, tenant_id, actor_id, [model]))[model_id]
+    if changes.get("preferred"):
+        rivals = [item.model_id for item in directory.models if item.model_name == model.model_name and item.model_id != model_id]
+        if rivals:
+            await db.execute(update(GatewayModelSetting).where(GatewayModelSetting.tenant_id == tenant_id, GatewayModelSetting.model_id.in_(rivals)).values(preferred=False, updated_by=actor_id))
+    for name, value in changes.items():
+        setattr(row, name, value)
+    row.updated_by = actor_id
+    await db.flush()
+    updated = (await load_directory(db, tenant_id)).model(model_id)
+    assert updated is not None
+    return _catalog_model_view(updated, await _requests_by_model(db, tenant_id, datetime.now(UTC) - _RECENT_WINDOW))
+
+
+async def update_catalog_instance(db: AsyncSession, tenant_id: str, actor_id: str, instance_id: str, body: CatalogInstancePatch) -> dict[str, Any]:
+    directory = await load_directory(db, tenant_id, with_connections=True)
+    if not any(item.instance_id == instance_id for item in directory.connections):
+        raise GatewayNotFound(instance_id)
+    models = [model for model in directory.models if model.instance_id == instance_id]
+    for row in (await _settings_rows(db, tenant_id, actor_id, models)).values():
+        row.enabled = body.enabled
+        row.updated_by = actor_id
+    await db.flush()
+    return await catalog_view(db, tenant_id)
+
+
+async def update_settings(db: AsyncSession, tenant_id: str, actor_id: str, body: GatewaySettingsPatch) -> dict[str, Any]:
+    """Change the default for models nobody switched; models that exist now keep their state."""
+    directory = await load_directory(db, tenant_id)
+    if body.new_models_enabled != directory.new_models_enabled:
+        await _settings_rows(db, tenant_id, actor_id, [model for model in directory.models if model.enabled_by_default])
+    statement = insert(GatewaySetting).values(id=uuid.uuid4().hex, tenant_id=tenant_id, new_models_enabled=body.new_models_enabled, updated_by=actor_id)
+    await db.execute(statement.on_conflict_do_update(index_elements=["tenant_id"], set_={"new_models_enabled": body.new_models_enabled, "updated_by": actor_id}))
+    await db.flush()
+    return await catalog_view(db, tenant_id)
+
+
+# --- keys --------------------------------------------------------------------
 
 
 def _key_view(row: GatewayKey, quota_used: int | None = None) -> dict[str, Any]:
@@ -70,7 +168,8 @@ def _key_view(row: GatewayKey, quota_used: int | None = None) -> dict[str, Any]:
         "status": row.status,
         "expires_at": _iso(row.expires_at),
         "allow_all_models": row.allow_all_models,
-        "allowed_model_ids": list(row.allowed_model_ids or []),
+        "allowed_model_ids": [int(item) for item in row.allowed_model_ids or []],
+        "allowed_instance_ids": [str(item) for item in row.allowed_instance_ids or []],
         "rpm_limit": row.rpm_limit,
         "tpm_limit": row.tpm_limit,
         "max_parallel_requests": row.max_parallel_requests,
@@ -86,20 +185,6 @@ def _key_view(row: GatewayKey, quota_used: int | None = None) -> dict[str, Any]:
     }
 
 
-async def _servable(db: AsyncSession, tenant_id: str, model_id: int, model_type: str) -> None:
-    try:
-        await resolve_upstream(db, tenant_id, model_id, model_type)
-    except ModelUnavailable as error:
-        raise ValueError(_UNAVAILABLE_REASONS.get(error.reason, "The model cannot be served through the gateway")) from None
-
-
-async def _owned_model(db: AsyncSession, tenant_id: str, gateway_model_id: str) -> GatewayModel:
-    row = await db.scalar(select(GatewayModel).where(GatewayModel.tenant_id == tenant_id, GatewayModel.id == gateway_model_id))
-    if row is None:
-        raise GatewayNotFound(gateway_model_id)
-    return row
-
-
 async def _owned_key(db: AsyncSession, tenant_id: str, key_id: str) -> GatewayKey:
     row = await db.scalar(select(GatewayKey).where(GatewayKey.tenant_id == tenant_id, GatewayKey.id == key_id))
     if row is None:
@@ -107,12 +192,17 @@ async def _owned_key(db: AsyncSession, tenant_id: str, key_id: str) -> GatewayKe
     return row
 
 
-async def _checked_model_ids(db: AsyncSession, tenant_id: str, model_ids: list[str]) -> list[str]:
+async def _checked_model_ids(db: AsyncSession, tenant_id: str, model_ids: list[int]) -> list[int]:
     unique = list(dict.fromkeys(model_ids))
-    if unique:
-        known = set((await db.scalars(select(GatewayModel.id).where(GatewayModel.tenant_id == tenant_id, GatewayModel.id.in_(unique)))).all())
-        if known != set(unique):
-            raise ValueError("allowed_model_ids contains an unknown published model")
+    if unique and not set(unique) <= {model.model_id for model in await catalog.registered_models(db, tenant_id)}:
+        raise ValueError("allowed_model_ids contains a model this tenant has not registered")
+    return unique
+
+
+async def _checked_instance_ids(db: AsyncSession, tenant_id: str, instance_ids: list[str]) -> list[str]:
+    unique = list(dict.fromkeys(instance_ids))
+    if unique and not set(unique) <= {item.instance_id for item in await catalog.connections(db, tenant_id)}:
+        raise ValueError("allowed_instance_ids contains a connection this tenant does not have")
     return unique
 
 
@@ -139,68 +229,6 @@ async def _key_with_usage(db: AsyncSession, row: GatewayKey) -> dict[str, Any]:
     return _key_view(row, (await _quota_usage(db, [row])).get(row.id))
 
 
-async def list_candidates(db: AsyncSession, tenant_id: str) -> list[dict[str, Any]]:
-    """The owner's registered models, each with the types the gateway can publish it as.
-
-    ``publishable_types`` is empty when the provider is outside the relay rules,
-    the model is disabled, or none of its capabilities has a gateway endpoint.
-    """
-    described = await describe_models(db, tenant_id)
-    candidates = []
-    for model_id, details in sorted(described.items(), key=lambda item: (item[1]["provider"], item[1]["model_name"], item[0])):
-        servable = details["relayable"] and details["available"]
-        candidates.append({"model_id": model_id, **details, "publishable_types": sorted(set(details["model_types"]) & SUPPORTED_MODEL_TYPES) if servable else []})
-    return candidates
-
-
-async def list_models(db: AsyncSession, tenant_id: str) -> list[dict[str, Any]]:
-    rows = (await db.scalars(select(GatewayModel).where(GatewayModel.tenant_id == tenant_id).order_by(GatewayModel.name))).all()
-    described = await describe_models(db, tenant_id) if rows else {}
-    return [_model_view(row, described) for row in rows]
-
-
-async def create_model(db: AsyncSession, tenant_id: str, actor_id: str, body: GatewayModelCreate) -> dict[str, Any]:
-    await _servable(db, tenant_id, body.model_id, body.model_type)
-    row = GatewayModel(
-        id=uuid.uuid4().hex,
-        tenant_id=tenant_id,
-        name=body.name,
-        model_id=body.model_id,
-        model_type=body.model_type,
-        status="active",
-        description=body.description,
-        rpm_limit=body.rpm_limit,
-        tpm_limit=body.tpm_limit,
-        max_parallel_requests=body.max_parallel_requests,
-        created_by=actor_id,
-    )
-    db.add(row)
-    await db.flush()
-    return _model_view(row, await describe_models(db, tenant_id))
-
-
-async def update_model(db: AsyncSession, tenant_id: str, actor_id: str, gateway_model_id: str, body: GatewayModelPatch) -> dict[str, Any]:
-    row = await _owned_model(db, tenant_id, gateway_model_id)
-    changes = body.model_dump(exclude_unset=True)
-    if changes.get("name") is None:
-        changes.pop("name", None)
-    if changes.get("status") is None:
-        changes.pop("status", None)
-    if changes.get("status") == "active" and row.status != "active":
-        # Re-enabling is a fresh publication: the target may have changed meanwhile.
-        await _servable(db, tenant_id, row.model_id, row.model_type)
-    for name, value in changes.items():
-        setattr(row, name, value)
-    row.updated_by = actor_id
-    await db.flush()
-    return _model_view(row, await describe_models(db, tenant_id))
-
-
-async def delete_model(db: AsyncSession, tenant_id: str, gateway_model_id: str) -> None:
-    await db.delete(await _owned_model(db, tenant_id, gateway_model_id))
-    await db.flush()
-
-
 async def list_keys(db: AsyncSession, tenant_id: str) -> list[dict[str, Any]]:
     rows = list((await db.scalars(select(GatewayKey).where(GatewayKey.tenant_id == tenant_id).order_by(GatewayKey.create_time.desc(), GatewayKey.id))).all())
     usage = await _quota_usage(db, rows)
@@ -220,6 +248,7 @@ async def create_key(db: AsyncSession, tenant_id: str, actor_id: str, body: Gate
         expires_at=body.expires_at,
         allow_all_models=body.allow_all_models,
         allowed_model_ids=await _checked_model_ids(db, tenant_id, body.allowed_model_ids),
+        allowed_instance_ids=await _checked_instance_ids(db, tenant_id, body.allowed_instance_ids),
         rpm_limit=body.rpm_limit,
         tpm_limit=body.tpm_limit,
         max_parallel_requests=body.max_parallel_requests,
@@ -238,11 +267,13 @@ async def update_key(db: AsyncSession, tenant_id: str, actor_id: str, key_id: st
     if row.status == "revoked":
         raise GatewayConflict("A revoked key cannot be changed")
     changes = body.model_dump(exclude_unset=True)
-    for required in ("name", "allow_all_models", "allowed_model_ids", "status"):
+    for required in ("name", "allow_all_models", "allowed_model_ids", "allowed_instance_ids", "status"):
         if changes.get(required) is None:
             changes.pop(required, None)
     if "allowed_model_ids" in changes:
         changes["allowed_model_ids"] = await _checked_model_ids(db, tenant_id, changes["allowed_model_ids"])
+    if "allowed_instance_ids" in changes:
+        changes["allowed_instance_ids"] = await _checked_instance_ids(db, tenant_id, changes["allowed_instance_ids"])
     for name, value in changes.items():
         setattr(row, name, value)
     if (row.token_quota is None) != (row.quota_period is None):
@@ -258,6 +289,144 @@ async def revoke_key(db: AsyncSession, tenant_id: str, actor_id: str, key_id: st
     row.updated_by = actor_id
     await db.flush()
     return await _key_with_usage(db, row)
+
+
+# --- overview ----------------------------------------------------------------
+
+
+def public_base_url(config: ModelGatewayConfig) -> str | None:
+    """Where callers reach the data plane, when the server can tell."""
+    if config.public_base_url.strip():
+        return config.public_base_url.strip().rstrip("/")
+    if config.host.strip() in _WILDCARD_HOSTS:
+        return None
+    host = f"[{config.host}]" if ":" in config.host else config.host
+    return f"http://{host}:{config.http_port}/v1"
+
+
+async def data_plane_status(config: ModelGatewayConfig, transport: httpx.AsyncBaseTransport | None = None) -> str:
+    """``up`` when the data plane answers its health check from this host."""
+    host = "127.0.0.1" if config.host.strip() in _WILDCARD_HOSTS else config.host
+    host = f"[{host}]" if ":" in host else host
+    try:
+        async with httpx.AsyncClient(transport=transport, timeout=_HEALTH_TIMEOUT_SECONDS) as client:
+            response = await client.get(f"http://{host}:{config.http_port}/healthz")
+    except httpx.HTTPError:
+        return "down"
+    return "up" if response.status_code == 200 else "down"
+
+
+def _window(days: int, now: datetime) -> tuple[str, datetime, datetime]:
+    """Bucket size and the bucket-aligned start of a window ending now (UTC)."""
+    if days == 1:
+        return "hour", now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=23), now
+    return "day", now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1), now
+
+
+async def overview(db: AsyncSession, tenant_id: str, *, days: int, config: ModelGatewayConfig, data_plane: str, now: datetime | None = None) -> dict[str, Any]:
+    if days not in OVERVIEW_DAYS:
+        raise ValueError(f"days must be one of {', '.join(map(str, OVERVIEW_DAYS))}")
+    now = now or datetime.now(UTC)
+    bucket, start, end = _window(days, now)
+    log = GatewayRequestLog
+    in_window = and_(log.tenant_id == tenant_id, log.started_at >= start, log.started_at < end)
+    failed = _failed()
+
+    totals = (
+        await db.execute(
+            select(
+                func.count().label("requests"),
+                func.coalesce(func.sum(cast(case((failed, 1), else_=0), Integer)), 0).label("errors"),
+                func.coalesce(func.sum(log.prompt_tokens), 0).label("prompt_tokens"),
+                func.coalesce(func.sum(log.completion_tokens), 0).label("completion_tokens"),
+                func.coalesce(func.sum(log.total_tokens), 0).label("total_tokens"),
+                func.coalesce(func.sum(cast(case((log.usage_source == "unavailable", 1), else_=0), Integer)), 0).label("usage_unknown"),
+                func.percentile_cont(0.5).within_group(log.first_token_ms).filter(and_(log.stream.is_(True), log.first_token_ms.is_not(None))).label("first_token_p50_ms"),
+            ).where(in_window)
+        )
+    ).one()
+    previous_requests = await db.scalar(select(func.count()).select_from(log).where(log.tenant_id == tenant_id, log.started_at >= start - (end - start), log.started_at < start))
+
+    code = func.coalesce(log.error_code, log.error_type)
+    errors_by_code = (
+        await db.execute(
+            select(log.status_code, code, func.count().label("count")).where(in_window, failed).group_by(log.status_code, code).order_by(func.count().desc(), log.status_code, code).limit(3)
+        )
+    ).all()
+
+    # Buckets are UTC, independent of the database session time zone.
+    truncated = func.date_trunc(bucket, func.timezone("UTC", log.started_at))
+    counted = {
+        row[0].replace(tzinfo=UTC): (int(row[1]), int(row[2]))
+        for row in (await db.execute(select(truncated, func.count(), func.coalesce(func.sum(cast(case((failed, 1), else_=0), Integer)), 0)).where(in_window).group_by(truncated))).all()
+    }
+    step = timedelta(hours=1) if bucket == "hour" else timedelta(days=1)
+    series, cursor = [], start
+    while cursor < end:
+        requests, errors = counted.get(cursor, (0, 0))
+        series.append({"start": cursor.isoformat(), "requests": requests, "errors": errors})
+        cursor += step
+
+    directory = await load_directory(db, tenant_id)
+    top_models = []
+    for model_id, upstream_name, requests, tokens in (
+        await db.execute(
+            select(log.upstream_model_id, func.max(log.upstream_model_name), func.count(), func.coalesce(func.sum(log.total_tokens), 0))
+            .where(in_window, log.upstream_model_id.is_not(None))
+            .group_by(log.upstream_model_id)
+            .order_by(func.coalesce(func.sum(log.total_tokens), 0).desc(), func.count().desc())
+            .limit(5)
+        )
+    ).all():
+        model = directory.model(int(model_id))
+        top_models.append(
+            {"model_id": int(model_id), "name": model.call_name if model else upstream_name, "provider": model.provider if model else None, "requests": int(requests), "total_tokens": int(tokens)}
+        )
+    top_keys = [
+        {"key_id": key_id, "key_name": key_name, "requests": int(requests), "total_tokens": int(tokens)}
+        for key_id, key_name, requests, tokens in (
+            await db.execute(
+                select(log.key_id, func.max(log.key_name), func.count(), func.coalesce(func.sum(log.total_tokens), 0))
+                .where(in_window)
+                .group_by(log.key_id)
+                .order_by(func.coalesce(func.sum(log.total_tokens), 0).desc(), func.count().desc())
+                .limit(5)
+            )
+        ).all()
+    ]
+    recent_errors = (await db.scalars(select(log).where(log.tenant_id == tenant_id, failed).order_by(log.started_at.desc(), log.id).limit(5))).all()
+
+    callable_models = [model for model in directory.models if model.state == CALLABLE]
+    active_keys = await db.scalar(
+        select(func.count()).select_from(GatewayKey).where(GatewayKey.tenant_id == tenant_id, GatewayKey.status == "active", or_(GatewayKey.expires_at.is_(None), GatewayKey.expires_at > now))
+    )
+    p50 = totals.first_token_p50_ms
+    return {
+        "base_url": public_base_url(config),
+        "listen_port": config.http_port,
+        "data_plane": data_plane,
+        "counts": {"providers": len({model.provider for model in callable_models}), "callable_models": len(callable_models), "active_keys": int(active_keys or 0)},
+        "window": {"start": start.isoformat(), "end": end.isoformat(), "days": days},
+        "totals": {
+            "requests": int(totals.requests),
+            "errors": int(totals.errors),
+            "prompt_tokens": int(totals.prompt_tokens),
+            "completion_tokens": int(totals.completion_tokens),
+            "total_tokens": int(totals.total_tokens),
+            "usage_unknown": int(totals.usage_unknown),
+            "first_token_p50_ms": round(float(p50)) if p50 is not None else None,
+        },
+        "previous_requests": int(previous_requests or 0),
+        "errors_by_code": [{"status_code": int(status), "code": error_code, "count": int(count)} for status, error_code, count in errors_by_code],
+        "bucket": bucket,
+        "series": series,
+        "top_models": top_models,
+        "top_keys": top_keys,
+        "recent_errors": [_log_view(row) for row in recent_errors],
+    }
+
+
+# --- logs and usage ----------------------------------------------------------
 
 
 def _failed() -> Any:

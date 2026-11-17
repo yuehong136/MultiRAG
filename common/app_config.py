@@ -943,6 +943,8 @@ class ModelGatewayConfig(_Section):
     enabled: bool = False
     host: str = "127.0.0.1"
     http_port: int = 9390
+    # 调用方访问数据面的地址（含 /v1），显示在管理页面上；留空时由监听地址推导，监听通配地址时由页面按当前主机名补全
+    public_base_url: str = ""
     # 请求体上限（字节）；超过返回 413，不转发
     max_request_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
     connect_timeout_seconds: float = Field(default=10.0, gt=0)

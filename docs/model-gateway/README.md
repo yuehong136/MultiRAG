@@ -1,6 +1,6 @@
 # MultiRAG 模型网关（Model Gateway）
 
-> 状态：**P1 最小闭环与 P2 限额已实现；调用记录清理、rerank 与 P3 尚未实现**（见第 10 节）
+> 状态：**P1 最小闭环、P2 限额与模型目录（取代发布）已实现；调用记录清理、rerank 与 P3 尚未实现**（见第 10 节）
 > 最后核验：2026-11-17
 > 维护范围：把已登记的模型以标准模型接口对外提供、API Key、调用记录与用量、限额
 
@@ -17,24 +17,27 @@
 MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
 ```
 
-数据面进程不做数据库引导：三张表由主 API 启动时的 schema 引导创建，所以升级后先启动一次主 API。
+数据面进程不做数据库引导：网关的表由主 API 启动时的 schema 引导和迁移创建，所以升级后先启动一次主 API。
 主 API 进程也要带同一个开关，管理接口才可用。配置段是 `model_gateway`
 （`common/app_config.py` 的 `ModelGatewayConfig`）：监听地址默认 `127.0.0.1:9390`，
+`public_base_url` 是调用方使用的地址（显示在管理页面上，留空时由监听地址推导），
 另有请求体上限和四个超时。未启用时管理路由返回 404，数据面进程拒绝启动。
 
 最小使用路径：
 
-1. 在模型管理里登记一个自部署模型（已有功能）。
-2. `POST /api/v1/model-gateway/models` 把它发布为公开模型名。
-3. `POST /api/v1/model-gateway/keys` 创建 Key，响应里的 `key` 只出现这一次。
-4. 调用方把 SDK 的 `base_url` 指向 `http://<网关地址>/v1`，用这把 Key 调用。
-5. `GET /api/v1/model-gateway/logs` 和 `/usage` 查看调用记录和用量。
+1. 在模型管理里登记模型（已有功能）。它会自动出现在网关目录里，不需要发布。
+2. `POST /api/v1/model-gateway/keys` 创建 Key 并选择可调用范围，响应里的 `key` 只出现这一次。
+3. 调用方把 SDK 的 `base_url` 指向 `http://<网关地址>/v1`，用这把 Key 和模型名调用。
+4. `GET /api/v1/model-gateway/overview`、`/logs` 和 `/usage` 查看用量和调用记录。
 
 ## 1. 定位
 
-模型网关把租户已经登记的模型，以标准模型接口提供给外部程序调用。管理者做三件事：
-把模型发布为一个公开名称，创建 API Key，查看按 Key 的调用记录和用量。之后可以按 Key
-或按模型加限额。
+模型网关把租户已经登记的模型，以标准模型接口提供给外部程序调用。已连接提供商里的模型
+自动进入网关目录，管理者主要做两件事：创建 API Key 并选择它能调用的提供商连接或模型，
+查看调用记录和用量。需要时可以关闭某个模型、给模型起别名，或按 Key、按模型加限额。
+
+不设单独的发布步骤：同类网关（New-API、One-API、LiteLLM、Bifrost、Portkey）都直接把已配置的
+模型作为可授权对象，暴露范围由每把 Key 的授权和模型上的开放开关决定（第 12 节）。
 
 不在范围内：
 
@@ -47,7 +50,7 @@ MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
 
 网关是面向所有部署方的通用能力。新增字段或对象时逐条判定，任何一条不成立就不进核心：
 
-1. 在默认资源范围内，「发布模型 → 创建 Key → 用标准 SDK 调用 → 查到调用记录」不需要任何额外登记。
+1. 在默认资源范围内，「登记模型 → 创建 Key → 用标准 SDK 调用 → 查到调用记录」不需要任何额外登记。
 2. Key 的说明和标签为空时，授权、调用和统计行为不变。
 3. 标签和请求体里的 `user` 只用于检索和归因，不参与授权、路由或限额身份。
 4. 使用方如何组织人员、提出需求、分发 Key，由部署方在平台之外决定；这些信息只会以
@@ -69,24 +72,54 @@ MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
 
 ## 3. 对象模型
 
-新增三张自有表，位于 `usr_ai` schema，沿用 `t_ai_` 前缀，都带 `tenant_id`。上游部署不新建对象，
-继续使用已有的 Provider / Instance / Model。
+网关自有四张表，位于 `usr_ai` schema，沿用 `t_ai_` 前缀，都带 `tenant_id`。上游部署不新建对象，
+继续使用已有的 Provider / Instance（连接）/ Model。
 
-### 公开模型 `GatewayModel`（`t_ai_gateway_models`）
+### 模型目录（不落表）
+
+目录是租户全部已登记模型的派生视图（`api/model_gateway/directory.py`），由三部分合成：
+`catalog` 读出的登记信息、下面的模型设置行、租户设置。每个模型有：
+
+| 属性 | 含义 |
+|---|---|
+| `servable_types` | 网关有端点的能力，目前是 `chat`、`embedding` 的子集 |
+| `reason` | 当前不能服务的原因：`provider_not_supported`（厂商不在转发规则里）、`endpoint_not_supported`（没有可服务的能力）、`model_disabled`（模型、连接或厂商在模型管理里停用） |
+| `enabled` | 开放开关。没人设置过时取租户默认值（`enabled_by_default` 为真） |
+| `state` | 有 `reason` 时为 `unavailable`；否则关闭为 `closed`，开放为 `callable` |
+| `names` | 能调到它的全部名字，第一个是调用名 `call_name` |
+
+**调用名规则**。每个模型可以被以下名字调用，字符串冲突时按此顺序优先：
+
+1. 别名（可选，租户内唯一）；
+2. `提供商/连接名/模型名`，始终唯一；
+3. `提供商/模型名`，同一提供商内同名模型只有一个拥有它；
+4. 模型名本身，同名模型只有一个拥有它。
+
+第 3、4 条由标记为首选（`preferred`）的模型拥有，否则由最早登记的模型拥有。所有已登记模型都参与
+命名，无论是否开放，所以开放、关闭或新增模型都不会抢走另一个模型已经在用的名字。模型名去掉登记时
+追加的 `___` 后缀。调用名依次取别名、模型名、`提供商/模型名`、`提供商/连接名/模型名` 中第一个归它的。
+
+### 模型设置 `GatewayModelSetting`（`t_ai_gateway_model_settings`）
+
+只有管理者改过某个模型时才有这一行。
 
 | 字段 | 含义 |
 |---|---|
 | `id`、`tenant_id` | 标识和所属租户 |
-| `name` | 公开模型名，租户内唯一；即请求体里的 `model` |
-| `model_id` | 已登记模型的数字 ID（`TenantLLM.id`） |
-| `model_type` | `chat` / `embedding` / `rerank` |
-| `status` | `active` / `inactive` |
+| `model_id` | 已登记模型的数字 ID（`TenantLLM.id`），租户内唯一；不是外键，模型删除后行留下但不再生效 |
+| `enabled` | 开放开关 |
+| `alias` | 可空；租户内唯一（部分唯一索引） |
+| `preferred` | 同名模型里是否拥有不带前缀的名字；设为真时清除其他同名模型的标记 |
 | `description` | 可空 |
 | `rpm_limit`、`tpm_limit`、`max_parallel_requests` | 可空，该模型所有 Key 合计的限额（第 7 节） |
 | `created_by`、`updated_by` | 管理操作人 |
 
-一个公开名对应一个已登记模型。模型语义变化（例如 embedding 更换权重）用新的公开名表达，
-不引入版本号机制。
+### 租户设置 `GatewaySetting`（`t_ai_gateway_settings`）
+
+| 字段 | 含义 |
+|---|---|
+| `tenant_id` | 唯一 |
+| `new_models_enabled` | 没有模型设置行的模型是否开放，默认开放。修改时，已经存在、还跟随默认值的模型写入当前状态，所以只有之后登记的模型跟随新默认值 |
 
 ### API Key `GatewayKey`（`t_ai_gateway_keys`）
 
@@ -99,7 +132,7 @@ MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
 | `secret_hash` | 整串 Key 的 SHA-256 |
 | `status` | `active` / `disabled` / `revoked`；撤销不可恢复 |
 | `expires_at` | 可空 |
-| `allow_all_models`、`allowed_model_ids` | 模型范围。默认不允许全部；列表为空且未显式允许全部时拒绝一切调用 |
+| `allow_all_models`、`allowed_instance_ids`、`allowed_model_ids` | 可调用范围：全部开放模型（含以后开放的）；或者整个连接（含该连接以后开放的模型）加上逐个指定的已登记模型 ID（快照）。默认不允许全部；两个列表都为空且未允许全部时拒绝一切调用。ID 指向的对象删除后保留，管理页面据此显示已失效 |
 | `rpm_limit`、`tpm_limit`、`max_parallel_requests`、`token_quota`、`quota_period` | 可空，这把 Key 的限额和配额（第 7 节） |
 | `last_used_at` | 低频更新，不随每个请求写库 |
 | `created_by`、`updated_by` | 管理操作人，不代表调用身份 |
@@ -114,7 +147,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 |---|---|
 | `id` | 服务端生成的请求 ID，同时写入响应头 `x-request-id` |
 | `tenant_id`、`key_id`、`key_name` | 归属；`key_name` 是调用时的快照，改名不改写历史 |
-| `model`、`gateway_model_id`、`upstream_model_id`、`upstream_model_name` | 公开名和实际调用的模型 |
+| `model`、`upstream_model_id`、`upstream_model_name` | 调用方请求的模型名和实际调用的已登记模型；`gateway_model_id` 只在目录取代发布之前的记录里有值 |
 | `endpoint`、`stream` | 调用的端点，是否流式 |
 | `status_code`、`error_type`、`error_code` | 结果；客户端中途断开单独标记 |
 | `prompt_tokens`、`completion_tokens`、`total_tokens`、`usage_details` | 用量；未知为空值，不写 0 |
@@ -136,7 +169,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 
 | 端点 | 行为 |
 |---|---|
-| `GET /v1/models` | 返回当前 Key 有权访问的公开模型，OpenAI 列表形状 |
+| `GET /v1/models` | 返回当前 Key 可调用的开放模型的调用名，OpenAI 列表形状 |
 | `POST /v1/chat/completions` | 透传，含流式 |
 | `POST /v1/embeddings` | 透传 |
 
@@ -158,7 +191,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 |---|---|
 | `VLLM`、`OpenAI-API-Compatible`、`Xinference`、`LocalAI`、`LM-Studio` | 登记的地址经 `common/url_utils.py` 的 `ensure_api_version()` 补上版本段 |
 | `OpenAI` | 登记的地址原样使用；留空时为 `https://api.openai.com/v1` |
-| `Tongyi-Qianwen` | DashScope 的 OpenAI 兼容根地址，聊天和向量都走它：留空时为 `https://dashscope.aliyuncs.com/compatible-mode/v1`；阿里云主机（`*.aliyuncs.com`）上的原生地址（裸主机或 `/api/v1`）换成同一主机的 `/compatible-mode/v1`；其他地址原样使用；其他主机上的 `/api/v1` 只支持原生协议，不能发布 |
+| `Tongyi-Qianwen` | DashScope 的 OpenAI 兼容根地址，聊天和向量都走它：留空时为 `https://dashscope.aliyuncs.com/compatible-mode/v1`；阿里云主机（`*.aliyuncs.com`）上的原生地址（裸主机或 `/api/v1`）换成同一主机的 `/compatible-mode/v1`；其他地址原样使用；其他主机上的 `/api/v1` 只支持原生协议，网关不能服务 |
 
 - 上游模型名去掉登记时追加的 `___` 后缀。
 - 这些规则与 `core/llm` 里对应驱动的现有行为一致，用契约测试钉住
@@ -168,7 +201,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 - 网关不改写请求参数。驱动为某些模型做的参数裁剪（例如去掉不被支持的采样参数）不会发生在网关里；
   上游拒绝时，它的错误原样返回给调用方。
 - rerank 的上游路径各厂商不一致，逐个收录。
-- 发布时就校验厂商是否在收录范围内，派发前再校验一次。
+- 目录里标出不在收录范围的厂商（`provider_not_supported`），派发前再校验一次。
 
 不走 OpenAI 协议的厂商以后直接调用已依赖的 `litellm` SDK 做协议转换，同样不经过 `core/llm`。
 
@@ -176,8 +209,8 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 
 1. 认证 Key，得到 `key_id`、`tenant_id` 和模型范围（第 5 节）。
 2. 只解析请求体里的 `model`、`stream`、`user`，其余字段交给上游校验。请求体有大小上限。
-3. 按 `(tenant_id, model)` 找到有效的公开模型，检查 Key 的模型范围，再用
-   `resolve_config()` 取上游地址、凭据和模型名。
+3. 在租户目录里按名字找到模型：不存在或已关闭返回 404；不在 Key 的范围内返回 403；能力与端点不符返回 400；
+   再用 `resolve_config()` 取上游地址、凭据和模型名，不能服务时返回 503。
 4. 改写请求并转发。认证和解析用的数据库会话在此之前关闭，流式期间不持有会话或事务。
 5. 把上游响应原样返回，同时读取用量。
 6. 请求结束后写一行调用记录，包括失败和客户端中途断开的情况。
@@ -203,15 +236,15 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 | Key 格式错误、不存在或秘密不匹配 | 401 | `invalid_api_key` |
 | Key 已停用或撤销；Key 已过期 | 401 | `api_key_disabled`；`api_key_expired`（仅在秘密校验通过后才区分原因） |
 | 请求体不是 JSON 对象；缺少 `model` | 400 | `invalid_json`；`missing_model` |
-| 公开模型的类型与端点不符 | 400 | `model_endpoint_mismatch` |
+| 模型的能力与端点不符 | 400 | `model_endpoint_mismatch` |
 | Key 无权访问该模型 | 403 | `model_not_allowed` |
-| 公开模型不存在或未启用 | 404 | `model_not_found` |
+| 模型名不存在，或模型已关闭 | 404 | `model_not_found` |
 | 请求体超过上限 | 413 | `request_too_large` |
 | 触发限流、并发上限或配额 | 429 | `rate_limit_exceeded`；`concurrency_limit_exceeded`；`insufficient_quota`（第 7 节） |
 | 上游返回 401 / 403 | 502 | `upstream_auth_error`，避免调用方误以为是自己的 Key 有问题 |
 | 上游返回其他 4xx | 原样返回 | 上游的错误体，保留 `Retry-After` |
 | 上游 5xx；连接失败 | 502 | `upstream_error`；`upstream_unreachable` |
-| 已发布的模型当前不可用（被停用、厂商不在收录范围） | 503 | `model_unavailable` |
+| 开放的模型当前不能服务（在模型管理里停用、厂商不在收录范围） | 503 | `model_unavailable` |
 | 上游超时 | 504 | `upstream_timeout` |
 
 ## 5. 认证与授权
@@ -220,7 +253,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
   `secret_hash`，再检查状态和有效期。首期每个请求直接读库，撤销和范围收窄对新请求立即生效；
   进行中的流不被中断。
 - `GET /v1/models` 和实际调用使用同一个授权判断函数。
-- 调用方只能提交公开模型名。请求里不能指定厂商、上游地址、上游凭据或内部模型 ID。
+- 调用方只能提交目录里的模型名（第 3 节）。请求里不能指定上游地址、上游凭据或内部模型 ID。
 - 三类凭据互不通用：网关 Key 只能调用数据面；既有 RAG SDK 令牌和登录态不能调用数据面；
   网关 Key 不能调用管理接口和既有 RAG 接口。
 - 管理接口要求登录态。来源为 `AuthenticationSource.SDK_API_TOKEN` 的身份
@@ -244,7 +277,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 |---|---|---|
 | 单个 Key | `rpm_limit`、`tpm_limit`、`max_parallel_requests` | 每分钟请求数、每分钟 token 数、并发上限 |
 | 单个 Key | `token_quota`、`quota_period` | token 配额，按 UTC 自然日（`day`）或自然月（`month`）重置；两个字段必须一起设置 |
-| 单个公开模型 | `rpm_limit`、`tpm_limit`、`max_parallel_requests` | 该模型所有 Key 合计，保护上游容量；多建 Key 不能绕过 |
+| 单个模型 | `rpm_limit`、`tpm_limit`、`max_parallel_requests` | 存在模型设置行上，该模型所有 Key 合计，保护上游容量；多建 Key 不能绕过，换用别名或带前缀的名字也不能绕过 |
 
 实现在 `api/model_gateway/limits.py`：
 
@@ -279,37 +312,42 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 
 | 路由 | 用途 |
 |---|---|
-| `GET /api/v1/model-gateway/candidates` | 列出已登记的模型，以及每个模型能以哪些类型发布（不能发布时为空，页面据此置灰） |
-| `GET` / `POST /api/v1/model-gateway/models`，`PATCH` / `DELETE .../models/{id}` | 发布、修改、下线公开模型 |
-| `GET` / `POST /api/v1/model-gateway/keys`，`PATCH .../keys/{id}`，`POST .../keys/{id}/revoke` | 创建、修改元数据和范围、启停、撤销 Key |
+| `GET /api/v1/model-gateway/catalog` | 全部已登记模型的目录（第 3 节的属性、近 7 天请求数），以及全部连接和租户默认值 |
+| `PATCH /api/v1/model-gateway/catalog/models/{model_id}` | 开放或关闭模型，设置别名、首选、说明和模型级限额；别名已被另一个模型使用时返回 409 |
+| `PATCH /api/v1/model-gateway/catalog/instances/{instance_id}` | 开放或关闭一个连接下的全部模型 |
+| `PATCH /api/v1/model-gateway/settings` | 设置新登记模型的默认开放状态 |
+| `GET` / `POST /api/v1/model-gateway/keys`，`PATCH .../keys/{id}`，`POST .../keys/{id}/revoke` | 创建、修改元数据和可调用范围、启停、撤销 Key |
+| `GET /api/v1/model-gateway/overview` | 接入地址、数据面健康状态、计数，以及最近 1 / 7 / 30 天的请求、失败、token、首字时延中位数、时间序列、Top 模型与 Key、最近失败 |
 | `GET /api/v1/model-gateway/logs` | 查询调用记录 |
 | `GET /api/v1/model-gateway/usage` | 按 Key、模型、日期或 `end_user` 汇总用量 |
 
-目前只能发布 `chat` 和 `embedding` 两类模型；发布和重新启用时都会校验目标模型可用且厂商在收录范围内。
+Key 的范围在创建和修改时校验：模型 ID 必须是本租户登记的模型，连接 ID 必须是本租户的连接。
 限额字段在创建和修改时都可以带；修改时显式传 `null` 表示取消该项限额。Key 列表里的 `quota_used`
 是当前周期的已用 token（没有配额的 Key 为 `null`）。
 调用记录按页查询（每页最多 100 条），用量汇总默认取最近 7 天，日期按 UTC 划分。
-汇总里的 token 只累计用量已知的调用，`usage_unknown` 给出未计入的调用数。
+汇总里的 token 只累计用量已知的调用，`usage_unknown` 给出未计入的调用数。概览的时间桶也按 UTC 划分，
+空桶补零；`base_url` 在监听通配地址且未配置 `public_base_url` 时为空，页面按当前主机名补全。
 Web 管理页面在独立 Web 仓库的 `src/pages/settings/model-gateway/`，入口是设置里的「模型网关」：
-公开模型、API Key（明文只在创建后的弹窗里显示一次）、调用记录和用量四个分区。
+概览、模型、API Key（明文只在创建后的弹窗里显示一次）、调用记录四个分区。
 网关未启用时，页面显示「未启用」而不是错误。
 
 ## 9. 与 RAGFlow 跟进的隔离
 
-网关代码放在 `api/model_gateway/`：`catalog`（目录桥）、`keys`、`store`（数据面持久化）、`relay`、
-`usage`、`app` 和 `server`（数据面进程）、`management` 和 `schemas`（管理操作）。
+网关代码放在 `api/model_gateway/`：`catalog`（目录桥）、`directory`（开放状态与命名）、`keys`、`store`（数据面持久化）、
+`relay`、`usage`、`limits`、`app` 和 `server`（数据面进程）、`management` 和 `schemas`（管理操作）。
 它对现有文件的改动限于下表，全部是追加：
 
 | 文件 | 改动 |
 |---|---|
-| `api/db/db_models.py` | 末尾追加三张自有表。建表函数只识别这个文件命名空间里的模型类，所以表定义必须在这里 |
-| `configs/alembic/versions/` | 新增一个迁移文件 |
+| `api/db/db_models.py` | 末尾追加网关自有表。建表函数只识别这个文件命名空间里的模型类，所以表定义必须在这里 |
+| `configs/alembic/versions/` | `d1f3a5c7e9b2` 建表；`f3b5d7e9a1c2` 以模型目录取代发布（见下） |
+| `api/db/services/model_provider_service.py` | 新增只读的 `instances_for_owner()`，供目录列出没有模型的连接 |
 | `common/app_config.py` | 新增 `model_gateway` 配置段 |
-| `api/db/services/model_deletion_policy.py` | `collect_blocking_model_references()` 增加一类引用：有效的公开模型 |
+| `api/db/services/model_deletion_policy.py` | 目录取代发布后，网关不再登记删除保护引用 |
 | `api/apps/restful_apis/model_gateway_api.py` | 新文件，管理路由 |
 | `pyproject.toml` | 新增 import-linter 契约；把 `api/model_gateway` 纳入 mypy 严格检查范围 |
 | `tests/support/integration_suites.py` | 登记集成测试文件 |
-| [模型配置生命周期](../model-provider-lifecycle.md) | 引用表增加「有效的公开模型」一行 |
+| [模型配置生命周期](../model-provider-lifecycle.md) | 引用表说明网关不阻止模型删除 |
 
 不修改：`core/llm/*`、`api/db/services/llm_service.py`、`api/db/services/tenant_llm_service.py`、
 `api/apps/restful_apis/openai_api.py`、`api/utils/api_utils.py`、`api/apps/__init__.py`，以及 `APIToken`。
@@ -319,10 +357,16 @@ Web 管理页面在独立 Web 仓库的 `src/pages/settings/model-gateway/`，�
 - `api.model_gateway` 不得导入 `core.llm`、`agent`、`api.apps`、`api.db.services.llm_service`、
   `api.db.joint_services`。先按直接导入约束，与仓库里其他契约的做法一致。
 - 读取模型配置只通过一个模块（目录桥），它调用 `model_provider_service` 的
-  `resolve_config()` 和 `models_for_owner()`。网关其余部分不接触模型相关的 ORM。
+  `resolve_config()`、`models_for_owner()` 和 `instances_for_owner()`。网关其余部分不接触模型相关的 ORM。
 
-模型删除保护沿用现有语义：有效的公开模型阻止删除它引用的模型，返回 409 和引用清单；
-停用的公开模型不阻止，再次启用时重新校验引用的模型是否可用。
+模型删除不受网关阻止：目录随登记信息变化，被删除的模型从目录里消失；它的设置行留下但不再生效，
+Key 范围里的对应 ID 保留，管理页面显示为已失效。
+
+**从发布迁移到目录**（`f3b5d7e9a1c2`）：每个模型取一条发布记录（优先启用的，再按创建时间），公开名与模型名
+不同的转为别名，启用状态、说明和限额照搬；对已经用过网关（有发布记录或 Key）的租户，从未发布的模型写成
+关闭，保持迁移前的暴露范围；Key 的公开模型 ID 换成已登记模型 ID，找不到的丢弃；最后删除发布表。
+同一模型的其余发布名不再可用。降级只在网关没有数据时可做。
+`d1f3a5c7e9b2` 校验按模型先建的表时允许多出后续迁移增加的列。
 
 跟进上游提交时，只有三类变更需要复核网关，其余提交与网关无关：
 
@@ -338,14 +382,15 @@ Web 管理页面在独立 Web 仓库的 `src/pages/settings/model-gateway/`，�
 |---|---|---|
 | P1 最小闭环（**已实现**） | 三张表和迁移；管理接口；数据面的 `/v1/models`、`/v1/chat/completions`、`/v1/embeddings`；调用记录；Key 的有效期和启停；模型删除保护 | 通用性准则第 1、2 条成立；真实 SDK 完成普通和流式调用，并能按 Key 查到记录 |
 | P2 管控（**限额已实现**） | 限流、并发和软配额；用量汇总 | 限额按维度生效；多把 Key 不能绕过模型级上限；重启后配额仍然有效 |
+| 模型目录（**已实现**） | 去掉发布；目录、开放开关、命名规则、别名与首选；Key 按连接或模型授权；概览；迁移 | 登记即可授权；同名模型名字稳定；迁移保持原暴露范围；按连接授权包含以后开放的模型 |
 | P2 余项（未实现） | 调用记录的保留与清理；rerank | 每项单独验收 |
 | P3 按需 | 非 OpenAI 协议厂商；`/v1/responses`、`/v1/messages`；多部署与回退；正文日志（手动开启）；按日汇总；管理审计；严格预算 | 每项单独立项和验收 |
 
 验证按 [AGENTS.md 的验证表](../../AGENTS.md#验证) 执行：
 
-- **单元**：Key 的生成、解析和校验；授权判断；流式用量解析（客户端是否要求用量两种情况）；
-  错误映射。上游用受控的假服务，不依赖真实模型。
-- **集成**：scratch 库上的建表和迁移；删除保护返回 409；调用记录独立读回。
+- **单元**：Key 的生成、解析和校验；授权判断；命名与开放规则；流式用量解析（客户端是否要求用量两种情况）；
+  错误映射；概览的地址推导和数据面探测。上游用受控的假服务，不依赖真实模型。
+- **集成**：scratch 库上两条引导路径的建表和迁移；发布数据迁移到目录；目录、Key 范围和调用记录独立读回；网关不阻止模型删除；概览汇总。
 - **契约**：同一条模型配置，网关与 `core/llm` 驱动算出的上游地址和模型名一致。
 - **消费者**：集成测试用真实的 OpenAI Python SDK 调用网关。该 SDK 的 embeddings 默认请求 base64 编码，
   已覆盖。
@@ -354,15 +399,15 @@ Web 管理页面在独立 Web 仓库的 `src/pages/settings/model-gateway/`，�
   通义千问已跑过（2026-11-17，qwen-plus 与 text-embedding-v4，默认地址）：普通、流式和向量调用都返回 200，
   用量都来自上游，调用方没有收到多余的用量尾块；DashScope 兼容接口直接支持 base64 编码的向量。
 
-对应的测试文件：`tests/unit/test_model_gateway_*.py`（Key、用量、目录契约、数据面、管理路由）和
-`tests/integration/test_model_gateway.py`（迁移两条引导路径、SQL 持久化、Key 生命周期、用量汇总、删除保护）。
+对应的测试文件：`tests/unit/test_model_gateway_*.py`（Key、用量、目录契约、命名与开放、数据面、管理路由、概览）和
+`tests/integration/test_model_gateway.py`（迁移两条引导路径、发布数据迁移、SQL 持久化、Key 生命周期、用量汇总与概览）。
 
 通用性验收单列：说明和标签为空时照常调用和统计；改名不改写历史；标签不能改变授权和路由；
-撤销 Key 后历史仍可查；全程不需要创建组织、应用或项目记录。
+撤销 Key 后历史仍可查；全程不需要创建组织、应用或项目记录，也不需要发布模型。
 
 ## 11. 未决事项
 
-1. 响应里的 `model` 是否改写为公开名。改写流式响应需要逐块解析和重新序列化，与原样转发冲突。
+1. 响应里的 `model` 是否改写为调用名。改写流式响应需要逐块解析和重新序列化，与原样转发冲突。
 2. 多个数据面进程共享限额计数（例如放到 Redis）是否需要；如果做，共享存储不可用时默认放行还是拒绝。
 3. 调用记录写入失败时，是否需要「拒绝新请求」的严格模式。
 4. 管理接口是否需要自动化凭据（独立于登录态的管理 Key）。
@@ -371,7 +416,7 @@ Web 管理页面在独立 Web 仓库的 `src/pages/settings/model-gateway/`，�
 
 ## 12. 参考与取舍
 
-以下是 2026-11-15 核对的同类实现，链接指向各项目默认分支，括号内是核对时的提交。
+以下是 2026-11-15 与 2026-11-17 核对的同类实现，链接指向各项目默认分支，括号内是核对时的提交。
 它们用于说明取舍，不表示这些项目策略相同，也不表示本设计复刻其存储结构。
 
 | 取舍 | 参考 |
@@ -381,6 +426,9 @@ Web 管理页面在独立 Web 仓库的 `src/pages/settings/model-gateway/`，�
 | 同协议上游走 HTTP 转发，强制上游返回流式用量 | [new-api `relay-router.go`](https://github.com/QuantumNous/new-api/blob/main/router/relay-router.go)（`b388140a`）、[GPUStack `routes/openai.py`](https://github.com/gpustack/gpustack/blob/main/gpustack/routes/openai.py) |
 | 调用记录在请求结束后写一行，默认不存正文 | [LiteLLM `schema.prisma`](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/schema.prisma) 的 SpendLogs、[new-api `log.go`](https://github.com/QuantumNous/new-api/blob/main/model/log.go)、[GPUStack `model_usage_details.py`](https://github.com/gpustack/gpustack/blob/main/gpustack/schemas/model_usage_details.py) |
 | token 限额事后扣减 | [Higress `ai-token-ratelimit`](https://github.com/higress-group/higress/blob/main/plugins/wasm-go/extensions/ai-token-ratelimit/README_EN.md)（`0316bc90`）、[Bifrost `budget.go`](https://github.com/maximhq/bifrost/blob/dev/framework/configstore/tables/budget.go)（`a3cd2b5b`） |
+| 不设发布步骤，已配置的模型即可授权；按提供商整组授权包含以后的模型 | [new-api `model/ability.go`、`controller/model.go`](https://github.com/QuantumNous/new-api)（`669d7749`）、[LiteLLM `auth_checks.py`](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/auth/auth_checks.py)（`0cc072c9`）、[Bifrost `account.go`](https://github.com/maximhq/bifrost/blob/dev/core/schemas/account.go)（`09edfa35`） |
+| 规范名带提供商前缀，避免同名冲突 | [Portkey Model Catalog](https://portkey.ai/docs/product/model-catalog)、[GPUStack `model_routes.py`](https://github.com/gpustack/gpustack/blob/main/gpustack/schemas/model_routes.py)（`8e252645`） |
+| 上层开关是上限，Key 在上限内收窄；建 Key 时选「全部 / 自定义」 | [百炼 API Key](https://help.aliyun.com/zh/model-studio/get-api-key)、[方舟 API Key](https://docs.volcengine.com/docs/82379/1361424) |
 | 默认资源范围内即可签发 Key；部门和成本中心用标签承载 | [OpenAI 项目 API Key](https://developers.openai.com/api/reference/resources/organization/subresources/projects/subresources/api_keys)、[百炼业务空间](https://help.aliyun.com/zh/model-studio/use-workspace)、[方舟 API Key](https://docs.volcengine.com/docs/82379/1541594) |
 | 限流响应头和 `x-request-id` | [OpenAI 限流说明](https://developers.openai.com/api/docs/guides/rate-limits) |
 

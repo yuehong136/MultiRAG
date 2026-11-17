@@ -32,11 +32,14 @@ def _sdk_token_principal():
     )
 
 
-@pytest.mark.parametrize(("method", "path"), [("GET", "/models"), ("GET", "/candidates"), ("POST", "/keys"), ("GET", "/logs"), ("GET", "/usage")])
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("GET", "/catalog"), ("PATCH", "/catalog/models/7"), ("PATCH", "/settings"), ("GET", "/overview"), ("POST", "/keys"), ("GET", "/logs"), ("GET", "/usage")],
+)
 def test_routes_do_not_exist_while_the_gateway_is_disabled(client, monkeypatch, method, path):
-    monkeypatch.setattr(management, "list_models", pytest.fail)
+    monkeypatch.setattr(management, "catalog_view", pytest.fail)
 
-    response = client.request(method, PREFIX + path, json={"name": "runner"} if method == "POST" else None)
+    response = client.request(method, PREFIX + path, json={"name": "runner"} if method != "GET" else None)
 
     assert response.status_code == 404
 
@@ -51,16 +54,75 @@ def test_sdk_api_token_cannot_manage_the_gateway(enabled, monkeypatch):
     assert enabled.post(f"{PREFIX}/keys", json={"name": "runner"}).status_code == 403
 
 
-def test_candidates_are_listed_for_the_owner(enabled, monkeypatch):
-    async def list_candidates(db, tenant_id):
-        return [{"model_id": 7, "model_name": "qwen", "publishable_types": ["chat"], "tenant": tenant_id}]
+@pytest.mark.parametrize(("method", "path"), [("GET", "/candidates"), ("GET", "/models"), ("POST", "/models"), ("PATCH", "/models/m1"), ("DELETE", "/models/m1")])
+def test_publishing_routes_are_gone(enabled, method, path):
+    assert enabled.request(method, PREFIX + path, json={} if method in {"POST", "PATCH"} else None).status_code in {404, 405}
 
-    monkeypatch.setattr(management, "list_candidates", list_candidates)
 
-    response = enabled.get(f"{PREFIX}/candidates")
+def test_catalog_is_listed_for_the_owner(enabled, monkeypatch):
+    async def catalog_view(db, tenant_id):
+        return {"new_models_enabled": True, "connections": [], "models": [{"model_id": 7, "call_name": "qwen", "tenant": tenant_id}]}
+
+    monkeypatch.setattr(management, "catalog_view", catalog_view)
+
+    response = enabled.get(f"{PREFIX}/catalog")
 
     assert response.status_code == 200
-    assert response.json()["data"] == [{"model_id": 7, "model_name": "qwen", "publishable_types": ["chat"], "tenant": "user-unit"}]
+    assert response.json()["data"]["models"] == [{"model_id": 7, "call_name": "qwen", "tenant": "user-unit"}]
+
+
+def test_model_switch_alias_and_limits_reach_the_operation(enabled, monkeypatch):
+    seen = {}
+
+    async def update_catalog_model(db, tenant_id, actor_id, model_id, body):
+        seen.update(tenant_id=tenant_id, model_id=model_id, changes=body.model_dump(exclude_unset=True))
+        return {"model_id": model_id}
+
+    monkeypatch.setattr(management, "update_catalog_model", update_catalog_model)
+
+    response = enabled.patch(f"{PREFIX}/catalog/models/7", json={"enabled": False, "alias": "chat-default", "rpm_limit": 600, "tpm_limit": None})
+
+    assert response.status_code == 200
+    # Explicit nulls reach the operation, so an alias or a limit can be removed again.
+    assert seen == {"tenant_id": "user-unit", "model_id": 7, "changes": {"enabled": False, "alias": "chat-default", "rpm_limit": 600, "tpm_limit": None}}
+
+
+def test_connection_switch_and_default_reach_their_operations(enabled, monkeypatch):
+    seen = {}
+
+    async def update_catalog_instance(db, tenant_id, actor_id, instance_id, body):
+        seen["instance"] = (instance_id, body.enabled)
+        return {"models": []}
+
+    async def update_settings(db, tenant_id, actor_id, body):
+        seen["settings"] = body.new_models_enabled
+        return {"models": []}
+
+    monkeypatch.setattr(management, "update_catalog_instance", update_catalog_instance)
+    monkeypatch.setattr(management, "update_settings", update_settings)
+
+    assert enabled.patch(f"{PREFIX}/catalog/instances/inst-1", json={"enabled": True}).status_code == 200
+    assert enabled.patch(f"{PREFIX}/settings", json={"new_models_enabled": False}).status_code == 200
+    assert seen == {"instance": ("inst-1", True), "settings": False}
+
+
+def test_overview_reports_the_configured_address_and_data_plane(enabled, monkeypatch):
+    seen = {}
+
+    async def overview(db, tenant_id, *, days, config, data_plane):
+        seen.update(days=days, data_plane=data_plane, port=config.http_port)
+        return {"days": days}
+
+    async def data_plane_status(config):
+        return "down"
+
+    monkeypatch.setattr(management, "overview", overview)
+    monkeypatch.setattr(management, "data_plane_status", data_plane_status)
+
+    assert enabled.get(f"{PREFIX}/overview").json()["data"] == {"days": 7}
+    assert enabled.get(f"{PREFIX}/overview", params={"days": 30}).status_code == 200
+    assert enabled.get(f"{PREFIX}/overview", params={"days": 14}).status_code == 422
+    assert seen == {"days": 30, "data_plane": "down", "port": 9390}
 
 
 def test_key_creation_is_scoped_to_the_owner_and_returns_the_plaintext_once(enabled, monkeypatch):
@@ -79,7 +141,7 @@ def test_key_creation_is_scoped_to_the_owner_and_returns_the_plaintext_once(enab
     assert (seen["tenant_id"], seen["actor_id"]) == ("user-unit", "user-unit")
     # Only a name is required: everything else is optional metadata or scope.
     body = seen["body"]
-    assert (body.description, body.tags, body.expires_at, body.allow_all_models, body.allowed_model_ids) == (None, None, None, False, [])
+    assert (body.description, body.tags, body.expires_at, body.allow_all_models, body.allowed_model_ids, body.allowed_instance_ids) == (None, None, None, False, [], [])
     assert (body.rpm_limit, body.tpm_limit, body.max_parallel_requests, body.token_quota, body.quota_period) == (None, None, None, None, None)
 
 
@@ -117,12 +179,9 @@ def test_limits_and_quota_are_passed_to_the_operation(enabled, monkeypatch):
         ("/keys", {"name": "runner", "expires_at": "2999-01-01T00:00:00"}),
         ("/keys", {"name": "runner", "tags": {str(index): "v" for index in range(17)}}),
         ("/keys", {"name": "runner", "tags": {"purpose": "x" * 257}}),
-        ("/models", {"name": "chat default", "model_id": 1, "model_type": "chat"}),
-        ("/models", {"name": "chat-default", "model_id": 0, "model_type": "chat"}),
-        ("/models", {"name": "rerank-default", "model_id": 1, "model_type": "rerank"}),
-        ("/models", {"name": "chat-default", "model_id": 1, "model_type": "chat", "base_url": "http://elsewhere"}),
-        ("/models", {"name": "chat-default", "model_id": 1, "model_type": "chat", "tpm_limit": -5}),
-        ("/models", {"name": "chat-default", "model_id": 1, "model_type": "chat", "token_quota": 100, "quota_period": "day"}),
+        ("/keys", {"name": "runner", "allowed_model_ids": ["gm-chat"]}),
+        ("/keys", {"name": "runner", "allowed_model_ids": [0]}),
+        ("/keys", {"name": "runner", "allowed_instance_ids": [""]}),
         ("/keys", {"name": "runner", "rpm_limit": 0}),
         ("/keys", {"name": "runner", "max_parallel_requests": 1.5}),
         ("/keys", {"name": "runner", "token_quota": 100}),
@@ -132,9 +191,27 @@ def test_limits_and_quota_are_passed_to_the_operation(enabled, monkeypatch):
 )
 def test_invalid_bodies_are_rejected_before_any_operation(enabled, monkeypatch, path, body):
     monkeypatch.setattr(management, "create_key", pytest.fail)
-    monkeypatch.setattr(management, "create_model", pytest.fail)
 
     assert enabled.post(PREFIX + path, json=body).status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/catalog/models/7", {"alias": "chat default"}),
+        ("/catalog/models/7", {"tpm_limit": -5}),
+        ("/catalog/models/7", {"token_quota": 100, "quota_period": "day"}),
+        ("/catalog/models/7", {"base_url": "http://elsewhere"}),
+        ("/catalog/models/seven", {"enabled": True}),
+        ("/catalog/instances/inst-1", {}),
+        ("/settings", {"new_models_enabled": "sometimes"}),
+    ],
+)
+def test_invalid_catalog_changes_are_rejected_before_any_operation(enabled, monkeypatch, path, body):
+    for operation in ("update_catalog_model", "update_catalog_instance", "update_settings"):
+        monkeypatch.setattr(management, operation, pytest.fail)
+
+    assert enabled.patch(PREFIX + path, json=body).status_code == 422
 
 
 @pytest.mark.parametrize(
@@ -142,7 +219,7 @@ def test_invalid_bodies_are_rejected_before_any_operation(enabled, monkeypatch, 
     [
         (management.GatewayNotFound("missing"), 404),
         (management.GatewayConflict("A revoked key cannot be changed"), 409),
-        (ValueError("allowed_model_ids contains an unknown published model"), 400),
+        (ValueError("allowed_model_ids contains a model this tenant has not registered"), 400),
         (IntegrityError("insert", {}, Exception("duplicate")), 409),
     ],
 )

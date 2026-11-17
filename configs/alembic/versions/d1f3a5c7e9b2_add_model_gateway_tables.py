@@ -120,7 +120,8 @@ def _validate(bind: sa.Connection, table: sa.Table) -> None:
     """Accept a table created model-first only when it matches this revision."""
     inspector = sa.inspect(bind)
     columns = {column["name"]: column for column in inspector.get_columns(table.name, schema=SCHEMA)}
-    if set(columns) != set(table.columns.keys()):
+    # A table created from a newer model already has the columns later revisions add.
+    if not set(table.columns.keys()) <= set(columns):
         raise RuntimeError(f"Incompatible model gateway columns: {table.name}")
     for column in table.columns:
         actual = columns[column.name]
