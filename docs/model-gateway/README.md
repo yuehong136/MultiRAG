@@ -63,7 +63,8 @@ MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
 | 用量只有 `TenantLLM.used_tokens` 累计值，由 `LLMBundle`（`api/db/services/llm_service.py`）写入 | 没有按请求、按 Key 的记录。新增调用记录表 |
 | `core/llm` 的驱动面向 RAG：失败以 `**ERROR**` 前缀文本返回，流式只产出文本 | 不承载标准协议。网关不经过它 |
 | 模型登记为 Provider → Instance → Model；`api/db/services/model_provider_service.py` 的 `resolve_config()` 按租户、模型 ID 和能力返回连接配置，并校验启用状态 | 连接和上游凭据继续只在此维护。网关只读 |
-| `common/url_utils.py` 提供 `ensure_api_version()` 等地址归一化；`core/utils/redis_conn.py` 有 Redis 令牌桶脚本 | 直接复用 |
+| `common/url_utils.py` 提供 `ensure_api_version()` 等地址归一化 | 直接复用 |
+| `core/utils/redis_conn.py` 有 Redis 令牌桶脚本 | 限额目前在数据面进程内计数，没有用它；需要多进程共享计数时再评估（第 11 节） |
 | 没有请求级限流，也没有按租户或按 Key 的配额 | 第二阶段补齐 |
 
 ## 3. 对象模型

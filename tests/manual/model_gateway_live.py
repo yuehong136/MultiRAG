@@ -5,7 +5,7 @@ model named by the environment, publishes it, issues a key, and calls it with
 the OpenAI SDK through the gateway. The scratch database, which briefly holds
 the upstream credential, is dropped at the end. No credential is printed.
 
-    MODEL_GATEWAY_LIVE_API_KEY=... MODEL_GATEWAY_LIVE_CHAT_MODEL=<model> \
+    PYTHONPATH=. MODEL_GATEWAY_LIVE_API_KEY=... MODEL_GATEWAY_LIVE_CHAT_MODEL=<model> \
         uv run python tests/manual/model_gateway_live.py
 
 Optional: MODEL_GATEWAY_LIVE_FACTORY (default ``OpenAI``),
