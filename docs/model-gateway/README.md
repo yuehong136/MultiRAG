@@ -351,6 +351,8 @@ Web 管理页面在独立 Web 仓库的 `src/pages/settings/model-gateway/`，�
   已覆盖。
 - **真实上游**：`tests/manual/model_gateway_live.py` 在 scratch 库里登记环境变量给出的模型，经网关做一次
   普通调用和一次流式调用，并读回调用记录。它不随测试套件运行；每接入一类新的上游，手动跑一次。
+  通义千问已跑过（2026-11-17，qwen-plus 与 text-embedding-v4，默认地址）：普通、流式和向量调用都返回 200，
+  用量都来自上游，调用方没有收到多余的用量尾块；DashScope 兼容接口直接支持 base64 编码的向量。
 
 对应的测试文件：`tests/unit/test_model_gateway_*.py`（Key、用量、目录契约、数据面、管理路由）和
 `tests/integration/test_model_gateway.py`（迁移两条引导路径、SQL 持久化、Key 生命周期、用量汇总、删除保护）。
