@@ -284,10 +284,13 @@ async def invalidate_source_writers(db: AsyncSession, *, memory_id: str, tenant_
     from memory.maintenance.lifecycle import invalidate_for_source
 
     maintenance = await invalidate_for_source(db, memory_id=memory_id, tenant_id=tenant_id, source_id=source_id, permanent=permanent)
+    from memory.compaction.lifecycle import invalidate as invalidate_compaction
+
+    compaction = await invalidate_compaction(db, memory_id=memory_id, tenant_id=tenant_id, source_id=source_id, permanent=permanent)
     return {
-        "outbox_ids": list(dict.fromkeys([*outbox_ids, *maintenance["outbox_ids"]])),
+        "outbox_ids": list(dict.fromkeys([*outbox_ids, *maintenance["outbox_ids"], *compaction["outbox_ids"]])),
         "message_ids": sorted(ids | set(maintenance["message_ids"])),
-        "active_operation_ids": list(dict.fromkeys([*active_operation_ids, *maintenance["active_operation_ids"]])),
+        "active_operation_ids": list(dict.fromkeys([*active_operation_ids, *maintenance["active_operation_ids"], *compaction["active_operation_ids"]])),
     }
 
 

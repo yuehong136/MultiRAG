@@ -134,6 +134,8 @@ def _safe_view(
         created_at=_iso(row.created_at),
         updated_at=_iso(row.updated_at),
     )
+    if row.kind == "context_compact":
+        value.update(retryable=False, can_reconcile=False)
     return value
 
 

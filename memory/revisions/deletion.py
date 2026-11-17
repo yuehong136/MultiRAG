@@ -184,6 +184,9 @@ class MemoryDeletionService:
             from memory.maintenance.lifecycle import invalidate_for_bank
 
             await invalidate_for_bank(self.db, memory_id=memory_id, tenant_id=bank.tenant_id)
+            from memory.compaction.lifecycle import invalidate as invalidate_compaction
+
+            await invalidate_compaction(self.db, memory_id=memory_id, tenant_id=bank.tenant_id)
             prior = await self._outboxes(memory_id)
             for row in prior:
                 row.state, row.error_code = "redacted", "memory_deletion_requested"

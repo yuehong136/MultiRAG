@@ -199,6 +199,10 @@ async def get_operation(db: AsyncSession, memory_id: str, operation_id: str, *, 
 
 async def _read_operation(db: AsyncSession, memory_id: str, operation_id: str, *, actor_id: str) -> dict[str, Any]:
     kind = await _operation_kind(db, memory_id, operation_id)
+    if kind == "context_compact":
+        from api.apps.services.memory_compaction_service import compactions
+
+        return (await (await compactions(db, memory_id, actor_id=actor_id)).get(memory_id, operation_id))["operation"]
     if kind == "dream_publish":
         from api.apps.services.memory_maintenance_service import publications
 
@@ -254,6 +258,8 @@ async def reconcile_operation(db: AsyncSession, memory_id: str, operation_id: st
     from api.apps.services.memory_operation_service import authorize_reconciliation
 
     kind = await authorize_reconciliation(db, memory_id, operation_id, actor_id=actor_id)
+    if kind == "context_compact":
+        raise RevisionConflict("compaction_model_replay_forbidden")
     if kind == "dream_publish":
         from api.apps.services.memory_maintenance_service import publications
 
