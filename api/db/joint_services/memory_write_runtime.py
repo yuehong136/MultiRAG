@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -23,6 +25,7 @@ from memory.revisions.domain import RevisionConflict, RevisionNotFound, Revision
 from memory.revisions.identifiers import MEMORY_COUNTER_KEY, allocate_message_id
 from memory.revisions.sources import SourceService
 from memory.revisions.storage import ManagedMessageStore
+from memory.structured_sources import canonical_source, source_envelope
 from memory.writes.providers import MemoryWriteProviders, release_sql
 from memory.writes.service import AppendService
 
@@ -110,6 +113,34 @@ async def append_message(db: AsyncSession, memory_id: str, message: dict[str, An
     return await service.append_raw(memory_id, operation_id=operation_id, content=content, scope=scope, valid_at=timestamp_to_date(current_timestamp()))
 
 
+async def append_structured_message(db: AsyncSession, memory_id: str, message: dict[str, Any], *, operation_id: str, actor_id: str | None, tenant_id: str | None = None) -> dict[str, Any]:
+    """Use the source writer contract for an explicitly selected Message producer."""
+    validate_operation_id(operation_id)
+    segments: list[dict[str, str]] = []
+    for role, field in (("user", "user_input"), ("assistant", "agent_response")):
+        content = message.get(field, "")
+        if not isinstance(content, str):
+            raise RevisionValidationError("invalid_message_source_content")
+        if content.strip():
+            segments.append({"role": role, "content": content})
+    envelope = source_envelope(segments, None)
+    scope = {name: message.get(name, "") for name in ("user_id", "agent_id", "session_id")}
+    if any(not isinstance(value, str) or len(value.encode("utf-8")) > 256 for value in scope.values()):
+        raise RevisionValidationError("invalid_append_identity")
+    service = await service_for(db, memory_id, actor_id=actor_id, tenant_id=tenant_id)
+    instant = datetime.now(UTC)
+    return await service.append_raw(
+        memory_id,
+        operation_id=operation_id,
+        content=canonical_source(envelope),
+        scope=scope,
+        valid_at=timestamp_to_date(int(instant.timestamp() * 1000)),
+        enqueue_extraction=False,
+        structured_received_at=instant.isoformat(),
+        reconcile_existing=False,
+    )
+
+
 async def queue_messages(
     db: AsyncSession,
     memory_ids: list[str],
@@ -119,7 +150,26 @@ async def queue_messages(
     operation_id: str | None = None,
     run_context: RunContext | None = None,
     operation_results: list[dict[str, Any]] | None = None,
+    structured_memory: bool = False,
+    is_canceled: Callable[[], bool] | None = None,
 ) -> tuple[bool, str]:
+    if type(structured_memory) is not bool:
+        raise RevisionValidationError("invalid_structured_memory")
+    if structured_memory:
+        if operation_id is None:
+            raise RevisionValidationError("structured_memory_operation_required")
+        if not isinstance(run_context, RunContext) or run_context.principal is None or not run_context.platform_user_id:
+            raise PermissionError("Structured memory requires an authenticated run.")
+        if actor_id is not None and actor_id != run_context.platform_user_id:
+            raise PermissionError("Memory actor does not match the run.")
+        actor_id = run_context.platform_user_id
+        target = run_context.agent_id or (run_context.draft_target.agent_id if run_context.draft_target is not None else None)
+        if target is not None and message.get("agent_id") != target:
+            raise PermissionError("Memory agent does not match the run.")
+        if not supports_coordinated_writes():
+            raise RevisionValidationError("structured_memory_backend_unsupported")
+        if is_canceled is not None and is_canceled():
+            raise asyncio.CancelledError
     ids = list(dict.fromkeys(memory_ids))
     rows = list(await db.execute(select(Memory.id, Memory.tenant_id).where(Memory.id.in_(ids))))
     owners = {row.id: row.tenant_id for row in rows}
@@ -140,11 +190,18 @@ async def queue_messages(
     validate_operation_id(operation_id)
     failures: list[str] = []
     for mid in ids:
+        if structured_memory and is_canceled is not None and is_canceled():
+            raise asyncio.CancelledError
         if mid not in owners:
             failures.append(f"Memory '{mid}' not found.")
             continue
         try:
-            result = await append_message(db, mid, trusted, operation_id=operation_id, actor_id=actor_id, tenant_id=owners[mid])
+            append = append_structured_message if structured_memory else append_message
+            result = await append(db, mid, trusted, operation_id=operation_id, actor_id=actor_id, tenant_id=owners[mid])
+        except asyncio.CancelledError:
+            if structured_memory and operation_results is not None:
+                operation_results.append({"memory_id": mid, "operation_id": operation_id, "error_code": "memory_write_canceled", "requires_reconciliation": True})
+            raise
         except (RevisionConflict, RevisionValidationError, RevisionNotFound, RevisionPersistenceUnknown) as error:
             result = {"operation_id": operation_id, "error_code": error.code, "requires_reconciliation": True}
         except Exception:

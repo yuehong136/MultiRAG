@@ -106,7 +106,7 @@ def analyze_publish(env: dict[str, Any], case: dict[str, Any], directory: Path, 
     return publish_reviewed(env, mid, selected)
 
 
-def judgment(env: dict[str, Any], entry_id: str, result_name: str, label: str, applicability: str, directory: Path) -> dict[str, Any]:
+def judgment(env: dict[str, Any], entry_id: str, result_name: str, label: str, applicability: str, directory: Path, *, review_timeout_seconds: int = 300) -> dict[str, Any]:
     mid = env["memory_id"]
     snapshot = call(env, "GET", f"/memories/{mid}/entries/{entry_id}/verification-snapshot")
     if result_name == "human_confirmed":
@@ -120,7 +120,7 @@ def judgment(env: dict[str, Any], entry_id: str, result_name: str, label: str, a
         output = directory / (label + ".verification-decision.json")
         env["journal"].event("reserve-independent-verification-decision", path=str(output), snapshot_sha256=digest)
         write_private(directory / (label + ".verification-request.json"), {**evidence, "snapshot_sha256": digest, "decision_path": str(output)}, env["journal"])
-        deadline = time.monotonic() + 300
+        deadline = time.monotonic() + review_timeout_seconds
         while not output.exists() and time.monotonic() < deadline:
             time.sleep(0.1)
         assert output.is_file(), "independent_synthetic_verification_review_required"

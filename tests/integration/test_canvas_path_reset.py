@@ -69,13 +69,13 @@ def test_http_two_pauses_preserve_durable_outputs_and_isolation(release_api: dic
         assert output(fresh, "Message:unvisited") is None
     before = read_state(env, agent_id)
     calls: list[tuple[str, str]] = []
-    original = Message._invoke
+    original = Message._invoke_async
 
-    def track(self: Message, **kwargs: Any) -> None:
+    async def track(self: Message, **kwargs: Any) -> None:
         calls.append((self._id, self._canvas.globals["sys.query"]))
-        original(self, **kwargs)
+        await original(self, **kwargs)
 
-    monkeypatch.setattr(Message, "_invoke", track)
+    monkeypatch.setattr(Message, "_invoke_async", track)
     request: dict[str, Any] = {"agent_id": agent_id, "query": "owner email", "stream": stream}
     if session_id:
         request["session_id"] = session_id

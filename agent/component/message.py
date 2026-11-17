@@ -28,6 +28,7 @@ import os
 import random
 import re
 import tempfile
+from collections.abc import AsyncIterator
 from functools import partial
 from typing import Any
 
@@ -40,6 +41,7 @@ _jinja2_sandbox = SandboxedEnvironment()
 from api.db.db_models import async_db_connection
 from api.db.joint_services.memory_message_service import queue_save_to_memory_task
 from common import settings
+from common.asyncio_utils import finish_owned_work
 from common.connection_utils import timeout
 from common.misc_utils import get_uuid
 
@@ -49,25 +51,28 @@ class MessageParam(ComponentParamBase):
     Define the Message component parameters.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.content = []
+        self.content: list[str] = []
         self.stream = True
-        self.output_format = None  # default output format
+        self.output_format: str | None = None  # default output format
         self.auto_play = False
-        self.memory_ids = []  # Memory IDs to save conversation
+        self.memory_ids: list[str] = []  # Memory IDs to save conversation
+        self.structured_memory = False
         self.outputs = {
             "content": {"type": "str"},
             "downloads": {"type": "list"},
         }
 
-    def check(self):
+    def check(self) -> bool:
         self.check_empty(self.content, "[Message] Content")
         self.check_boolean(self.stream, "[Message] stream")
+        self.check_boolean(self.structured_memory, "[Message] structured_memory")
         return True
 
 
 class Message(ComponentBase):
+    _param: MessageParam
     component_name = "Message"
 
     @staticmethod
@@ -191,10 +196,10 @@ class Message(ComponentBase):
             buf += t
         return buf
 
-    async def _stream(self, rand_cnt: str):
+    async def _stream(self, rand_cnt: str) -> AsyncIterator[str]:
         s = 0
         all_content = ""
-        cache = {}
+        cache: dict[str, str] = {}
         downloads: list[dict[str, Any]] = []
         for r, ref in self._iter_input_references(rand_cnt):
             if self.check_if_canceled("Message streaming"):
@@ -250,8 +255,9 @@ class Message(ComponentBase):
 
         self.set_output("downloads", downloads)
         self.set_output("content", all_content)
-        self._convert_content(all_content)
-        await self._save_to_memory(all_content)
+        await finish_owned_work(asyncio.to_thread(self._convert_content, all_content))
+        if not self.check_if_canceled("Memory save"):
+            await self._save_to_memory(all_content)
 
     def _is_jinjia2(self, content: str) -> bool:
         patt = [r"\{%.*%\}", "{{", "}}"]
@@ -264,10 +270,17 @@ class Message(ComponentBase):
                 content = content.replace(name, str(value))
         return content
 
-    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
     def _invoke(self, **kwargs: Any) -> None:
+        """Keep synchronous consumers while Canvas awaits the native async path."""
+        asyncio.run(self._invoke_async(**kwargs))
+
+    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)), attempts=1)
+    async def _invoke_async(self, **kwargs: Any) -> None:
         if self.check_if_canceled("Message processing"):
             return
+        for key in ("memory_error", "memory_operations"):
+            if key in self._param.outputs:
+                self.set_output(key, None)
 
         rand_cnt = random.choice(self._param.content)
         if self._param.stream and not self._is_jinjia2(rand_cnt):
@@ -290,8 +303,9 @@ class Message(ComponentBase):
 
         self.set_output("downloads", downloads)
         self.set_output("content", content)
-        self._convert_content(content)
-        self._save_to_memory(content)
+        await finish_owned_work(asyncio.to_thread(self._convert_content, content))
+        if not self.check_if_canceled("Memory save"):
+            await self._save_to_memory(content)
 
     def thoughts(self) -> str:
         return ""
@@ -558,12 +572,41 @@ class Message(ComponentBase):
                 user_id = self._canvas.get_variable_value(user_id)
 
         message_dict = {"user_id": user_id or "", "agent_id": self._canvas._id, "session_id": self._canvas.task_id, "user_input": self._canvas.get_sys_query(), "agent_response": content}
+        structured_memory = getattr(self._param, "structured_memory", False)
+        if type(structured_memory) is not bool:
+            self.set_output("memory_error", "invalid_structured_memory")
+            return False, "invalid_structured_memory"
+        if structured_memory:
+            from agent.component.message_memory import operation_metadata, source_operation_id
+            from api.db.joint_services.memory_write_runtime import queue_messages
+            from memory.revisions.domain import RevisionValidationError
+
+            operations: list[dict[str, Any]] = []
+            try:
+                operation_id = source_operation_id(self)
+                async with async_db_connection() as db:
+                    saved = await queue_messages(
+                        db,
+                        self._param.memory_ids,
+                        message_dict,
+                        run_context=run_context,
+                        operation_id=operation_id,
+                        operation_results=operations,
+                        structured_memory=True,
+                        is_canceled=self.is_canceled,
+                    )
+            except (PermissionError, RevisionValidationError) as error:
+                saved = (False, error.code if isinstance(error, RevisionValidationError) else "memory_write_not_available")
+            finally:
+                self.set_output("memory_operations", operation_metadata(operations))
+            if not saved[0]:
+                self.set_output("memory_error", saved[1])
+            return saved
         async with async_db_connection() as db:
             if run_context is None:
-                return await queue_save_to_memory_task(db, self._param.memory_ids, message_dict)
-            return await queue_save_to_memory_task(
-                db,
-                self._param.memory_ids,
-                message_dict,
-                run_context=run_context,
-            )
+                saved = await queue_save_to_memory_task(db, self._param.memory_ids, message_dict)
+            else:
+                saved = await queue_save_to_memory_task(db, self._param.memory_ids, message_dict, run_context=run_context)
+        if not saved[0]:
+            self.set_output("memory_error", saved[1])
+        return saved

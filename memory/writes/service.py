@@ -124,8 +124,19 @@ class AppendService(WriterCoordinator):
         self.fifo_evict, self.ensure_index, self.queue_submit = fifo_evict, ensure_index, queue_submit
 
     async def append_raw(
-        self, memory_id: str, *, operation_id: str, content: str, scope: dict[str, str], valid_at: str, enqueue_extraction: bool = True, structured_received_at: str | None = None
+        self,
+        memory_id: str,
+        *,
+        operation_id: str,
+        content: str,
+        scope: dict[str, str],
+        valid_at: str,
+        enqueue_extraction: bool = True,
+        structured_received_at: str | None = None,
+        reconcile_existing: bool = True,
     ) -> dict[str, Any]:
+        if type(reconcile_existing) is not bool:
+            raise RevisionValidationError("invalid_append_replay_policy")
         _content(content, self.count_tokens)
         if set(scope) != {"user_id", "agent_id", "session_id"} or any(not isinstance(value, str) for value in scope.values()) or type(enqueue_extraction) is not bool:
             raise RevisionValidationError("invalid_append_scope")
@@ -146,7 +157,12 @@ class AppendService(WriterCoordinator):
                 raise RevisionValidationError("structured_source_requires_explicit_maintenance")
             metadata.update(source_format=SOURCE_FORMAT, received_at=received, envelope_sha256=content_hash(content), submitted_by=self.actor_id, submission_operation_id=operation_id)
             request["source_format"] = SOURCE_FORMAT
-        await self.admit(memory_id, operation_id=operation_id, kind="append_raw", request=request, server_metadata=metadata)
+        if reconcile_existing:
+            await self.admit(memory_id, operation_id=operation_id, kind="append_raw", request=request, server_metadata=metadata)
+        else:
+            admitted = await self.admit(memory_id, operation_id=operation_id, kind="append_raw", request=request, server_metadata=metadata, _include_created=True)
+            if admitted["_created_here"] is not True:
+                return await self.operation(memory_id, operation_id)
         return await self.reconcile(memory_id, operation_id)
 
     async def extract_source(self, memory_id: str, *, operation_id: str, task_id: str, source_id: int) -> dict[str, Any]:

@@ -51,7 +51,7 @@ async def test_real_iteration_resolves_each_value_without_rewriting_expression(m
         return [conditions[0]["value"]]
 
     monkeypatch.setattr(module.DocMetadataService, "filter_doc_ids_by_meta_pushdown", select_ids)
-    monkeypatch.setattr(canvas.get_component_obj("Message:done"), "_save_to_memory", lambda *_: None)
+    monkeypatch.setattr(canvas.get_component_obj("Message:done"), "_save_to_memory", AsyncMock())
     try:
         events = [event async for event in canvas.run()]
         assert not canvas.error

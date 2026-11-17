@@ -382,8 +382,19 @@ class WriterCoordinator:
         return None
 
     async def admit(
-        self, memory_id: str, *, operation_id: str, kind: str, request: dict[str, Any], task_id: str | None = None, source_id: int | None = None, server_metadata: dict[str, Any] | None = None
+        self,
+        memory_id: str,
+        *,
+        operation_id: str,
+        kind: str,
+        request: dict[str, Any],
+        task_id: str | None = None,
+        source_id: int | None = None,
+        server_metadata: dict[str, Any] | None = None,
+        _include_created: bool = False,
     ) -> dict[str, Any]:
+        if type(_include_created) is not bool:
+            raise RevisionValidationError("invalid_writer_admission_view")
         validate_operation_id(operation_id)
         if not kind or len(kind) > 24:
             raise RevisionValidationError("invalid_writer_kind")
@@ -393,6 +404,7 @@ class WriterCoordinator:
         async with self._write(operation_id):
             _, fence = await self._memory_fence(memory_id)
             row = await self.db.get(MemoryWriterAdmission, (memory_id, operation_id))
+            created = row is None
             if row is not None:
                 if row.request_sha256 != digest or row.tenant_id != self.tenant_id:
                     raise RevisionConflict("operation_request_mismatch")
@@ -447,6 +459,8 @@ class WriterCoordinator:
                 await self._configure_admission(row, fence, request)
                 await self.db.flush()
             result = await self._view(row)
+            if _include_created:
+                result["_created_here"] = created
         return result
 
     async def claim(self, memory_id: str, operation_id: str) -> dict[str, Any]:
