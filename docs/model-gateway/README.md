@@ -11,14 +11,14 @@
 
 ## 0. 启用与运行
 
-网关默认关闭。启用后有两部分：主 API 里的管理接口，和独立的数据面进程。
+仓库的 `configs/service_conf.yaml` 默认启用网关。主 API 启动后提供管理接口，数据面进程单独启动。
 
 ```bash
-MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
+uv run python -m api.model_gateway.server
 ```
 
 数据面进程不做数据库引导：网关的表由主 API 启动时的 schema 引导和迁移创建，所以升级后先启动一次主 API。
-主 API 进程也要带同一个开关，管理接口才可用。配置段是 `model_gateway`
+使用自定义配置文件时，主 API 和数据面进程均需启用 `model_gateway.enabled`。配置段是 `model_gateway`
 （`common/app_config.py` 的 `ModelGatewayConfig`）：监听地址默认 `127.0.0.1:9390`，
 `public_base_url` 是调用方使用的地址（显示在管理页面上，留空时由监听地址推导），
 另有请求体上限和四个超时。未启用时管理路由返回 404，数据面进程拒绝启动。

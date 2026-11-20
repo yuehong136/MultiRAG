@@ -4,6 +4,7 @@ import sys
 from datetime import UTC, datetime
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
 from api.model_gateway import management
@@ -20,8 +21,8 @@ def _routes():
 
 
 @pytest.fixture
-def enabled(client):
-    client.app.dependency_overrides[_routes().require_enabled] = lambda: None
+def enabled(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setattr(_routes().get_app_config().model_gateway, "enabled", True)
     return client
 
 
@@ -39,7 +40,8 @@ def _sdk_token_principal():
     ("method", "path"),
     [("GET", "/catalog"), ("PATCH", f"/catalog/models/{MODEL_ID}"), ("PATCH", "/settings"), ("GET", "/overview"), ("POST", "/keys"), ("GET", "/logs"), ("GET", "/usage")],
 )
-def test_routes_do_not_exist_while_the_gateway_is_disabled(client, monkeypatch, method, path):
+def test_routes_do_not_exist_while_the_gateway_is_disabled(client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, path: str) -> None:
+    monkeypatch.setattr(_routes().get_app_config().model_gateway, "enabled", False)
     monkeypatch.setattr(management, "catalog_view", pytest.fail)
 
     response = client.request(method, PREFIX + path, json={"name": "runner"} if method != "GET" else None)

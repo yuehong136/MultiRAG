@@ -15,6 +15,10 @@ multirag:
   # 管理后台是否需要超级管理员权限 (true: 仅超级管理员, false: 所有激活用户)
   admin_require_superuser: false
 
+model_gateway:
+  # 启用主 API 的网关管理接口；独立网关使用 api.model_gateway.server 启动
+  enabled: true
+
 multimodal_upload_storage:
   # 指定用于多模态文件上传的存储类型: minio, oss, s3, azure_spn, azure_sas
   type: "minio"
