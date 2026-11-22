@@ -280,6 +280,7 @@ def required_services(paths: list[Path]) -> set[str]:
             "test_memory_structured_sources_live.py",
             "test_memory_source_comparison.py",
             "test_memory_source_longitudinal.py",
+            "test_memory_four_arm.py",
             "test_memory_message_longitudinal.py",
             "test_memory_compaction.py",
             "test_memory_compaction_reuse.py",

@@ -514,6 +514,41 @@ provider 用量、估算输入、未知费用及审阅／宿主成本分别报�
 没有供应商金额回执或本次报价，金额、缓存写入计费、内部未观测重试、人工和主机费用仍未知；本轮不是账单核对或完整 TCO。
 已封存案例从本轮起属于固定回归，后续不能再计为未见样本。
 
+## 四路纵向能力对照
+
+定向入口 [test_memory_four_arm.py](../../tests/evals/test_memory_four_arm.py) 用相同的合成来源、来源时间、权限、
+模型和完整答复预算比较四条路径。隔离运行器 [memory_four_arm_isolated.py](../../tests/manual/memory_four_arm_isolated.py)
+启动自有的 PostgreSQL、Milvus 和 Valkey。所有写入在隔离端点。真实模式只读解析指定的已有模型配置，
+在登记进程的私有目录交接给短时 fixture，调用结束后删除。受控模式在 SDK 发送边界返回确定性结果，
+保留真实 HTTP、消息存储、队列和 worker。
+
+| 路径 | 从同一输入开始的行为 |
+| --- | --- |
+| A | 旧 RAW 写入，真实队列抽取 `RAW/SEMANTIC`，现有检索；最终走可用的旧遗忘 API。 |
+| B | 同样抽取，新增显式来源登记、绑定更正来源的人工修订与源撤回。 |
+| C | B 加持久 Dreaming。分析前后独立读回已发布修订，需要外部复核明确审核，再走原发布命令。 |
+| D | 读取 C 同一相位的记忆和完全相同的检索结果，加一份按请求生成的只读启动包。 |
+
+每例从两个会话开始，随后输入主动更正，再撤回更正来源。B/C 的手工修订编辑确实从更正来源抽取出的条目。
+相位后读取检索及启动包，受撤回数据、绑定其上的修订及核验不得继续供给，仍有效的旁支来源可以保留。
+C/D 共享准备和查询，实际实验开销只计一次。单独使用每条路径的参考开销计入该路径所需的准备、队列抽取、候选分析、
+发布、查询和答复。记录后台分析与等待、人工审核、检索、启动包和答复的延迟。SDK 用量记录缓存命中、推理及失败尝试，
+并报告报价参考小计。未知使用量与费用保持未知。
+
+先在注册运行器中以 `controlled` 模式完成固定轨迹，再以 `live` 模式使用真实 `gpt-6.1-terra` 和
+`text-embedding-3-small`。传入 `--asset-root` 借用已有解析资产，`--report-dir` 指定私有的新目录。
+保留 [已知输入](../../tests/fixtures/memory_four_arm_known.json) 的两例。另用 `MULTIRAG_FOUR_ARM_HOLDOUT` 和
+`MULTIRAG_FOUR_ARM_HOLDOUT_SHA256` 绑定两条独立封存用例并登记文件哈希。真实模式指定两个
+`MULTIRAG_MEMORY_CHAT_MODEL_ID` 和 `MULTIRAG_MEMORY_EMBEDDING_MODEL_ID`，价格引用使用
+`MULTIRAG_MEMORY_PRICE_QUOTES`。完整轨迹为每例三个时点、每时点四次答复，共 48 次答复；每个场景最多 60 次 SDK
+尝试。自动提取在评估边界额外设 1,024 输出上限，现有抽取内容和生产行为保持原样。答复实际 SDK 请求包含完整包，
+按共同的 16,384 token 窗口、512 输出和 256 余量检查。生产代码无需配置新版评估。
+
+每次运行保留分臂原始证据和独立评阅包。答复请求不包含分组、预期答案或评分标准。评阅包隐藏组别，
+提供可引用证据和固定判据。候选、已发布后人工核验、最后答复各自独立留证。结果仅描述封存合成输入的质量
+和已观察开销。直接比对 [RAGFlow 上游持久任务测试](https://github.com/infiniflow/ragflow/blob/58d8fb6d5a9aafb04caa5475fc498928dfe4e154/internal/service/memory_message_service_test.go#L114)
+和 [LongMemEval-V2 查询评分数据隔离测试](https://github.com/xiaowu0162/LongMemEval-V2/blob/2cc8c540bdb87fe6761629b585e727e1c4704520/tests/test_query_privacy.py#L51)。
+
 ## 实际 Message 来源的纵向回放
 
 实际 Message 生产者回放复用上述候选、独立采用决定、显式发布、版本核验、启动包、检索和回答流程。
