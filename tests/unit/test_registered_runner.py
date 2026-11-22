@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -133,16 +134,34 @@ class RegisteredRunnerTest(CaseRootTest):
     def test_cancel_between_spawn_and_assignment_keeps_pid_for_cleanup(self) -> None:
         module = self.load_runner()
         real_launch = module.subprocess.Popen
+        requested = threading.Event()
+        delivered = threading.Event()
+
+        def send_cancel() -> None:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+            if requested.wait(5):
+                signal.pthread_kill(threading.get_ident(), signal.SIGTERM)
+                delivered.set()
+
+        sender = threading.Thread(target=send_cancel, daemon=True)
+        sender.start()
+        self.addCleanup(sender.join, 6)
 
         def launch(*args: Any, **kwargs: Any) -> Any:
             process = real_launch(*args, **kwargs)
-            os.kill(os.getpid(), signal.SIGTERM)
+            self.addCleanup(module.stop_group, process)
+            requested.set()
+            self.assertTrue(delivered.wait(5))
             return process
 
         with patch.object(module.subprocess, "Popen", side_effect=launch):
             result = module.main(self.command("import time; time.sleep(60)")[2:])
         self.assertEqual(result, 143)
-        self.assert_clean(self.events())
+        events = self.events()
+        spawned = next(event for event in events if event["event"] == "spawned")
+        finished = next(event for event in events if event["event"] == "finished")
+        self.assertEqual(spawned["pid"], finished["pgid"])
+        self.assert_clean(events)
 
     def test_cleanup_failure_records_final_nonzero_exit_and_raw_success(self) -> None:
         module = self.load_runner()
