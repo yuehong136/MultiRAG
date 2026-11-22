@@ -153,7 +153,8 @@ func TestAfterD7HostedRejectMalformedVectorsAndDiscovery(t *testing.T) {
 }
 
 func TestAfterD7ASROCRAndParse(t *testing.T) {
-	key, asrName, ocrName, parseName := "key", "whisper-v3-turbo", "mistral-ocr-latest", "vlm"
+	key := "key"
+	asrName, ocrName, parseName := "whisper-v3-turbo", "mistral-ocr-latest", "vlm"
 	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+key {
 			t.Error("media credential lost")

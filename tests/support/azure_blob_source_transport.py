@@ -6,6 +6,7 @@ transport serves listing XML and versioned blob downloads to the installed SDK.
 
 from __future__ import annotations
 
+from base64 import b64encode
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -16,6 +17,8 @@ from xml.etree import ElementTree
 
 from azure.core.pipeline.transport import HttpRequest, HttpResponse, HttpTransport
 from requests.structures import CaseInsensitiveDict
+
+ACCOUNT_KEY_FIXTURE = b64encode(b"Azure Blob transport fixture").decode("ascii")
 
 
 @dataclass(frozen=True)

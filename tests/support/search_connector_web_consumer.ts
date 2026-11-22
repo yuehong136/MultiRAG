@@ -271,10 +271,10 @@ async function main(): Promise<void> {
     // listing, connector link, sync worker, vendor request or deletion is run.
     const credentials = {
       account_name: 'after67fixture',
-      account_key: 'Zml4dHVyZS1vbmx5LWtleQ==',
+      account_key: Buffer.from('Azure account fixture').toString('base64'),
       container_name: 'fixture-container',
       connection_string:
-        'DefaultEndpointsProtocol=https;AccountName=after67fixture;AccountKey=Zml4dHVyZS1vbmx5LWtleQ==;EndpointSuffix=core.windows.net',
+        `DefaultEndpointsProtocol=https;AccountName=after67fixture;AccountKey=${Buffer.from('Azure connection fixture').toString('base64')};EndpointSuffix=core.windows.net`,
       container_url: 'https://after67fixture.blob.core.windows.net/fixture-container',
       sas_token: 'sv=2023-11-03&sp=rl&sig=fixture-only',
     }
