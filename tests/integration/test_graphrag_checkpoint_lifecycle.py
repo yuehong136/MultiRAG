@@ -21,9 +21,17 @@ from core.graphrag.general import index
 from core.graphrag.phase_markers import PHASE_COMMUNITY, PHASE_RESOLUTION, clear_phase_markers, phase_key
 from tests.support.dataset_management_http import management_api as management_api
 from tests.support.dataset_management_http import request_api
-from tests.support.graphrag_acceptance import DocumentExtractor, Model, add_source_document, api, native_rows, observe, worker
+from tests.support.graphrag_acceptance import DocumentExtractor, Model, add_source_document, api, native_rows, worker
 from tests.support.graphrag_acceptance import graphrag_api as graphrag_api
+from tests.support.graphrag_acceptance import observe as observe_graph
 from tests.support.smoke import smoke_command
+
+
+def observe(env: dict[str, Any], label: str) -> dict[str, Any]:
+    snapshot = observe_graph(env, label)
+    # Compare and record all fields, including rows the SDK materializes lazily.
+    snapshot["rows"] = [dict(row) for row in snapshot["rows"]]
+    return snapshot
 
 
 @pytest.mark.parametrize("endpoint", ["knowledge_graph", "graph", "index?type=graph"])
