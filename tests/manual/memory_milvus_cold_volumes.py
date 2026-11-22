@@ -11,7 +11,7 @@ import subprocess
 import tarfile
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, cast
+from typing import IO, BinaryIO, cast
 from uuid import uuid4
 
 from tests.support.resource_journal import ResourceJournal
@@ -62,7 +62,7 @@ def inspect_stack(project: str, containers: Mapping[str, str]) -> dict[str, obje
     return {"services": profile}
 
 
-def validate_volume_tar(payload: BinaryIO) -> int:
+def validate_volume_tar(payload: IO[bytes]) -> int:
     """Check exact member paths and types before the archive reaches Docker."""
     with tarfile.open(fileobj=payload, mode="r:") as archive:
         members: dict[PurePosixPath, bool] = {}
@@ -97,7 +97,10 @@ def validate_bundle(bundle: tarfile.TarFile) -> dict[str, object]:
         raise ValueError("Cold Milvus archive manifest is invalid")
     for volume in VOLUMES:
         member = bundle.getmember(f"{volume}.tar")
-        with cast(BinaryIO, bundle.extractfile(member)) as payload:
+        payload = bundle.extractfile(member)
+        if not isinstance(payload, io.BufferedReader):
+            raise ValueError(f"Cold Milvus volume payload missing: {volume}")
+        with payload:
             count = validate_volume_tar(payload)
             digest = hashlib.file_digest(payload, "sha256").hexdigest()
         if manifest["volumes"][volume] != {"members": count, "sha256": digest}:
