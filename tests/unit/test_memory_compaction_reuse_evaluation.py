@@ -1,9 +1,10 @@
-"""Fresh-consumption and exact single-trajectory accounting; no semantic scoring."""
+"""Fresh-consumption, masked review and exact single-trajectory accounting."""
 
 from __future__ import annotations
 
 import json
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -75,6 +76,34 @@ def test_fixed_plan_and_counterbalance_do_not_rerun_prefix_subsets() -> None:
     assert reuse.pair_order(0, 1) == reuse.pair_order(0, 2)[::-1]
     with pytest.raises(ValueError):
         reuse.pair_order(0, True)
+    expanded = [reuse.pair_order(case, index, expansion=True)[0] for case in range(reuse.EXPANSION_CASES) for index in range(1, 5)]
+    assert expanded.count("uncompressed") == expanded.count("compacted") == 16
+    with pytest.raises(ValueError):
+        reuse.pair_order(2, 1)
+
+
+def expanded_case(kind: str, label: str) -> dict[str, Any]:
+    base = original.load_cases(Path(__file__).parents[1] / "fixtures/memory_compaction_baseline.json", "known_baseline")[0]
+    base.update(id=label, reuse_kind=kind)
+    if kind == "longitudinal":
+        base["followups"] = [{"question": f"第 {index} 次怎么看原约束？", "rubric": deepcopy(base["rubric"]["answer"])} for index in (2, 3, 4)]
+    return base
+
+
+def test_expansion_fixtures_enforce_disjoint_question_trajectories_and_balanced_inventory(tmp_path: Path) -> None:
+    cases = [expanded_case(kind, f"new_case_{index}") for index, kind in enumerate(("repeat", "longitudinal", "repeat", "longitudinal"))]
+    path = tmp_path / "sealed.json"
+    fixture = {"schema_version": 1, "kind": "expansion_holdout", "cases": cases}
+    path.write_text(json.dumps(fixture))
+    assert reuse.load_expansion_cases(path, "expansion_holdout") == cases
+    with pytest.raises(ValueError, match="fixture"):
+        reuse.load_expansion_cases(path, "expansion_development")
+    assert len({item["question"] for item in reuse.expansion_trajectory(cases[0])[1]}) == 1
+    assert len({item["question"] for item in reuse.expansion_trajectory(cases[1])[1]}) == 4
+    cases[1]["followups"][0]["question"] = cases[1]["question"]
+    path.write_text(json.dumps(fixture))
+    with pytest.raises(ValueError, match="distinct_questions"):
+        reuse.load_expansion_cases(path, "expansion_holdout")
 
 
 def test_every_prepare_fetches_original_operation_and_withdrawal_stops_without_fallback() -> None:
@@ -158,6 +187,51 @@ def test_failed_answer_remains_in_its_arm_prefix_unknown_cost() -> None:
     assert arm["attempt_count"] == 3 and arm["provider_total_tokens"] is None and arm["known_provider_total_tokens_subtotal"] == 105
     assert result["prefixes"]["2"]["complete_pairs"] is False
     assert result["all_actual_attempts"]["provider_total_tokens"] is None
+
+
+def test_cumulative_cache_price_subtotals_do_not_infer_cache_write_or_invoices() -> None:
+    attempts, answers = trajectory()
+    by_id = {row["attempt_id"]: row for row in attempts}
+    quote = {
+        "terra": {
+            "source": "provider-model-page",
+            "as_of": "2026-11-22",
+            "currency": "USD",
+            "per_million": {"input_tokens": "1", "output_tokens": "5", "cache_read_input_tokens": ".05"},
+        }
+    }
+    for key, (ordinary, cached, output) in {"summary": (200, 40, 20), "1-uncompressed": (100, 800, 10), "1-compacted": (100, 0, 10)}.items():
+        by_id[key].update(model_reference="terra", usage={"input_tokens": ordinary, "cache_read_input_tokens": cached, "output_tokens": output}, provider_total_tokens=ordinary + cached + output)
+    cost = reuse.cumulative_cost(attempts, answers, prices=quote, include_known_buckets=True)["prefixes"]["1"]
+    known = cost["known_bucket_reference"]
+    assert known["uncompressed_incremental"]["known_bucket_subtotal"] == "0.00019000"
+    assert known["compacted_incremental_including_one_summary"]["known_bucket_subtotal"] == "0.00045200"
+    assert known["uncompressed_incremental"]["by_bucket"]["cache_read_input_tokens"]["known_token_subtotal"] == 800
+    assert known["compacted_incremental_including_one_summary"]["attempts"][0]["excluded_buckets"]["cache_creation_input_tokens"] is None
+    assert cost["compacted_incremental_including_one_summary"]["token_price_estimate"] is None
+
+
+def test_expanded_review_masks_arms_and_keeps_missing_and_rejected_pairs_distinct() -> None:
+    _, answers = trajectory()
+    sources, _, _, _ = current()
+    case, prompts = reuse.expansion_trajectory(expanded_case("longitudinal", "review_case"))
+    for row in answers:
+        row["response"]["answer"] = "same visible answer"
+        row["prepared"] = {"request": "private arm-specific context"}
+    packet, mapping = reuse.blind_answer_review(case["id"], sources, answers, prompts)
+    assert set(packet["review_items"]) == set(mapping)
+    assert list(packet["review_items"]) == sorted(mapping)
+    assert all(len(key) == 32 and key.isalnum() for key in mapping)
+    assert set(packet["review_items"][next(iter(mapping))]) == {"question", "rubric", "answer"}
+    assert all(set(source) == {"source_id", "content"} for source in packet["sources"])
+    assert "private arm-specific context" not in json.dumps(packet)
+    judgments = {
+        key: {"accepted": item["mode"] == "uncompressed", "required": {"rule": "satisfied"}, "forbidden": {"boundary": "unassessable"}} for key, item in mapping.items() if item["reuse_index"] == 1
+    }
+    quality = reuse.semantic_prefixes(mapping, judgments)
+    assert quality["1"]["complete_pairs"] and quality["1"]["pair_outcomes"]["raw_only_accepted"] == 1
+    assert quality["4"]["expected_pairs"] == 4 and quality["4"]["evaluated_pairs"] == 1 and not quality["4"]["complete_pairs"]
+    assert quality["1"]["by_mode"]["compacted"]["criteria"]["forbidden"]["unassessable"] == 1
 
 
 def test_duplicate_attempt_cannot_be_charged_as_two_answers() -> None:

@@ -679,6 +679,66 @@ API 包预算仍是估算，真实 SDK 包装计量及供应商回执分别记�
 两例撤回必要来源后，真实 API 返回的产物正文为空，重新准备请求失败，未增加模型调用。
 独立留出此后转为固定回归；同题重复、代理评阅及摘要先审的边界继续适用。
 
+## 压缩质量与累计成本扩测
+
+通过 `tests/evals/test_memory_compaction_reuse.py::test_real_compaction_expansion` 显式运行。开发集是
+`tests/fixtures/memory_compaction_expansion.json` 的四个合成场景。独立作者另行封存了四个留出，提示、运行器和评分规则冻结后才开放。
+每组各含两例同题重复及两例连续四个不同问题。已开放的留出以原字节存放在 `tests/fixtures/memory_compaction_expansion_holdout.json`，供固定复跑。
+之后的独立留出验证需使用新封存的样本。
+
+两路共享相同、已冻结的两份 RAW 来源、权限、问题、请求预算和模型。压缩路只生成一次前缀摘要并保留完整后缀，每次消费从
+原操作重新 GET 并复核来源。回答次序交替，第 1、2、4 次累计量来自同一轨迹。继续使用 OpenAI `gpt-6.1-terra` 和
+`text-embedding-3-small`。每例上限为两次来源向量化、一次摘要、八次回答，整批上限 88 个调用，失败和重试都占配额。
+摘要只接收来源。摘要先独立评阅，回答评阅包只显示不透明编号、原始证据、问题和对应判据。给定回答的分支映射在另一文件中保存。
+合成评阅用于观察保真，记忆的人工审核发布仍沿用原有流程。
+
+运行参数由事前登记的命令传入。`MULTIRAG_COMPACTION_EXPANSION_DEV` 和 `MULTIRAG_COMPACTION_EXPANSION_HOLDOUT`
+分别指向开发与留出 JSON，`MULTIRAG_COMPACTION_EXPANSION_PRICES` 指向带币种、日期、来源和档位的标准报价。
+使用 `scripts/run_integration.py --suite eval-generation`，沿用现有直连供应商、隔离存储与外部评阅回执合同。
+累计差额按分支实际调用归属，计入一次摘要和失败尝试，共享向量化在另外一栏计一次。
+参考小计按供应商回执的缓存读取计量。当前 Chat Completions 观察器未报告的缓存写入保留未知，未读缓存部分先以普通输入率计价，
+小计未加缓存写入溢价。完整金额、账单核对和总体拥有成本分列。报价和计量口径见
+[Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra)、[向量模型](https://developers.openai.com/api/docs/models/text-embedding-3-small)
+与 [OpenAI Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching#monitoring-cache-usage)。
+
+本批直接核对默认分支的源码与回归测试。保留 RAGFlow 的 RAW 失败后不得投递这一行为边界，在评估中保留失败尝试。
+沿用 OpenClaw 的无进展停止和标识符判据、QwenPaw 的陈旧提案与预算负例、DeepSeek Harness 的完整工具组边界，
+以及 LongMemEval-V2 的评分元数据隔离。源码差异集中在现有评估运行器、夹具与文档。
+[RAGFlow 写入失败回归](https://github.com/infiniflow/ragflow/blob/33e29d80031becf3f57335179ef2100e8408acdf/internal/service/memory_message_service_test.go#L114) ·
+[OpenClaw 摘要回归](https://github.com/openclaw/openclaw/blob/af7c2407dc41866b6b523019d16b8fcbe7cbf5ef/src/agents/compaction.summary-format.test.ts#L38) ·
+[QwenPaw 提案与预算回归](https://github.com/agentscope-ai/QwenPaw/blob/b02e17b8cf3fdde484f33c6981321280a0417232/tests/unit/agents/context/test_decision_compaction.py#L432) ·
+[DeepSeek Harness 工具组测试](https://github.com/deepseek-ai/deepseek-harness/blob/d98f5d68519215da48f3002da2cb9c9d2068d81d/packages/compaction/compaction/tests/tool-pairing.spec.ts#L94) ·
+[LongMemEval-V2 查询隐私回归](https://github.com/xiaowu0162/LongMemEval-V2/blob/2cc8c540bdb87fe6761629b585e727e1c4704520/tests/test_query_privacy.py#L51)。
+
+### 2026-11-22 实测
+
+八例全部运行，开发集和独立留出各三例完成四次配对。共记录 **72 次真实调用、75,849 token**，包括 16 次共享向量化、8 次摘要和 48 次回答。
+一例开发场景的短文本触发 `compaction_no_effect`，摘要产物的估算 token 未减少。另一例留出摘要遗漏“出处已核对”表示来源卡与登记条目匹配，
+独立评阅拒绝了该摘要。两例均止于摘要阶段，共六次调用，参考小计 USD 0.00553914。真实任务原始退出码为 1，保留两项未通过，
+且没有重试、更换样本或放宽门禁。
+
+下表只汇总六条完成的配对轨迹。质量分母为累计答复数，同题重复在表中按实际答复计数。
+压缩列成本含每例一次摘要，共享向量化另计。缓存读取与 token 均取供应商回执。报价采用该日标准 USD 费率，每百万 token 的
+普通输入 1.00、缓存读取 0.05、输出 5.00，向量输入 0.02。表中的金额为未加缓存写入溢价的参考小计。
+
+| 累计消费 | RAW 质量通过 | 压缩质量通过 | RAW／压缩 token | RAW／压缩缓存读取 token | RAW 参考 USD | 压缩参考 USD |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 次 | 6/6 | 6/6 | 8,096／13,799 | 0／0 | 0.01257600 | 0.02707100 |
+| 2 次 | 12/12 | 11/12 | 16,128／20,803 | 3,803／1,110 | 0.02130715 | 0.03815250 |
+| 4 次 | 24/24 | 23/24 | 32,576／35,170 | 11,409／3,330 | 0.04066545 | 0.06208650 |
+
+压缩臂第二次回答有一份漏掉后续背景修改没有改变设置这一点，数值 `0`、`false`、`[]` 与合成预览适用范围仍正确。
+完成配对的三条独立留出，四次累计答复两臂均通过 12/12。评阅者为独立 Codex 代理，答复包隐藏分支与调用顺序，答复文字仍可能给出提示。
+所有完成配对的案例都验证了撤回来源后再次准备消费会在模型请求发出前停止。
+
+四次消费后六例的压缩参考小计仍都高于 RAW。该前缀的两路累计调用端耗时（含来源复核及压缩生成，排除评阅等待）为 97.45 秒与 146.60 秒。
+包括共享向量化及两个未完成场景，整批已知费用参考小计 **USD 0.10837959**。完整金额、账单和人工／主机费用仍未知。
+结果来自八个有界合成场景，继续显式按需使用压缩，默认使用旧 RAW。
+
+冻结输入通过 63 项相关单测、2 项受控隔离存储配对、定向 Ruff、格式与类型检查。日志保留 LiteLLM 退出时的后台日志协程告警，
+独立读回确认试验拥有的 PostgreSQL 临时库、Milvus 集合、Redis 键和监听器已清理。厂商模型绑定只读解析，评估写入只发生在临时库和隔离命名空间。
+三存储同恢复点仍按单独演练排期。
+
 ## 原生 LLM→Message 与严格语义回归
 
 此组从已认证的 Agent API 执行 `Begin → LLM → Message`，由原生 LLM 节点真实生成资料，

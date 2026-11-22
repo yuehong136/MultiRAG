@@ -23,6 +23,24 @@ if os.environ.get("MULTIRAG_COMPACTION_REUSE_HOLDOUT"):
 assert len(CASES) <= 2 and len({case["id"] for _, case in CASES}) == len(CASES)
 
 
+def expansion_cases() -> list[tuple[int, str, dict[str, Any]]]:
+    paths = {"expansion_development": os.environ.get("MULTIRAG_COMPACTION_EXPANSION_DEV"), "expansion_holdout": os.environ.get("MULTIRAG_COMPACTION_EXPANSION_HOLDOUT")}
+    if not any(paths.values()):
+        return []
+    cases: list[tuple[str, dict[str, Any]]] = []
+    for kind, path in paths.items():
+        if not path:
+            raise ValueError("compaction_expansion_requires_development_and_holdout_fixtures")
+        cases.extend((kind, case) for case in reuse.load_expansion_cases(Path(path), kind))
+    historical_ids = {case["id"] for _, case in CASES}
+    for name in ("memory_compaction_holdout.json", "memory_compaction_reuse_holdout.json"):
+        historical_ids.update(case["id"] for case in original.load_cases(BASELINE.with_name(name), "independent_holdout"))
+    new_ids = {case["id"] for _, case in cases}
+    if len(new_ids) != reuse.EXPANSION_CASES or new_ids & historical_ids:
+        raise ValueError("compaction_expansion_requires_eight_new_unique_cases")
+    return [(index, kind, case) for index, (kind, case) in enumerate(cases)]
+
+
 @pytest.mark.parametrize(("case_index", "kind", "case"), [(index, kind, case) for index, (kind, case) in enumerate(CASES)], ids=[case["id"] for _, case in CASES])
 def test_real_compaction_reuse(memory_live_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, case_index: int, kind: str, case: dict[str, Any]) -> None:
     env = memory_live_api
@@ -33,7 +51,28 @@ def test_real_compaction_reuse(memory_live_api: dict[str, Any], monkeypatch: pyt
     assert report["mechanism_complete"] is True
 
 
-def test_controlled_compaction_reuse_sdk(memory_live_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+EXPANSION_CASES = expansion_cases()
+
+
+@pytest.mark.parametrize(("case_index", "kind", "case"), EXPANSION_CASES, ids=[case["id"] for _, _, case in EXPANSION_CASES])
+def test_real_compaction_expansion(memory_live_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, case_index: int, kind: str, case: dict[str, Any]) -> None:
+    env = memory_live_api
+    assert os.environ.get("MULTIRAG_MEMORY_LIVE_PROVIDER") == "OpenAI"
+    require_direct_openai_models(env)
+    quote_path = os.environ.get("MULTIRAG_COMPACTION_EXPANSION_PRICES") or os.environ.get("MULTIRAG_MEMORY_PRICE_QUOTES")
+    prices = json.loads(Path(quote_path).read_text()) if quote_path else None
+    if quote_path:
+        monkeypatch.setenv("MULTIRAG_MEMORY_PRICE_QUOTES", quote_path)
+    env["journal"].event("reuse-fixture-kind", kind=kind, case_id=case["id"], reuse_kind=case["reuse_kind"], one_summary=True, SDK_maximum=reuse.MAX_SDK_PER_CASE)
+    report = reuse.run_case(env, monkeypatch, case, case_index, Path(request.config.getoption("--test-report-dir")), prices=prices)
+    assert report["mechanism_complete"] is True
+    assert len(report["actual_attempts"]) == reuse.MAX_SDK_PER_CASE
+    assert report["semantic_prefixes"]["4"]["complete_pairs"] is True
+    assert report["cumulative_cost"]["unattributed_answer_attempts"]["attempt_count"] == 0
+
+
+@pytest.mark.parametrize("expansion", [False, True], ids=["legacy", "expanded"])
+def test_controlled_compaction_reuse_sdk(memory_live_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, expansion: bool) -> None:
     """Actual API/PG/Milvus/prepared SDK, strict fake HTTP and simulated reviewers."""
     env = memory_live_api
     require_direct_openai_models(env)
@@ -96,12 +135,19 @@ def test_controlled_compaction_reuse_sdk(memory_live_api: dict[str, Any], monkey
     monkeypatch.setattr(httpx.AsyncClient, "send", asynchronous)
     monkeypatch.setattr(original, "external_review", review)
     case = original.load_cases(BASELINE, "known_baseline")[0]
+    if expansion:
+        case["id"] = "controlled_" + case["id"]
+        case.update(reuse_kind="longitudinal", followups=[{"question": f"第{index}次检查应核对哪些既有约束？", "rubric": case["rubric"]["answer"]} for index in (2, 3, 4)])
     report = reuse.run_case(env, monkeypatch, case, 0, Path(request.config.getoption("--test-report-dir")))
     assert report["mechanism_complete"] is True and len(observed) == len(env["observer"].attempts) == 11
     assert len(report["answers"]) == 8 and all(row["fresh_get_count"] == 1 for row in report["answers"])
     assert report["withdrawal_prepare_rejected_no_model"] is True
     assert report["cumulative_cost"]["prefixes"]["4"]["complete_pairs"] is True
     assert sum(row["kind"] == "chat" for row in observed) == 9
+    if expansion:
+        assert report["semantic_prefixes"]["4"]["pair_outcomes"]["both_accepted"] == 4
+        assert len({row["body"]["messages"][2]["content"] for row in observed if row["kind"] == "chat" and len(row["body"]["messages"]) == 3}) == 4
+        assert report["cumulative_cost"]["prefixes"]["4"]["known_bucket_reference"]["compacted_incremental_including_one_summary"]["attempt_count"] == 5
     env["journal"].event(
         "controlled-reuse-complete", actual_external_calls=0, SDK_calls=11, provider_usage_simulated=True, review_simulated=True, summary_count=1, answer_count=8, fresh_GET_per_answer=True
     )

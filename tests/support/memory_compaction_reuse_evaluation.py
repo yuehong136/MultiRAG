@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import math
+import secrets
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -28,6 +29,7 @@ from memory.maintenance.evaluation import usage_cost
 from memory.writes.providers import MemoryWriteProviders
 from tests.support import memory_compaction_evaluation as original
 from tests.support.memory_startup_evaluation_budget import inspect_answer_request
+from tests.support.memory_startup_evaluation_cost import known_bucket_cost
 from tests.support.memory_startup_longitudinal import costs
 from tests.support.memory_workload_review import call, write_private
 from tests.support.memory_writes_http import api_request
@@ -36,13 +38,62 @@ REPETITIONS = 4
 PREFIXES = (1, 2, 4)
 MAX_SDK_PER_CASE = 11
 COMPLETION_RESERVE_PER_CASE = 9 * original.ANSWER_LIMIT
+EXPANSION_CASES_PER_FIXTURE = 4
+EXPANSION_CASES = 2 * EXPANSION_CASES_PER_FIXTURE
 FetchOperation = Callable[[str, str], dict[str, Any]]
 
 
-def pair_order(case_index: int, reuse_index: int) -> tuple[original.Mode, original.Mode]:
-    if type(case_index) is not int or not 0 <= case_index < 2 or type(reuse_index) is not int or not 1 <= reuse_index <= REPETITIONS:
+def pair_order(case_index: int, reuse_index: int, *, expansion: bool = False) -> tuple[original.Mode, original.Mode]:
+    case_count = EXPANSION_CASES if expansion else original.MAX_CASES
+    if type(case_index) is not int or not 0 <= case_index < case_count or type(reuse_index) is not int or not 1 <= reuse_index <= REPETITIONS:
         raise ValueError("invalid_reuse_trajectory_index")
     return original.mode_order((case_index + reuse_index - 1) % 2)
+
+
+def expansion_trajectory(value: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Validate a frozen extension without changing the legacy single-question recipe."""
+    if not isinstance(value, dict) or value.get("reuse_kind") not in ("repeat", "longitudinal"):
+        raise ValueError("invalid_compaction_reuse_kind")
+    case = original.validate_case({key: item for key, item in value.items() if key not in {"reuse_kind", "followups"}})
+    if case["selected_source_indices"] != [0] or case["retained_source_indices"] != [1]:
+        raise ValueError("compaction_expansion_requires_ordered_fixture_sources")
+    first = {"question": case["question"], "rubric": case["rubric"]["answer"]}
+    if value["reuse_kind"] == "repeat":
+        if "followups" in value:
+            raise ValueError("compaction_repeat_cannot_override_followups")
+        return case, [deepcopy(first) for _ in range(REPETITIONS)]
+    followups = value.get("followups")
+    if not isinstance(followups, list) or len(followups) != REPETITIONS - 1:
+        raise ValueError("compaction_longitudinal_requires_three_followups")
+    for item in followups:
+        if not isinstance(item, dict) or set(item) != {"question", "rubric"}:
+            raise ValueError("invalid_compaction_followup")
+        original.validate_case({**case, "question": item["question"], "rubric": {"summary": case["rubric"]["summary"], "answer": item["rubric"]}})
+    trajectory = [first, *deepcopy(followups)]
+    if len({item["question"].strip() for item in trajectory}) != REPETITIONS:
+        raise ValueError("compaction_longitudinal_requires_distinct_questions")
+    return case, trajectory
+
+
+def load_expansion_cases(path: Path, kind: str) -> list[dict[str, Any]]:
+    fixture = json.loads(path.read_text())
+    if (
+        not isinstance(fixture, dict)
+        or set(fixture) != {"schema_version", "kind", "cases"}
+        or type(fixture["schema_version"]) is not int
+        or fixture["schema_version"] != 1
+        or kind not in {"expansion_development", "expansion_holdout"}
+        or fixture["kind"] != kind
+    ):
+        raise ValueError("invalid_compaction_expansion_fixture")
+    cases = fixture["cases"]
+    if not isinstance(cases, list) or len(cases) != EXPANSION_CASES_PER_FIXTURE:
+        raise ValueError("compaction_expansion_fixture_requires_four_cases")
+    for case in cases:
+        expansion_trajectory(case)
+    if len({case["id"] for case in cases}) != len(cases) or sum(case["reuse_kind"] == "repeat" for case in cases) != len(cases) // 2:
+        raise ValueError("compaction_expansion_fixture_requires_unique_and_balanced_cases")
+    return cases
 
 
 def reference_from(result: dict[str, Any]) -> dict[str, str]:
@@ -214,7 +265,14 @@ def cache_observations(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def cumulative_cost(attempts: list[dict[str, Any]], answers: list[dict[str, Any]], *, summary_elapsed_seconds: float | None = None) -> dict[str, Any]:
+def cumulative_cost(
+    attempts: list[dict[str, Any]],
+    answers: list[dict[str, Any]],
+    *,
+    summary_elapsed_seconds: float | None = None,
+    prices: dict[str, Any] | None = None,
+    include_known_buckets: bool = False,
+) -> dict[str, Any]:
     """Read 1/2/4 prefixes of one trajectory, charging summary exactly once."""
     by_id = {row["attempt_id"]: row for row in attempts}
     if len(by_id) != len(attempts):
@@ -223,7 +281,7 @@ def cumulative_cost(attempts: list[dict[str, Any]], answers: list[dict[str, Any]
     if len(set(pairs)) != len(pairs) or any(type(index) is not int or not 1 <= index <= REPETITIONS or mode not in original.MODES for index, mode in pairs):
         raise ValueError("invalid_or_duplicate_reuse_answer_slot")
     used = [identity for row in answers for identity in row.get("attempt_ids", [row["response"]["attempt_id"]] if "response" in row else [])]
-    if len(set(used)) != len(used) or any(identity not in by_id for identity in used):
+    if len(set(used)) != len(used) or any(identity not in by_id or by_id[identity]["stage"] != "answer" for identity in used):
         raise ValueError("duplicate_or_missing_reuse_answer_attempt")
     source = [row for row in attempts if row["stage"] == "source_embedding"]
     summary = [row for row in attempts if row["stage"] == "analysis"]
@@ -259,27 +317,39 @@ def cumulative_cost(attempts: list[dict[str, Any]], answers: list[dict[str, Any]
             wall[mode] = read_time + send_time if read_time is not None and send_time is not None else None
         if wall["compacted"] is not None:
             wall["compacted"] = wall["compacted"] + summary_elapsed_seconds if summary_elapsed_seconds is not None else None
+        billed = {
+            "uncompressed_incremental": groups["uncompressed"],
+            "compacted_answers_only": groups["compacted"],
+            "compacted_incremental_including_one_summary": summary + groups["compacted"],
+        }
         results[str(count)] = {
             "prefix_of_single_trajectory": True,
             "complete_pairs": complete,
-            "uncompressed_incremental": usage_cost(groups["uncompressed"], None),
-            "compacted_answers_only": usage_cost(groups["compacted"], None),
-            "compacted_incremental_including_one_summary": usage_cost(summary + groups["compacted"], None),
+            **{key: usage_cost(rows, prices) for key, rows in billed.items()},
             "sdk_elapsed_seconds": {"uncompressed": elapsed(groups["uncompressed"], "elapsed_seconds"), "compacted_including_summary": elapsed(summary + groups["compacted"], "elapsed_seconds")},
             "consumer_wall_seconds_including_fresh_GET_and_send": wall,
             "observed_cache": {mode: cache_observations(groups[mode]) for mode in original.MODES},
         }
+        if include_known_buckets:
+            results[str(count)]["known_bucket_reference"] = {key: known_bucket_cost(rows, prices) for key, rows in billed.items()}
     unattributed = [row for row in attempts if row["stage"] == "answer" and row["attempt_id"] not in used]
-    return {
-        "shared_source_preparation_counted_once": usage_cost(source, None),
-        "summary_generation_actual": usage_cost(summary, None),
+    total = {
+        "shared_source_preparation_counted_once": source,
+        "summary_generation_actual": summary,
+        "all_actual_attempts": attempts,
+        "unattributed_answer_attempts": unattributed,
+    }
+    result: dict[str, Any] = {
+        **{key: usage_cost(rows, prices) for key, rows in total.items()},
         "prefixes": results,
-        "all_actual_attempts": usage_cost(attempts, None),
-        "unattributed_answer_attempts": usage_cost(unattributed, None),
-        "price_quotes": None,
+        "price_quotes": deepcopy(prices),
         "invoice_verified": False,
         "not_three_independent_1_2_4_experiments": True,
     }
+    if include_known_buckets:
+        result["known_bucket_reference"] = {key: known_bucket_cost(rows, prices) for key, rows in total.items()}
+        result["cache_write_pricing"] = "Chat Completions cache-write usage is unreported by the observer; reference subtotals omit any write-rate adjustment."
+    return result
 
 
 def answer_review_request(case: dict[str, Any], sources: list[dict[str, Any]], answers: list[dict[str, Any]], case_index: int) -> tuple[dict[str, Any], dict[str, str]]:
@@ -313,17 +383,84 @@ def answer_review_request(case: dict[str, Any], sources: list[dict[str, Any]], a
     }, mapping
 
 
-def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any], case_index: int, directory: Path) -> dict[str, Any]:
-    checked = original.validate_case(case)
+def blind_answer_review(case_id: str, sources: list[dict[str, Any]], answers: list[dict[str, Any]], trajectory: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Keep branch, request shape and call order outside the reviewer packet."""
+    slots = {(row["reuse_index"], row["mode"]) for row in answers}
+    expected = {(index, mode) for index in range(1, REPETITIONS + 1) for mode in original.MODES}
+    if slots != expected or len(answers) != len(expected) or any("response" not in row for row in answers):
+        raise ValueError("reuse_answer_review_requires_eight_actual_answers")
+    items: dict[str, Any] = {}
+    mapping: dict[str, dict[str, Any]] = {}
+    for row in answers:
+        key = secrets.token_hex(16)
+        if key in mapping:
+            raise RuntimeError("duplicate_review_item_identity")
+        index = row["reuse_index"]
+        mapping[key] = {"reuse_index": index, "mode": row["mode"], "answer_record_sha256": original.digest(row)}
+        items[key] = {**deepcopy(trajectory[index - 1]), "answer": row["response"]["answer"]}
+    return {
+        "schema_version": 1,
+        "synthetic_only": True,
+        "kind": "reuse_answers",
+        "case_id": case_id,
+        "sources": [{"source_id": source["source_id"], "content": source["content"]} for source in sources],
+        "review_items": {key: items[key] for key in sorted(items)},
+    }, mapping
+
+
+def semantic_prefixes(mapping: dict[str, dict[str, Any]], judgments: dict[str, Any]) -> dict[str, Any]:
+    """Project the same bound decisions to consumption prefixes without imputing outcomes."""
+    outcomes = {(item["reuse_index"], item["mode"]): judgments[key] for key, item in mapping.items() if key in judgments}
+    results: dict[str, Any] = {}
+    for count in PREFIXES:
+        by_mode: dict[str, Any] = {}
+        for mode in original.MODES:
+            judged = [outcomes[(index, mode)] for index in range(1, count + 1) if (index, mode) in outcomes]
+            by_mode[mode] = {
+                "judged_answers": len(judged),
+                "accepted_answers": sum(result["accepted"] for result in judged),
+                "criteria": {
+                    category: {result: sum(value == result for outcome in judged for value in outcome[category].values()) for result in ("satisfied", "violated", "unassessable")}
+                    for category in ("required", "forbidden")
+                },
+            }
+        compared = [
+            (outcomes[(index, "uncompressed")]["accepted"], outcomes[(index, "compacted")]["accepted"])
+            for index in range(1, count + 1)
+            if (index, "uncompressed") in outcomes and (index, "compacted") in outcomes
+        ]
+        results[str(count)] = {
+            "expected_pairs": count,
+            "evaluated_pairs": len(compared),
+            "complete_pairs": len(compared) == count,
+            "by_mode": by_mode,
+            "pair_outcomes": {
+                "both_accepted": compared.count((True, True)),
+                "raw_only_accepted": compared.count((True, False)),
+                "compacted_only_accepted": compared.count((False, True)),
+                "both_rejected": compared.count((False, False)),
+            },
+        }
+    return results
+
+
+def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any], case_index: int, directory: Path, *, prices: dict[str, Any] | None = None) -> dict[str, Any]:
+    expansion = "reuse_kind" in case
+    if expansion:
+        checked, trajectory = expansion_trajectory(case)
+    else:
+        checked = original.validate_case(case)
+        trajectory = [{"question": checked["question"], "rubric": checked["rubric"]["answer"]}] * REPETITIONS
+    same_question = not expansion or case["reuse_kind"] == "repeat"
     observer, journal, mid, label = env["observer"], env["journal"], env["memory_id"], case["id"]
     observer.max_attempts = MAX_SDK_PER_CASE
     report: dict[str, Any] = {
         "case_id": label,
-        "case_sha256": original.digest(checked),
+        "case_sha256": original.digest(case),
         "synthetic_only": True,
         "controlled_protocol_only": env.get("reuse_controlled_protocol_only") is True,
         "mechanism_complete": False,
-        "same_question_four_repeats": True,
+        "same_question_four_repeats": same_question,
         "applied_to_chat": False,
         "long_term_publication": False,
         "model_call_plan": {"source_embedding": 2, "summary": 1, "answers": 8, "SDK_maximum": MAX_SDK_PER_CASE, "completion_reserve": COMPLETION_RESERVE_PER_CASE},
@@ -331,6 +468,8 @@ def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any
         "answers": [],
         "consumer_adopted_for_evaluation_only": False,
     }
+    if expansion:
+        report.update(reuse_kind=case["reuse_kind"], semantic_summary_accepted=None, semantic_prefixes=semantic_prefixes({}, {}))
     started = time.monotonic()
     try:
         report["phase"] = "source_preparation"
@@ -361,18 +500,21 @@ def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any
         requested = original.review_request(checked, "summary", {"artifact": {"sources": report["sources"], "artifact": generated["artifact"], "evaluation_only_no_application": True}})
         review = original.external_review(directory, label + "-reuse-summary", requested, journal, timeout_seconds=900)
         report["summary_review"] = {"request_sha256": original.digest(requested), "decision": review}
-        assert review["judgments"]["artifact"]["accepted"] is True
+        summary_accepted = review["judgments"]["artifact"]["accepted"] is True
+        if expansion:
+            report["semantic_summary_accepted"] = summary_accepted
+        assert summary_accepted, "compaction_summary_rejected_in_independent_review"
         report["consumer_adopted_for_evaluation_only"] = True
 
         def fetch(memory_id: str, operation_id: str) -> dict[str, Any]:
             return call(env, "GET", f"/memories/{memory_id}/context-compaction-operations/{operation_id}")
 
         report["phase"] = "repeated_answers"
-        for index in range(1, REPETITIONS + 1):
-            for mode in pair_order(case_index, index):
+        for index, step in enumerate(trajectory, start=1):
+            for mode in pair_order(case_index, index, expansion=expansion):
                 before = len(observer.attempts)
                 read_started = time.monotonic()
-                record = prepare_for_mode(reference, fetch, mode=mode, sources=report["sources"], compaction_request=compaction, expected_packages=packages, question=checked["question"])
+                record = prepare_for_mode(reference, fetch, mode=mode, sources=report["sources"], compaction_request=compaction, expected_packages=packages, question=step["question"])
                 assert len(observer.attempts) == before, "fresh_prepare_must_not_call_a_model"
                 record.update(reuse_index=index, fresh_read_seconds=time.monotonic() - read_started)
                 report["answers"].append(record)
@@ -382,12 +524,20 @@ def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any
                     record["response"] = asyncio.run(send_request(env, record))
                 finally:
                     record["send_elapsed_seconds"] = time.monotonic() - send_started
-        requested, mapping = answer_review_request(checked, report["sources"], report["answers"], case_index)
-        write_private(directory / (label + ".reuse-variant-mapping.private.json"), {"mapping": mapping, "not_fully_blind": True}, journal)
+        audit_path = directory / (label + ".reuse-variant-mapping.private.json")
+        blind_mapping: dict[str, dict[str, Any]] = {}
+        if expansion:
+            requested, blind_mapping = blind_answer_review(label, report["sources"], report["answers"], trajectory)
+            write_private(audit_path, {"mapping": blind_mapping, "review_request_sha256": original.digest(requested), "arm_masked": True}, journal)
+        else:
+            requested, mapping = answer_review_request(checked, report["sources"], report["answers"], case_index)
+            write_private(audit_path, {"mapping": mapping, "not_fully_blind": True}, journal)
         report["phase"] = "independent_answer_review"
         review = original.external_review(directory, label + "-reuse-answers", requested, journal, timeout_seconds=900)
         report["answer_review"] = {"request_sha256": original.digest(requested), "decision": review}
         report["semantic_answers_accepted"] = all(item["accepted"] for item in review["judgments"].values())
+        if expansion:
+            report["semantic_prefixes"] = semantic_prefixes(blind_mapping, review["judgments"])
         report["phase"] = "withdrawal"
         state = call(env, "GET", f"/memories/{mid}/sources/{identities[0]}/state")
         report["withdrawal"] = call(
@@ -435,6 +585,8 @@ def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any
         report["cost"] = costs(env)
         report["cost"]["planned_scope"] = ["source_embedding", "analysis", "answer"]
         report["cost"]["not_applicable"] = ["publication_embedding", "retrieval_embedding"]
-        report["cumulative_cost"] = cumulative_cost(observer.attempts, report["answers"], summary_elapsed_seconds=report.get("summary_generation_elapsed_seconds"))
+        report["cumulative_cost"] = cumulative_cost(
+            observer.attempts, report["answers"], summary_elapsed_seconds=report.get("summary_generation_elapsed_seconds"), prices=prices, include_known_buckets=expansion
+        )
         report["not_claimed"] = ["fully blind trial", "business-human acceptance", "invoice/TCO", "cache inferred from latency", "production default injection", "applied or published context"]
         write_private(directory / (label + ".reuse-report.json"), report, journal)
