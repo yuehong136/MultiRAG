@@ -319,13 +319,15 @@ jobs:
                       'listen': listen, 'mysql_listen': '127.0.0.1:18962',
                       'multirag': {'secret_key': secrets.token_hex(32)},
                   }, output)
+          redis_port = int(os.environ['REDIS_PORT'])
           with afterff.open('x') as output:
               json.dump({
                   'database': {'driver': 'postgres', 'host': os.environ['PGHOST'],
                                'port': int(os.environ['PGPORT']), 'database': os.environ['AFTERFF_DATABASE'],
                                'username': os.environ['PGUSER'], 'password': os.environ['PGPASSWORD'],
                                'schema': 'usr_ai'},
-                  'redis': {'host': '127.0.0.1', 'port': int(os.environ['REDIS_PORT']), 'db': 1},
+                  # The Go server loader requires host:port. The document fixture also checks port.
+                  'redis': {'host': f'127.0.0.1:{redis_port}', 'port': redis_port, 'db': 1},
               }, output)
           PY
           for database in "$AFTER33_DATABASE" "$AFTER298_DATABASE" "$AFTERFF_DATABASE"; do
