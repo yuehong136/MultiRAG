@@ -359,11 +359,11 @@ def test_actual_web_member_chunk_client(shared_api: dict[str, Any]) -> None:
         + "const p = {kb_id: process.env.C_KB!, doc_id: process.env.C_DOC!};\n"
         + "const list = await api.listChunks(p); assert.equal(list.total, 1);\n"
         + "await api.setChunk({...p, chunk_id: process.env.C_CHUNK!, content_with_weight: 'web member updated'});\n"
-        + "const item = await api.getChunk({...p, chunk_id: process.env.C_CHUNK!}); assert.equal(item.content_with_weight, 'web member updated');\n"
+        + "const item = (await api.listChunks(p)).chunks.find(row => row.chunk_id === process.env.C_CHUNK!); assert.equal(item?.content_with_weight, 'web member updated');\n"
         + "await api.switchChunks({...p, chunk_ids: [process.env.C_CHUNK!], available_int: 0});\n"
-        + "assert.equal((await api.getChunk({...p, chunk_id: process.env.C_CHUNK!})).available_int, 0);\n"
+        + "assert.equal((await api.listChunks(p)).chunks.find(row => row.chunk_id === process.env.C_CHUNK!)?.available_int, 0);\n"
         + "await api.switchChunks({...p, chunk_ids: [process.env.C_CHUNK!], available_int: 1});\n"
-        + "console.log('actual Web member list/update/get/toggle passed');\n"
+        + "console.log('actual Web member list/update/reload/toggle passed');\n"
     )
     execution = subprocess.run(
         [str(tsx_runner(web)), "--tsconfig", str(web / "tsconfig.app.json"), str(script)],

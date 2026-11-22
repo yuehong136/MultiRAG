@@ -7,6 +7,7 @@ const token = process.env.SANDBOX_ADMIN_TOKEN!
 const normal = process.env.SANDBOX_NORMAL_TOKEN!
 assert.ok(root && base && token && normal)
 Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+Object.defineProperty(globalThis, 'self', { configurable: true, value: globalThis })
 const values = new Map<string, string>()
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
   getItem: (key: string) => values.get(key) ?? null,
