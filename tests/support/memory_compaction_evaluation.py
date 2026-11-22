@@ -37,6 +37,7 @@ MODES: tuple[Mode, Mode] = ("uncompressed", "compacted")
 SUBJECT, AGENT = "compaction-evaluation-subject", "compaction-evaluation-agent"
 MAX_CASES, MAX_SOURCES, MAX_SDK_PER_CASE = 2, 2, 5
 INPUT_LIMIT, SUMMARY_LIMIT, ANSWER_LIMIT = 16384, 512, 512
+EXTENDED_SUMMARY_LIMIT = 1024
 PACKAGE_LIMIT, CALLER_LIMIT, MARGIN = 4096, 16384, 256
 REVIEW_TIMEOUT = 600
 ORDER_SEED = 20261117085248
@@ -131,8 +132,10 @@ def raw_content(source: dict[str, Any]) -> str:
     return "User Input: " + source["user_input"] + "\nAgent Response: " + source["agent_response"]
 
 
-def preflight_case(case: dict[str, Any]) -> dict[str, Any]:
+def preflight_case(case: dict[str, Any], *, summary_limit: int = SUMMARY_LIMIT) -> dict[str, Any]:
     checked = validate_case(case)
+    if type(summary_limit) is not int or summary_limit not in {SUMMARY_LIMIT, EXTENDED_SUMMARY_LIMIT}:
+        raise ValueError("invalid_compaction_summary_limit")
     counts = []
     for source in checked["sources"]:
         content = raw_content(source)
@@ -144,7 +147,7 @@ def preflight_case(case: dict[str, Any]) -> dict[str, Any]:
         "source_embedding_input_tokens_estimated": counts,
         "source_embedding_full_content": True,
         "sdk_maximum": MAX_SDK_PER_CASE,
-        "completion_reserve_tokens": SUMMARY_LIMIT + 2 * ANSWER_LIMIT,
+        "completion_reserve_tokens": summary_limit + 2 * ANSWER_LIMIT,
         "target_chat_tokenizer_exact": False,
     }
 
@@ -177,18 +180,18 @@ def embedding_wire_guard(expected: str) -> Iterator[list[dict[str, Any]]]:
         yield records
 
 
-def compaction_request(source_ids: list[str], operation_id: str) -> dict[str, Any]:
+def compaction_request(source_ids: list[str], operation_id: str, *, summary_limit: int = SUMMARY_LIMIT) -> dict[str, Any]:
     if len(source_ids) != MAX_SOURCES or len(set(source_ids)) != len(source_ids):
         raise ValueError("invalid_compaction_observed_sources")
     if any(not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", value) or int(value) > 2**63 - 1 for value in source_ids):
         raise ValueError("invalid_compaction_source_identity")
-    return {"operation_id": operation_id, "source_ids": list(source_ids), "prefix_count": 1, "input_budget_tokens": INPUT_LIMIT, "output_budget_tokens": SUMMARY_LIMIT, "budget_tokens": PACKAGE_LIMIT}
+    return {"operation_id": operation_id, "source_ids": list(source_ids), "prefix_count": 1, "input_budget_tokens": INPUT_LIMIT, "output_budget_tokens": summary_limit, "budget_tokens": PACKAGE_LIMIT}
 
 
 @contextmanager
 def wire_guard(system: str, history: list[dict[str, Any]], *, output_limit: int, phase: str) -> Iterator[list[dict[str, Any]]]:
     """Count the complete SDK body before transport; do not clip any source text."""
-    if type(output_limit) is not int or output_limit not in {SUMMARY_LIMIT, ANSWER_LIMIT}:
+    if type(output_limit) is not int or output_limit not in {SUMMARY_LIMIT, EXTENDED_SUMMARY_LIMIT, ANSWER_LIMIT}:
         raise ValueError("invalid_compaction_wire_limit")
     expected = [{"role": "system", "content": system}, *deepcopy(history)]
     captured: list[dict[str, Any]] = []
@@ -358,7 +361,7 @@ def capture_summary(env: dict[str, Any], patch: pytest.MonkeyPatch, sources: lis
             assert item["binding"] == source_binding(source), "compaction_model_binding_changed"
         record = {"system_sha256": content_hash(system), "source_payload": body, "source_payload_sha256": digest(body), "wires": []}
         captured.append(record)
-        with wire_guard(system, history, output_limit=SUMMARY_LIMIT, phase=env["observer"].phase) as wires:
+        with wire_guard(system, history, output_limit=request["output_budget_tokens"], phase=env["observer"].phase) as wires:
             record["wires"] = wires
             output = await original(bundle, system, history, generation, **options)
         assert len(wires) == 1, "compaction_summary_sdk_not_observed_once"
@@ -369,7 +372,15 @@ def capture_summary(env: dict[str, Any], patch: pytest.MonkeyPatch, sources: lis
         yield captured
 
 
-def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any], case_index: int, directory: Path) -> dict[str, Any]:
+def run_case(
+    env: dict[str, Any],
+    patch: pytest.MonkeyPatch,
+    case: dict[str, Any],
+    case_index: int,
+    directory: Path,
+    *,
+    summary_limit: int = SUMMARY_LIMIT,
+) -> dict[str, Any]:
     """One compaction, two package-only answers, independent decisions, no apply."""
     checked = validate_case(case)
     observer, journal, mid, label = env["observer"], env["journal"], env["memory_id"], checked["id"]
@@ -382,7 +393,7 @@ def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any
         "applied_to_chat": False,
         "long_term_publication": False,
         "consumer_adopted_for_evaluation_only": False,
-        "model_call_plan": {"source_embedding": 2, "summary": 1, "answer": 2, "sdk_maximum": MAX_SDK_PER_CASE},
+        "model_call_plan": {"source_embedding": 2, "summary": 1, "answer": 2, "sdk_maximum": MAX_SDK_PER_CASE, "summary_limit": summary_limit, "answer_limit": ANSWER_LIMIT},
         "summary_stage_compatibility": "analysis; workload_phase isolates compaction generation, no Dreaming analysis",
         "sources": [],
         "preflight": None,
@@ -391,13 +402,13 @@ def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any
     started = time.monotonic()
     try:
         report["phase"] = "preflight"
-        report["preflight"] = preflight_case(checked)
+        report["preflight"] = preflight_case(checked, summary_limit=summary_limit)
         report["phase"] = "source_preparation"
         sources = report["sources"]
         for index, source in enumerate(checked["sources"]):
             append_source(env, source, f"{label}-source-{index}", sources)
         identities = [sources[index]["source_id"] for index in checked["selected_source_indices"] + checked["retained_source_indices"]]
-        request = compaction_request(identities, label + "-compact")
+        request = compaction_request(identities, label + "-compact", summary_limit=summary_limit)
         report["compaction_request"] = request
         report["phase"] = "summary_generation"
         observer.set_stage("analysis", phase=label + "-compaction-generation")
@@ -426,9 +437,10 @@ def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any
         report["consumer_adopted_for_evaluation_only"] = True
         report["phase"] = "answer_comparison"
         # Refresh the original accepted artifact, never regenerate under a new op.
-        refreshed = call(env, "GET", f"/memories/{mid}/context-compactions/{artifact['artifact_id']}")
-        current = refreshed.get("artifact", refreshed)
-        assert comparison_packages(sources, request, current) == packages, "compaction_changed_before_evaluation_consumption"
+        operation_path = f"/memories/{mid}/context-compaction-operations/{operation['operation_id']}"
+        refreshed = call(env, "GET", operation_path)
+        assert refreshed == generated and len(observer.attempts) == before_replay, "compaction_changed_before_evaluation_consumption"
+        report["fresh_operation_read"] = {"operation_id": refreshed["operation"]["operation_id"], "artifact_id": refreshed["artifact"]["artifact_id"], "matches_generated": True}
         answers: dict[str, Any] = {}
         report["answers"] = answers
         for mode in mode_order(case_index):
@@ -436,14 +448,11 @@ def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any
         report["answers"] = answers
         order = mode_order(case_index)
         mapping = {"variant-" + str(index + 1): mode for index, mode in enumerate(order)}
-        write_private(directory / (label + ".variant-mapping.private.json"), {"mapping": mapping, "not_fully_blind": True, "summary_review_preceded_answer_review": True}, journal)
+        write_private(directory / (label + ".variant-mapping.private.json"), {"mapping": mapping, "answer_arm_masked": True, "summary_review_preceded_answer_review": True}, journal)
         answer_request = review_request(
             checked,
             "answers",
-            {
-                key: {"sources": sources, "context": packages[mode], "question": checked["question"], "answer": answers[mode]["answer"], "answer_record_sha256": digest(answers[mode])}
-                for key, mode in mapping.items()
-            },
+            {key: {"sources": sources, "question": checked["question"], "answer": answers[mode]["answer"]} for key, mode in mapping.items()},
         )
         report["phase"] = "independent_answer_review"
         judged = external_review(directory, label + "-answers", answer_request, journal)
@@ -463,14 +472,16 @@ def run_case(env: dict[str, Any], patch: pytest.MonkeyPatch, case: dict[str, Any
             },
         )
         before_read = len(observer.attempts)
-        unavailable = api_request(env, "GET", f"/memories/{mid}/context-compactions/{artifact['artifact_id']}", actor=0)
+        unavailable = api_request(env, "GET", operation_path, actor=0)
         report["artifact_after_withdrawal"] = {"http_status": unavailable.status_code, "body": unavailable.json()}
         assert unavailable.status_code in {200, 404, 409} and len(observer.attempts) == before_read
         if unavailable.status_code == 200:
             data = unavailable.json()["data"]
-            redacted = data.get("artifact", data)
+            redacted = data["artifact"]
+            assert data["operation"]["operation_id"] == operation["operation_id"] and data["operation"]["status"] == "stale"
             assert redacted.get("valid_for_current") is False and redacted.get("package") is None
         assert packages["compacted"]["summary"] not in unavailable.text and sources[checked["selected_source_indices"][0]]["content"] not in unavailable.text
+        report["withdrawal_prevents_consumption"] = True
         report["mechanism_complete"] = True
         return report
     except BaseException as error:

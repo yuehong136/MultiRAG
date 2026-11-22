@@ -768,6 +768,30 @@ API 包预算仍是估算，真实 SDK 包装计量及供应商回执分别记�
 相关 81 项单测、2 项受控协议、5 项 HTTP 回归和定向 Ruff、格式、类型检查均通过。受控请求实查已收到新提示，输出预算仍是 512。
 独立读回验证隔离资源已清理，业务数据保持只读边界。
 
+### 旧馆藏出处定义的单次预算诊断
+
+显式运行 `tests/evals/test_memory_compaction.py::test_real_cabinet_provenance_extended_summary_budget`。
+该用例冻结 `held_cabinet_provenance` 原有的两条来源、首问和判据，沿用同一摘要提示和原来的回答输出上限 512。
+本次请求将摘要输出上限设为 1,024，与原 512 结果分别记录。调用上限为两次向量化、一次摘要和一对答复，
+聊天输出共预留 2,048 token。报告记录实际 SDK 预算、完成原因、可见响应、推理用量和失败尝试。
+
+只有摘要可用、完整数据包确有缩减且出处定义通过独立评阅后，才重新读取同一个压缩操作并消费。
+答复评阅包只有原始来源、问题、判据和按编号排列的两个答复，分支映射单独保存。
+撤回所覆盖的来源后，原操作停止供给摘要或来源正文，不发生新的模型调用。
+受控 SDK 覆盖 1,024／512 边界和纯推理的 `length` 停止，后者只尝试一次摘要，随后保留失败回执。
+[OpenClaw 停止条件测试](https://github.com/openclaw/openclaw/blob/894c16b6ca453fbe9dc95933adbeb12d38dade43/src/agents/compaction.summary-format.test.ts#L38)
+· [DeepSeek Harness 完整包装缩减检查](https://github.com/deepseek-ai/deepseek-harness/blob/d98f5d68519215da48f3002da2cb9c9d2068d81d/packages/compaction/compaction-basic/src/region.ts#L423)
+· [OpenAI SDK 输出上限定义](https://github.com/openai/openai-python/blob/f63f14b34754fa77fc839ac2cf95da3ef42e1f6a/src/openai/types/chat/completion_create_params.py#L189)。
+
+2026-11-22 在独立 PostgreSQL、Milvus 和 Valkey 上直连 OpenAI 实测，使用 `gpt-6.1-terra` 和 `text-embedding-3-small`。
+摘要正常结束，626 个输出 token 中有 106 个推理 token，完整包估算从 1,587 降到 1,359 token。
+独立评阅确认摘要保留了“出处已核对”表示出处卡与登记条目相符的正面定义，以及原有适用和核验边界。
+两份编号答复也通过判据，答复的措辞仍可能提示分支。原操作回读与生成结果一致，撤回后状态为 `stale`，摘要和来源正文停止供给。
+全程 5 次调用，供应商回执合计 5,699 token，无未知用量。共享向量化为 1,126 token，
+原文答复为 1,541 token，压缩含摘要为 3,032 token。账单和缓存写入费用未知。
+此结果只覆盖 1,024 预算下的一次配对，原 512 预算的 `length` 失败保留。81 项相关单测、4 项受控 SDK、
+1 项真实直连及定向 Ruff、格式和类型检查均通过，独立读回确认两组隔离资源已清理。
+
 ## 原生 LLM→Message 与严格语义回归
 
 此组从已认证的 Agent API 执行 `Begin → LLM → Message`，由原生 LLM 节点真实生成资料，

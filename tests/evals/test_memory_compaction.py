@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from tests.support import memory_compaction_evaluation as evaluation
+from tests.support import memory_compaction_reuse_evaluation as reuse
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.memory_structured_sources_live import require_direct_openai_models
 from tests.support.memory_workload_runtime import memory_live_api as memory_live_api
@@ -32,7 +33,32 @@ def test_real_compaction_comparison(memory_live_api: dict[str, Any], monkeypatch
     assert report["mechanism_complete"] is True
 
 
-def _install_controlled_sdk(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, *, fail_summary: bool = False) -> list[dict[str, Any]]:
+def _cabinet_provenance_case() -> dict[str, Any]:
+    fixtures = reuse.load_expansion_cases(BASELINE.with_name("memory_compaction_expansion_holdout.json"), "expansion_holdout")
+    frozen = next(case for case in fixtures if case["id"] == "held_cabinet_provenance")
+    case, _ = reuse.expansion_trajectory(frozen)
+    return case
+
+
+def test_real_cabinet_provenance_extended_summary_budget(memory_live_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    env = memory_live_api
+    assert os.environ.get("MULTIRAG_MEMORY_LIVE_PROVIDER") == "OpenAI"
+    require_direct_openai_models(env)
+    case = _cabinet_provenance_case()
+    env["journal"].event("compaction-cabinet-provenance-request", case_sha256=evaluation.digest(case), summary_limit=evaluation.EXTENDED_SUMMARY_LIMIT, maximum_attempts=evaluation.MAX_SDK_PER_CASE)
+    report = evaluation.run_case(env, monkeypatch, case, 0, Path(request.config.getoption("--test-report-dir")), summary_limit=evaluation.EXTENDED_SUMMARY_LIMIT)
+    assert report["planned_scope_complete"] and report["withdrawal_prevents_consumption"]
+    assert report["semantic_answers_accepted"] is True
+
+
+def _install_controlled_sdk(
+    env: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fail_summary: bool = False,
+    summary_limit: int = evaluation.SUMMARY_LIMIT,
+    reasoning_only_summary: bool = False,
+) -> list[dict[str, Any]]:
     require_direct_openai_models(env)
     observed: list[dict[str, Any]] = []
     original_sync, original_async = httpx.Client.send, httpx.AsyncClient.send
@@ -57,16 +83,20 @@ def _install_controlled_sdk(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
             return await original_async(client, outbound, *args, **options)
         assert outbound.method == "POST" and outbound.url.path.endswith("/chat/completions")
         body = json.loads(outbound.content)
-        assert body["model"] == "gpt-6.1-terra" and body["max_completion_tokens"] == 512 and "max_tokens" not in body
+        summary_stage = env["observer"].stage == "analysis"
+        expected_limit = summary_limit if summary_stage else evaluation.ANSWER_LIMIT
+        assert body["model"] == "gpt-6.1-terra" and body["max_completion_tokens"] == expected_limit and "max_tokens" not in body
         observed.append({"kind": "chat", "body": body})
-        if fail_summary and env["observer"].stage == "analysis":
+        if fail_summary and summary_stage:
             return httpx.Response(
                 500, request=outbound, json={"error": {"message": "Controlled provider unavailable; never a real provider response.", "type": "server_error", "code": "controlled_unavailable"}}
             )
-        if env["observer"].stage == "analysis":
+        if summary_stage:
             text = "仅合成数据与演练内网，禁止生产、真实客户数据和公网；RIV-7F2B-2026每批最多48条，每窗90秒，连续两窗p95均超过280毫秒才停止并回退。文字说明不证明执行或核验。"
         else:
             text = "受控SDK协议响应，不代表实际模型事实准确率。"
+        reasoning_only = summary_stage and reasoning_only_summary
+        completion_tokens = expected_limit if reasoning_only else 11
         return httpx.Response(
             200,
             request=outbound,
@@ -75,12 +105,20 @@ def _install_controlled_sdk(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
                 "object": "chat.completion",
                 "created": 0,
                 "model": body["model"],
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 31, "completion_tokens": 11, "total_tokens": 42, "prompt_tokens_details": {"cached_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0}},
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": None if reasoning_only else text}, "finish_reason": "length" if reasoning_only else "stop"}],
+                "usage": {
+                    "prompt_tokens": 31,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": 31 + completion_tokens,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                    "completion_tokens_details": {"reasoning_tokens": completion_tokens if reasoning_only else 0},
+                },
             },
         )
 
     def simulated_review(directory: Path, label: str, value: dict[str, Any], journal: Any, **options: Any) -> dict[str, Any]:
+        if value["kind"] == "answers":
+            assert all(set(item) == {"sources", "question", "answer", "rubric"} for item in value["review_items"].values())
         decision = {
             "request_sha256": evaluation.digest(value),
             "reviewed_by": "controlled_protocol_simulation_only",
@@ -128,3 +166,28 @@ def test_controlled_compaction_sdk_failure_does_not_retry(memory_live_api: dict[
     assert attempts[-1]["state"] == "failed" and attempts[-1]["provider_total_tokens"] is None
     assert report["generated"]["operation"]["status"] == "failed" and report["generated"]["artifact"]["package"] is None
     env["journal"].event("controlled-compaction-sdk-failure", external_provider_calls=0, sdk_calls=3, summary_attempts=1, answer_calls=0, failed_usage_unknown=True, retries=0)
+
+
+@pytest.mark.parametrize("reasoning_only", [False, True], ids=["complete", "reasoning-only"])
+def test_controlled_cabinet_provenance_extended_summary_budget(memory_live_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, reasoning_only: bool) -> None:
+    case = _cabinet_provenance_case()
+    case["id"] += "-controlled-empty" if reasoning_only else "-controlled-complete"
+    directory = Path(request.config.getoption("--test-report-dir"))
+    limit = evaluation.EXTENDED_SUMMARY_LIMIT
+    assert evaluation.preflight_case(case)["completion_reserve_tokens"] == 1536
+    observed = _install_controlled_sdk(memory_live_api, monkeypatch, summary_limit=limit, reasoning_only_summary=reasoning_only)
+    if reasoning_only:
+        with pytest.raises(AssertionError):
+            evaluation.run_case(memory_live_api, monkeypatch, case, 0, directory, summary_limit=limit)
+        report = json.loads((directory / (case["id"] + ".compaction-report.json")).read_text())
+        assert report["generated"]["operation"]["error_code"] == "empty_compaction_summary"
+        assert report["generated"]["artifact"]["package"] is None and "answers" not in report
+        assert report["consumer_adopted_for_evaluation_only"] is False
+        assert report["actual_attempts"][-1]["finish_reason"] == "length"
+    else:
+        report = evaluation.run_case(memory_live_api, monkeypatch, case, 0, directory, summary_limit=limit)
+        assert report["planned_scope_complete"] and report["withdrawal_prevents_consumption"]
+        assert report["semantic_answers_accepted"] is True
+    assert report["preflight"]["completion_reserve_tokens"] == 2048
+    assert [row["body"]["max_completion_tokens"] for row in observed if row["kind"] == "chat"] == ([1024] if reasoning_only else [1024, 512, 512])
+    assert len(report["actual_attempts"]) == len(observed) == (3 if reasoning_only else 5)
