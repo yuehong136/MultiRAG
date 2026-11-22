@@ -3,7 +3,7 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 import sqlalchemy as sa
@@ -12,11 +12,12 @@ from sqlalchemy.orm import Session
 from api.db.memory_compaction_models import MemoryCompactionArtifact, MemoryCompactionRoot
 from api.db.memory_revision_models import MemoryMutationOperation, MemoryPublicationOutbox
 from api.db.memory_writer_models import MemoryWriterAdmission
+from memory.compaction.consumption import prepare_compaction_request
 from memory.compaction.domain import MAX_ARTIFACTS
 from memory.writes.admission import MAX_WRITER_INVENTORY
 from tests.support.memory_compaction_http import compaction_api as compaction_api
 from tests.support.memory_compaction_http import release_api as release_api
-from tests.support.memory_compaction_http import request
+from tests.support.memory_compaction_http import request, retirement_commit_fault
 from tests.support.memory_compaction_http import writes_api as writes_api
 from tests.support.memory_message_recovery_web import memory_effects, no_sql_mutations
 from tests.support.memory_writes_http import api_request, result
@@ -102,6 +103,109 @@ def test_preview_confirmation_and_replay_remove_only_compaction_copies(compactio
         assert admission is not None and admission.request_metadata == {"artifact_id": artifact_id, "retired": True} and admission.active_token is None
         assert publication is not None and publication.payload == {"action": "context_compact", "reserved_bytes": 0}
         assert operation is not None and operation.result == {"artifact_id": artifact_id, "generated_only": True, "retired_at": artifact["retired_at"]}
+
+
+@pytest.mark.parametrize("phase", ["before_commit", "after_commit"])
+def test_retirement_commit_failure_recovers_original_operation(compaction_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, phase: Literal["before_commit", "after_commit"]) -> None:
+    env, mid = compaction_api, compaction_api["memory_id"]
+    operation_id = "owned-retirement-commit-recovery"
+    base = f"/memories/{mid}/context-compactions"
+    generate = request(env, operation_id)
+    created = result(api_request(env, "POST", base, json=generate))
+    artifact = created["artifact"]
+    artifact_id = artifact["artifact_id"]
+    inventory, path, operation_path = _paths(env, operation_id, artifact_id)
+    preview = _preview(env, path)
+    assert preview["eligible"]
+    before_counts = result(api_request(env, "GET", inventory))
+    before = memory_effects(env)
+    source = artifact["sources"][1]
+    source_path = f"/memories/{mid}/sources/{source['source_id']}"
+    source_pin = {
+        **{key: source["scope"][key] for key in ("user_id", "agent_id", "session_id")},
+        "content_sha256": source["content_sha256"],
+        "expected_source_revision": source["source_revision"],
+        "expected_source_generation": source["source_generation"],
+    }
+    raw_before = result(api_request(env, "GET", source_path, params=source_pin))
+
+    with retirement_commit_fault(env, monkeypatch, artifact_id=artifact_id, operation_id=operation_id, phase=phase):
+        response = _retire(env, path, preview)
+    assert response.status_code == 503 and "no-store" in response.headers["Cache-Control"]
+    assert response.json()["data"] == {"operation_id": operation_id, "error_code": "operation_commit_unknown", "requires_reconciliation": True}
+    changed = memory_effects(env)
+    committed = phase == "after_commit"
+    assert (changed["sql_sha256"] != before["sql_sha256"]) is committed
+    assert {key: value for key, value in changed.items() if key != "sql_sha256"} == {key: value for key, value in before.items() if key != "sql_sha256"}
+
+    with Session(env["engine"]) as reader:
+        reader.execute(sa.text("SET TRANSACTION READ ONLY"))
+        stored = reader.get(MemoryCompactionArtifact, artifact_id)
+        operation = reader.get(MemoryMutationOperation, (mid, operation_id))
+        assert stored is not None and operation is not None
+        assert (stored.retired_at is not None) is committed
+        assert stored.input_manifest_sha256 == artifact["input_manifest_sha256"]
+        assert stored.state == operation.status == ("stale" if committed else "generated")
+        assert stored.package == (None if committed else artifact["package"])
+        roots = reader.scalar(sa.select(sa.func.count()).select_from(MemoryCompactionRoot).where(MemoryCompactionRoot.artifact_id == artifact_id))
+        assert roots == (0 if committed else len(artifact["sources"]))
+        if committed:
+            assert stored.retirement is not None and stored.retirement["preview_sha256"] == preview["preview_sha256"]
+            assert operation.error_code == "compaction_retired" and operation.result["retired_at"] == stored.retirement["retired_at"]
+        else:
+            assert stored.retirement is None and operation.error_code is None
+
+    reference = preview["affected"]["consumption_reference"]
+
+    def fetch_original(memory_id: str, requested_operation_id: str) -> dict[str, Any]:
+        assert (memory_id, requested_operation_id) == (mid, operation_id)
+        return result(api_request(env, "GET", operation_path))
+
+    def prepare() -> dict[str, Any]:
+        return prepare_compaction_request(
+            reference,
+            fetch_original,
+            scope={**artifact["sources"][0]["scope"], "session_id": None},
+            model="gpt-6.1-terra",
+            question="核对适用条件",
+            context_window_tokens=32768,
+            tokenizer_label="diagnostic_only",
+            count_tokens=len,
+        )
+
+    with no_sql_mutations() as writes:
+        recovered = fetch_original(mid, operation_id)
+        assert recovered["operation"]["operation_id"] == operation_id
+        assert recovered["artifact"]["artifact_id"] == artifact_id
+        assert result(api_request(env, "GET", source_path, params=source_pin)) == raw_before
+        counts = result(api_request(env, "GET", inventory))
+        assert counts["retired_count"] == before_counts["retired_count"] + int(committed)
+        assert counts["retained_count"] == before_counts["retained_count"] - int(committed)
+        assert counts["available_slots"] == before_counts["available_slots"] + int(committed)
+        latest_preview = _preview(env, path)
+        if committed:
+            assert recovered["artifact"]["error_code"] == "compaction_retired" and recovered["artifact"]["package"] is None
+            assert latest_preview["blockers"] == ["already_retired"]
+            assert result(_retire(env, path, preview)) == recovered
+            with pytest.raises(ValueError, match="compaction_not_consumable"):
+                prepare()
+        else:
+            assert recovered == created and latest_preview == preview
+            assert prepare()["snapshot_only"] is True
+        assert result(api_request(env, "POST", base, json=generate)) == recovered
+    assert writes == [] and memory_effects(env) == changed and len(env["summary_calls"]) == 1
+    env["journal"].event(
+        "retirement-commit-recovery-readback",
+        phase=phase,
+        status=response.status_code,
+        operation_id=operation_id,
+        artifact_id=artifact_id,
+        commit_observed=committed,
+        original_raw_preserved=True,
+        read_replay_writes=len(writes),
+        additional_model_calls=0,
+        slots_released=int(committed),
+    )
 
 
 def test_canceled_attempt_requires_actual_drain_and_fresh_preview(compaction_api: dict[str, Any]) -> None:

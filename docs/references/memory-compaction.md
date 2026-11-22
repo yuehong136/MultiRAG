@@ -111,6 +111,60 @@ POST /api/v1/memories/{memory_id}/context-compactions/{artifact_id}/retirements
 旧消费引用失效。相同预览哈希重放清理只回看该回执；原生成操作重放不再生成。
 连接中断或提交结果未知时，先回看原操作。Web 支持库存、清理预览、手动确认与原操作刷新恢复，刷新不会提交清理。
 
+## 清理确认结果未知
+
+清理请求返回 503 或连接中断时，从原 Memory 打开原生成操作，再读取当前库存和同一产物的清理预览。
+以持久状态为准，不以请求失败判断清理是否已经提交：
+
+| 原操作的当前状态 | 处置 |
+| --- | --- |
+| 已清理，有 `retired_at` 和 `compaction_retired` 回执 | 读取原回执即可。旧摘要和消费引用不再可用，名额已经释放。 |
+| 未清理，最新预览仍允许清理 | 核对最新影响范围，再由创建者明确确认。确认前没有释放名额。 |
+| 无权、不可读取、在途或无法确认 | 停止重试，按现有权限和写入排空流程核对。不要换操作 ID 重新生成，也不要依据租约超时推断 IO 已结束。 |
+
+取消或[管理员核对写入是否结束](memory-revisions.md#整库删除与排空)，不等于压缩产物已清理。
+当前清理只接受服务记录的正常排空凭证；硬崩溃留下的不确定产物仍可能占用名额。
+清理仍须通过自身的终态、排空凭证和预览哈希检查。
+核对过程中保留原操作身份；不要手工改写摘要、回执、配额计数或活动凭证。
+
+定向回归把故障注入到真实 PostgreSQL 清理事务的提交边界。两种情况都返回同一个原操作 ID 和 503，
+提交前失败后原产物仍可用，提交后丢失回执则只释放一次名额。独立 SQL 读回验证正文和来源绑定，
+随后再检查恢复读取与重放没有新增写入、模型调用或 RAW 变更。
+固定 Web 客户端通过真实 HTTP 发出一次清理请求，并用新的客户端进程两次打开原操作。
+两个进程都只读：提交前失败可读回原产物，提交后回执丢失只能读回清理结果。
+
+## 隔离升级与恢复演练
+
+使用上一个发布版本的同源结构和脱敏或合成数据副本。备份和恢复的目标都应是专用库；使用显式连接，
+核对数据库身份和 Alembic 版本后才允许迁移。不要让命令回退到服务默认连接。
+
+1. 停止演练环境中的旧 API 写入、worker 和外部生产者，等待实际写入与 outbox 排空。记录待迁移产物、根来源、原操作及受管状态。
+2. 用与服务端匹配的 `pg_dump` 制作自定义格式的 PostgreSQL 归档，将它用 `pg_restore --single-transaction` 恢复到空的隔离目标库。独立读回旧版数据，确认恢复后再在该目标上运行正式 Alembic 升级。
+3. 用新版 API 和固定 Web 版本读回原操作、库存、预览和来源；核对迁移没有改变旧产物正文、原操作身份或既有审核结果。
+4. 将原归档恢复到另一个空库复核回退路径。在新库已产生清理回执或其他业务写入时，恢复上版快照会丢失这些后续写入；应隔离核对差异，不能把旧快照直接重新接回线上供给。
+
+PostgreSQL 归档只覆盖 SQL 数据。Milvus 中的 RAW 和索引、Redis 中的队列以及其他服务的持久状态，
+不随该归档恢复。生产备份与恢复必须另验证这些依赖在同一恢复点上的一致性，也不能通过删除清理回执来降级迁移。
+工具语义见 [PostgreSQL pg_dump](https://www.postgresql.org/docs/current/app-pgdump.html) 和
+[pg_restore](https://www.postgresql.org/docs/current/app-pgrestore.html)。
+
+归档往返可能改变 PostgreSQL 对旧状态 CHECK 约束的类型转换写法。
+迁移只对这条约束接受由 PostgreSQL 重建出的等价定义；实际允许的状态不同或约束未经校验时仍拒绝升级。
+
+复跑使用 [隔离演练脚本](../../tests/manual/memory_compaction_rollout.py)，通过[登记入口](../development.md#事前登记验证命令)
+运行 `python -B -m tests.manual.memory_compaction_rollout`。传入 `--pg-bin-dir` 指定同大版本的 PostgreSQL 客户端目录，
+以及 `--previous-ref` 和 `--target-ref` 指定完整的新旧后端提交 SHA；
+用 `WEB_COMPLETION_CHECKOUT` 指向包含固定 Web 提交及已安装依赖的本地仓库。
+演练从 Git 提取三个固定版本，工作区中的其他改动不进入演练。
+复跑还需本机已有的解析模型资产、PostgreSQL、Milvus 和 Redis；演练复制所需资产到临时目录，不下载模型。
+演练使用旧版源码生成合成记录，整个过程只在独占的临时数据库、来源索引和归档文件上运行。
+
+本地演练以 `d25e679b` 生成的旧版数据为输入，使用 PostgreSQL 17.11、目标后端 `c87c88ee` 和固定 Web `b355c64f`。
+在还原的副本上应用正式迁移，比较迁移前后 110 张表的旧字段、行指纹和 1 个序列。
+固定客户端先只读复查原产物，再在升级库验证显式确认和同哈希重放。
+同一归档另行还原到旧版回退库，数据指纹和序列与原库一致；旧 API 上的固定客户端回看全程只读。
+演练期间复用隔离的 Milvus 来源，未运行生产 worker，也没有迁移业务库。
+
 ## 验证与直接参考
 
 固定回归覆盖顺序、完整后缀、角色／时间声明、空输出、预算、操作复用、取消、来源变化和写入排空。
@@ -140,5 +194,10 @@ POST /api/v1/memories/{memory_id}/context-compactions/{artifact_id}/retirements
 | [lossless-claw 清理实现](https://github.com/Martian-Engineering/lossless-claw/blob/f68be585258cac17eef13363bf845a193d914fc0/src/prune.ts#L327)及[只读预览测试](https://github.com/Martian-Engineering/lossless-claw/blob/f68be585258cac17eef13363bf845a193d914fc0/test/prune.test.ts#L155) | 先只读预览再显式确认，确认时在事务内复核；这里限定单个产物并校验预览哈希。 |
 | [DeepSeek Harness 排空测试](https://github.com/deepseek-ai/deepseek-harness/blob/d98f5d68519215da48f3002da2cb9c9d2068d81d/packages/compaction/compaction-basic/tests/manual-compaction.spec.ts#L838) | 取消后等待持久化检查点才释放执行资格。MultiRAG 读取现有写入凭证判断是否已排空。 |
 | [QwenPaw 压缩钩子](https://github.com/nwahlk/QwenPaw/blob/0280fc969c10e1cfd597eac00d4932075cae2b06/src/copaw/agents/hooks/memory_compaction.py#L177) | 对照会话运行时持有历史时的自动压缩和标记行为。MultiRAG 沿用显式产物接口，清理不改原会话状态。 |
+
+故障与恢复演练继续对照 [RAGFlow 的持久写入失败测试](https://github.com/infiniflow/ragflow/blob/91c702e86be3dcb3cabc9f6d81e485d02241bef8/internal/service/memory_message_service_test.go#L114)、
+[DeepSeek Harness 的提交与持久化故障测试](https://github.com/deepseek-ai/deepseek-harness/blob/d98f5d68519215da48f3002da2cb9c9d2068d81d/packages/compaction/compaction-basic/tests/manual-compaction.spec.ts#L708)和
+[OpenClaw 的预览与执行一致性测试](https://github.com/openclaw/openclaw/blob/f7ee25be86f4d76f0fcdace8a2a96e0fa19d0eee/src/config/sessions/cleanup-service.cap-archive.test.ts#L25)。
+本项目复用现有操作 ID、事务和 Web 消费者，按实际提交状态断言恢复；没有移植上游运行时或运行上游测试套件。
 
 定时触发仍后置，Wiki 等主线，本功能不涉及 AgentHub。

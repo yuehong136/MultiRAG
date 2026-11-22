@@ -1,16 +1,91 @@
 """Owned RAW sources and controlled summaries for real artifact API/storage tests."""
 
 from collections.abc import Iterator
-from typing import Any
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Any, Literal
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.memory_compaction_models import MemoryCompactionArtifact, MemoryCompactionRoot
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.memory_writes_http import WriteChat, api_request, result
 from tests.support.memory_writes_http import writes_api as writes_api
+
+
+@dataclass
+class RetirementCommitFault:
+    injected: bool = False
+    commit_completed: bool = False
+
+
+@contextmanager
+def retirement_commit_fault(
+    env: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    artifact_id: str,
+    operation_id: str,
+    phase: Literal["before_commit", "after_commit"],
+) -> Iterator[RetirementCommitFault]:
+    """Fail the commit boundary of one real, flushed retirement on the owned database."""
+    database = env["engine"].url.database
+    assert isinstance(database, str) and database.startswith("multirag_test_")
+    assert env["engine"].dialect.name == "postgresql"
+    marker = "owned_retirement_commit_fault"
+    original_commit = AsyncSession.commit
+    fault = RetirementCommitFault()
+
+    def mark_retirement(session: Session, flush_context: Any, instances: Any) -> None:
+        if any(
+            isinstance(item, MemoryCompactionArtifact)
+            and item.memory_id == env["memory_id"]
+            and item.artifact_id == artifact_id
+            and item.operation_id == operation_id
+            and item.retired_at is not None
+            and sa.inspect(item).attrs.retired_at.history.has_changes()
+            for item in session.dirty
+        ):
+            binding = session.get_bind()
+            engine = binding if isinstance(binding, sa.engine.Engine) else binding.engine
+            assert engine.url.database == database
+            session.info[marker] = True
+
+    async def interrupt_commit(session: AsyncSession) -> None:
+        if not session.sync_session.info.pop(marker, False):
+            await original_commit(session)
+            return
+        assert not fault.injected
+        flushed = (
+            await session.execute(
+                sa.select(MemoryCompactionArtifact.retired_at, MemoryCompactionArtifact.package.is_(None)).where(
+                    MemoryCompactionArtifact.artifact_id == artifact_id,
+                    MemoryCompactionArtifact.memory_id == env["memory_id"],
+                    MemoryCompactionArtifact.operation_id == operation_id,
+                )
+            )
+        ).one()
+        assert flushed[0] is not None and flushed[1] is True
+        assert not await session.scalar(sa.select(sa.exists().where(MemoryCompactionRoot.artifact_id == artifact_id)))
+        if phase == "after_commit":
+            await original_commit(session)
+            fault.commit_completed = True
+        fault.injected = True
+        env["journal"].event("retirement-commit-fault-injected", database=database, artifact_id=artifact_id, operation_id=operation_id, phase=phase, commit_completed=fault.commit_completed)
+        raise sa.exc.OperationalError("controlled retirement commit acknowledgement failure", {}, RuntimeError("controlled test fault"))
+
+    env["journal"].event("reserve-retirement-commit-fault", database=database, artifact_id=artifact_id, operation_id=operation_id, phase=phase)
+    sa.event.listen(Session, "before_flush", mark_retirement)
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(AsyncSession, "commit", interrupt_commit)
+            yield fault
+        assert fault.injected and fault.commit_completed is (phase == "after_commit")
+    finally:
+        sa.event.remove(Session, "before_flush", mark_retirement)
 
 
 @pytest.fixture
