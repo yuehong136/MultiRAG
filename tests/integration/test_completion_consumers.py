@@ -20,11 +20,11 @@ from tests.support.agent_update_release import release_api as release_api
 from tests.support.reference_metadata_http import metadata_http as metadata_http
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 from tests.support.smoke import smoke_command
-from tests.support.web_consumer import tsx_runner
+from tests.support.web_consumer import pinned_web_checkout, tsx_runner
 
 
 def web_run(env: dict[str, Any], identifier: str, token: str, mode: str) -> dict[str, Any]:
-    root = Path(os.environ.get("WEB_COMPLETION_CHECKOUT", "/Users/xldu/project/web"))
+    root, _ = pinned_web_checkout()
     runner, script = tsx_runner(root), root / "scripts/verify-completion-routes.ts"
     assert runner.exists() and script.exists(), "The actual Web consumer checkout is required."
     completed = subprocess.run(
@@ -39,6 +39,7 @@ def web_run(env: dict[str, Any], identifier: str, token: str, mode: str) -> dict
     return json.loads(completed.stdout.splitlines()[-1])
 
 
+@pytest.mark.external_consumer
 def test_actual_web_agent_plural(release_api: dict[str, Any]) -> None:
     env = release_api
     created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "Web completions", "dsl": message_dsl("published web reply")}, timeout=30).json()
@@ -56,6 +57,7 @@ def test_actual_web_agent_plural(release_api: dict[str, Any]) -> None:
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 
 
+@pytest.mark.external_consumer
 def test_actual_web_search_and_admin_chat(metadata_http: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     env = metadata_http
     with Session(env["engine"]) as db:
