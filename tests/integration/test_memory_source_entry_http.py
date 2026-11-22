@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -39,8 +40,8 @@ BROWSER_ENTRY = "memory-source-entry-browser.ts"
 
 def _run_registered_browser(command: list[str], checkout: Path, web_sha: str, child_env: dict[str, str], config: Path, report_dir: Path | None) -> None:
     project = Path(__file__).resolve().parents[2]
-    evidence = config.parent / "registered-browser"
-    evidence.mkdir(mode=0o700)
+    # Chromium puts SingletonSocket below TMPDIR. A nested pytest path can exceed the Linux Unix socket limit.
+    evidence = Path(tempfile.mkdtemp(dir="/tmp", prefix="mrb-")).resolve()
     runner_command = [sys.executable, str(project / "scripts/run_registered.py"), "--evidence-root", str(evidence), "--label", "memory-source-entry-browser"]
     for path in (Path(__file__), project / ".github/consumer-web.json", checkout / "package-lock.json", checkout / "scripts/consumers" / BROWSER_ENTRY):
         runner_command.extend(("--input", str(path)))
@@ -54,22 +55,35 @@ def _run_registered_browser(command: list[str], checkout: Path, web_sha: str, ch
             timed_out = True
             process.terminate()
             stdout, stderr = process.communicate()
-    assert stdout.strip(), stderr
+    assert stdout.strip(), f"{stderr}\nRegistered source-entry browser evidence: {evidence}"
     receipt = json.loads(stdout.strip().splitlines()[-1])
     journal = Path(receipt["journal"])
-    assert journal.parent == evidence
+    assert journal.parent == evidence and journal.stem == receipt["run_id"]
     raw_output = journal.with_suffix(".output")
-    if report_dir is not None:
-        report = report_dir / "memory-source-entry-browser" / receipt["run_id"]
-        report.mkdir(parents=True, mode=0o700)
-        (report / "receipt.json").write_text(json.dumps({**receipt, "web_sha": web_sha, "timed_out": timed_out}, indent=2))
-        shutil.copyfile(journal, report / journal.name)
-        for case in journal.with_suffix(".cases").glob("*.jsonl"):
-            shutil.copyfile(case, report / case.name)
-        if raw_output.is_file():
-            token = json.loads(config.read_text())["token"]
-            (report / raw_output.name).write_text(raw_output.read_text(errors="replace").replace(token, "[redacted fixture JWT]"))
-    assert not timed_out and process.returncode == receipt["exit_code"] == receipt["raw_exit"] == 0, f"Registered source-entry browser failed: {receipt}; private output: {raw_output}"
+    report = (report_dir or config.parent) / "memory-source-entry-browser" / receipt["run_id"]
+    report.mkdir(parents=True, mode=0o700)
+    (report / "receipt.json").write_text(json.dumps({**receipt, "web_sha": web_sha, "timed_out": timed_out}, indent=2))
+    shutil.copyfile(journal, report / journal.name)
+    for case in journal.with_suffix(".cases").glob("*.jsonl"):
+        shutil.copyfile(case, report / case.name)
+    if raw_output.is_file():
+        token = json.loads(config.read_text())["token"]
+        (report / raw_output.name).write_text(raw_output.read_text(errors="replace").replace(token, "[redacted fixture JWT]"))
+    # Keep recovery resources whenever the runner has not confirmed their removal.
+    finished = json.loads(journal.read_text().splitlines()[-1])
+    cleaned = (
+        finished.get("event") == "finished"
+        and finished.get("run_id") == receipt["run_id"]
+        and finished.get("process_group_absent") is True
+        and finished.get("owned_absent") is True
+        and finished.get("cleanup_errors") == []
+        and not os.path.lexists(journal.with_suffix(""))
+    )
+    if cleaned:
+        shutil.rmtree(evidence)
+    assert cleaned and not timed_out and process.returncode == receipt["exit_code"] == receipt["raw_exit"] == 0, (
+        f"Registered source-entry browser failed: {receipt}; output: {report / raw_output.name}"
+    )
 
 
 def run_entry_consumer(env: dict[str, Any], tmp_path: Path, *, operation: str, script: str = "memory-source-entry.ts", report_dir: Path | None = None, **changes: Any) -> dict[str, Any]:
