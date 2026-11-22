@@ -13,10 +13,12 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import time
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 import sqlalchemy as sa
@@ -30,6 +32,7 @@ if TYPE_CHECKING:
 
 ROOT = Path(__file__).resolve().parents[2]
 STORES = ("postgresql", "milvus", "redis")
+_COLD_SERVER_BUILD = "3.0-20261110-63100f8f5b4"
 
 
 class RecoveryPointMismatch(ValueError):
@@ -112,6 +115,7 @@ class Capture:
     journal: ResourceJournal
     points: dict[str, Point]
     bindings: dict[str, Any]
+    milvus_cold: bool = False
 
     @pytest.fixture
     def same_point_capture(self) -> Capture:
@@ -128,13 +132,89 @@ class Capture:
                 conn.scalar(sa.text("SELECT count(*) FROM usr_ai.t_ai_memory_publication_outbox WHERE lease_token IS NOT NULL OR receipt->'active_attempts' NOT IN ('[]'::jsonb, 'null'::jsonb)")) == 0
             )
         before = snapshots(engine, self.bindings)
-        archives = self.stores.backup(self.work / name, self.bindings["collections"])
+        collections = self.bindings["collections"]
+        if self.milvus_cold:
+            if "coldProbePrefix" not in self.bindings:
+                self.bindings["coldProbePrefix"] = f"upgrade_rehearsal_{secrets.token_hex(6)}"
+                self.journal.event("reserve-milvus-cold-probe-collections", project=self.stores.project, prefix=self.bindings["coldProbePrefix"])
+                self.bindings["coldProbeSnapshot"] = _cold_probe(self.stores, self.bindings, "seed")
+            collections = _collection_names(self.bindings)
+        archives = self.stores.backup(self.work / name, collections)
         assert snapshots(engine, self.bindings) == before
         hashes = {store: archive_hash(archives[store]) for store in STORES}
         if self.points:
             assert all(before[store] != self.points["point-a"].state[store] for store in STORES)
         self.points[name] = Point(archives, hashes, before)
         self.journal.event("same-point-captured", point=name, archive_sha256=hashes, state_sha256=before)
+
+
+def _collection_names(bindings: dict[str, Any]) -> list[str]:
+    names = bindings["collections"]
+    prefix = bindings.get("coldProbePrefix")
+    return [*names, f"{prefix}_memory", f"{prefix}_bm25"] if prefix else names
+
+
+def _cold_probe(stores: RestoreStores, bindings: dict[str, Any], mode: Literal["seed", "verify", "write"]) -> dict[str, Any]:
+    from pymilvus import MilvusClient, connections
+
+    from scripts import milvus_upgrade_probe as probe
+
+    prefix = bindings["coldProbePrefix"]
+    probe.validate_target(stores.milvus_uri, prefix)
+    with closing(MilvusClient(uri=stores.milvus_uri, timeout=8)) as client:
+        version = client.get_server_version()
+        if version != _COLD_SERVER_BUILD:
+            raise RuntimeError(f"Cold probe expected Milvus 3.0.6, got {version}")
+    connections.connect(probe._ALIAS, uri=stores.milvus_uri, timeout=10)
+    try:
+        if mode == "seed":
+            probe.seed(prefix)
+        elif mode == "write":
+            probe.write_after_upgrade(prefix)
+        result = probe.snapshot(prefix, native_order=True)
+    finally:
+        connections.disconnect(probe._ALIAS)
+    if mode == "write":
+        with closing(MilvusClient(uri=stores.milvus_uri, timeout=8)) as client:
+            rows = client.query(
+                collection_name=f"{prefix}_memory",
+                filter='id in ["memory_2", "memory_3", "memory_9"]',
+                output_fields=["id", "content_ltks"],
+                limit=3,
+                consistency_level="Strong",
+            )
+        assert {row["id"] for row in rows} == {"memory_3", "memory_9"}
+        assert "updated after upgrade" in next(row["content_ltks"] for row in rows if row["id"] == "memory_3")
+    return result
+
+
+def _cold_archive_negatives(work: Path, point: Point, journal: ResourceJournal) -> None:
+    from tests.manual.memory_milvus_cold_volumes import validate_bundle
+
+    original = point.archives["milvus"]
+    missing = work / "milvus-cold-missing-volume.tar"
+    damaged = work / "milvus-cold-damaged.tar"
+    for path in (missing, damaged):
+        journal.event("reserve-private-consumer-file", path=str(path))
+    with tarfile.open(original, "r:") as source, tarfile.open(missing, "w") as target:
+        missing.chmod(0o600)
+        for member in source.getmembers():
+            if member.name == "minio_data.tar":
+                continue
+            data = source.extractfile(member)
+            assert data is not None
+            with data as payload:
+                target.addfile(member, payload)
+    with tarfile.open(missing, "r:") as archive, pytest.raises(ValueError, match="volume set incomplete"):
+        validate_bundle(archive)
+    journal.event("same-point-negative", reason="cold Milvus volume missing", storage_restore_started=False, application_started=False, worker_started=False)
+    shutil.copyfile(original, damaged)
+    damaged.chmod(0o600)
+    with damaged.open("r+b") as stream:
+        stream.write(b"invalid-cold-archive-header")
+    with pytest.raises(RecoveryPointMismatch, match="archive digest mismatch: milvus"):
+        check_archives({**point.archives, "milvus": damaged}, point.archive_hashes)
+    journal.event("same-point-negative", reason="cold Milvus archive digest mismatch", storage_restore_started=False, application_started=False, worker_started=False)
 
 
 def _child_environment(overlay: Path) -> dict[str, str]:
@@ -277,7 +357,7 @@ def _run_target(stores: RestoreStores, work: Path, bindings: dict[str, Any], poi
             path.unlink(missing_ok=True)
 
 
-def _run() -> None:
+def _run(*, milvus_cold: bool = False) -> None:
     from tests.manual.memory_restore_stores import isolated_stores
 
     journal = ResourceJournal("memory-same-point-rollout")
@@ -285,11 +365,11 @@ def _run() -> None:
     journal.event("reserve-same-point-work", path=str(work))
     work.mkdir(mode=0o700)
     try:
-        with isolated_stores(work, journal, name="source") as source:
+        with isolated_stores(work, journal, name="source", cold_milvus=milvus_cold) as source:
             overlay = work / "source.json"
             config = source.overlay(yaml.safe_load((ROOT / "configs" / "service_conf.yaml").read_text()))
             private_consumer_file(overlay, json.dumps(config), journal, [])
-            capture = Capture(source, work, journal, {}, {})
+            capture = Capture(source, work, journal, {}, {}, milvus_cold)
             original_env = dict(os.environ)
             source_env = _child_environment(overlay)
             try:
@@ -303,6 +383,7 @@ def _run() -> None:
                 os.environ.clear()
                 os.environ.update(original_env)
                 overlay.unlink(missing_ok=True)
+        journal.event("same-point-source-cleared", project=source.project, mode="cold" if milvus_cold else "collection-snapshot")
         a, b = capture.points["point-a"], capture.points["point-b"]
         check_archives(a.archives, a.archive_hashes)
         check_archives(b.archives, b.archive_hashes)
@@ -311,30 +392,45 @@ def _run() -> None:
             check_archives(missing, a.archive_hashes)
         journal.event("same-point-negative", reason="backup set incomplete", storage_restore_started=False, application_started=False, worker_started=False)
 
-        mixed = {**a.archives, "redis": b.archives["redis"]}
-        with pytest.raises(RecoveryPointMismatch, match="archive digest mismatch: redis"):
+        if milvus_cold:
+            _cold_archive_negatives(work, a, journal)
+        changed = "milvus" if milvus_cold else "redis"
+        collections = _collection_names(capture.bindings)
+        mixed = {**a.archives, changed: b.archives[changed]}
+        with pytest.raises(RecoveryPointMismatch, match=f"archive digest mismatch: {changed}"):
             check_archives(mixed, a.archive_hashes)
         # Compose three individually intact archives from different checkpoints.
         # Verify storage itself rejects admission independently of labels/hashes.
-        check_archives(mixed, {**a.archive_hashes, "redis": b.archive_hashes["redis"]})
-        with isolated_stores(work, journal, name="mixed") as target:
-            target.restore(mixed, capture.bindings["collections"])
+        check_archives(mixed, {**a.archive_hashes, changed: b.archive_hashes[changed]})
+        with isolated_stores(work, journal, name="mixed", cold_milvus=milvus_cold, milvus_archive=mixed["milvus"] if milvus_cold else None) as target:
+            target.restore(mixed, collections)
             mixed_state = _run_target(target, work, capture.bindings, a, probe=True, journal=journal)
-            assert mixed_state == {**a.state, "redis": b.state["redis"]}
-            with pytest.raises(RecoveryPointMismatch, match="restored state mismatch: redis"):
+            assert mixed_state == {**a.state, changed: b.state[changed]}
+            with pytest.raises(RecoveryPointMismatch, match=f"restored state mismatch: {changed}"):
                 admit_restored(mixed_state, a.state)
-            journal.event("same-point-negative", reason="restored state mismatch: redis", all_archives_intact=True, state_verified_independently=True, application_started=False, worker_started=False)
+            journal.event(
+                "same-point-negative", reason=f"restored state mismatch: {changed}", all_archives_intact=True, state_verified_independently=True, application_started=False, worker_started=False
+            )
 
+        check_archives(a.archives, a.archive_hashes)
         started = time.monotonic()
-        with isolated_stores(work, journal, name="same") as target:
-            check_archives(a.archives, a.archive_hashes)
-            target.restore(a.archives, capture.bindings["collections"])
+        with isolated_stores(work, journal, name="same", cold_milvus=milvus_cold, milvus_archive=a.archives["milvus"] if milvus_cold else None) as target:
+            target.restore(a.archives, collections)
             observed = _run_target(target, work, capture.bindings, a, probe=True, journal=journal)
             assert observed is not None
             admit_restored(observed, a.state)
             journal.event("same-point-admitted", state_sha256=observed, seconds=time.monotonic() - started)
+            if milvus_cold:
+                assert _cold_probe(target, capture.bindings, "verify") == capture.bindings["coldProbeSnapshot"]
+                journal.event("milvus-cold-retrieval-verified", project=target.project, probes=["dense", "BM25", "hybrid", "native ORDER BY"], schema_and_rows_match=True)
             _run_target(target, work, capture.bindings, a, probe=False, journal=journal)
-        journal.event("same-point-complete", point="point-a", negative_cases=2, source_stack_stopped_before_restore=True)
+            if milvus_cold:
+                written = _cold_probe(target, capture.bindings, "write")
+                assert written["memory"]["rows_sha256"] != capture.bindings["coldProbeSnapshot"]["memory"]["rows_sha256"]
+                target.restart_cold_milvus()
+                assert _cold_probe(target, capture.bindings, "verify") == written
+                journal.event("milvus-cold-new-writes-restarted", project=target.project, insert=True, upsert=True, delete=True, restart_readback=True)
+        journal.event("same-point-complete", point="point-a", negative_cases=4 if milvus_cold else 2, source_stack_stopped_before_restore=True)
     finally:
         shutil.rmtree(work)
         assert not work.exists()
@@ -347,10 +443,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", type=Path)
     parser.add_argument("--probe", type=Path)
+    parser.add_argument("--milvus-cold", action="store_true", help="Use the same-version physical Milvus archive instead of the collection snapshot")
     args = parser.parse_args()
     if not os.environ.get("MULTIRAG_RUN_ID") or not os.environ.get("MULTIRAG_RUN_JOURNAL"):
         parser.error("Use scripts/run_registered.py")
     if args.target is not None:
+        if args.milvus_cold:
+            parser.error("--milvus-cold applies to the top-level drill only")
         _target(args.target, args.probe)
     elif args.probe is not None:
         parser.error("--probe requires --target")
@@ -366,7 +465,7 @@ def main() -> None:
 
         for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             signal.signal(sig, cancel)
-        _run()
+        _run(milvus_cold=args.milvus_cold)
 
 
 if __name__ == "__main__":

@@ -126,6 +126,30 @@ curl --fail http://127.0.0.1:29091/healthz
 不要让升级后的卷重新连接 2.6.22，不要恢复覆盖仍有新写入的目标。
 测试资源清理只作用于自有 project，保留源备份和报告直到恢复验证完成。
 
+## 同版本 Milvus 整栈冷恢复
+
+复用[三存储同恢复点的登记命令](memory-compaction.md#三存储同恢复点演练)。在登记参数中增加 `--input tests/manual/memory_milvus_cold_volumes.py` 和
+`--input scripts/milvus_upgrade_probe.py`，在末行模块命令后增加 `--milvus-cold`。
+此路径使用已安装的 Milvus 3.0.6、etcd 和 MinIO 镜像，不需要下载 Milvus Backup。
+源及目标都使用独占 Compose 项目和回环端口。生效的 PostgreSQL 逻辑备份与 Valkey RDB 路径沿用同恢复点演练。
+
+1. 停写排空后，先验证真实镜像摘要、卷归属、挂载、etcd 前缀、对象存储 bucket 和前缀、Woodpecker 后端。当前隔离镜像包含四个持久挂载，其中 MinIO 使用 `/minio_data`，镜像同时声明了 `/data`，两处都纳入检查。各检查点先停止 Milvus，再停止 MinIO 和 etcd。服务退出码非零会阻断封存。
+2. 封存每个已停止的卷，保留目录、文件及数字所有权和权限。目标只向归属已核实的空卷解包，复核卷集合、内外层哈希、文件内容和元数据，再依次启动存储依赖和 Milvus。源清退后才能使用归档。缺卷与损坏归档在还原前拒绝，三份完好但 Milvus 来自后一个检查点的归档由恢复后的状态准入拒绝。
+3. 同点还原通过后，复用固定 Web、现有 worker 重投以及 Milvus 稠密、BM25、混合检索和排序探针。在独立探针集合执行插入、upsert 和删除，再重启 Milvus 及其依赖并读回持久结果。记录封存、存储启动与应用放行的耗时。演练使用合成数据，部署恢复目标应以对应环境和数据量的证据为准。
+
+本地实测使用 Milvus `3.0-20261110-63100f8f5b4`、PostgreSQL 16.14、Valkey 8.1.5 和固定 Web `b355c64f`。
+匹配目标从创建到准入耗时约 21.80 秒，受控应用启动后的首次固定 Web 回看耗时约 11.48 秒。四项负例均在应用读取和 worker 重投前阻断。
+匹配目标在重投前后各完成 15 次固定 Web 读取，已撤回的来源原文均返回 404。两条待确认消息在真实 worker 入口处理后归零，模型调用为零。
+探针重启后读回新插入、修改和删除结果。三个测试项目、卷、回环监听及归档辅助容器完成清退和独立读回。
+
+默认逻辑还原与物理卷还原有独立验收记录。仓库目标为 RDB 时按相同 Valkey 镜像及配置引用已测的 RDB 证据。目标启用 AOF 或双模式时，
+部署前须核对有效配置并验证完整 AOF 目录、重写后的增量分段以及负例准入。
+[Milvus 3.0.6 Woodpecker 配置](https://github.com/milvus-io/milvus/blob/63100f8f5b4b675a12fe78fc9673b005ee318731/configs/milvus.yaml#L316) ·
+[Milvus WAL 恢复测试](https://github.com/milvus-io/milvus/blob/8bcbb0770b2356d4e7842fe97100a5f0f7215902/internal/streamingnode/server/wal/recovery/recovery_idempotency_test.go#L25) ·
+[Woodpecker 对象存储恢复测试](https://github.com/zilliztech/woodpecker/blob/74d188d6514dd6ba1a85aa53ba15e9910e6b0645/server/storage/objectstorage/writer_recover_empty_test.go#L37) ·
+[etcd 损坏快照测试](https://github.com/etcd-io/etcd/blob/f872eb465ed3d2d056ec16742a1a2f8e322a5751/tests/e2e/ctl_v3_snapshot_test.go#L73) ·
+[Valkey 持久化](https://valkey.io/topics/persistence/)
+
 ## 逻辑备份与恢复
 
 另保留一个独立备份副本。推荐校验 release checksum 的

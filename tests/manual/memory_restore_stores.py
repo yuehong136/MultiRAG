@@ -28,6 +28,7 @@ import yaml
 from minio import Minio
 from pymilvus import MilvusClient
 
+from tests.manual import memory_milvus_cold_volumes as cold
 from tests.support.resource_journal import ResourceJournal
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -128,7 +129,7 @@ class RestoreStores:
     ports: dict[int, int]
     database: str
     password: str = field(repr=False)
-    backup_program: Path
+    backup_program: Path | None
     journal: ResourceJournal
     containers: dict[str, str] = field(default_factory=dict)
 
@@ -152,7 +153,7 @@ class RestoreStores:
             "redis": redis_config,
             "datav_redis": redis_config,
             "milvus": {"hosts": self.milvus_uri, "db_name": "default", "username": "", "password": "", "token": ""},
-            "minio": {"host": f"127.0.0.1:{self.ports[9000]}", "user": "minioadmin", "password": "minioadmin"},
+            "minio": {"host": f"127.0.0.1:{self.ports[9000]}", "user": "minioadmin", "password": "minioadmin", "region": ""},
         }
 
     def _docker(self, *args: str) -> list[str]:
@@ -195,6 +196,8 @@ class RestoreStores:
         return config
 
     def _backup_cli(self, *args: str) -> None:
+        if self.backup_program is None:
+            raise RuntimeError("Milvus Backup is unavailable in the physical restore drill")
         config = self.config_path.with_name(self.config_path.stem + "-milvus-backup.json")
         if not config.exists():
             self.journal.event("reserve-private-consumer-file", path=str(config))
@@ -278,6 +281,70 @@ class RestoreStores:
             for collection in collections:
                 milvus.load_collection(collection, timeout=120)
 
+    def _cold_containers(self) -> dict[str, str]:
+        return {service: _output(self._docker("ps", "--all", "--quiet", service)) for service in cold.SERVICES}
+
+    def _cold_profile(self) -> dict[str, object]:
+        profile = cold.inspect_stack(self.project, self._cold_containers())
+        # Image defaults and the selected Compose overrides jointly define
+        # this exact topology. inspect_stack rejects any additional mounts.
+        config = yaml.safe_load(_output(self._docker("exec", "-T", "standalone", "cat", "/milvus/configs/milvus.yaml")))
+        etcd, minio, woodpecker = (config[key] for key in ("etcd", "minio", "woodpecker"))
+        if minio["bucketName"] != _BUCKET or woodpecker["meta"]["type"] != "etcd" or woodpecker["storage"]["type"] != "minio":
+            raise ValueError("Unexpected Milvus bucket or WAL topology")
+        if not _output(self._docker("exec", "-T", "etcd", "etcdctl", "get", "--prefix", "--keys-only", etcd["rootPath"] + "/")):
+            raise ValueError("The configured etcd prefix has no Milvus metadata")
+        if not any(self._minio().list_objects(_BUCKET, prefix=minio["rootPath"] + "/", recursive=True)):
+            raise ValueError("The configured bucket prefix has no Milvus objects")
+        return {
+            **profile,
+            "etcd": {key: etcd[key] for key in ("rootPath", "metaSubPath", "kvSubPath")},
+            "minio": {key: minio[key] for key in ("bucketName", "rootPath")},
+            "wal": {"metadata": woodpecker["meta"]["type"], **woodpecker["storage"]},
+        }
+
+    def _stop_cold_milvus(self) -> None:
+        self.assert_alive()
+        for services in (("standalone",), ("minio", "etcd")):
+            subprocess.run(self._docker("stop", "--timeout", "35", *services), check=True, timeout=55)
+            for service in services:
+                state = json.loads(_output(["docker", "inspect", "--format", "{{json .State}}", self.containers[service]]))
+                if state["Status"] != "exited" or state["ExitCode"] != 0 or state["OOMKilled"]:
+                    raise RuntimeError(f"Isolated {service} did not shut down cleanly, exit={state['ExitCode']}")
+                self.journal.event("milvus-cold-service-stopped", project=self.project, service=service, exit_code=state["ExitCode"])
+
+    def _start_cold_milvus(self) -> None:
+        started = time.monotonic()
+        subprocess.run(self._docker("start", "etcd", "minio"), check=True, timeout=30)
+
+        def etcd_ready() -> bool:
+            return "is healthy" in _output(self._docker("exec", "-T", "etcd", "etcdctl", "endpoint", "health"))
+
+        _wait(etcd_ready, "cold etcd startup")
+        _wait(lambda: self._minio().bucket_exists(_BUCKET), "cold MinIO bucket")
+        subprocess.run(self._docker("start", "standalone"), check=True, timeout=30)
+        _wait(self._milvus_ready, "cold Milvus startup")
+        self.journal.event("milvus-cold-services-ready", project=self.project, seconds=time.monotonic() - started)
+
+    def _backup_cold_milvus(self, path: Path, collections: list[str]) -> None:
+        with closing(self._milvus()) as milvus:
+            if set(collections) - set(milvus.list_collections()):
+                raise ValueError("Cannot cold-archive a missing owned Milvus collection")
+            for name in collections:
+                milvus.flush(collection_name=name, timeout=60)
+        profile = self._cold_profile()
+        image = _output(["docker", "inspect", "--format", "{{.Image}}", self.containers["standalone"]])
+        self._stop_cold_milvus()
+        cold.archive_volumes(path, self.project, profile, image, self.journal)
+        self._start_cold_milvus()
+        if self._cold_profile() != profile:
+            raise ValueError("Cold source profile changed after restart")
+
+    def restart_cold_milvus(self) -> None:
+        self._stop_cold_milvus()
+        self._start_cold_milvus()
+        self.assert_alive()
+
     def backup(self, destination: Path, collections: list[str]) -> dict[str, Path]:
         """Capture independent archives after our caller has fenced and drained writes."""
         self.assert_alive()
@@ -290,7 +357,10 @@ class RestoreStores:
             self.journal.event("reserve-private-consumer-file", path=str(path), component=name)
         with _private(files["postgresql"]) as archive:
             subprocess.run(self._postgres("pg_dump", "--format=custom", "--no-owner", "--no-acl"), stdout=archive, check=True, timeout=90)
-        self._backup_milvus(files["milvus"], collections)
+        if self.backup_program is None:
+            self._backup_cold_milvus(files["milvus"], collections)
+        else:
+            self._backup_milvus(files["milvus"], collections)
         with closing(self._redis()) as client:
             config = self._valkey_persistence(client)
             saves = cast(dict[str, Any], client.info("persistence"))["rdb_saves"]
@@ -322,12 +392,14 @@ class RestoreStores:
         if _output(self._postgres("psql", "-XAt", "--command", "SELECT count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')")) != "0":
             raise ValueError("PostgreSQL restore target is not empty")
         with closing(self._milvus()) as milvus, closing(self._redis()) as client:
-            if milvus.list_collections() or client.info("keyspace"):
-                raise ValueError("Milvus or Valkey restore target is not empty")
+            expected_collections = set(collections) if self.backup_program is None else set()
+            if set(milvus.list_collections()) != expected_collections or client.info("keyspace"):
+                raise ValueError("Unexpected collections or keys in the restore target")
             self._valkey_persistence(client)
         with archives["postgresql"].open("rb") as source:
             subprocess.run(self._postgres("pg_restore", "--single-transaction", "--exit-on-error", "--no-owner", "--no-acl"), stdin=source, check=True, timeout=120)
-        self._restore_milvus(archives["milvus"], collections)
+        if self.backup_program is not None:
+            self._restore_milvus(archives["milvus"], collections)
         subprocess.run(self._docker("stop", "--timeout", "10", "redis"), check=True, timeout=25)
         subprocess.run(self._docker("cp", str(archives["redis"]), "redis:/data/dump.rdb"), check=True, timeout=25)
         subprocess.run(self._docker("start", "redis"), check=True, timeout=25)
@@ -337,7 +409,7 @@ class RestoreStores:
 
 
 @contextmanager
-def isolated_stores(work: Path, journal: ResourceJournal, *, name: str) -> Iterator[RestoreStores]:
+def isolated_stores(work: Path, journal: ResourceJournal, *, name: str, cold_milvus: bool = False, milvus_archive: Path | None = None) -> Iterator[RestoreStores]:
     """Start a disposable copy of every persisted service used by the drill."""
     if not os.environ.get("MULTIRAG_RUN_ID") or not os.environ.get("MULTIRAG_RUN_JOURNAL") or not re.fullmatch(r"[a-z][a-z0-9-]{0,28}", name):
         raise ValueError("Use a registered runner and an isolated stack name")
@@ -351,6 +423,16 @@ def isolated_stores(work: Path, journal: ResourceJournal, *, name: str) -> Itera
     compose = yaml.safe_load(_BASE_COMPOSE.read_text())
     services = compose["services"]
     services["standalone"]["image"] = _IMAGES["standalone"]
+    if milvus_archive is not None and not cold_milvus:
+        raise ValueError("A physical archive requires the physical restore mode")
+    if milvus_archive is not None and (milvus_archive.is_symlink() or not milvus_archive.resolve(strict=True).is_relative_to(work.resolve())):
+        raise ValueError("Use an owned archive within the registered recovery directory")
+    if cold_milvus:
+        # MinIO itself declares /data even though this profile serves
+        # /minio_data. A named mount keeps the full topology owned and sealed.
+        compose["volumes"]["minio_image_data"] = None
+        for service, mounts in cold.MOUNTS.items():
+            services[service]["volumes"] = [{"type": "volume", "source": volume, "target": mount, "volume": {"nocopy": True}} for mount, volume in mounts.items()]
     services["postgresql"] = {
         "image": _IMAGES["postgresql"],
         "environment": {"POSTGRES_USER": _USER, "POSTGRES_PASSWORD": password, "POSTGRES_DB": database},
@@ -368,7 +450,7 @@ def isolated_stores(work: Path, journal: ResourceJournal, *, name: str) -> Itera
         settings["pull_policy"] = "never"
     images = {service: _output(["docker", "image", "inspect", "--format", "{{.Id}}", settings["image"]]) for service, settings in services.items()}
     config_path = work / f"{project}.json"
-    program = _backup_program(work, journal)
+    program = None if cold_milvus else _backup_program(work, journal)
 
     with ExitStack() as stack:
         ports: dict[int, int] = {}
@@ -397,9 +479,20 @@ def isolated_stores(work: Path, journal: ResourceJournal, *, name: str) -> Itera
 
     stores = RestoreStores(project, config_path, ports, database, password, program, journal)
     try:
-        subprocess.run(stores._docker("run", "--rm", "--no-deps", "volume-init"), check=True, timeout=80)
-        expected_services = ["postgresql", "redis", "etcd", "minio", "standalone"]
-        subprocess.run(stores._docker("up", "--detach", "--pull", "never", *expected_services), check=True, timeout=100)
+        expected_services = ["postgresql", "redis", *cold.SERVICES]
+        if milvus_archive is None:
+            subprocess.run(stores._docker("run", "--rm", "--no-deps", "volume-init"), check=True, timeout=80)
+            subprocess.run(stores._docker("up", "--detach", "--pull", "never", *expected_services), check=True, timeout=100)
+        else:
+            started = time.monotonic()
+            subprocess.run(stores._docker("create", "--pull", "never", *cold.SERVICES), check=True, timeout=60)
+            profile = cold.inspect_stack(project, stores._cold_containers())
+            captured = cold.restore_volumes(milvus_archive, project, profile, images["standalone"], journal)
+            journal.event("milvus-cold-restore-archives-applied", project=project, seconds=time.monotonic() - started)
+            stores._start_cold_milvus()
+            if stores._cold_profile() != captured:
+                raise ValueError("Running cold restore profile differs from the archive")
+            subprocess.run(stores._docker("up", "--detach", "--pull", "never", "postgresql", "redis"), check=True, timeout=80)
         stores.containers.update((service, _output(stores._docker("ps", "--quiet", service))) for service in expected_services)
         for service, container in stores.containers.items():
             if _output(["docker", "inspect", "--format", "{{.Image}}", container]) != images[service]:
@@ -414,7 +507,7 @@ def isolated_stores(work: Path, journal: ResourceJournal, *, name: str) -> Itera
         _wait(stores._redis_ready, "Valkey startup")
         _wait(stores._milvus_ready, "Milvus startup")
         with closing(stores._milvus()) as milvus, closing(stores._redis()) as client:
-            if milvus.list_collections() or client.info("keyspace"):
+            if (milvus_archive is None and milvus.list_collections()) or client.info("keyspace"):
                 raise RuntimeError("A new isolated store unexpectedly contains data")
             redis_mode = stores._valkey_persistence(client)
             journal.event(
