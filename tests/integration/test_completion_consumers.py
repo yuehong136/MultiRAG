@@ -14,7 +14,7 @@ import pytest
 import requests
 from sqlalchemy.orm import Session
 
-from api.db.db_models import API4Conversation, Conversation, Search
+from api.db.db_models import API4Conversation, Conversation, Search, User
 from tests.support.agent_update_release import message_dsl, read_state, update
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.reference_metadata_http import metadata_http as metadata_http
@@ -59,9 +59,14 @@ def test_actual_web_agent_plural(release_api: dict[str, Any]) -> None:
 
 @pytest.mark.external_consumer
 def test_actual_web_search_and_admin_chat(metadata_http: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from api.apps import manager
+
     env = metadata_http
     with Session(env["engine"]) as db:
         before = db.get(Search, env["ids"]["search"]).to_dict()
+        cli_user = db.get(User, before["tenant_id"])
+        assert cli_user is not None
+        cli_token = manager.create_access_token(data={"sub": cli_user.email})
     web_run(env, env["ids"]["search"], env["api_key"], "search")
     with Session(env["engine"]) as db:
         assert db.get(Search, env["ids"]["search"]).to_dict() == before
@@ -78,7 +83,7 @@ def test_actual_web_search_and_admin_chat(metadata_http: dict[str, Any], monkeyp
     http = importlib.import_module("http_client")
     address = urlsplit(env["base"])
     transport = http.HttpClient(host=address.hostname, port=address.port)
-    transport.login_token = env["api_key"]
+    transport.login_token = cli_token
     client = admin.MultiRAGClient(transport, "user")
     client.chat_on_session({"chat_name": "Metadata chat", "session_id": session_id, "message": "real CLI question"})
     assert "Answer" in capsys.readouterr().out

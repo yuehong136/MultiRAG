@@ -386,7 +386,14 @@ def test_pinned_web_remove_conversation_client(session_upload_api: dict[str, Any
     result = subprocess.run(
         [str(tsx_runner(root)), "--tsconfig", str(root / "tsconfig.app.json"), str(script)],
         cwd=root,
-        env={**os.environ, "SESSION_CLEANUP_BASE": env["base"], "SESSION_CLEANUP_TOKEN": env["jwt"], "SESSION_CLEANUP_ID": session_id},
+        env={
+            **os.environ,
+            "SESSION_CLEANUP_BASE": env["base"],
+            "SESSION_CLEANUP_TOKEN": env["jwt"],
+            "SESSION_CLEANUP_ID": session_id,
+            "SESSION_CLEANUP_CHAT": env["chats"][0],
+            "SESSION_CLEANUP_WEB_SHA": expected,
+        },
         capture_output=True,
         text=True,
         timeout=45,
