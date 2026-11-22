@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
+from alembic import op
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
@@ -59,7 +60,8 @@ def test_compaction_migration_is_idempotent_and_nonempty_audit_cannot_downgrade(
         journal.event("compaction-migration-cleanup-readback", audit_rows=0)
 
 
-def test_retirement_migration_preserves_existing_generation_row_and_guards_downgrade(bootstrapped_engine: sa.Engine) -> None:
+@pytest.mark.parametrize("restore_check", [False, True], ids=["native-check", "restored-check"])
+def test_retirement_migration_preserves_existing_generation_row_and_guards_downgrade(bootstrapped_engine: sa.Engine, restore_check: bool) -> None:
     engine = bootstrapped_engine
     assert str(engine.url.database).startswith("multirag_test_")
     path = Path(__file__).parents[2] / "configs/alembic/versions/0d35f7a9c1e3_add_compaction_retirement.py"
@@ -92,6 +94,20 @@ def test_retirement_migration_preserves_existing_generation_row_and_guards_downg
             module.downgrade()
         old_columns = {column["name"] for column in sa.inspect(connection).get_columns(table.name, schema="usr_ai")}
         assert {"retired_at", "retirement"}.isdisjoint(old_columns)
+        if restore_check:
+            definition = connection.execute(
+                sa.text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = to_regclass(:table) AND conname = 'ck_memory_compaction_state'"),
+                {"table": table.fullname},
+            ).scalar_one()
+            with Operations.context(MigrationContext.configure(connection)):
+                op.drop_constraint("ck_memory_compaction_state", table.name, type_="check", schema="usr_ai")
+            connection.exec_driver_sql(f"ALTER TABLE {table.fullname} ADD CONSTRAINT ck_memory_compaction_state {definition}")
+        with connection.begin_nested() as invalid, Operations.context(MigrationContext.configure(connection)):
+            op.drop_constraint("ck_memory_compaction_state", table.name, type_="check", schema="usr_ai")
+            op.create_check_constraint("ck_memory_compaction_state", table.name, "state IN ('generated','unsupported')", schema="usr_ai")
+            with pytest.raises(RuntimeError, match="incompatible check constraint: ck_memory_compaction_state"):
+                module.upgrade()
+            invalid.rollback()
         with Operations.context(MigrationContext.configure(connection)):
             module.upgrade()
             module.upgrade()

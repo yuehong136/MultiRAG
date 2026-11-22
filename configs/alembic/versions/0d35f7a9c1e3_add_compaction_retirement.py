@@ -38,7 +38,7 @@ def upgrade() -> None:
     assert spec and spec.loader
     validator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(validator)
-    validator.validate_constraints(bind, table)
+    validator.validate_constraints(bind, table, roundtrip_checks=frozenset({"ck_memory_compaction_state"}))
 
 
 def downgrade() -> None:

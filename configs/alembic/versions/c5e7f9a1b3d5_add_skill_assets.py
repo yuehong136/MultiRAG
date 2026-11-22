@@ -40,7 +40,7 @@ def upgrade() -> None:
         validate_constraints(bind, model.__table__)
 
 
-def validate_constraints(bind: Any, table: sa.Table) -> None:
+def validate_constraints(bind: Any, table: sa.Table, *, roundtrip_checks: frozenset[str] = frozenset()) -> None:
     """Reject partially bootstrapped or drifted tables, including changed CHECK text."""
     inspector = sa.inspect(bind)
     schema = "usr_ai"
@@ -94,8 +94,22 @@ def validate_constraints(bind: Any, table: sa.Table) -> None:
                 bind.execute(sa.text(f'ALTER TABLE "{probe}" ADD CONSTRAINT "{constraint.name}" CHECK ({expression})'))
         expected_checks = {item["name"]: item["sqltext"] for item in sa.inspect(bind).get_check_constraints(probe)}
         actual_checks = {item["name"]: item["sqltext"] for item in inspector.get_check_constraints(table.name, schema=schema)}
-        if any(actual_checks.get(name) != expression for name, expression in expected_checks.items()):
-            raise RuntimeError("Existing skill table has incompatible check constraint")
+        for name, expression in expected_checks.items():
+            if actual_checks.get(name) == expression:
+                continue
+            if name in roundtrip_checks and actual_checks.get(name) is not None:
+                # pg_dump deparses the trusted expected expression before restoring it.
+                restored_definition = bind.scalar(
+                    sa.text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = to_regclass(:probe) AND conname = :name"),
+                    {"probe": probe, "name": name},
+                )
+                if restored_definition:
+                    bind.execute(sa.text(f'ALTER TABLE "{probe}" ADD CONSTRAINT "dump_roundtrip" {restored_definition}'))
+                    restored = {item["name"]: item["sqltext"] for item in sa.inspect(bind).get_check_constraints(probe)}
+                    bind.execute(sa.text(f'ALTER TABLE "{probe}" DROP CONSTRAINT "dump_roundtrip"'))
+                    if actual_checks[name] == restored["dump_roundtrip"]:
+                        continue
+            raise RuntimeError(f"Existing skill table has incompatible check constraint: {name}")
     finally:
         bind.execute(sa.text(f'DROP TABLE "{probe}"'))
     if bind.scalar(sa.text("SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = CAST(:table_name AS regclass) AND NOT convalidated)"), {"table_name": f"usr_ai.{table.name}"}):
