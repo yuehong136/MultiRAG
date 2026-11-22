@@ -83,7 +83,7 @@ def test_actual_web_search_and_admin_chat(metadata_http: dict[str, Any], monkeyp
     http = importlib.import_module("http_client")
     address = urlsplit(env["base"])
     transport = http.HttpClient(host=address.hostname, port=address.port)
-    transport.login_token = cli_token
+    transport.login_token = f"Bearer {cli_token}"
     client = admin.MultiRAGClient(transport, "user")
     client.chat_on_session({"chat_name": "Metadata chat", "session_id": session_id, "message": "real CLI question"})
     assert "Answer" in capsys.readouterr().out
