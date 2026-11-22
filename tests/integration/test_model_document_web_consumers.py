@@ -4,6 +4,8 @@ import base64
 import hashlib
 import json
 import os
+import shutil
+import socket
 import subprocess
 import threading
 from collections.abc import Callable, Iterator
@@ -11,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 import uvicorn  # noqa: F401 -- initialize before legacy component nest_asyncio patches
@@ -19,9 +22,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from agent.component.docs_generator import DocGenerator, DocGeneratorParam
 from agent.component.message import Message
-from api.db.db_models import LLM, Conversation, Dialog, LLMFactories, TenantLLM, UserCanvas, UserCanvasVersion, get_db
+from api.db.db_models import Conversation, Dialog, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, UserCanvas, UserCanvasVersion, get_db
 from api.db.services.tenant_llm_service import TenantLLMService
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.resource_journal import ResourceJournal
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 from tests.support.web_consumer import tsx_runner
@@ -29,7 +33,7 @@ from tests.support.web_consumer import tsx_runner
 pytestmark = pytest.mark.external_consumer
 
 
-def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, record_property: Callable[[str, object], None]) -> None:
+def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, record_property: Callable[[str, object], None], tmp_path: Path) -> None:
     from api import apps
 
     env = runtime_upload_api
@@ -45,16 +49,28 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
     monkeypatch.setattr(TenantLLMService, "ensure_opendataloader_from_env", classmethod(lambda cls, db, tenant_id: None))
     checkout = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
     script = Path(__file__).resolve().parents[1] / "support/chat_model_web_consumer.mts"
+    provider_id, instance_id = uuid4().hex, uuid4().hex
+    cache = tmp_path / "web-consumer-vite-cache"
+    env["journal"].event("reserve-web-vite-ssr-cache", path=str(cache), web_checkout=str(checkout))
+    env["journal"].event("reserve-chat-model-registrations", tenant_id=env["owners"][0], provider_id=provider_id, instance_id=instance_id, names=["vision", "text"])
     try:
         with sessions() as db:
-            db.merge(LLMFactories(name="Ollama", tags="LLM", status="1"))
+            provider = TenantModelProvider(id=provider_id, tenant_id=env["owners"][0], provider_name="Ollama", status="active")
+            instance = TenantModelInstance(id=instance_id, provider_id=provider.id, instance_name="chat-types", api_key="controlled-no-provider", base_url="http://127.0.0.1:1", status="active")
+            db.add(provider)
+            db.flush()
+            db.add(instance)
+            db.flush()
             for name, kind in [("vision", "image2text"), ("text", "chat")]:
-                db.add(TenantLLM(tenant_id=env["owners"][0], llm_factory="Ollama", llm_name=name, mdl_type=kind, api_key="controlled-no-provider", status="1"))
+                row = TenantLLM(tenant_id=env["owners"][0], llm_factory="Ollama", llm_name=name, mdl_type=kind, api_key=instance.api_key, status="1")
+                db.add(row)
+                db.flush()
+                db.add(TenantModel(id=row.id, instance_id=instance.id, model_name=name, model_types=[kind], is_tools=False))
             db.commit()
         completed = subprocess.run(
             [str(tsx_runner(checkout)), "--tsconfig", str(checkout / "tsconfig.app.json"), str(script)],
             cwd=checkout,
-            env={**os.environ, "DOMAIN_ACCEPTANCE_BASE": env["base"], "DOMAIN_ACCEPTANCE_TOKEN": env["jwt"]},
+            env={**os.environ, "DOMAIN_ACCEPTANCE_BASE": env["base"], "DOMAIN_ACCEPTANCE_TOKEN": env["jwt"], "WEB_CONSUMER_VITE_CACHE": str(cache)},
             capture_output=True,
             text=True,
             timeout=90,
@@ -62,24 +78,38 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
         assert completed.returncode == 0, completed.stdout + completed.stderr
         result = json.loads(completed.stdout.splitlines()[-1])
         with sessions() as db:
-            for identifier, kind in zip(result["ids"], ["image2text", "chat"], strict=True):
+            for identifier, reference, kind in zip(result["ids"], result["references"], ["image2text", "chat"], strict=True):
                 row = db.get(Dialog, identifier)
                 assert row is not None and row.tenant_id == env["owners"][0]
                 assert row.llm_setting == {"temperature": 0, "model_type": kind}
+                assert row.llm_id == reference and row.tenant_llm_id == int(reference)
                 assert row.prompt_config["quote"] is False
         record_property("actual_web_chat_model_sql_readback", json.dumps(result))
     finally:
+        if cache.exists():
+            shutil.rmtree(cache)
+        assert not cache.exists()
+        env["journal"].event("web-vite-cache-cleanup-readback", path=str(cache), absent=True)
         with sessions() as db:
             ids = list(db.scalars(select(Dialog.id).where(Dialog.tenant_id == env["owners"][0])))
             db.execute(delete(Conversation).where(Conversation.dialog_id.in_(ids)))
             db.execute(delete(Dialog).where(Dialog.tenant_id == env["owners"][0]))
-            db.execute(delete(TenantLLM).where(TenantLLM.tenant_id.in_(env["owners"])))
+            model_ids = list(db.scalars(select(TenantLLM.id).where(TenantLLM.tenant_id.in_(env["owners"]))))
+            db.execute(delete(TenantModel).where(TenantModel.id.in_(model_ids)))
+            db.execute(delete(TenantLLM).where(TenantLLM.id.in_(model_ids)))
+            db.execute(delete(TenantModelInstance).where(TenantModelInstance.id == instance_id))
+            db.execute(delete(TenantModelProvider).where(TenantModelProvider.id == provider_id))
             db.commit()
-            assert db.scalar(select(Dialog.id).where(Dialog.tenant_id == env["owners"][0])) is None
+        with sessions() as reader:
+            assert reader.scalar(select(Dialog.id).where(Dialog.tenant_id == env["owners"][0])) is None
+            assert reader.scalar(select(TenantLLM.id).where(TenantLLM.id.in_(model_ids))) is None
+            assert reader.scalar(select(TenantModel.id).where(TenantModel.id.in_(model_ids))) is None
+            assert reader.get(TenantModelInstance, instance_id) is None
+            assert reader.get(TenantModelProvider, provider_id) is None
 
 
 def run_web(env: dict[str, Any], mode: str, **values: str) -> dict[str, Any]:
-    checkout = Path(os.environ.get("WEB_COMPLETION_CHECKOUT", "/Users/xldu/project/web"))
+    checkout = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
     runner = tsx_runner(checkout)
     script = checkout / "scripts/verify-model-document-routes.ts"
     assert runner.exists() and script.exists(), "Production Web consumer checkout is required"
@@ -100,12 +130,9 @@ def test_actual_web_model_save_reload(release_api: dict[str, Any], monkeypatch: 
     from common import settings
 
     env = release_api
+    journal = ResourceJournal("model-document-web-provider")
     factory = "Ollama"
-    with Session(env["engine"]) as db:
-        db.merge(LLMFactories(name=factory, tags="LLM", status="1"))
-        db.merge(LLM(fid=factory, llm_name="combined-fixture", mdl_type="chat", max_tokens=8192, tags="LLM", is_tools=True))
-        db.commit()
-    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": factory}])
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": factory, "llm": []}])
     monkeypatch.setattr(TenantLLMService, "ensure_mineru_from_env", classmethod(lambda cls, db, tenant_id: None))
     monkeypatch.setattr(TenantLLMService, "ensure_opendataloader_from_env", classmethod(lambda cls, db, tenant_id: None))
     # register_page imports this router under api.apps.llm; retain the real JWT loader.
@@ -129,25 +156,47 @@ def test_actual_web_model_save_reload(release_api: dict[str, Any], monkeypatch: 
             self.end_headers()
             self.wfile.write(payload)
 
+    journal.event("reserve-controlled-ollama-provider", host="127.0.0.1", port=0)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+    journal.event("created-controlled-ollama-provider", host="127.0.0.1", port=server.server_port)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         result = run_web(env, "model", DOMAIN_ACCEPTANCE_PROVIDER=f"http://127.0.0.1:{server.server_port}")
         assert result["flags"] == [False, True, False] and len(requests) == 3
         with Session(env["engine"]) as db:
-            row = db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == env["owners"][0], TenantLLM.llm_factory == factory, TenantLLM.llm_name == "combined-fixture")).one()
-            assert json.loads(row.api_key) == {"api_key": "fixture-key", "is_tools": False}
+            for expected in result["models"]:
+                row = db.get(TenantLLM, expected["id"])
+                model = db.get(TenantModel, expected["id"])
+                assert model is not None
+                instance = db.get(TenantModelInstance, model.instance_id)
+                assert row is not None and row.tenant_id == env["owners"][0] and row.api_key == "fixture-key"
+                assert model.model_name == "combined-fixture" and model.model_types == ["chat"] and model.is_tools is expected["is_tools"]
+                assert instance is not None and instance.instance_name == expected["instance"] and instance.api_key == "fixture-key" and instance.base_url == f"http://127.0.0.1:{server.server_port}"
+            assert result["anonymous_denied"] is True
         record_property("web_consumer_readback", json.dumps({**result, "database": env["engine"].url.database, "stored_is_tools": False, "provider_http_requests": len(requests)}))
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=10)
         assert not thread.is_alive()
+        with socket.socket() as probe:
+            assert probe.connect_ex(("127.0.0.1", server.server_port)) != 0
+        journal.event("controlled-provider-cleanup-readback", thread_absent=True, listener_closed=True)
         with Session(env["engine"]) as db:
-            db.execute(delete(TenantLLM).where(TenantLLM.tenant_id.in_(env["owners"])))
+            model_ids = list(db.scalars(select(TenantLLM.id).where(TenantLLM.tenant_id.in_(env["owners"]))))
+            providers = list(db.scalars(select(TenantModelProvider.id).where(TenantModelProvider.tenant_id.in_(env["owners"]))))
+            db.execute(delete(TenantModel).where(TenantModel.id.in_(model_ids)))
+            db.execute(delete(TenantLLM).where(TenantLLM.id.in_(model_ids)))
+            db.execute(delete(TenantModelInstance).where(TenantModelInstance.provider_id.in_(providers)))
+            db.execute(delete(TenantModelProvider).where(TenantModelProvider.id.in_(providers)))
             db.commit()
-            assert db.scalar(select(TenantLLM.id).where(TenantLLM.tenant_id.in_(env["owners"]))) is None
+        with Session(env["engine"]) as reader:
+            assert reader.scalar(select(TenantLLM.id).where(TenantLLM.id.in_(model_ids))) is None
+            assert reader.scalar(select(TenantModel.id).where(TenantModel.id.in_(model_ids))) is None
+            assert reader.scalar(select(TenantModelInstance.id).where(TenantModelInstance.provider_id.in_(providers))) is None
+            assert reader.scalar(select(TenantModelProvider.id).where(TenantModelProvider.id.in_(providers))) is None
+        journal.event("model-consumer-sql-cleanup-readback", model_ids=model_ids, provider_ids=providers, remaining=0)
 
 
 def test_actual_web_document_save_reload_download(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, record_property: Callable[[str, object], None]) -> None:
