@@ -192,10 +192,10 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
         redis_endpoint = {key: redis.connection_pool.connection_kwargs.get(key) for key in ["host", "port", "db"]}
         original_command, original_pipeline = redis.execute_command, redis.pipeline
 
-        def reserve_redis_keys(*keys: str | bytes) -> None:
+        def reserve_redis_keys(*keys: object) -> None:
             with lock:
                 for raw_key in keys:
-                    key = raw_key.decode() if isinstance(raw_key, bytes) else raw_key
+                    key = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key)
                     if key in owned_redis:
                         continue
                     assert not redis.exists(key), "Fixture refuses to overwrite a borrowed Redis key"
