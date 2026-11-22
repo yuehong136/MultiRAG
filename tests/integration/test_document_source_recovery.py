@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from api.db.services.document_source_recovery import SourceRecovery, SourceRecov
 from api.db.services.llm_service import LLMBundle
 from common import settings
 from core.utils.redis_conn import REDIS_CONN
+from tests.support.database import scratch_database
 from tests.support.document_parser_update import bootstrapped_engine as bootstrapped_engine
 from tests.support.document_parser_update import image_http_api as image_http_api
 from tests.support.document_parser_update import image_resources as image_resources
@@ -433,8 +435,23 @@ def test_source_compare_restore_window_excludes_wrong_document_writer(parser_api
     save(env["parser_record_path"], env["parser_record"])
 
 
+@pytest.fixture
+def source_recovery_migration_database(tmp_path: Path, alembic_cfg: Config) -> Iterator[sa.Engine]:
+    """Exercise only the source-recovery migration on a fresh owned database."""
+    with scratch_database(tmp_path) as engine:
+        cfg = Config(alembic_cfg.config_file_name)
+        cfg.set_main_option("script_location", alembic_cfg.get_main_option("script_location"))
+        with engine.begin() as db:
+            cfg.attributes["connection"] = db
+            command.stamp(cfg, "a9c810f1d2e3")
+        yield engine
+
+
 @pytest.mark.parametrize("schema", ["absent", "exact", "pair_unique_index", "partial_pair_unique_index", "incompatible", "protected", "extra_unique", "extra_unique_index"])
-def test_source_recovery_migration_requires_exact_durable_schema(parser_database: sa.Engine, alembic_cfg: Config, schema: str, request: pytest.FixtureRequest, tmp_path: Path) -> None:
+def test_source_recovery_migration_requires_exact_durable_schema(
+    source_recovery_migration_database: sa.Engine, alembic_cfg: Config, schema: str, request: pytest.FixtureRequest, tmp_path: Path
+) -> None:
+    parser_database = source_recovery_migration_database
     table = SourceRecoveryRecord.__table__
     cfg = Config(alembic_cfg.config_file_name)
     cfg.set_main_option("script_location", alembic_cfg.get_main_option("script_location"))
@@ -566,9 +583,7 @@ def test_source_recovery_migration_requires_exact_durable_schema(parser_database
             table.drop(db, checkfirst=True)
             table.create(db)
             cfg.attributes["connection"] = db
-            # Restore later migration tables too, rather than stamping a
-            # revision whose schema the fixture has not actually recreated.
-            command.upgrade(cfg, "head")
+            command.upgrade(cfg, "a9c810f1d2e3")
         record["cleanup"] = {"fixture_table_restored": True, "fixture_rows_absent": True}
         save(path, record)
 

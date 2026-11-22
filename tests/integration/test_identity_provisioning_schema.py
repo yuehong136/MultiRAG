@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import threading
 import uuid
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -26,6 +28,17 @@ from api.db.db_models import (
     User,
     UserTenant,
 )
+from tests.support.database import scratch_database
+
+
+@pytest.fixture(name="bootstrapped_engine")
+def identity_migration_engine(postgres_service: None, tmp_path: Path, alembic_cfg: Config) -> Iterator[sa.Engine]:
+    """Migration tests own a fresh DB, apart from other suites' immutable history."""
+    with scratch_database(tmp_path) as engine:
+        with engine.begin() as connection:
+            command.stamp(_migration_config(alembic_cfg, connection), _I6_REVISION)
+        yield engine
+
 
 _I6_REVISION = "b4c6d8e0f2a4"
 _I21_REVISION = "9a3b5c7d8e0f"
@@ -825,10 +838,8 @@ def test_i6_downgrade_lock_blocks_concurrent_policy_insert(
                 _I21_REVISION,
             )
             assert contender.result(timeout=5) == "55P03"
-            assert len(lock_statements) == 3
-            assert lock_statements[0] == "lock table usr_ai.t_ai_agent_execution_origins in access exclusive mode"
-            assert lock_statements[1] == "lock table usr_ai.t_document_source_recovery in access exclusive mode"
-            lock_sql = lock_statements[2]
+            assert len(lock_statements) == 1
+            lock_sql = lock_statements[0]
             expected_order = (
                 IdentityTenantPolicy.__tablename__,
                 IdentityProviderAccount.__tablename__,

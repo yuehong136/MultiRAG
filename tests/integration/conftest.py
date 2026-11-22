@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 import sqlalchemy as sa
 
+from common import settings
 from common.config_utils import CONFIGS
 from tests.support import services
 from tests.support.database import _alembic_config as _alembic_config
@@ -23,6 +24,30 @@ from tests.support.database import _pg_role_can_create_db as _pg_role_can_create
 from tests.support.database import _pg_url as _pg_url
 from tests.support.integration_suites import required_services
 from tests.support.resource_journal import ResourceJournal
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _defrost_settings_facade_module() -> Iterator[None]:
+    """Clear module fixture undo shadows while retaining session overrides."""
+    before = {name: value for name, value in vars(settings).items() if name in settings._LAZY}
+    yield
+    for name in tuple(vars(settings)):
+        if name in settings._LAZY and name not in before:
+            delattr(settings, name)
+    for name, value in before.items():
+        setattr(settings, name, value)
+
+
+@pytest.fixture(autouse=True)
+def _defrost_settings_facade(_defrost_settings_facade_module: None) -> Iterator[None]:
+    """Undo adds PEP562 dict entries; retain genuine higher-scope overrides."""
+    before = {name: value for name, value in vars(settings).items() if name in settings._LAZY}
+    yield
+    for name in tuple(vars(settings)):
+        if name in settings._LAZY and name not in before:
+            delattr(settings, name)
+    for name, value in before.items():
+        setattr(settings, name, value)
 
 
 def _docker_usable() -> bool:

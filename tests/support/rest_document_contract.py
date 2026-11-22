@@ -38,8 +38,7 @@ def rest_documents(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
     datasets = [uuid4().hex for _ in range(2)]
     name = "rest_contract_" + journal.run_id
     queue = "rest-doc:" + journal.run_id + ":queue"
-    port = 20000 + int(journal.run_id[:4], 16) % 30000
-    journal.event("reserve", database=database, bucket=bucket, owners=owners, datasets=datasets, dataset_name=name, queue=queue, port=port)
+    journal.event("reserve", database=database, bucket=bucket, owners=owners, datasets=datasets, dataset_name=name, queue=queue)
     admin = sa.create_engine(_pg_url(CONFIGS["postgresql"]["dbname"]), isolation_level="AUTOCOMMIT")
     with ExitStack() as cleanup:
         cleanup.callback(admin.dispose)
@@ -165,7 +164,10 @@ def rest_documents(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
         monkeypatch.setattr(app_module, "SessionLocal", lambda: Session(engine))
         listener = socket.socket()
         cleanup.callback(listener.close)
-        listener.bind(("127.0.0.1", port))
+        journal.event("reserve-listener", host="127.0.0.1", port=0)
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        journal.event("listener-bound", host="127.0.0.1", port=port)
         server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error"))
         thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
 
