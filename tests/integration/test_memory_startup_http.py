@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import subprocess
@@ -11,16 +10,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import sqlalchemy as sa
-from sqlalchemy.orm import Session
 
-from api.db.db_models import Base, Memory, Task, TenantLLM
 from common.token_utils import encoder
 from memory.revisions.storage import ManagedMessageStore
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.memory_dreaming_http import dreaming_api as dreaming_api
 from tests.support.memory_incremental_http import seed_source
-from tests.support.memory_startup_http import APPLICABILITY, SCOPE, confirm, endpoint
+from tests.support.memory_startup_http import APPLICABILITY, SCOPE, confirm, endpoint, sql_fingerprint
 from tests.support.memory_startup_http import startup_api as startup_api
 from tests.support.memory_writes_http import api_request, result
 from tests.support.memory_writes_http import writes_api as writes_api
@@ -36,20 +32,6 @@ def preview(env: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     response = api_request(env, "POST", endpoint(env, "/startup-context"), json=request(env, **overrides))
     assert response.headers.get("cache-control") == "no-store"
     return result(response)
-
-
-def sql_fingerprint(env: dict[str, Any]) -> str:
-    """Independent exact-bank readback includes metadata, tasks and model counters."""
-    state: dict[str, Any] = {}
-    with Session(env["engine"]) as reader:
-        for table in Base.metadata.sorted_tables:
-            if table.schema == "usr_ai" and "memory_id" in table.c:
-                rows = reader.execute(sa.select(table).where(table.c.memory_id == env["memory_id"])).mappings().all()
-                state[table.fullname] = sorted(json.dumps(dict(row), sort_keys=True, default=str) for row in rows)
-        for model, column, identity in ((Memory, Memory.id, env["memory_id"]), (Task, Task.doc_id, env["memory_id"]), (TenantLLM, TenantLLM.tenant_id, env["tenants"]["personal"])):
-            rows = reader.execute(sa.select(model.__table__).where(column == identity)).mappings().all()
-            state[model.__tablename__] = sorted(json.dumps(dict(row), sort_keys=True, default=str) for row in rows)
-    return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
 
 
 def source_params(source: dict[str, Any], **overrides: Any) -> dict[str, Any]:

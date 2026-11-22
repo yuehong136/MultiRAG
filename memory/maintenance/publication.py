@@ -16,6 +16,7 @@ from api.db.memory_maintenance_models import MemoryMaintenanceCandidate, MemoryM
 from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemoryMutationOperation, MemoryPublicationOutbox, MemoryRevisionSource, MemorySourceState
 from api.db.memory_writer_models import MemoryWriterAdmission, MemoryWriterFence
 from common.asyncio_utils import finish_owned_work
+from memory.compaction.history import retired_compaction_history
 from memory.maintenance.domain import ASSESSMENT, assemble_candidates, identifier
 from memory.maintenance.jobs import manifest_for_job
 from memory.maintenance.types import InputValidator
@@ -378,7 +379,11 @@ class PublicationService(WriterCoordinator):
             source = await self.db.scalar(select(func.max(MemorySourceState.source_message_id)).where(MemorySourceState.memory_id == memory_id))
             revision = await self.db.scalar(select(func.max(MemoryEntryRevision.message_id)).where(MemoryEntryRevision.memory_id == memory_id))
             manifests = list(
-                await self.db.scalars(select(MemoryWriterAdmission.message_ids).where(MemoryWriterAdmission.memory_id == memory_id, MemoryWriterAdmission.tenant_id == self.tenant_id).limit(10001))
+                await self.db.scalars(
+                    select(MemoryWriterAdmission.message_ids)
+                    .where(MemoryWriterAdmission.memory_id == memory_id, MemoryWriterAdmission.tenant_id == self.tenant_id, ~retired_compaction_history(MemoryWriterAdmission))
+                    .limit(10001)
+                )
             )
             if len(manifests) > 10000:
                 raise RevisionConflict("writer_inventory_incomplete")

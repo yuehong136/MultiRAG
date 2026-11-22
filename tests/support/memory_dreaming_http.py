@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -92,3 +93,42 @@ def dreaming_api(writes_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) ->
             }
             assert not any(remaining.values()), remaining
         env["journal"].event("dreaming-sql-cleanup-readback", memory_id=mid, remaining=remaining)
+
+
+def analyze(env: dict[str, Any], job: dict[str, Any]) -> list[dict[str, Any]]:
+    mid, jid = env["memory_id"], job["job_id"]
+    submitted = api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{jid}/runs", json={"operation_id": "run-dream"})
+    accepted = result(submitted, status=submitted.status_code)
+    assert submitted.status_code in {200, 202} and accepted["analysis_operation_id"] == "run-dream"
+    completed = wait_job(env, jid)
+    assert completed["state"] == "ready", completed
+    return result(api_request(env, "GET", f"/memories/{mid}/maintenance-jobs/{jid}/candidates"))["candidates"]
+
+
+def wait_job(env: dict[str, Any], job_id: str, *, execution_terminal: bool = True) -> dict[str, Any]:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        assert not env.get("worker_errors"), env.get("worker_errors")
+        view = result(api_request(env, "GET", f"/memories/{env['memory_id']}/maintenance-jobs/{job_id}"))
+        execution = view.get("execution") or {}
+        if view["state"] not in {"pending", "running", "cancel_requested"} and (not execution_terminal or execution.get("state") not in {"queued", "claimed", "running"}):
+            return view
+        time.sleep(0.05)
+    raise AssertionError("maintenance execution did not settle")
+
+
+def approve(env: dict[str, Any], job: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    reviewed = []
+    for candidate in candidates:
+        value = result(
+            api_request(
+                env,
+                "POST",
+                f"/memories/{env['memory_id']}/maintenance-jobs/{job['job_id']}/candidates/{candidate['candidate_id']}/reviews",
+                json={"operation_id": "approve-" + candidate["candidate_id"], "expected_revision": candidate["revision"], "decision": "approve"},
+            )
+        )
+        assert value["state"] == "approved" and value["revision"] > candidate["revision"]
+        assert value["assessment"]["verification_status"] == "unverified"
+        reviewed.append({"candidate_id": value["candidate_id"], "expected_revision": value["revision"]})
+    return reviewed

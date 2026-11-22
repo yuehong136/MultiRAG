@@ -2,7 +2,6 @@
 
 import asyncio
 import threading
-import time
 from typing import Any
 
 import pytest
@@ -16,7 +15,7 @@ from memory.revisions.domain import RevisionStorageUnknown, content_hash
 from memory.revisions.storage import ManagedMessageStore
 from memory.services.messages import MessageService
 from tests.support.agent_update_release import release_api as release_api
-from tests.support.memory_dreaming_http import _TARGET
+from tests.support.memory_dreaming_http import _TARGET, analyze, approve, wait_job
 from tests.support.memory_dreaming_http import dreaming_api as dreaming_api
 from tests.support.memory_maintenance_worker import maintenance_worker
 from tests.support.memory_writes_http import api_request, result
@@ -28,45 +27,6 @@ def create_job(env: dict[str, Any], *, with_target: bool = True, operation_id: s
         api_request(env, "POST", f"/memories/{env['memory_id']}/maintenance-jobs", json={"operation_id": operation_id, "source_ids": ["900"], "entry_ids": [env["entry_id"]] if with_target else []}),
         status=202,
     )
-
-
-def analyze(env: dict[str, Any], job: dict[str, Any]) -> list[dict[str, Any]]:
-    mid, jid = env["memory_id"], job["job_id"]
-    submitted = api_request(env, "POST", f"/memories/{mid}/maintenance-jobs/{jid}/runs", json={"operation_id": "run-dream"})
-    accepted = result(submitted, status=submitted.status_code)
-    assert submitted.status_code in {200, 202} and accepted["analysis_operation_id"] == "run-dream"
-    completed = wait_job(env, jid)
-    assert completed["state"] == "ready", completed
-    return result(api_request(env, "GET", f"/memories/{mid}/maintenance-jobs/{jid}/candidates"))["candidates"]
-
-
-def wait_job(env: dict[str, Any], job_id: str, *, execution_terminal: bool = True) -> dict[str, Any]:
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        assert not env.get("worker_errors"), env.get("worker_errors")
-        view = result(api_request(env, "GET", f"/memories/{env['memory_id']}/maintenance-jobs/{job_id}"))
-        execution = view.get("execution") or {}
-        if view["state"] not in {"pending", "running", "cancel_requested"} and (not execution_terminal or execution.get("state") not in {"queued", "claimed", "running"}):
-            return view
-        time.sleep(0.05)
-    raise AssertionError("maintenance execution did not settle")
-
-
-def approve(env: dict[str, Any], job: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    reviewed = []
-    for candidate in candidates:
-        value = result(
-            api_request(
-                env,
-                "POST",
-                f"/memories/{env['memory_id']}/maintenance-jobs/{job['job_id']}/candidates/{candidate['candidate_id']}/reviews",
-                json={"operation_id": "approve-" + candidate["candidate_id"], "expected_revision": candidate["revision"], "decision": "approve"},
-            )
-        )
-        assert value["state"] == "approved" and value["revision"] > candidate["revision"]
-        assert value["assessment"]["verification_status"] == "unverified"
-        reviewed.append({"candidate_id": value["candidate_id"], "expected_revision": value["revision"]})
-    return reviewed
 
 
 def test_candidates_are_isolated_until_explicit_reviewed_batch_publication(dreaming_api: dict[str, Any]) -> None:
@@ -103,6 +63,7 @@ def test_candidates_are_isolated_until_explicit_reviewed_batch_publication(dream
         for entry in published["entries"]:
             assert isinstance(entry["message_id"], str) and int(entry["message_id"]) > 2**53
             row = reader.get(MemoryEntryRevision, (entry["entry_id"], entry["new_revision"]))
+            assert row is not None
             assert row.origin == "consolidated" and row.assessment["verification_status"] == "unverified"
     still_visible = result(api_request(env, "GET", f"/memories/{mid}/maintenance-jobs/{job['job_id']}/candidates"))["candidates"]
     assert all(not item["redacted"] for item in still_visible)
@@ -123,7 +84,8 @@ def test_source_withdrawal_clears_candidate_copies_and_fences_late_model_output(
         )
         assert withdrawn["index_sync_status"] != "ready"
         with Session(env["engine"]) as reader:
-            assert reader.get(MemoryMaintenanceJob, job["job_id"]).state == "redacted"
+            stored_job = reader.get(MemoryMaintenanceJob, job["job_id"])
+            assert stored_job is not None and stored_job.state == "redacted"
             assert all(item.snapshot == {} for item in reader.scalars(sa.select(MemoryMaintenanceInput).where(MemoryMaintenanceInput.job_id == job["job_id"])))
     finally:
         env["analysis_release"].set()
@@ -274,7 +236,8 @@ def test_published_batch_anchor_withdrawal_preserves_an_independent_item(dreamin
     still_served = MessageService.get_by_message_id(mid, int(independent["message_id"]), env["tenants"]["personal"])
     assert still_served and still_served["content"] == "An independent fact from the second source."
     with Session(env["engine"]) as reader:
-        assert reader.get(MemoryEntry, independent["entry_id"]).state == "active"
+        independent_entry = reader.get(MemoryEntry, independent["entry_id"])
+        assert independent_entry is not None and independent_entry.state == "active"
         assert all(
             item.content is None and item.base_content is None and item.reason is None
             for item in reader.scalars(sa.select(MemoryMaintenanceCandidate).where(MemoryMaintenanceCandidate.job_id == job["job_id"]))
@@ -317,7 +280,8 @@ def test_bank_deletion_redacts_maintenance_snapshots_and_candidate_text(dreaming
     deleted = result(api_request(env, "POST", f"/memories/{mid}/deletions", json={"operation_id": "delete-with-candidates"}))
     assert deleted["lifecycle"] == "deleted" and deleted["tracked_cleanup_confirmed"] is True
     with Session(env["engine"]) as reader:
-        assert reader.get(MemoryMaintenanceJob, job["job_id"]).entry_snapshots == []
+        stored_job = reader.get(MemoryMaintenanceJob, job["job_id"])
+        assert stored_job is not None and stored_job.entry_snapshots == []
         assert all(row.snapshot == {} for row in reader.scalars(sa.select(MemoryMaintenanceInput).where(MemoryMaintenanceInput.job_id == job["job_id"])))
         assert all(
             row.content is None and row.base_content is None and row.patch is None and row.diff is None
@@ -351,8 +315,10 @@ def test_cancel_unpublished_batch_cleans_fixed_staging_without_changing_current(
     assert all(asyncio.run(store.read(identity)) is None for identity in fixed_ids)
     assert MessageService.get_by_message_id(mid, 910, env["tenants"]["personal"])["content"] == _TARGET
     with Session(env["engine"]) as reader:
-        assert reader.get(ManagedMemoryState, mid).reserved_bytes == 0
-        assert reader.get(MemoryEntry, env["entry_id"]).current_revision == 1
+        managed = reader.get(ManagedMemoryState, mid)
+        assert managed is not None and managed.reserved_bytes == 0
+        current_entry = reader.get(MemoryEntry, env["entry_id"])
+        assert current_entry is not None and current_entry.current_revision == 1
 
 
 def test_patch_preserves_existing_episodic_event_metadata(dreaming_api: dict[str, Any]) -> None:

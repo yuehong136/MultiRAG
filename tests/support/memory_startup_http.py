@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterator
 from typing import Any, TypedDict
 
@@ -9,6 +11,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from api.db.db_models import Base, Memory, Task, TenantLLM
 from api.db.memory_verification_models import MemoryVerificationHead, MemoryVerificationOperation, MemoryVerificationRecord, MemoryVerificationSource
 from tests.support.memory_writes_http import api_request, result
 
@@ -68,3 +71,17 @@ def startup_api(dreaming_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
             remaining = {model.__tablename__: reader.scalar(sa.select(sa.func.count()).select_from(model).where(model.memory_id == env["memory_id"])) for model in _TABLES}
             assert not any(remaining.values()), remaining
         env["journal"].event("startup-verification-cleanup-readback", database=env["engine"].url.database, remaining=remaining)
+
+
+def sql_fingerprint(env: dict[str, Any]) -> str:
+    """Independent exact-bank readback includes metadata, tasks and model counters."""
+    state: dict[str, Any] = {}
+    with Session(env["engine"]) as reader:
+        for table in Base.metadata.sorted_tables:
+            if table.schema == "usr_ai" and "memory_id" in table.c:
+                rows = reader.execute(sa.select(table).where(table.c.memory_id == env["memory_id"])).mappings().all()
+                state[table.fullname] = sorted(json.dumps(dict(row), sort_keys=True, default=str) for row in rows)
+        for model, column, identity in ((Memory, Memory.id, env["memory_id"]), (Task, Task.doc_id, env["memory_id"]), (TenantLLM, TenantLLM.tenant_id, env["tenants"]["personal"])):
+            rows = reader.execute(sa.select(model.__table__).where(column == identity)).mappings().all()
+            state[model.__tablename__] = sorted(json.dumps(dict(row), sort_keys=True, default=str) for row in rows)
+    return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()

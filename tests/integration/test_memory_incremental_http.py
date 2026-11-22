@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from api.db.memory_incremental_models import MemoryMaintenanceBatch, MemoryMaintenanceCoverage, MemoryMaintenanceDiscovery
 from api.db.memory_maintenance_models import MemoryMaintenanceCandidate, MemoryMaintenanceJob
 from api.db.memory_revision_models import MemoryEntry
-from tests.integration.test_memory_dreaming_http import wait_job
+from tests.support.memory_dreaming_http import wait_job
 from tests.support.memory_incremental_http import LARGE_ID as _LARGE_ID
 from tests.support.memory_incremental_http import SCOPE as _SCOPE
 from tests.support.memory_incremental_http import create, endpoint, preview, run, seed_source, selection, wait_plan

@@ -19,8 +19,8 @@ from api.db.memory_revision_models import ManagedMemoryState, MemorySourceState
 from api.db.memory_writer_models import MemoryWriterAdmission
 from core.utils.redis_conn import REDIS_CONN
 from memory.revisions.storage import ManagedMessageStore
-from tests.integration.test_memory_dreaming_http import analyze, approve
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.memory_dreaming_http import analyze, approve
 from tests.support.memory_dreaming_http import dreaming_api as dreaming_api
 from tests.support.memory_structured_sources_http import append_source
 from tests.support.memory_writes_http import api_request, result

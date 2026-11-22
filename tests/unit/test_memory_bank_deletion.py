@@ -8,30 +8,32 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import Delete, Table, Update
 
+from api.db.db_models import Memory, Task
+from api.db.memory_revision_models import MemoryMutationOperation, MemoryPublicationOutbox
 from memory.revisions import deletion
 from memory.revisions.domain import RevisionBusy
 from memory.writes.types import WriterDrainSnapshot
 
 
-def drained(**changes: Any) -> WriterDrainSnapshot:
+def drained(*, drained: bool = True, untracked_task_ids: list[str] | None = None) -> WriterDrainSnapshot:
     return {
         "state": "closing",
         "generation": 2,
         "active_operations": [],
         "unknown_operations": [],
         "pending_operation_ids": [],
-        "untracked_task_ids": [],
+        "untracked_task_ids": untracked_task_ids or [],
         "untracked_task_ids_sha256": "a" * 64,
         "legacy_quiescence_attested": False,
         "legacy_quiescence_attestation": None,
-        "drained": True,
-        **changes,
+        "drained": drained,
     }
 
 
 def test_actual_attempts_and_untracked_tasks_cannot_disappear_by_lease_expiry() -> None:
-    row = SimpleNamespace(id="old", lease_until=None, state="ready", receipt={"active_attempts": ["unfinished"]})
+    row = MemoryPublicationOutbox(id="old", lease_until=None, state="ready", receipt={"active_attempts": ["unfinished"]})
     counts, blocked, operator = deletion.MemoryDeletionService._blocked(drained(untracked_task_ids=["legacy-task"], drained=False), [row])
     assert counts["active_attempts"] == 1 and counts["untracked_tasks"] == 1
     assert set(blocked) == {"active_attempts", "untracked_tasks"} and operator is True
@@ -84,7 +86,14 @@ class Decisions:
         return self.memory, self.bank
 
     async def execute(self, query: Any) -> Any:
-        self.events.append("sql-delete")
+        assert self.transaction
+        assert isinstance(query, (Update, Delete)) and isinstance(query.table, Table)
+        if isinstance(query, Update):
+            assert query.table.name == MemoryMutationOperation.__tablename__
+            self.events.append("sql-clear-operation-results")
+        else:
+            assert query.table.name in {Task.__tablename__, Memory.__tablename__}
+            self.events.append("sql-delete")
         return SimpleNamespace(rowcount=1)
 
     async def view(self, operation: Any) -> dict[str, Any]:
@@ -130,22 +139,22 @@ async def test_delete_confirms_drop_before_sql_finalization(decisions: Decisions
     result = await decisions.service.reconcile_operation("bank", "delete", storage=target)
     assert result["status"] == "ready" and result["lifecycle"] == "deleted"
     assert result["tracked_cleanup_confirmed"] is True and result["physical_cleanup_complete"] is False
-    assert decisions.events == ["drop-confirmed", "sql-delete", "sql-delete", "attempt-finished"]
+    assert decisions.events == ["drop-confirmed", "sql-clear-operation-results", "sql-delete", "sql-delete", "attempt-finished"]
     assert decisions.bank.reserved_bytes == 0 and decisions.old.receipt["reservation_released"] is True
 
 
 async def test_unknown_drop_retains_memory_and_original_operation(decisions: Decisions) -> None:
     result = await decisions.service.reconcile_operation("bank", "delete", storage=Storage(decisions, lose_reply=True))
     assert result["status"] == "persistence_unknown" and result["operation_id"] == "delete"
-    assert decisions.bank.state == "deleting" and "sql-delete" not in decisions.events
-    assert decisions.events[-1] == "attempt-finished"
+    assert decisions.bank.state == "deleting"
+    assert decisions.events == ["drop-confirmed", "attempt-finished"]
 
 
 async def test_actual_old_attempt_blocks_drop_even_if_outbox_is_ready(decisions: Decisions) -> None:
     decisions.old.receipt["active_attempts"] = ["old-token"]
     result = await decisions.service.reconcile_operation("bank", "delete", storage=Storage(decisions))
     assert result["status"] == "published" and result["blocked_by"] == ["active_attempts"]
-    assert "drop-confirmed" not in decisions.events and "sql-delete" not in decisions.events
+    assert decisions.events == []
 
 
 async def test_expired_own_attempt_is_not_automatically_replayed(decisions: Decisions) -> None:

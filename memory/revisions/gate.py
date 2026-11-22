@@ -53,10 +53,15 @@ def _load_policy(memory_ids: list[str], messages: list[dict[str, Any]] | None) -
     from api.db.db_models import db_connection
     from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemoryPublicationOutbox, MemoryRevisionSource, MemorySourceState
     from api.db.memory_writer_models import MemoryWriterAdmission
+    from memory.compaction.history import retired_compaction_history
 
     with db_connection() as db:
         banks = {row.memory_id: (row.tenant_id, row.state) for row in db.scalars(select(ManagedMemoryState).where(ManagedMemoryState.memory_id.in_(memory_ids)))}
-        admissions = list(db.scalars(select(MemoryWriterAdmission).where(MemoryWriterAdmission.memory_id.in_(memory_ids)).limit(10001))) if messages is None or messages else []
+        admissions = (
+            list(db.scalars(select(MemoryWriterAdmission).where(MemoryWriterAdmission.memory_id.in_(memory_ids), ~retired_compaction_history(MemoryWriterAdmission)).limit(10001)))
+            if messages is None or messages
+            else []
+        )
         if len(admissions) > 10000:
             raise RevisionConflict("writer_policy_window_exceeded")
         requested = None if messages is None else {(message.get("memory_id"), _positive_id(message.get("message_id"))) for message in messages}

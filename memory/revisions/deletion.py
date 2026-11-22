@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,7 @@ from api.db.db_models import Memory, Task
 from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemoryMutationOperation, MemoryPublicationOutbox, MemoryRevisionSource, MemorySourceState
 from api.db.services.memory_service import MemoryService
 from common.asyncio_utils import finish_owned_work
+from memory.compaction.history import retired_compaction_history
 from memory.revisions.domain import RevisionBusy, RevisionConflict, RevisionNotFound, RevisionPersistenceUnknown, request_hash, validate_operation_id
 from memory.revisions.service import operation_view
 from memory.revisions.storage import ManagedMessageStore
@@ -112,7 +113,11 @@ class MemoryDeletionService:
     async def _outboxes(self, memory_id: str) -> list[MemoryPublicationOutbox]:
         return list(
             await self.db.scalars(
-                select(MemoryPublicationOutbox).where(MemoryPublicationOutbox.memory_id == memory_id).order_by(MemoryPublicationOutbox.id).execution_options(populate_existing=True).with_for_update()
+                select(MemoryPublicationOutbox)
+                .where(MemoryPublicationOutbox.memory_id == memory_id, ~retired_compaction_history(MemoryPublicationOutbox))
+                .order_by(MemoryPublicationOutbox.id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
             )
         )
 
@@ -306,8 +311,12 @@ class MemoryDeletionService:
             for row in rows:
                 row.payload = {key: value for key, value in row.payload.items() if key == "action"}
                 row.receipt = {**row.receipt, "reservation_released": True}
-            for previous in await self.db.scalars(select(MemoryMutationOperation).where(MemoryMutationOperation.memory_id == memory_id, MemoryMutationOperation.operation_id != operation_id)):
-                previous.result = {}
+            await self.db.execute(
+                update(MemoryMutationOperation)
+                .where(MemoryMutationOperation.memory_id == memory_id, MemoryMutationOperation.operation_id != operation_id, ~retired_compaction_history(MemoryMutationOperation))
+                .values(result={})
+                .execution_options(synchronize_session=False)
+            )
             await self.db.execute(delete(Task).where(Task.doc_id == memory_id, Task.task_type == "memory"))
             deleted = await self.db.execute(delete(Memory).where(Memory.id == memory_id, Memory.tenant_id == tenant_id))
             if deleted.rowcount != 1:  # type: ignore[attr-defined]

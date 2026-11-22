@@ -19,9 +19,10 @@ from api.db.memory_revision_models import ManagedMemoryState, MemoryMutationOper
 from api.db.memory_writer_models import MemoryWriterAdmission, MemoryWriterFence
 from common.asyncio_utils import finish_owned_work
 from memory.compaction.domain import MAX_ARTIFACTS, SYSTEM, canonical, input_fingerprint, model_body, package_for, selection, summary_text
+from memory.compaction.retention import RetentionService, utc_timestamp
 from memory.revisions.domain import RevisionBusy, RevisionConflict, RevisionNotFound, RevisionPersistenceUnknown, RevisionValidationError, request_hash, validate_operation_id
 from memory.source_provenance import source_receipts
-from memory.writes.admission import WriterCoordinator, _admissions
+from memory.writes.admission import _admissions
 from memory.writes.types import Authorize
 
 SourceLoader = Callable[[str, list[str]], Awaitable[list[dict[str, Any]]]]
@@ -29,7 +30,7 @@ ModelIdentity = Callable[[str], Awaitable[dict[str, Any]]]
 Summarizer = Callable[[str, str, int, dict[str, Any]], Awaitable[str]]
 
 
-class CompactionService(WriterCoordinator):
+class CompactionService(RetentionService):
     def __init__(
         self,
         db: AsyncSession,
@@ -94,7 +95,9 @@ class CompactionService(WriterCoordinator):
 
     async def _configure_admission(self, row: MemoryWriterAdmission, fence: MemoryWriterFence, request: dict[str, Any]) -> None:
         count = await self.db.scalar(
-            select(func.count()).select_from(MemoryCompactionArtifact).where(MemoryCompactionArtifact.memory_id == row.memory_id, MemoryCompactionArtifact.tenant_id == self.tenant_id)
+            select(func.count())
+            .select_from(MemoryCompactionArtifact)
+            .where(MemoryCompactionArtifact.memory_id == row.memory_id, MemoryCompactionArtifact.tenant_id == self.tenant_id, MemoryCompactionArtifact.retired_at.is_(None))
         )
         if count is None or count >= MAX_ARTIFACTS:
             raise RevisionConflict("compaction_artifact_inventory_limit")
@@ -233,7 +236,7 @@ class CompactionService(WriterCoordinator):
             await self._memory_fence(memory_id)
             artifact = await self._record(memory_id, operation_id, lock=True)
             assert artifact is not None
-            if artifact.cancellation_requested or artifact.state in {"stale", "canceled"}:
+            if artifact.retired_at is not None or artifact.cancellation_requested or artifact.state in {"stale", "canceled"}:
                 return
             if bindings is not None:
                 await self._assert_roots(memory_id, bindings)
@@ -256,17 +259,17 @@ class CompactionService(WriterCoordinator):
             artifact = await self._record(memory_id, operation_id)
             if artifact is None:
                 raise RevisionNotFound("compaction_operation_not_found")
-            bindings = await self._root_bindings(artifact)
+            bindings = [] if artifact.retired_at is not None else await self._root_bindings(artifact)
             snapshot = {
                 key: deepcopy(getattr(artifact, key))
-                for key in ("artifact_id", "memory_id", "operation_id", "state", "input_manifest_sha256", "model_binding", "usage", "package", "error_code", "redacted")
+                for key in ("artifact_id", "memory_id", "operation_id", "state", "input_manifest_sha256", "model_binding", "usage", "package", "error_code", "redacted", "retirement")
             }
             snapshot["created_at"] = artifact.created_at.isoformat()
-            admission = await self._row(memory_id, operation_id)
-            busy = admission.active_token is not None or admission.state in {"active", "unknown"}
+            snapshot["retired_at"] = utc_timestamp(artifact.retired_at)
+            artifact_state = artifact.state
             await self._idle()
             valid = False
-            if snapshot["state"] == "generated" and not snapshot["redacted"]:
+            if snapshot["state"] == "generated" and not snapshot["redacted"] and snapshot["retired_at"] is None:
                 try:
                     current = await self.load_sources(memory_id, [item["source_id"] for item in bindings])
                     if [item["binding"] for item in current] != bindings:
@@ -275,21 +278,24 @@ class CompactionService(WriterCoordinator):
                     valid = True
                 except (RevisionConflict, RevisionNotFound):
                     valid = False
-                await self.authorize(self.db, memory_id)
-                fresh = await self._record(memory_id, operation_id)
-                if fresh is None:
-                    raise RevisionNotFound("compaction_operation_not_found")
-                for key in ("state", "redacted", "error_code"):
-                    snapshot[key] = deepcopy(getattr(fresh, key))
-                valid = valid and fresh.state == "generated" and not fresh.cancellation_requested and not fresh.redacted
-                if not valid and snapshot["state"] == "generated":
-                    snapshot["state"] = "stale"
+            await self.authorize(self.db, memory_id)
+            fresh = await self._record(memory_id, operation_id)
+            if fresh is None:
+                raise RevisionNotFound("compaction_operation_not_found")
+            for key in ("state", "redacted", "error_code", "retirement"):
+                snapshot[key] = deepcopy(getattr(fresh, key))
+            snapshot["retired_at"] = utc_timestamp(fresh.retired_at)
+            valid = valid and fresh.state == "generated" and not fresh.cancellation_requested and not fresh.redacted and fresh.retired_at is None
+            if not valid and snapshot["state"] == "generated":
+                snapshot["state"] = "stale" if artifact_state == "generated" else artifact_state
             admission = await self._row(memory_id, operation_id)
             busy = admission.active_token is not None or admission.state in {"active", "unknown"}
             if snapshot["state"] == "running" and not busy:
                 snapshot["state"] = "persistence_unknown"
             if not valid:
                 snapshot["package"] = None
+            if snapshot["retired_at"] is not None:
+                bindings = []
             snapshot.update(sources=bindings, valid_for_current=valid, validity_checked=True, snapshot_only=True)
             return {
                 "operation": {
@@ -302,6 +308,7 @@ class CompactionService(WriterCoordinator):
                     "writer_busy": busy,
                     "needs_operator_reconciliation": snapshot["state"] == "persistence_unknown" or (busy and snapshot["state"] in {"canceled", "stale"}),
                     "can_retry": False,
+                    "retired_at": snapshot["retired_at"],
                 },
                 "artifact": snapshot,
             }
@@ -324,18 +331,19 @@ class CompactionService(WriterCoordinator):
     async def cancel(self, memory_id: str, operation_id: str) -> dict[str, Any]:
         validate_operation_id(operation_id)
         async with self._write(operation_id):
-            await self._memory_fence(memory_id)
+            await self._lock_memory_fence(memory_id, create=False)
             artifact = await self._record(memory_id, operation_id, lock=True)
             if artifact is None or artifact.actor_id != self.actor_id:
                 raise RevisionNotFound("compaction_operation_not_found")
-            artifact.cancellation_requested, artifact.package, artifact.state, artifact.error_code = True, None, "canceled", "compaction_canceled"
-            row = await self._row(memory_id, operation_id, lock=True)
-            row.publication_state = "canceled"
-            operation = await self.db.get(MemoryMutationOperation, (memory_id, operation_id))
-            assert operation is not None
-            operation.status, operation.error_code = "canceled", "compaction_canceled"
-            outbox = await self._outbox(row)
-            outbox.state, outbox.error_code = "canceled", "compaction_canceled"
+            if artifact.retired_at is None:
+                artifact.cancellation_requested, artifact.package, artifact.state, artifact.error_code = True, None, "canceled", "compaction_canceled"
+                row = await self._row(memory_id, operation_id, lock=True)
+                row.publication_state = "canceled"
+                operation = await self.db.get(MemoryMutationOperation, (memory_id, operation_id))
+                assert operation is not None
+                operation.status, operation.error_code = "canceled", "compaction_canceled"
+                outbox = await self._outbox(row)
+                outbox.state, outbox.error_code = "canceled", "compaction_canceled"
         return await self.get(memory_id, operation_id)
 
     async def list_artifacts(self, memory_id: str, *, limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
@@ -371,6 +379,8 @@ class CompactionService(WriterCoordinator):
                         "state": row.state,
                         "error_code": row.error_code,
                         "created_at": row.created_at.isoformat(),
+                        "retired_at": utc_timestamp(row.retired_at),
+                        "retirement": deepcopy(row.retirement),
                         "valid_for_current": None,
                         "validity_checked": False,
                         "package": None,

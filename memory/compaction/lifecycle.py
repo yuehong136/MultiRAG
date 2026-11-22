@@ -15,7 +15,7 @@ from memory.revisions.domain import RevisionConflict
 
 async def invalidate(db: AsyncSession, *, memory_id: str, tenant_id: str, source_id: int | None = None, permanent: bool = True) -> dict[str, list[Any]]:
     """Caller owns the existing Memory/fence/source lock order and transaction."""
-    query = select(MemoryCompactionArtifact).where(MemoryCompactionArtifact.memory_id == memory_id, MemoryCompactionArtifact.tenant_id == tenant_id)
+    query = select(MemoryCompactionArtifact).where(MemoryCompactionArtifact.memory_id == memory_id, MemoryCompactionArtifact.tenant_id == tenant_id, MemoryCompactionArtifact.retired_at.is_(None))
     if source_id is not None:
         query = query.where(
             MemoryCompactionArtifact.artifact_id.in_(

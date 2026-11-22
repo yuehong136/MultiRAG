@@ -58,7 +58,7 @@ API 的 `usage` 明确是 tokenizer 估算，`provider_tokens=null`、`provider_
 不能用模型配置表的累计计数差冒充本次调用账单；真实供应商用量与费用由独立评估或供应商回执记录。
 压缩调用关闭本层模型自动重试，并对本次持有的官方 OpenAI SDK 客户端关闭 SDK 重试；其他供应商内部行为不作等同保证。
 一次失败可能已经产生供应商费用，未知结果不能据此标为零费用或自动再次调用。
-每个 Memory 最多保留 1,000 个产物审计记录；达到上限拒绝新建，不静默清理历史或只失效前一部分记录。
+每个 Memory 最多同时保留 1,000 个未清理产物。所有未清理状态均占用配额；达到上限时拒绝新建，须显式清理后才释放名额。
 
 ## 回看、取消与失效
 
@@ -88,10 +88,35 @@ Web 在 Memory 详情的压缩页面提供有序输入、预算、显式生成�
 URL 只保留操作身份；关闭、刷新或切换账号后不从本地持久缓存恢复摘要正文，不自动重新发出 POST。
 使用摘要仍需人工核对其条件、否定、时间、标识符和待办；本接口不持久化一条“已应用”或长期记忆审核结论。
 
+## 库存与手动清理
+
+```text
+GET  /api/v1/memories/{memory_id}/context-compactions/inventory
+GET  /api/v1/memories/{memory_id}/context-compactions/{artifact_id}/retention-preview
+POST /api/v1/memories/{memory_id}/context-compactions/{artifact_id}/retirements
+```
+
+库存以产物为单位，返回保留数、已清理数、可用名额、未清理产物的状态分布及未排空计数。
+预览说明单个产物涉及的来源与引用、能否清理及阻止原因，不返回摘要正文，也不修改任何数据。
+清理仅允许原创建者在仍有 Memory 权限时确认；产物必须已结束，并且有持久证据证明写入与发布都已排空。
+状态未知或取消后模型仍在运行时，保持阻止清理。
+
+确认请求体为 `{"expected_preview_sha256":"<最近一次预览返回的哈希>"}`。
+服务端在写入锁内重新校验权限、排空证据与预览快照；快照改变返回 409，须重新预览和确认。
+清理释放一个产物名额，并清掉该产物的摘要包、保留正文副本、根来源绑定及请求副本。
+原 RAW、长期记忆和审核结论仍可按原规则使用；清理不会调用模型，也不代表底层备份已物理擦除。
+
+清理后保留原生成操作身份、请求哈希和审计回执；原操作回看返回 `stale` / `compaction_retired`，不再提供数据包。
+有完整排空凭证的清理回执不占写入排空清单的名额；库存仍会统计历史回执。
+旧消费引用失效。相同预览哈希重放清理只回看该回执；原生成操作重放不再生成。
+连接中断或提交结果未知时，先回看原操作。Web 支持库存、清理预览、手动确认与原操作刷新恢复，刷新不会提交清理。
+
 ## 验证与直接参考
 
 固定回归覆盖顺序、完整后缀、角色／时间声明、空输出、预算、操作复用、取消、来源变化和写入排空。
 真实 SQL／HTTP 与真实 Web 消费者另行验证；模型效果及总用量方法见[记忆评估](memory-evaluation.md)。
+清理回归覆盖旧产物迁移、只读预览、确认重放、取消后排空及旧引用失效。用 10,001 条历史回执验证了
+普通 RAW 写入和读取、新建压缩产物及 Memory 删除；有矛盾的活动写入记录仍会阻止删除。
 部署需要先应用正式 Alembic 迁移。测试仅迁移隔离数据库；已有非空审计表拒绝直接 downgrade，以免丢弃恢复与来源记录。
 
 实现时于 2026-11-17 直接核对以下源码和测试。引用固定提交便于复核，不表示运行过上游测试或完整移植其实现：
@@ -105,4 +130,15 @@ URL 只保留操作身份；关闭、刷新或切换账号后不从本地持久�
 
 [Anthropic 原文](https://www.anthropic.com/research/components-of-agent-memory)将 compaction 与跨会话记忆区分；
 它支持这里将短期上下文压缩与长期候选审核分开的边界，不是本功能准确率或无损性的证明。
+
+清理实现于 2026-11-22 另对照以下源码与测试：
+
+| 来源 | 采用的边界 |
+| --- | --- |
+| [RAGFlow RAW 写入](https://github.com/infiniflow/ragflow/blob/91c702e86be3dcb3cabc9f6d81e485d02241bef8/internal/service/memory_message_service.go)及[测试](https://github.com/infiniflow/ragflow/blob/91c702e86be3dcb3cabc9f6d81e485d02241bef8/internal/service/memory_message_service_test.go#L77) | 继续区分明确失败与不确定结果；清理压缩产物不接管 RAW 写入。 |
+| [OpenClaw 清理实现](https://github.com/openclaw/openclaw/blob/ae8155cf5f5434132b578504716a60c62c3de4e6/src/commands/sessions-cleanup.runtime.ts)及[配额回归](https://github.com/openclaw/openclaw/blob/ae8155cf5f5434132b578504716a60c62c3de4e6/src/config/sessions/cleanup-service.cap-archive.test.ts#L25) | 预览与应用使用一致的配额口径；清理后的审计记录不占产物名额。 |
+| [lossless-claw 清理实现](https://github.com/Martian-Engineering/lossless-claw/blob/f68be585258cac17eef13363bf845a193d914fc0/src/prune.ts#L327)及[只读预览测试](https://github.com/Martian-Engineering/lossless-claw/blob/f68be585258cac17eef13363bf845a193d914fc0/test/prune.test.ts#L155) | 先只读预览再显式确认，确认时在事务内复核；这里限定单个产物并校验预览哈希。 |
+| [DeepSeek Harness 排空测试](https://github.com/deepseek-ai/deepseek-harness/blob/d98f5d68519215da48f3002da2cb9c9d2068d81d/packages/compaction/compaction-basic/tests/manual-compaction.spec.ts#L838) | 取消后等待持久化检查点才释放执行资格。MultiRAG 读取现有写入凭证判断是否已排空。 |
+| [QwenPaw 压缩钩子](https://github.com/nwahlk/QwenPaw/blob/0280fc969c10e1cfd597eac00d4932075cae2b06/src/copaw/agents/hooks/memory_compaction.py#L177) | 对照会话运行时持有历史时的自动压缩和标记行为。MultiRAG 沿用显式产物接口，清理不改原会话状态。 |
+
 定时触发仍后置，Wiki 等主线，本功能不涉及 AgentHub。

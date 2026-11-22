@@ -20,7 +20,12 @@ class MemoryCompactionArtifact(Base):
         UniqueConstraint("memory_id", "operation_id", name="uq_memory_compaction_operation"),
         UniqueConstraint("artifact_id", "memory_id", name="uq_memory_compaction_scope"),
         CheckConstraint("state IN ('running','generated','failed','stale','canceled','persistence_unknown')", name="ck_memory_compaction_state"),
+        CheckConstraint(
+            "(retired_at IS NULL AND retirement IS NULL) OR (retired_at IS NOT NULL AND retirement IS NOT NULL AND package IS NULL AND redacted AND cancellation_requested AND state = 'stale')",
+            name="ck_memory_compaction_retirement",
+        ),
         Index("ix_memory_compaction_list", "memory_id", "created_at", "artifact_id"),
+        Index("ix_memory_compaction_retention", "memory_id", "tenant_id", "retired_at", "state"),
         {"schema": "usr_ai"},
     )
     artifact_id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -34,10 +39,12 @@ class MemoryCompactionArtifact(Base):
     input_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     model_binding: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     usage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
-    package: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    package: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     error_code: Mapped[str | None] = mapped_column(String(64))
     cancellation_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     redacted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retirement: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 

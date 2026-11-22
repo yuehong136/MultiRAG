@@ -24,11 +24,10 @@ from core.utils.redis_conn import REDIS_CONN
 from memory.revisions.domain import content_hash, request_hash
 from memory.revisions.storage import ManagedMessageStore
 from memory.services.messages import MessageService
-from tests.integration.test_memory_dreaming_http import analyze, approve
-from tests.integration.test_memory_startup_http import sql_fingerprint
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.memory_dreaming_http import analyze, approve
 from tests.support.memory_dreaming_http import dreaming_api as dreaming_api
-from tests.support.memory_startup_http import confirm
+from tests.support.memory_startup_http import confirm, sql_fingerprint
 from tests.support.memory_startup_http import startup_api as startup_api
 from tests.support.memory_structured_sources_http import append_source, provenance, provenance_guards, source_command
 from tests.support.memory_writes_http import api_request, manage_bank, result

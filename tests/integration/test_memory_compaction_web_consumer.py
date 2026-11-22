@@ -10,11 +10,11 @@ from typing import Any
 
 import pytest
 
-from tests.integration.test_memory_message_recovery_web import memory_effects, no_sql_mutations
 from tests.support.memory_compaction_http import compaction_api as compaction_api
 from tests.support.memory_compaction_http import release_api as release_api
 from tests.support.memory_compaction_http import request
 from tests.support.memory_compaction_http import writes_api as writes_api
+from tests.support.memory_message_recovery_web import memory_effects, no_sql_mutations
 from tests.support.memory_writes_http import api_request, result
 from tests.support.resource_journal import ResourceJournal
 from tests.support.web_consumer import pinned_web_checkout, private_consumer_file
@@ -101,3 +101,75 @@ def test_pinned_web_generate_reopen_and_stale_read_have_no_hidden_generation(com
         replay = result(api_request(env, "POST", f"/memories/{mid}/context-compactions", json=request(env, "compaction-web-owned")))
         assert replay["artifact"]["package"] is None
     assert writes == [] and memory_effects(env) == before and len(env["summary_calls"]) == 1
+
+
+def _retention_consumer(env: dict[str, Any], tmp_path: Path, *, mode: str, artifact_id: str) -> dict[str, Any]:
+    checkout, sha = pinned_web_checkout()
+    journal = ResourceJournal("memory-compaction-retention-web")
+    config = tmp_path / f"retention-{mode}.private.json"
+    receipt = tmp_path / f"retention-{mode}.receipt.json"
+    owned: list[Path] = []
+    try:
+        private_consumer_file(
+            config,
+            json.dumps(
+                {
+                    "baseURL": env["base"],
+                    "token": env["jwts"][1],
+                    "memoryId": env["memory_id"],
+                    "operationId": "retention-web-owned",
+                    "artifactId": artifact_id,
+                    "mode": mode,
+                    "ownedScratchConfirmed": True,
+                    "resultFile": str(receipt),
+                }
+            ),
+            journal,
+            owned,
+        )
+        private_consumer_file(receipt, "", journal, owned)
+        journal.event("reserve-compaction-retention-consumer", web_sha=sha, memory_id=env["memory_id"], mode=mode, process_group=os.getpgrp())
+        completed = subprocess.run(
+            ["node", "--import", "tsx", "scripts/consumers/memory-compaction-retention.ts", str(config)],
+            cwd=checkout,
+            env={**os.environ, "TSX_TSCONFIG_PATH": "tsconfig.app.json"},
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        value = json.loads(receipt.read_text())
+        assert value["passed"] and value["readOnlyRecovery"]
+        assert value["generationRequests"] == value["applicationRequests"] == 0
+        assert value["artifactId"] == artifact_id and value["operationId"] == "retention-web-owned"
+        journal.event("compaction-retention-consumer-readback", web_sha=sha, receipt=value)
+        return value
+    finally:
+        for path in owned:
+            path.unlink(missing_ok=True)
+            assert not path.exists()
+        journal.event("compaction-retention-consumer-private-files-cleaned", paths=[str(path) for path in owned], absent=True)
+
+
+@pytest.mark.external_consumer
+def test_pinned_web_retire_and_reopen_preserve_generation_identity(compaction_api: dict[str, Any], tmp_path: Path) -> None:
+    env = compaction_api
+    path = f"/memories/{env['memory_id']}/context-compactions"
+    body = request(env, "retention-web-owned")
+    created = result(api_request(env, "POST", path, json=body))
+    assert created["operation"]["status"] == "generated"
+    artifact_id = created["artifact"]["artifact_id"]
+    previous = memory_effects(env)
+    retired = _retention_consumer(env, tmp_path, mode="retire", artifact_id=artifact_id)
+    assert retired["retirementRequests"] == 2
+    assert retired["retainedAfter"] == retired["retainedBefore"] - 1
+    after = memory_effects(env)
+    assert {key: value for key, value in previous.items() if key != "sql_sha256"} == {key: value for key, value in after.items() if key != "sql_sha256"}
+    with no_sql_mutations() as writes:
+        reopened = _retention_consumer(env, tmp_path, mode="read", artifact_id=artifact_id)
+        replay = result(api_request(env, "POST", path, json=body))
+    assert reopened["retirementRequests"] == 0 and reopened["retiredAt"] == retired["retiredAt"]
+    assert replay["operation"]["status"] == "stale" and replay["artifact"]["package"] is None
+    assert replay["artifact"]["error_code"] == "compaction_retired"
+    assert writes == [] and memory_effects(env) == after and len(env["summary_calls"]) == 1

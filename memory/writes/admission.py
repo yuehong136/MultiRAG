@@ -18,6 +18,7 @@ from api.db.db_models import Memory, Task
 from api.db.memory_revision_models import ManagedMemoryState, MemoryMutationOperation, MemoryPublicationOutbox
 from api.db.memory_writer_models import MemoryWriterAdmission, MemoryWriterFence
 from common.asyncio_utils import finish_owned_work
+from memory.compaction.history import retired_compaction_history
 from memory.revisions.domain import RevisionBusy, RevisionConflict, RevisionNotFound, RevisionPersistenceUnknown, RevisionValidationError, positive_int, request_hash, validate_operation_id
 from memory.revisions.service import operation_view
 from memory.writes.types import Authorize, WriterDrainSnapshot
@@ -38,7 +39,7 @@ async def _fence(db: AsyncSession, memory_id: str, tenant_id: str, *, create: bo
 async def _admissions(db: AsyncSession, memory_id: str, tenant_id: str, *, lock: bool = False) -> list[MemoryWriterAdmission]:
     query = (
         select(MemoryWriterAdmission)
-        .where(MemoryWriterAdmission.memory_id == memory_id, MemoryWriterAdmission.tenant_id == tenant_id)
+        .where(MemoryWriterAdmission.memory_id == memory_id, MemoryWriterAdmission.tenant_id == tenant_id, ~retired_compaction_history(MemoryWriterAdmission))
         .order_by(MemoryWriterAdmission.operation_id)
         .limit(MAX_WRITER_INVENTORY + 1)
         .execution_options(populate_existing=True)
@@ -325,12 +326,16 @@ class WriterCoordinator:
             raise RevisionPersistenceUnknown(operation_id) from error
 
     async def _memory_fence(self, memory_id: str) -> tuple[Memory, MemoryWriterFence]:
+        return await self._lock_memory_fence(memory_id, create=True)
+
+    async def _lock_memory_fence(self, memory_id: str, *, create: bool) -> tuple[Memory, MemoryWriterFence]:
         memory = await self.db.scalar(select(Memory).where(Memory.id == memory_id, Memory.tenant_id == self.tenant_id).execution_options(populate_existing=True).with_for_update())
         if memory is None:
             raise RevisionNotFound("memory_not_found")
         await self.authorize(self.db, memory_id)
-        fence = await _fence(self.db, memory_id, self.tenant_id, create=True, lock=True)
-        assert fence is not None
+        fence = await _fence(self.db, memory_id, self.tenant_id, create=create, lock=True)
+        if fence is None:
+            raise RevisionConflict("memory_writer_fence_missing")
         if fence.state != "open":
             raise RevisionConflict("memory_writer_closed")
         bank = await self.db.scalar(select(ManagedMemoryState).where(ManagedMemoryState.memory_id == memory_id, ManagedMemoryState.tenant_id == self.tenant_id).with_for_update())

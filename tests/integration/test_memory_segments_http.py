@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from api.db.memory_incremental_models import MemoryMaintenanceDiscovery, MemoryMaintenanceFragmentCoverage
 from api.db.memory_maintenance_models import MemoryMaintenanceCandidate
 from memory.revisions.domain import content_hash
-from tests.integration.test_memory_dreaming_http import wait_job
+from tests.support.memory_dreaming_http import wait_job
 from tests.support.memory_incremental_http import create, endpoint, preview, run, seed_source, selection, wait_plan
 from tests.support.memory_incremental_http import dreaming_api as dreaming_api
 from tests.support.memory_incremental_http import incremental_api as incremental_api

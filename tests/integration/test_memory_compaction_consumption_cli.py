@@ -7,11 +7,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tests.integration.test_memory_message_recovery_web import memory_effects, no_sql_mutations
 from tests.support.memory_compaction_http import compaction_api as compaction_api
 from tests.support.memory_compaction_http import release_api as release_api
 from tests.support.memory_compaction_http import request
 from tests.support.memory_compaction_http import writes_api as writes_api
+from tests.support.memory_message_recovery_web import memory_effects, no_sql_mutations
 from tests.support.memory_writes_http import api_request, result
 from tests.support.resource_journal import ResourceJournal
 from tests.support.web_consumer import private_consumer_file

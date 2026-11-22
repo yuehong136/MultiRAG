@@ -60,6 +60,35 @@ async def cancel(memory_id: str, operation_id: str, body: EmptyCompactionCommand
         return no_store(_command_error(error, operation_id=operation_id))
 
 
+class RetirementCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_preview_sha256: str = Field(strict=True, pattern=r"^[a-f0-9]{64}$")
+
+
+@router.get("/memories/{memory_id}/context-compactions/inventory")
+async def inventory(memory_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
+    try:
+        return no_store(_result(await (await compactions(db, memory_id, actor_id=user.id)).retention_inventory(memory_id)))
+    except Exception as error:
+        return no_store(_command_error(error))
+
+
+@router.get("/memories/{memory_id}/context-compactions/{artifact_id}/retention-preview")
+async def retention_preview(memory_id: str, artifact_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
+    try:
+        return no_store(_result(await (await compactions(db, memory_id, actor_id=user.id)).retention_preview(memory_id, artifact_id)))
+    except Exception as error:
+        return no_store(_command_error(error))
+
+
+@router.post("/memories/{memory_id}/context-compactions/{artifact_id}/retirements")
+async def retire(memory_id: str, artifact_id: str, body: RetirementCommand, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
+    try:
+        return no_store(_result(await (await compactions(db, memory_id, actor_id=user.id)).retire(memory_id, artifact_id, **body.model_dump())))
+    except Exception as error:
+        return no_store(_command_error(error))
+
+
 @router.get("/memories/{memory_id}/context-compactions/{artifact_id}")
 async def artifact(memory_id: str, artifact_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
     try:

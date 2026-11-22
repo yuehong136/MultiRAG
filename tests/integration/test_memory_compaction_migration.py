@@ -57,3 +57,57 @@ def test_compaction_migration_is_idempotent_and_nonempty_audit_cannot_downgrade(
         with engine.connect() as reader:
             assert reader.scalar(sa.select(sa.func.count()).select_from(MemoryCompactionArtifact)) == 0
         journal.event("compaction-migration-cleanup-readback", audit_rows=0)
+
+
+def test_retirement_migration_preserves_existing_generation_row_and_guards_downgrade(bootstrapped_engine: sa.Engine) -> None:
+    engine = bootstrapped_engine
+    assert str(engine.url.database).startswith("multirag_test_")
+    path = Path(__file__).parents[2] / "configs/alembic/versions/0d35f7a9c1e3_add_compaction_retirement.py"
+    spec = importlib.util.spec_from_file_location("owned_retirement_migration", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    journal = ResourceJournal("memory-compaction-retirement-migration")
+    artifact_id = uuid4().hex
+    table = cast(sa.Table, MemoryCompactionArtifact.__table__)
+    journal.event("reserve-owned-migration-tables", database=engine.url.database, tables=[table.name], artifact_id=artifact_id)
+    package = {"summary": "owned legacy context"}
+    with engine.begin() as connection:
+        connection.execute(
+            sa.insert(table).values(
+                artifact_id=artifact_id,
+                memory_id="owned-migration",
+                tenant_id="owned",
+                actor_id="owned",
+                operation_id="owned-retirement-migration",
+                request_sha256="1" * 64,
+                request={"source_ids": ["100"]},
+                state="generated",
+                input_manifest_sha256="2" * 64,
+                model_binding={},
+                package=package,
+            )
+        )
+        with Operations.context(MigrationContext.configure(connection)):
+            module.downgrade()
+        old_columns = {column["name"] for column in sa.inspect(connection).get_columns(table.name, schema="usr_ai")}
+        assert {"retired_at", "retirement"}.isdisjoint(old_columns)
+        with Operations.context(MigrationContext.configure(connection)):
+            module.upgrade()
+            module.upgrade()
+        row = connection.execute(sa.select(table).where(table.c.artifact_id == artifact_id)).mappings().one()
+        assert row["request_sha256"] == "1" * 64 and row["package"] == package and row["retirement"] is None and row["retired_at"] is None
+        connection.execute(
+            sa.update(table)
+            .where(table.c.artifact_id == artifact_id)
+            .values(state="stale", request={}, package=None, retirement={"preview_sha256": "3" * 64}, retired_at=sa.func.now(), redacted=True, cancellation_requested=True)
+        )
+    try:
+        with engine.begin() as connection, Operations.context(MigrationContext.configure(connection)), pytest.raises(RuntimeError, match="Cannot discard compaction retirement tombstones"):
+            module.downgrade()
+    finally:
+        with engine.begin() as connection:
+            connection.execute(sa.delete(table).where(table.c.artifact_id == artifact_id))
+        with engine.connect() as reader:
+            assert not reader.scalar(sa.select(sa.exists().where(table.c.artifact_id == artifact_id)))
+        journal.event("compaction-retirement-migration-cleanup-readback", audit_row_absent=True)
