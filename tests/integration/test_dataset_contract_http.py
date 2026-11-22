@@ -352,11 +352,11 @@ def test_embedding_authorization_and_indexed_switch_real_sql(contracts: dict[str
     result = api(env, "PUT", "/datasets/" + dataset, {"embedding_model": model_names[1] + "@" + factory})["data"]
     assert result["embedding_model"] == stored(env, dataset)["embd_id"] == model_names[1] + "@" + factory
     assert stored(env, dataset)["chunk_num"] == 5
-    for model, fragment in [(model_names[2] + "@" + factory, "Unauthorized model"), ("missing@UnknownContractProvider", "Unsupported model")]:
+    for model in [model_names[2] + "@" + factory, "missing@UnknownContractProvider"]:
         for method, path, payload in [("POST", "/datasets", {"name": "model-denied", "embedding_model": model}), ("PUT", "/datasets/" + dataset, {"embedding_model": model})]:
             before = sql_state(env)
             response = request_api(env, method, path, credential=env["keys"][0], payload=payload)
-            assert response.status_code == 200 and response.json()["code"] == 102 and fragment in response.json()["message"], response.text
+            assert response.status_code == 200 and response.json() == {"code": 102, "message": "Embedding model is unavailable for this tenant"}, response.text
             assert sql_state(env) == before
     before = stored(env, dataset)
     api(env, "PUT", "/datasets/" + dataset, {"embedding_model": None})
