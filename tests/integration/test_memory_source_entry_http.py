@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -32,9 +34,45 @@ SEGMENTS = [
     {"role": "user", "content": "仅离线验收时先给检查步骤，再给示例；不能推广为生产授权。"},
     {"role": "assistant", "content": "我自称所有工具均已验证通过，但这句话没有真实执行凭据。"},
 ]
+BROWSER_ENTRY = "memory-source-entry-browser.ts"
 
 
-def run_entry_consumer(env: dict[str, Any], tmp_path: Path, *, operation: str, script: str = "memory-source-entry.ts", **changes: Any) -> dict[str, Any]:
+def _run_registered_browser(command: list[str], checkout: Path, web_sha: str, child_env: dict[str, str], config: Path, report_dir: Path | None) -> None:
+    project = Path(__file__).resolve().parents[2]
+    evidence = config.parent / "registered-browser"
+    evidence.mkdir(mode=0o700)
+    runner_command = [sys.executable, str(project / "scripts/run_registered.py"), "--evidence-root", str(evidence), "--label", "memory-source-entry-browser"]
+    for path in (Path(__file__), project / ".github/consumer-web.json", checkout / "package-lock.json", checkout / "scripts/consumers" / BROWSER_ENTRY):
+        runner_command.extend(("--input", str(path)))
+    runner_command.extend(("--borrowed", str(checkout / "node_modules"), "--", *command))
+    timed_out = False
+    with subprocess.Popen(runner_command, cwd=checkout, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=180)
+        except subprocess.TimeoutExpired:
+            # Let the registered runner stop its child process group and write the terminal receipt.
+            timed_out = True
+            process.terminate()
+            stdout, stderr = process.communicate()
+    assert stdout.strip(), stderr
+    receipt = json.loads(stdout.strip().splitlines()[-1])
+    journal = Path(receipt["journal"])
+    assert journal.parent == evidence
+    raw_output = journal.with_suffix(".output")
+    if report_dir is not None:
+        report = report_dir / "memory-source-entry-browser" / receipt["run_id"]
+        report.mkdir(parents=True, mode=0o700)
+        (report / "receipt.json").write_text(json.dumps({**receipt, "web_sha": web_sha, "timed_out": timed_out}, indent=2))
+        shutil.copyfile(journal, report / journal.name)
+        for case in journal.with_suffix(".cases").glob("*.jsonl"):
+            shutil.copyfile(case, report / case.name)
+        if raw_output.is_file():
+            token = json.loads(config.read_text())["token"]
+            (report / raw_output.name).write_text(raw_output.read_text(errors="replace").replace(token, "[redacted fixture JWT]"))
+    assert not timed_out and process.returncode == receipt["exit_code"] == receipt["raw_exit"] == 0, f"Registered source-entry browser failed: {receipt}; private output: {raw_output}"
+
+
+def run_entry_consumer(env: dict[str, Any], tmp_path: Path, *, operation: str, script: str = "memory-source-entry.ts", report_dir: Path | None = None, **changes: Any) -> dict[str, Any]:
     checkout, web_sha = pinned_web_checkout()
     journal = ResourceJournal("memory-source-entry-consumer")
     config, output = tmp_path / (operation + ".private.json"), tmp_path / (operation + ".result.json")
@@ -65,16 +103,13 @@ def run_entry_consumer(env: dict[str, Any], tmp_path: Path, *, operation: str, s
         assert not output.exists()
         owned.append(output)
         journal.event("reserve-source-entry-consumer", web_sha=web_sha, memory_id=env["memory_id"], operation_id=operation, script="scripts/consumers/" + script)
-        completed = subprocess.run(
-            ["node", "--import", "tsx", "scripts/consumers/" + script, str(config)],
-            cwd=checkout,
-            env={**os.environ, "TSX_TSCONFIG_PATH": "tsconfig.app.json"},
-            capture_output=True,
-            text=True,
-            timeout=180,
-            check=False,
-        )
-        assert completed.returncode == 0, completed.stdout + completed.stderr
+        command = ["node", "--import", "tsx", "scripts/consumers/" + script, str(config)]
+        child_env = {**os.environ, "TSX_TSCONFIG_PATH": "tsconfig.app.json"}
+        if script == BROWSER_ENTRY and not os.environ.get("MULTIRAG_RUN_ID"):
+            _run_registered_browser(command, checkout, web_sha, child_env, config, report_dir)
+        else:
+            completed = subprocess.run(command, cwd=checkout, env=child_env, capture_output=True, text=True, timeout=180, check=False)
+            assert completed.returncode == 0, completed.stdout + completed.stderr
         receipt = json.loads(output.read_text())
         assert receipt["passed"] is True and receipt["operationId"] == operation
         assert isinstance(receipt["sourceId"], str) and int(receipt["sourceId"]) > 2**53
@@ -139,8 +174,9 @@ def test_pinned_source_entry_writes_once_without_extracting_or_adopting(writes_a
 
 
 @pytest.mark.external_consumer
-def test_actual_source_form_writes_and_recovers_against_owned_backend(writes_api: dict[str, Any], tmp_path: Path) -> None:
-    receipt = run_entry_consumer(writes_api, tmp_path, operation="entry-browser-write", script="memory-source-entry-browser.ts")
+def test_actual_source_form_writes_and_recovers_against_owned_backend(writes_api: dict[str, Any], tmp_path: Path, request: pytest.FixtureRequest) -> None:
+    configured = request.config.getoption("--test-report-dir")
+    receipt = run_entry_consumer(writes_api, tmp_path, operation="entry-browser-write", script=BROWSER_ENTRY, report_dir=Path(configured) if configured else None)
     assert receipt["sourcePosts"] == 1 and receipt["refreshDidNotResubmit"] is True
     assert receipt["metadataRead"] is True and receipt["bodyPersisted"] is False and receipt["routeMocks"] is False
     assert_raw_only_write(writes_api, receipt, managed=False)
