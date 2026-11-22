@@ -12,7 +12,7 @@ dependencies = [
     "akshare>=1.15.78,<2.0.0",
     "alembic>=1.13.2",
     "anthropic==0.76.0",
-    "arxiv==4.0.0",
+    "arxiv==4.1.0",
     "asana>=5.2.2",
     "atlassian-python-api==4.0.7",
     # Discord voice support uses audioop, removed from the Python 3.13 stdlib.
