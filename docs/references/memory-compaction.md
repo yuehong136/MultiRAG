@@ -53,6 +53,7 @@ Memory 必须已显式启用托管状态，不能通过生成命令隐式启用�
 前后对照使用同一 JSON 格式，包含重复出现的来源／角色／出处包装及完整保留正文；
 管理 DTO、HTTP 信封、调用者追加的提示模板和真实模型协议开销不在该数据包预算内。
 调用者必须在最终 SDK 请求处重新计量，并为已有历史及模型输出留出空间。
+短前缀的 RAW 已经适合调用预算时，可以直接使用原文。摘要调用费用会先发生，只有生成后才能比较实际包体估算是否缩减。
 
 API 的 `usage` 明确是 tokenizer 估算，`provider_tokens=null`、`provider_billing_verified=false`。
 不能用模型配置表的累计计数差冒充本次调用账单；真实供应商用量与费用由独立评估或供应商回执记录。
@@ -164,6 +165,64 @@ PostgreSQL 归档只覆盖 SQL 数据。Milvus 中的 RAW 和索引、Redis 中�
 固定客户端先只读复查原产物，再在升级库验证显式确认和同哈希重放。
 同一归档另行还原到旧版回退库，数据指纹和序列与原库一致；旧 API 上的固定客户端回看全程只读。
 演练期间复用隔离的 Milvus 来源，未运行生产 worker，也没有迁移业务库。
+
+## 三存储同恢复点演练
+
+同版本演练使用独立的 PostgreSQL、Milvus 和 Valkey 源与目标。源侧通过真实 Memory API 建立合成 RAW、可读压缩产物、清理回执、撤回来源，
+并准备持久 Task 与 Redis Stream 待确认消息。停写后核对 SQL 活动连接和写入凭证，在原检查点和一次后续变更之间分别封存备份。
+两个检查点的 SQL、Milvus 和 Redis 状态必须各自不同。每份备份记录版本、校验和与对应的跨存储状态指纹。
+
+| 存储 | 备份及还原 | 准入读回 |
+| --- | --- | --- |
+| PostgreSQL 16 Compose 镜像 | 同镜像中的 `pg_dump` 自定义归档与单事务 `pg_restore`。 | 表结构、行、序列、版本、原操作和撤回状态。 |
+| Milvus 3.0.6 当前集合格式 | 官方 Milvus Backup 0.6.2 的 `snapshot` 和 `restore_snap` 路径。完整备份对象复制到目标独立 MinIO，在目标对象服务内恢复并等集合加载完成。 | 预期集合、RAW 和投影读回，以及真实向量检索与固定消费者源回看。 |
+| Valkey 8 隔离 RDB 模式 | 显式 `BGSAVE`，待保存完成后复制 `dump.rdb`，空目标从该文件启动。 | Stream 组游标、待确认项目、精确计数器高位和消息内容。 |
+
+先在全新的错配栈还原 PostgreSQL／Milvus 的原检查点和 Valkey 的后一个检查点。即使三份归档分别完整，也要由业务状态指纹识别错配，
+阻止业务读取监听器和重放阶段启动。另验证缺少一个备份组件时在还原前阻断。
+再在新的匹配栈用同一检查点的三份归档还原。固定 Web 客户端先只读回看，核对原操作、已经清理的产物和撤回后的来源停供。
+随后复用 worker 的入口处理已持久化的待确认任务。确认终态重投只 ACK，已有投影但未终结的任务进入人工对账，新消息 ID 高于旧上界。
+
+源码对照使用 [PostgreSQL 16 pg_restore](https://www.postgresql.org/docs/16/app-pgrestore.html)、
+[Milvus Backup 0.6.x 命令](https://milvus.io/docs/milvus_backup_0_6_cli.md) 与 [恢复入口](https://github.com/zilliztech/milvus-backup/blob/fd6705d3f98ddd62e87592ee7e27c4d2f2e13e7f/cmd/restore/restore.go)，
+以及 [Valkey RDB 待确认列表序列化](https://github.com/valkey-io/valkey/blob/80bb13e2a82b331512af2175a7f1117c313e4db2/src/rdb.c#L815) 和 [持久化文档](https://valkey.io/topics/persistence/)。
+队列准入沿用已有 [MultiRAG worker](../../core/svr/task_executor.py#L451)，并对照 [RAGFlow RAW 写入失败回归](https://github.com/infiniflow/ragflow/blob/33e29d80031becf3f57335179ef2100e8408acdf/internal/service/memory_message_service_test.go#L114)。
+
+带撤回记录的试跑触发了 Milvus 默认关闭旧式 L0 删除段导入的门禁。使用官方 snapshot 后，带删除的探针在保留默认配置的情况下完成。
+演练复制快照的完整备份对象，源栈退出后才在目标独立对象服务恢复。现有 Storage V2/LoonFFI 配置沿用原值。
+[Milvus 3.0.6 L0 导入配置](https://github.com/milvus-io/milvus/blob/v3.0.6/configs/milvus.yaml#L970) · [Backup 0.6.2 快照合同](https://github.com/zilliztech/milvus-backup/blob/v0.6.2/README.md#backup-formats)
+
+在包含本机解析资产和测试依赖的已确认后端版本中，从仓库根目录运行。`WEB_COMPLETION_CHECKOUT` 指向含本仓固定提交和已安装依赖的绝对路径，
+`EVIDENCE_ROOT` 指向事前登记的证据目录。驱动只使用本机已有镜像，校验官方 Backup 下载包后在登记的临时目录解包。[验证登记说明](../development.md#事前登记验证命令)
+
+```bash
+python3 -B scripts/run_registered.py --evidence-root "$EVIDENCE_ROOT" \
+  --label memory-same-point --input .github/consumer-web.json \
+  --input tests/manual/memory_same_point_rollout.py \
+  --input tests/manual/test_memory_same_point_seed.py \
+  --input tests/manual/memory_restore_stores.py \
+  --input tests/manual/memory_same_point_web.py \
+  --input tests/manual/memory_compaction_rollout.py \
+  --input docker/docker-compose-milvus-rehearsal.yml -- \
+  bash -c '
+    set -euo pipefail
+    pin=$(jq -er .ref .github/consumer-web.json)
+    mkdir -p "$TMPDIR/consumer"
+    git -C "$WEB_COMPLETION_CHECKOUT" archive "$pin" | tar -xf - -C "$TMPDIR/consumer"
+    ln -s "$WEB_COMPLETION_CHECKOUT/node_modules" "$TMPDIR/consumer/node_modules"
+    export MULTIRAG_ROLLOUT_WORK="$TMPDIR" MULTIRAG_ROLLOUT_WEB="$TMPDIR/consumer" MULTIRAG_ROLLOUT_WEB_SHA="$pin"
+    exec .venv/bin/python -B -m tests.manual.memory_same_point_rollout
+  '
+```
+
+此演练覆盖集合级逻辑还原与受控任务重投。Valkey AOF、Milvus 的 etcd／对象存储／WAL 整栈冷备以及生产切换需要各自的运行证据。
+恢复点之后的变更和撤回在开放业务前仍需核对，保留原人工审核发布流程。
+
+本地实测使用 PostgreSQL 16.14、Milvus 3.0.6 镜像和 Valkey 8.1.5。两个检查点均完成备份。缺件在还原前阻断，完整错配归档还原后
+按 Redis 状态阻断，两个负例均未启动应用监听器或 worker。匹配栈从创建到通过准入用时 39.64 秒，准入后首次固定 Web 回看用时 10.76 秒。
+固定 Web `b355c64f` 在重投前后各完成 15 个 GET。来源状态为 `forgotten`，原文请求仍返回 404，旧清理回执保持可读。
+真实 worker 的 `collect()` 处理两条待确认消息，终态只 ACK，有既有投影的未终结旧任务转对账。待确认队列归零，模型调用为零，
+Milvus 读回保持一致，新分配 ID 大于检查点上界。演练的应用启动日志保留了可选 MCP 模块的类型检查异常，验收范围为 Memory 接口及固定消费者。
 
 ## 验证与直接参考
 

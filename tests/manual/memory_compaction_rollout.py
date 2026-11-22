@@ -17,7 +17,7 @@ import sys
 import tarfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -284,7 +284,7 @@ def _upgrade() -> None:
         engine.dispose()
 
 
-def _serve_smoke(mode: str, config: dict[str, Any]) -> None:
+def _serve_smoke(mode: str, config: dict[str, Any], *, read_extra: Callable[[Path, dict[str, Any], ResourceJournal, list[Path]], None] | None = None) -> None:
     import uvicorn
 
     from api.db.db_models import engine
@@ -353,6 +353,10 @@ def _serve_smoke(mode: str, config: dict[str, Any]) -> None:
             before = _snapshot(engine)
             read = consume("memory-compaction", mode="read", expectedState="generated", prefixCount=1)
             assert read["artifactId"] == config["artifactId"] and _snapshot(engine) == before and requests and all(method == "GET" for method, _ in requests)
+            if read_extra is not None:
+                assert mode == "restored"
+                read_extra(checkout, config, journal, owned)
+                assert _snapshot(engine) == before and all(method == "GET" for method, _ in requests)
             if mode == "upgraded":
                 retirement = consume("memory-compaction-retention", mode="retire")
                 assert retirement["retirementRequests"] == 2
