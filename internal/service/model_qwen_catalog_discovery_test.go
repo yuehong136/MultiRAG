@@ -46,15 +46,30 @@ func TestExpandedCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pm.LoadAllModels(filepath.Join("..", "..", "configs", "all_models.json")); err != nil {
+	catalogPath := filepath.Join("..", "..", "configs", "all_models.json")
+	if err := pm.LoadAllModels(catalogPath); err != nil {
 		t.Fatal(err)
+	}
+	// Read the declared wire metadata independently, including explicit zeros.
+	catalogJSON, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog []struct {
+		modelModule.SupportedModel
+		Alias []string `json:"alias"`
+	}
+	if err := json.Unmarshal(catalogJSON, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	const expectedCatalogSize = 2042
+	if len(catalog) != expectedCatalogSize {
+		t.Fatalf("catalog entries = %d, want %d", len(catalog), expectedCatalogSize)
 	}
 	var ids []string
 	var expected []modelModule.SupportedModel
 	seen := map[string]bool{}
-	count := 0
-	for _, model := range pm.ListAllModels() {
-		count++
+	for _, model := range catalog {
 		for _, alias := range append([]string{model.Name}, model.Alias...) {
 			for _, rawID := range []string{alias, strings.ToUpper(alias)} {
 				if seen[rawID] {
@@ -62,21 +77,11 @@ func TestExpandedCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 				}
 				seen[rawID] = true
 				ids = append(ids, rawID)
-				types := append([]string{}, model.ModelTypes...)
-				row := modelModule.SupportedModel{Name: rawID, MaxDimension: model.MaxDimension, ModelTypes: &types, Thinking: model.Thinking}
-				if model.Dimensions != nil {
-					row.Dimensions = &model.Dimensions
-				}
-				if model.MaxTokens != 0 {
-					tokens := model.MaxTokens
-					row.MaxTokens = &tokens
-				}
+				row := model.SupportedModel
+				row.Name = rawID
 				expected = append(expected, row)
 			}
 		}
-	}
-	if count != 1124 {
-		t.Fatalf("catalog entries = %d, want 1124", count)
 	}
 	ids = append(ids, "unknown-provider-qwen")
 	expected = append(expected, modelModule.SupportedModel{Name: "unknown-provider-qwen"})
@@ -162,7 +167,7 @@ func TestExpandedCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 			t.Fatal(err)
 		}
 		list, ok := result.(*cli.CommonResponse)
-		if !ok || len(list.Data) != 1124 {
+		if !ok || len(list.Data) != expectedCatalogSize {
 			t.Fatalf("%s CLI catalog cardinality: %T", mode, result)
 		}
 		for _, tc := range []struct {
@@ -233,5 +238,5 @@ func TestExpandedCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 	if snapshot() != before {
 		t.Fatal("catalog, discovery, success or failure changed SQL inventory/bindings")
 	}
-	j.Event("qwen-consumer-contract", map[string]any{"models": count, "inventoryRows": len(expected), "knownAliasesAndCapabilities": true, "rawIDsAndOrderPreserved": true, "SQLUnchanged": true, "snapshotBefore": before, "snapshotAfter": snapshot(), "cliParserClient": true, "userAdminListShow": true, "identityBoundary": "controlled route middleware", "providerBoundary": "controlled HTTP inventory only"})
+	j.Event("qwen-consumer-contract", map[string]any{"models": len(catalog), "inventoryRows": len(expected), "knownAliasesAndCapabilities": true, "rawIDsAndOrderPreserved": true, "SQLUnchanged": true, "snapshotBefore": before, "snapshotAfter": snapshot(), "cliParserClient": true, "userAdminListShow": true, "identityBoundary": "controlled route middleware", "providerBoundary": "controlled HTTP inventory only"})
 }

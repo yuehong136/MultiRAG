@@ -113,7 +113,7 @@ func TestProviderKeyExecute(t *testing.T) {
 	calls := 0
 	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if r.Method != "GET" || r.URL.Path != "/api/v1/providers/OpenAI/connection" || r.URL.RawQuery != "" || r.Header.Get("Authorization") != "Bearer jwt-fixture" {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/providers/OpenAI/connection" || r.URL.RawQuery != "" || r.Header.Get("Authorization") != "Bearer jwt-fixture" {
 			t.Error("incorrect probe route/auth")
 		}
 		var body map[string]any
