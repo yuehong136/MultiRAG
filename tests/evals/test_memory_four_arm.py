@@ -41,8 +41,10 @@ def controlled_models(identifiers: dict[str, int]) -> dict[str, dict[str, Any]]:
 def controlled_sdk(patch: pytest.MonkeyPatch, case: dict[str, Any]) -> list[dict[str, Any]]:
     sends: list[dict[str, Any]] = []
     original_sync, original_async = httpx.Client.send, httpx.AsyncClient.send
+    injected = False
 
     def reply(request: httpx.Request) -> httpx.Response | None:
+        nonlocal injected
         if request.url.host != "api.openai.com":
             return None
         assert request.method == "POST"
@@ -51,6 +53,9 @@ def controlled_sdk(patch: pytest.MonkeyPatch, case: dict[str, Any]) -> list[dict
         model = body["model"]
         if request.url.path.endswith("/embeddings"):
             assert model == "text-embedding-3-small"
+            if not injected and any(f"User Input: {case['correction']}" in text for text in body["input"]):
+                injected = True
+                raise httpx.ConnectError("One controlled source-embedding transport failure", request=request)
             result = {
                 "object": "list",
                 "model": model,
@@ -126,6 +131,11 @@ def test_controlled_four_arm(request: pytest.FixtureRequest, monkeypatch: pytest
     assert all(report["revisions"][arm]["state"] == "revised" for arm in ("B", "C"))
     assert all(report[phase]["selected_count"] == 1 for phase in PHASES[:2])
     assert [len(row["startup"]["items"]) for row in report["answers"] if row["arm"] == "D"] == [1, 1, 0]
+    assert len(report["withdrawn_dreaming_projections_checked"]) == 1
+    assert report["withdrawals"]["A"]["no_row_or_model_effect"] is True
+    assert len(report["transport_recoveries"]) == 1
+    retry = report["transport_recoveries"][0]
+    assert retry["arm"] == "A" and retry["operation_id"] == "source-2" and retry["reconciled_status"] == "ready"
     assert len(sends) == len(report["cost"]["workload"]["observed_attempts"])
     chat = [body for body in sends if "messages" in body]
     assert len(chat) == 9 + 2 + MAX_ANSWERS

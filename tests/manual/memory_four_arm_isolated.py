@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -29,7 +30,10 @@ def main() -> int:
     parser.add_argument("mode", choices=("controlled", "live"))
     parser.add_argument("--report-dir", required=True, type=Path)
     parser.add_argument("--asset-root", required=True, type=Path)
+    parser.add_argument("--case-id", action="append", default=[])
     arguments = parser.parse_args()
+    if arguments.case_id and (arguments.mode != "live" or len(set(arguments.case_id)) != len(arguments.case_id) or any(not re.fullmatch(r"[a-z][a-z0-9-]{0,36}", case) for case in arguments.case_id)):
+        parser.error("Targeted case IDs are distinct fixture IDs for live mode only")
     assert os.environ.get("MULTIRAG_RUN_ID") and os.environ.get("MULTIRAG_RUN_JOURNAL"), "Use scripts/run_registered.py"
     from common.config_utils import CONFIGS
 
@@ -75,6 +79,8 @@ def main() -> int:
             else:
                 environment.pop("MULTIRAG_FOUR_ARM_HOLDOUT", None)
             selector = "test_live_four_arm" if arguments.mode == "live" else "test_controlled_four_arm"
+            test = f"tests/evals/test_memory_four_arm.py::{selector}"
+            targets = [f"{test}[{case}]" for case in arguments.case_id] or [test]
             report = arguments.report_dir.resolve()
             journal.event("reserve-four-arm-report-directory", path=str(report), mode=arguments.mode)
             report.mkdir(mode=0o700)
@@ -92,7 +98,7 @@ def main() -> int:
                     "--",
                     "-q",
                     *(["-x"] if arguments.mode == "controlled" else []),
-                    f"tests/evals/test_memory_four_arm.py::{selector}",
+                    *targets,
                 ],
                 cwd=ROOT,
                 env=environment,

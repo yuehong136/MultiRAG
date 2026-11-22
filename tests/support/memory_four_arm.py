@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import Memory, Task
 from api.db.joint_services import memory_write_runtime
 from api.db.memory_revision_models import MemoryEntryRevision
+from api.db.memory_writer_models import MemoryWriterAdmission
 from api.db.services.llm_service import LLMBundle
 from common import settings
 from core.utils.redis_conn import REDIS_CONN
@@ -118,20 +119,50 @@ def bank(env: dict[str, Any], arm: str) -> dict[str, Any]:
     return dict(env, memory_id=mid, arm=arm)
 
 
+def reconcile_append_transport(env: dict[str, Any], original: dict[str, Any], attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reconcile at most one confirmed transport failure on its original write."""
+    if (
+        original["status"] != "persistence_unknown"
+        or original["index_sync_status"] != "unknown"
+        or original.get("error_code") != "writer_io_unconfirmed"
+        or len(attempts) != 1
+        or attempts[0]["state"] != "failed"
+        or attempts[0].get("error_code") != "APIConnectionError"
+        or env["transport_recoveries"]
+    ):
+        return original
+    mid, identity = env["memory_id"], original["operation_id"]
+    endpoint = f"/memories/{mid}/operations/{identity}"
+    observed = call(env, "GET", endpoint)
+    assert (observed["status"], observed["index_sync_status"], observed.get("raw_source_id")) == ("persistence_unknown", "unknown", None)
+    with Session(env["engine"]) as reader:
+        writer = reader.get(MemoryWriterAdmission, (mid, identity))
+        assert writer is not None and writer.kind == "append_raw" and writer.state == "drained" and writer.active_token is None and not writer.message_ids
+    record = {"arm": env["arm"], "operation_id": identity, "failed_attempt_id": attempts[0]["attempt_id"], "original_status": observed["status"]}
+    env["transport_recoveries"].append(record)
+    reconciled = call(env, "POST", endpoint + "/reconciliations", json={})
+    assert reconciled["operation_id"] == identity
+    record["reconciled_status"] = reconciled["status"]
+    return reconciled
+
+
 def append_extract(env: dict[str, Any], patch: pytest.MonkeyPatch, queue: str, text: str, index: int) -> dict[str, Any]:
     observer, mid = env["observer"], env["memory_id"]
     label = f"{env['arm']}:source-{index}"
     observer.set_stage("source_embedding", phase=label)
+    attempt_start = len(observer.attempts)
     with fixed_submission_clock(patch, index):
-        row = result(
-            api_request(
-                env,
-                "POST",
-                f"/memories/{mid}/messages",
-                token=env["keys"][0],
-                json={"operation_id": f"source-{index}", "user_input": text, "agent_response": "", "user_id": SUBJECT, "agent_id": AGENT, "session_id": f"session-{index}"},
-            )
+        response = api_request(
+            env,
+            "POST",
+            f"/memories/{mid}/messages",
+            token=env["keys"][0],
+            json={"operation_id": f"source-{index}", "user_input": text, "agent_response": "", "user_id": SUBJECT, "agent_id": AGENT, "session_id": f"session-{index}"},
         )
+    assert response.status_code in {200, 202}, response.text
+    row = result(response, status=response.status_code)
+    if response.status_code == 202:
+        row = reconcile_append_transport(env, row, observer.attempts[attempt_start:])
     assert row["status"] == row["index_sync_status"] == "ready" and row["queue_state"] == "submitted"
     source, task_id = str(row["raw_source_id"]), row["extraction_task_id"]
     redis = REDIS_CONN.REDIS
@@ -165,8 +196,19 @@ def withdraw(env: dict[str, Any], source: dict[str, Any], label: str) -> dict[st
     mid, source_id = env["memory_id"], source["source_id"]
     if env["arm"] == "A":
         # The legacy supported path is part of the comparison.
+        storage = ManagedMessageStore(env["tenant_id"], mid)
+        identities = {source_id, *source["derived"]}
+
+        def observed_state() -> dict[str, tuple[bool, Any, str]]:
+            return {str(row["message_id"]): (row["status"], row["forget_at"], digest(row["content"])) for row in asyncio.run(storage.inventory()) if str(row["message_id"]) in identities}
+
+        before = observed_state()
+        attempts = len(env["observer"].attempts)
         response = api_request(env, "DELETE", f"/messages/{mid}:{source_id}", actor=0)
-        return {"http_status": response.status_code, "retcode": response.json()["retcode"], "legacy_forget": response.json()["data"]}
+        body = response.json()
+        assert response.status_code == 200 and body["retcode"] == 409 and body["retmsg"] == "source_adoption_required"
+        assert set(before) == identities and observed_state() == before and len(env["observer"].attempts) == attempts
+        return {"http_status": response.status_code, "retcode": 409, "reason": "source_adoption_required", "legacy_forget": False, "no_row_or_model_effect": True}
     current = call(env, "GET", f"/memories/{mid}/sources/{source_id}/state")
     result = call(
         env,
@@ -291,13 +333,17 @@ def dream(
     reviews_finished = time.monotonic()
     entries = [item["entry_id"] for operation in operations for item in operation.get("entries", [])]
     assert len(entries) == len(selected), operations
+    projections = []
     for entry in entries:
         verify(env, entry, label + "-verify", directory, controlled=controlled)
+        binding = call(env, "GET", f"/memories/{mid}/entries/{entry}/verification-snapshot")["binding"]
+        projections.append({"entry_id": entry, "message_id": str(binding["entry"]["message_id"]), "source_ids": [str(row["source_id"]) for row in binding["sources"]]})
     return {
         "candidate_count": len(candidates),
         "selected_count": len(selected),
         "job_id": job["job_id"],
         "entries": entries,
+        "projections": projections,
         "analysis_and_queue_seconds": before_review - started,
         "review_and_publish_seconds": reviews_finished - before_review,
         "verification_seconds": time.monotonic() - reviews_finished,
@@ -343,10 +389,15 @@ def startup(env: dict[str, Any], entries: list[str]) -> dict[str, Any]:
     return bundle
 
 
-def assert_stopped(context: dict[str, Any], source: dict[str, Any], revised: dict[str, Any]) -> None:
-    denied = {source["source_id"], *source["derived"], revised.get("current_message_id")}
+def assert_stopped(context: dict[str, Any], source: dict[str, Any], revised: dict[str, Any], *, projections: list[str]) -> None:
+    denied = {source["source_id"], *source["derived"], revised.get("current_message_id"), *projections}
     for item in context["items"]:
-        assert str(item.get("message_id", "")) not in denied and str(item.get("source_id", "")) not in denied
+        assert item["message_id"] not in denied
+        if "source" in item:
+            locator = item["source"]["locator"]
+            assert locator is None or locator["message_id"] not in denied
+        for source_ref in item.get("sources", []):
+            assert str(source_ref["source_id"]) not in denied
 
 
 def answer_phase(
@@ -369,9 +420,10 @@ def answer_phase(
     startup_seconds = time.monotonic() - started
     if withdrawn is not None:
         for arm in ("B", "C"):
-            assert_stopped(contexts[arm], withdrawn[arm]["source"], withdrawn[arm]["revised"])
-        assert_stopped(package, withdrawn["C"]["source"], withdrawn["C"]["revised"])
-        assert all(str(source["source_id"]) != withdrawn["C"]["source"]["source_id"] for item in package["items"] for source in item["sources"])
+            item = withdrawn[arm]
+            assert_stopped(contexts[arm], item["source"], item["revised"], projections=item["projections"])
+        item = withdrawn["C"]
+        assert_stopped(package, item["source"], item["revised"], projections=item["projections"])
     order = list(ARMS)
     random.Random(case["id"] + "-" + phase).shuffle(order)
     for arm in order:
@@ -433,6 +485,7 @@ def run_case(
         "shared_preparation": "C and read-only D share the exact retrieval and prepared bank",
     }
     started = time.monotonic()
+    report["transport_recoveries"] = env["transport_recoveries"] = []
     try:
         with owned_queue(env, patch) as queue, bounded_extraction(env, patch):
             banks = {arm: bank(env, arm) for arm in ("A", "B", "C")}
@@ -462,13 +515,15 @@ def run_case(
             report["dreaming_correction_workflow_seconds"] = time.monotonic() - correction_started
             answer_phase(banks, case, "corrected", corrected["entries"], report)
             report["withdrawals"] = {arm: withdraw(memory, source_records[arm][-1], "withdraw-current") for arm, memory in banks.items()}
+            removed_projections = [row["message_id"] for row in corrected["projections"] if source_records["C"][-1]["source_id"] in row["source_ids"]]
+            report["withdrawn_dreaming_projections_checked"] = removed_projections
             answer_phase(
                 banks,
                 case,
                 "withdrawn",
                 corrected["entries"],
                 report,
-                withdrawn={arm: {"source": source_records[arm][-1], "revised": revisions[arm]} for arm in ("B", "C")},
+                withdrawn={arm: {"source": source_records[arm][-1], "revised": revisions[arm], "projections": removed_projections if arm == "C" else []} for arm in ("B", "C")},
             )
             assert len(report["answers"]) == MAX_ANSWERS
             assert {tuple(row["input_sha256"] for row in records) for records in source_records.values()} == {tuple(digest(text) for text in [*case["initial"], case["correction"]])}
