@@ -404,7 +404,7 @@ class MilvusConnection(MilvusConnectionBase):
 
                     output_fields = self._filter_collection_output_fields(conn, collection_name, query_select_fields)
                     native_order_by = self._build_native_query_order_by(conn, collection_name, order_by)
-                    query_kwargs = {}
+                    query_kwargs = {"consistency_level": "Strong"}
                     query_limit = 10000
                     # Milvus 3.x can push down scalar ordering via query(order_by=[...]).
                     # Keep this isolated: with pymilvus 2.5.x the request builder does not serialize order_by,
