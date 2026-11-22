@@ -50,7 +50,8 @@ def main() -> int:
             assert configurations["chat"]["llm_name"] == "gpt-6.1-terra"
             assert configurations["embedding"]["llm_name"] == "text-embedding-3-small"
             assert all(value["llm_factory"] == "OpenAI" for value in configurations.values())
-            private(bindings, configurations, journal)
+            fields = ("llm_name", "llm_factory", "mdl_type", "api_key", "api_base", "max_tokens")
+            private(bindings, {kind: {key: configuration[key] for key in fields if key in configuration} for kind, configuration in configurations.items()}, journal)
             del configurations
         for name in ("det.onnx", "rec.onnx", "ocr.res", "updown_concat_xgb.model", "layout.onnx", "layout.laws.onnx", "layout.manual.onnx", "layout.paper.onnx", "tsr.onnx"):
             source = (arguments.asset_root / name).resolve(strict=True)
