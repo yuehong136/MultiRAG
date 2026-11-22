@@ -63,7 +63,10 @@ def resolve_model_type(db: Session, tenant_id: str, model_ref: str) -> list[str]
     if row is None:
         raise LookupError("Tenant model not found")
     config = TenantLLMService.resolve_model_config(db, row.to_dict())
-    return list(config.get("model_types", [row.mdl_type]))
+    model_types = config.get("model_types", [row.mdl_type])
+    if not isinstance(model_types, list) or not model_types or any(not isinstance(model_type, str) or not model_type for model_type in model_types):
+        raise LookupError("Tenant model has no usable capability")
+    return list(model_types)
 
 
 def get_model_config_by_id(

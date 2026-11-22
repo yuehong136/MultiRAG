@@ -54,6 +54,8 @@ DATABASE_TESTS = frozenset(
         "test_llm_embedding_inputs.py",
         "test_llm_tool_capability.py",
         "test_model_config_resolution.py",
+        "test_model_type_resolution.py",
+        "test_delta_model_consumers.py",
         "test_model_gateway.py",
         "test_provider_instances.py",
         "test_rdbms_state_sql.py",

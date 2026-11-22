@@ -913,12 +913,13 @@ def test_real_model_http_and_worker_rebind_keep_instance_identity(http: tuple[An
             self.wfile.write(content)
 
     with ExitStack() as cleanup:
-        port = 30000 + int(uuid4().hex[:4], 16) % 20000
-        address = ("127.0.0.1", port)
-        journal.event("reserve-listener", address=list(address))
-        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+        journal.event("reserve-listener", address=["127.0.0.1", 0])
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Provider, bind_and_activate=False)
         cleanup.callback(server.server_close)
         server.server_bind()
+        address = server.server_address
+        port = address[1]
+        journal.event("listener-bound", address=list(address))
         server.server_activate()
         thread = threading.Thread(target=server.serve_forever, name="provider-fixture")
         thread.start()
@@ -998,7 +999,14 @@ def test_real_model_http_and_worker_rebind_keep_instance_identity(http: tuple[An
         assert requests_seen == [("/first/v1/chat/completions", "Bearer fixture-first", "same-raw-name"), ("/second/v1/chat/completions", "Bearer fixture-second", "same-raw-name")]
         with Session(engine) as db:
             assert [db.get(TenantLLM, identifier).used_tokens for identifier in identifiers] == [3, 3]
-    with socket.socket() as probe:
+    with ExitStack() as probes:
+        probe = probes.enter_context(socket.socket())
+        probe.bind(("127.0.0.1", 0))
+        if probe.getsockname()[1] == port:
+            probe = probes.enter_context(socket.socket())
+            probe.bind(("127.0.0.1", 0))
+        probe.settimeout(1)
+        assert probe.getsockname()[1] != port
         assert probe.connect_ex(address) != 0
     assert not thread.is_alive()
     journal.event("listener-cleaned", address=list(address), absent=True, thread_stopped=True)
