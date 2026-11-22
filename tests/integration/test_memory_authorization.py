@@ -42,6 +42,7 @@ def memory_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
     tenants = {"private": owner, "team": owner, "personal": member, "foreign": outsider}
     queue = f"memory-auth-{uuid4().hex}"
     redis = REDIS_CONN.REDIS
+    env["reserve_redis_keys"](queue, f"{queue}:memory")
     increment = REDIS_CONN.generate_auto_increment_id
     monkeypatch.setattr(settings, "get_svr_queue_name", lambda priority: queue)
     monkeypatch.setattr(REDIS_CONN, "generate_auto_increment_id", lambda **kwargs: increment(key_prefix=queue, **kwargs))
@@ -184,7 +185,10 @@ def test_team_and_personal_messages_real_readback(memory_api: dict[str, Any]) ->
     with Session(env["engine"]) as db:
         tasks = list(db.scalars(sa.select(Task).where(Task.doc_id == mid)))
         assert len(tasks) == 1
-    assert "hello" in MessageService.get_by_message_id(mid, int(tasks[0].digest), env["tenants"]["personal"])["content"]
+    raw_id = int(tasks[0].digest)
+    assert raw_id > 0
+    assert int(REDIS_CONN.REDIS.get(f"{env['queue']}:memory")) == raw_id
+    assert "hello" in MessageService.get_by_message_id(mid, raw_id, env["tenants"]["personal"])["content"]
     assert REDIS_CONN.REDIS.xlen(env["queue"]) == 1
     assert request(env, "DELETE", f"/memories/{mid}")["retcode"] == 0
     with Session(env["engine"]) as db:

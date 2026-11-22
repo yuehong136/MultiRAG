@@ -192,6 +192,17 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
         redis_endpoint = {key: redis.connection_pool.connection_kwargs.get(key) for key in ["host", "port", "db"]}
         original_command, original_pipeline = redis.execute_command, redis.pipeline
 
+        def reserve_redis_keys(*keys: str | bytes) -> None:
+            with lock:
+                for raw_key in keys:
+                    key = raw_key.decode() if isinstance(raw_key, bytes) else raw_key
+                    if key in owned_redis:
+                        continue
+                    assert not redis.exists(key), "Fixture refuses to overwrite a borrowed Redis key"
+                    journal.event("reserve-redis-key", key=key, endpoint=redis_endpoint, before_absent=True)
+                    owned_redis.add(key)
+                    report["redis_keys"] = sorted(owned_redis)
+
         def reserve_command(arguments: tuple[Any, ...]) -> None:
             if not arguments:
                 return
@@ -202,17 +213,10 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
                 keys = list(arguments[3 : 3 + int(arguments[2])])
             elif command in {"DEL", "UNLINK"}:
                 keys = list(arguments[1:])
-            elif command in {"SET", "SETEX", "PSETEX", "SETNX", "HSET", "HMSET", "HDEL", "LPUSH", "RPUSH", "SADD", "ZADD", "INCR", "XADD", "EXPIRE", "PEXPIRE"}:
+            elif command in {"SET", "SETEX", "PSETEX", "SETNX", "HSET", "HMSET", "HDEL", "LPUSH", "RPUSH", "SADD", "ZADD", "INCR", "INCRBY", "XADD", "EXPIRE", "PEXPIRE"}:
                 keys = list(arguments[1:2])
-            with lock:
-                for raw_key in keys:
-                    key = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key)
-                    if key in owned_redis:
-                        continue
-                    assert not redis.exists(key), "Fixture refuses to overwrite a borrowed Redis key"
-                    journal.event("reserve-redis-key", key=key, endpoint=redis_endpoint, before_absent=True)
-                    owned_redis.add(key)
-                    report["redis_keys"] = sorted(owned_redis)
+            if keys:
+                reserve_redis_keys(*keys)
 
         def execute_command(*arguments: Any, **options: Any) -> Any:
             reserve_command(arguments)
@@ -328,6 +332,7 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
                 "keys": api_keys,
                 "client": client,
                 "engine": bootstrapped_engine,
+                "reserve_redis_keys": reserve_redis_keys,
                 "task_ids": task_ids,
                 "runtime_tenants": runtime_tenants,
                 "jwts": [apps.manager.create_access_token(data={"sub": f"{owner}@release.example.com"}) for owner in owners],
