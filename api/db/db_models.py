@@ -4626,7 +4626,7 @@ def init_database_tables() -> str:
     return "Success"
 
 
-def upgrade_database_tables(is_fresh_install: bool = False):
+def upgrade_database_tables(is_fresh_install: bool = False) -> str:
     logging.info("开始执行数据库结构升级...")
 
     # 获取项目根目录
@@ -4659,23 +4659,24 @@ def upgrade_database_tables(is_fresh_install: bool = False):
 
             # 获取当前数据库版本
             context = MigrationContext.configure(connection, opts={"version_table_schema": schema_name})
-            current_rev = context.get_current_revision()
+            current_revisions = context.get_current_heads()
 
             # 获取最新迁移版本
             script_directory = ScriptDirectory.from_config(alembic_cfg)
             head_rev = script_directory.get_current_head()
+            target_revisions = (head_rev,) if head_rev is not None else ()
 
-            if current_rev == head_rev:
-                logging.info(f"数据库已经是最新版本: {current_rev}")
+            if current_revisions == target_revisions:
+                logging.info(f"数据库已经是最新版本: {head_rev}")
                 return "数据库已经是最新版本"
 
-            logging.info(f"当前数据库版本: {current_rev or '无版本'}")
+            logging.info(f"当前数据库版本: {', '.join(current_revisions) or '无版本'}")
             logging.info(f"目标数据库版本: {head_rev or '无版本'}")
 
             # 全新环境：表刚由 init_web_db() 按最新 db_models.py 创建，
             # 无需跑历史迁移（历史迁移只针对老环境做列/重命名补丁），
             # 直接 stamp 到 head 即可。
-            if current_rev is None and is_fresh_install:
+            if not current_revisions and is_fresh_install:
                 logging.info("检测到全新环境，跳过历史迁移，直接 stamp 到最新版本...")
                 command.stamp(alembic_cfg, "head")
                 logging.info(f"全新环境已 stamp 到最新版本: {head_rev}")

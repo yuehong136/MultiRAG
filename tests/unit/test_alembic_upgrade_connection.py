@@ -47,7 +47,7 @@ class _FakeConfig:
         self.options[key] = value
 
 
-def _patch_upgrade_dependencies(monkeypatch: pytest.MonkeyPatch) -> tuple[object, list[tuple[_FakeConfig, str]]]:
+def _patch_upgrade_dependencies(monkeypatch: pytest.MonkeyPatch, current_heads: tuple[str, ...] = ("base",)) -> tuple[object, list[tuple[_FakeConfig, str]]]:
     fake_connection = object()
     upgrade_calls: list[tuple[_FakeConfig, str]] = []
 
@@ -57,7 +57,7 @@ def _patch_upgrade_dependencies(monkeypatch: pytest.MonkeyPatch) -> tuple[object
     monkeypatch.setattr(
         db_models,
         "MigrationContext",
-        SimpleNamespace(configure=lambda connection, opts: SimpleNamespace(get_current_revision=lambda: "base")),
+        SimpleNamespace(configure=lambda connection, opts: SimpleNamespace(get_current_heads=lambda: current_heads)),
     )
     monkeypatch.setattr(
         db_models,
@@ -73,10 +73,12 @@ def _patch_upgrade_dependencies(monkeypatch: pytest.MonkeyPatch) -> tuple[object
     return fake_connection, upgrade_calls
 
 
+@pytest.mark.parametrize("current_heads", [("base",), ("memory", "gateway")], ids=["single-parent", "merged-parents"])
 def test_upgrade_database_tables_uses_existing_connection_for_alembic(
     monkeypatch: pytest.MonkeyPatch,
+    current_heads: tuple[str, ...],
 ) -> None:
-    fake_connection, upgrade_calls = _patch_upgrade_dependencies(monkeypatch)
+    fake_connection, upgrade_calls = _patch_upgrade_dependencies(monkeypatch, current_heads)
 
     result = db_models.upgrade_database_tables()
 
@@ -87,6 +89,28 @@ def test_upgrade_database_tables_uses_existing_connection_for_alembic(
     assert "sqlalchemy.url" not in cfg.options
     assert cfg.attributes["connection"] is fake_connection
     assert upgrade_calls == [(cfg, "head")]
+
+
+def test_upgrade_database_tables_stamps_fresh_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_connection, upgrade_calls = _patch_upgrade_dependencies(monkeypatch, ())
+    stamp_calls: list[tuple[_FakeConfig, str]] = []
+    monkeypatch.setattr(db_models.command, "stamp", lambda cfg, revision: stamp_calls.append((cfg, revision)))
+
+    assert db_models.upgrade_database_tables(is_fresh_install=True) == "全新环境已 stamp 最新版本"
+
+    assert upgrade_calls == []
+    ((cfg, revision),) = stamp_calls
+    assert cfg.attributes["connection"] is fake_connection
+    assert revision == "head"
+
+
+def test_upgrade_database_tables_skips_migration_at_current_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, upgrade_calls = _patch_upgrade_dependencies(monkeypatch, ("head",))
+    monkeypatch.setattr(db_models.command, "stamp", lambda *_: pytest.fail("Current schema must not be stamped again"))
+
+    assert db_models.upgrade_database_tables() == "数据库已经是最新版本"
+
+    assert upgrade_calls == []
 
 
 def test_upgrade_database_tables_raises_on_migration_failure(
