@@ -3,6 +3,9 @@
 # dependencies = [
 #   "mcp==2.0.0",
 # ]
+# [[tool.uv.index]]
+# url = "https://mirrors.aliyun.com/pypi/simple"
+# default = true
 # ///
 """Isolated MCP SDK 2 fixture and probe for EIM-F2.
 

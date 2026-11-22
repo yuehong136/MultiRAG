@@ -164,7 +164,7 @@ class DefaultRerank(Base):
                     try:
                         DefaultRerank._model = FlagReranker(os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)), use_fp16=torch.cuda.is_available())
                     except Exception:
-                        model_dir = snapshot_download(repo_id=model_name, local_dir=os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)), local_dir_use_symlinks=False)
+                        model_dir = snapshot_download(repo_id=model_name, local_dir=os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)))
                         DefaultRerank._model = FlagReranker(model_dir, use_fp16=torch.cuda.is_available())
         self._model = DefaultRerank._model
         self._dynamic_batch_size = 8
