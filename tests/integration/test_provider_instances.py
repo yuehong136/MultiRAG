@@ -84,9 +84,12 @@ def _exercise_discovery(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, 
     async def owned_probe(provider: str, key: str, base: str, declaration: ModelRegistration) -> dict[str, Any]:
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        assert GLOBAL_LOGGING_WORKER._worker_task is None
+        task = GLOBAL_LOGGING_WORKER._worker_task
+        assert task is None or task.done()
+        assert not GLOBAL_LOGGING_WORKER._running_tasks
         journal.event("reserve-sdk-logging-worker", model=declaration.model_name, purpose="owned isolated provider probe")
         try:
+            GLOBAL_LOGGING_WORKER.start()
             return await REAL_VERIFY_MODEL(provider, key, base, declaration)
         finally:
             await GLOBAL_LOGGING_WORKER.stop()
@@ -938,13 +941,17 @@ def test_real_model_http_and_worker_rebind_keep_instance_identity(http: tuple[An
             from litellm.caching.llm_caching_handler import LLMClientCache
             from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-            assert GLOBAL_LOGGING_WORKER._worker_task is None
+            task = GLOBAL_LOGGING_WORKER._worker_task
+            assert task is None or task.done()
+            assert not GLOBAL_LOGGING_WORKER._running_tasks
             owned_cache = LLMClientCache()
             monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", owned_cache)
             async_engine = create_async_engine(engine.url)
             event.listen(async_engine.sync_engine, "before_cursor_execute", engine._provider_reserve)
             monkeypatch.setattr(tenant_llm_service, "async_session_factory", async_sessionmaker(async_engine, expire_on_commit=False))
+            journal.event("reserve-sdk-logging-worker", purpose="owned isolated model inference")
             try:
+                GLOBAL_LOGGING_WORKER.start()
                 for identifier in identifiers:
                     with Session(engine) as db:
                         config = get_model_config_by_id(db, identifier, tenant_id=owner, model_type="chat")
@@ -1487,8 +1494,12 @@ def test_after298_fixed_web_regions_and_ocr(http: tuple[Any, ...], monkeypatch: 
     async def owned_probe(provider: str, key: str, base: str, model: ModelRegistration) -> dict[str, Any]:
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
+        task = GLOBAL_LOGGING_WORKER._worker_task
+        assert task is None or task.done()
+        assert not GLOBAL_LOGGING_WORKER._running_tasks
         journal.event("reserve-sdk-logging-worker", model=model.model_name)
         try:
+            GLOBAL_LOGGING_WORKER.start()
             return await REAL_VERIFY_MODEL(provider, key, base, model)
         finally:
             await GLOBAL_LOGGING_WORKER.stop()
