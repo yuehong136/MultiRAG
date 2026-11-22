@@ -215,7 +215,8 @@ jobs:
           POSTGRES_USER: ci_go
           POSTGRES_PASSWORD: '123456'
           POSTGRES_DB: multirag_go_models_a_skills_ci
-        ports: ['5432/tcp']
+        # The owned AfterFF admin fixture requires the exact local port 5432.
+        ports: ['127.0.0.1:5432:5432/tcp']
         options: >-
           --tmpfs /var/lib/postgresql/data:rw,size=536870912
           --health-cmd "pg_isready -U ci_go -d multirag_go_models_a_skills_ci"
@@ -269,51 +270,72 @@ jobs:
           for command in multirag_cli server_main admin_server; do
             go build -o ".test-results/go/bin/$command" "./cmd/$command.go"
           done
-      - name: Prepare owned management regression database
+      - name: Prepare owned Go SQL regression databases
         env:
           PG_CONTAINER: ${{ job.services.postgres.id }}
-          PG_PORT: ${{ job.services.postgres.ports[5432] }}
           PGHOST: 127.0.0.1
-          PGPORT: ${{ job.services.postgres.ports[5432] }}
+          PGPORT: ${{ job.services.postgres.ports['5432'] }}
           PGUSER: ci_go
           PGPASSWORD: '123456'
           PGDATABASE: postgres
+          REDIS_PORT: ${{ job.services.redis.ports['6379'] }}
+          AFTER33_DATABASE: multirag_after33_g_ci
+          AFTER298_DATABASE: multirag_after298_i_20261030
+          AFTERFF_DATABASE: multirag_batch_g_afterff_20261028
         run: |
           set -euo pipefail
+          test "$PGPORT" = 5432
+          for database in "$AFTER33_DATABASE" "$AFTER298_DATABASE" "$AFTERFF_DATABASE"; do
+            test "$(psql -At -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_database WHERE datname='$database'")" = 0
+          done
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          Path('.test-results/go/after33-database.json').write_text(json.dumps({
-              'database': 'multirag_after33_g_ci', 'host': '127.0.0.1',
-              'port': int(os.environ['PG_PORT']), 'container': os.environ['PG_CONTAINER'],
-              'status': 'registered-before-create', 'borrowed_service': True,
-          }, indent=2))
+          root = Path('.test-results/go')
+          for case in ('after33', 'after298', 'afterff'):
+              with (root / (case + '-database.json')).open('x') as output:
+                  json.dump({'database': os.environ[case.upper() + '_DATABASE'],
+                             'host': os.environ['PGHOST'], 'port': int(os.environ['PGPORT']),
+                             'container': os.environ['PG_CONTAINER'],
+                             'status': 'registered-before-create', 'borrowed_service': True}, output, indent=2)
           private = Path(os.environ['RUNNER_TEMP']) / 'go-after10bbe.json'
           probe = Path(os.environ['RUNNER_TEMP']) / 'go-after10bbe-probe.json'
-          Path('.test-results/go/deepseek-config.json').write_text(json.dumps({
-              'paths': [str(private), str(probe)], 'host': '127.0.0.1',
-              'port': int(os.environ['PG_PORT']),
+          afterff = Path(os.environ['RUNNER_TEMP']) / 'go-afterff.json'
+          (root / 'deepseek-config.json').write_text(json.dumps({
+              'paths': [str(private), str(probe), str(afterff)], 'host': os.environ['PGHOST'],
+              'port': int(os.environ['PGPORT']),
               'status': 'registered-before-create', 'credentials_omitted': True,
           }, indent=2))
           from urllib.parse import quote
           import secrets
           dsn = ('postgres://' + quote(os.environ['PGUSER'], safe='') + ':' +
                  quote(os.environ['PGPASSWORD'], safe='') + '@127.0.0.1:' +
-                 os.environ['PG_PORT'] + '/postgres?sslmode=disable')
+                 os.environ['PGPORT'] + '/postgres?sslmode=disable')
+          os.umask(0o077)
           for path, listen in [(private, '127.0.0.1:18961'), (probe, '127.0.0.1:18962')]:
               with path.open('x') as output:
-                  os.chmod(path, 0o600)
                   json.dump({
-                      'admin_dsn': dsn, 'pg_endpoint': '127.0.0.1:' + os.environ['PG_PORT'],
+                      'admin_dsn': dsn, 'pg_endpoint': '127.0.0.1:' + os.environ['PGPORT'],
                       'listen': listen, 'mysql_listen': '127.0.0.1:18962',
                       'multirag': {'secret_key': secrets.token_hex(32)},
                   }, output)
+          with afterff.open('x') as output:
+              json.dump({
+                  'database': {'driver': 'postgres', 'host': os.environ['PGHOST'],
+                               'port': int(os.environ['PGPORT']), 'database': os.environ['AFTERFF_DATABASE'],
+                               'username': os.environ['PGUSER'], 'password': os.environ['PGPASSWORD'],
+                               'schema': 'usr_ai'},
+                  'redis': {'host': '127.0.0.1', 'port': int(os.environ['REDIS_PORT']), 'db': 1},
+              }, output)
           PY
-          psql -v ON_ERROR_STOP=1 -c 'CREATE DATABASE multirag_after33_g_ci'
+          for database in "$AFTER33_DATABASE" "$AFTER298_DATABASE" "$AFTERFF_DATABASE"; do
+            psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$database\""
+          done
+          PGDATABASE="$AFTERFF_DATABASE" psql -v ON_ERROR_STOP=1 -c 'CREATE SCHEMA usr_ai'
       - name: Prepare isolated Go file, memory and recovery services
         env:
-          PG_PORT: ${{ job.services.postgres.ports[5432] }}
-          REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+          PG_PORT: ${{ job.services.postgres.ports['5432'] }}
+          REDIS_PORT: ${{ job.services.redis.ports['6379'] }}
         run: |
           set -euo pipefail
           sudo sysctl -w vm.max_map_count=262144
@@ -394,17 +416,41 @@ jobs:
           PY
       - name: Go race regression (live opt-ins remain explicit)
         env:
-          MULTIRAG_SKILL_EMBEDDING_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_go_models_a_skills_ci?sslmode=disable
-          MULTIRAG_AFTER33_G_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_after33_g_ci?sslmode=disable
+          MULTIRAG_SKILL_EMBEDDING_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/multirag_go_models_a_skills_ci?sslmode=disable
+          MULTIRAG_AFTER33_G_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/multirag_after33_g_ci?sslmode=disable
           MULTIRAG_AFTER33_CLI: ${{ github.workspace }}/.test-results/go/bin/multirag_cli
           MULTIRAG_DEEPSEEK_CONFIG: ${{ runner.temp }}/go-after10bbe.json
           MULTIRAG_QWEN_CONFIG: ${{ runner.temp }}/go-after10bbe.json
           MULTIRAG_AFTER10BBE_S_CONFIG: ${{ runner.temp }}/go-after10bbe.json
           MULTIRAG_AFTERDCF_G_CONFIG: ${{ runner.temp }}/go-afterdcf.json
           MULTIRAG_AFTERDCF_G_INFINITY_CONFIG: ${{ runner.temp }}/go-afterdcf-infinity.json
+          SQL_CONFIG_TESTS: '^(TestRandomDatasetIDSQLLifecycleAndConsumerAuthorization|TestModelIDConsumersHTTPCLIAndSQL|TestChatSessionSSEDeadlineScratchPostgres|TestSkillSpaceDeleteConsumerScratchPostgres|TestSupportedDiscoveryMetadataHTTPAndSQL|TestSiliconFlowDiscoveryConsumersHTTPAndSQL)$'
+          AFTERFF_TESTS: '^(TestAfterFFAdminDeleteUserModelFailureRollsBackSQL|TestDocumentDeleteLiveUnknownObjectAndIndexFailuresRemainRetryable|TestDocumentDeleteLiveMissingFileAndRecoveryMirrorsBlockBeforeCancel|TestDocumentDeleteLivePendingSQLRecoveryBlocksAndReadyRetires|TestDocumentStopLiveSQLFailureCompensatesOnlyOwnNonce)$'
+          AFTER298_TEST: '^TestAfter298RoutesHTTPAndSQL$'
+          AFTER298_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/multirag_after298_i_20261030?sslmode=disable
         run: |
           set -euo pipefail
-          go test -race -count=1 -json ./internal/... | tee .test-results/go/tests.jsonl
+          # Run these exact tests once, with their owned fixtures and persistent journals.
+          mkdir -p .test-results/go/owned-cases
+          go test -race -count=1 -json ./internal/... -skip "$SQL_CONFIG_TESTS|$AFTERFF_TESTS|$AFTER298_TEST" | tee .test-results/go/tests.jsonl
+          REQUIRE_SERVICES=1 REST_DOCUMENT_RESOURCE_DIR="$PWD/.test-results/go/owned-cases" \
+            MULTIRAG_MODEL_ID_CONFIG="$RUNNER_TEMP/go-after10bbe.json" \
+            MULTIRAG_S_CASE_CONFIG="$RUNNER_TEMP/go-after10bbe.json" \
+            MULTIRAG_DISCOVERY_CONFIG="$RUNNER_TEMP/go-after10bbe.json" \
+            MULTIRAG_DISCOVERY_CLI="$PWD/.test-results/go/bin/multirag_cli" \
+            go test -race -count=1 -json ./internal/handler ./internal/service \
+              -run "$SQL_CONFIG_TESTS" | tee -a .test-results/go/tests.jsonl
+          # These two loopback ports are reserved for this test on the hosted runner.
+          REQUIRE_SERVICES=1 REST_DOCUMENT_RESOURCE_DIR="$PWD/.test-results/go/owned-cases" \
+            MULTIRAG_AFTER298_I_DSN="$AFTER298_DSN" \
+            MULTIRAG_AFTER298_I_USER_ADDRESS=127.0.0.1:18963 \
+            MULTIRAG_AFTER298_I_ADMIN_ADDRESS=127.0.0.1:18964 \
+            go test -race -count=1 -json ./internal/router \
+              -run "$AFTER298_TEST" | tee -a .test-results/go/tests.jsonl
+          REQUIRE_SERVICES=1 REST_DOCUMENT_RESOURCE_DIR="$PWD/.test-results/go/owned-cases" \
+            MULTIRAG_AFTERFF_G_CONFIG="$RUNNER_TEMP/go-afterff.json" \
+            go test -race -count=1 -json -p 1 ./internal/admin ./internal/service \
+              -run "$AFTERFF_TESTS" | tee -a .test-results/go/tests.jsonl
           REQUIRE_SERVICES=1 MULTIRAG_AFTER10BBE_G_CONFIG="$RUNNER_TEMP/go-after10bbe.json" \
             go test -race -tags integration -count=1 -json ./internal/handler \
               -run '^(TestAfter10bbeAgentMetadataHTTPAndSQL|TestHandlerInternalErrorsSQLHTTP)$' | tee -a .test-results/go/tests.jsonl
@@ -446,28 +492,39 @@ jobs:
           with (root / 'afterdcf-cleanup.json').open('x') as output:
               json.dump(record, output); output.flush(); os.fsync(output.fileno())
           PY
-      - name: Drop owned management regression database
+      - name: Drop owned Go SQL regression databases
         if: always()
         env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
           PGHOST: 127.0.0.1
-          PGPORT: ${{ job.services.postgres.ports[5432] }}
+          PGPORT: ${{ job.services.postgres.ports['5432'] }}
           PGUSER: ci_go
           PGPASSWORD: '123456'
           PGDATABASE: postgres
         run: |
           set -euo pipefail
-          psql -v ON_ERROR_STOP=1 -c 'DROP DATABASE IF EXISTS multirag_after33_g_ci WITH (FORCE)'
-          remaining=$(psql -At \
-            -c "SELECT count(*) FROM pg_database WHERE datname = 'multirag_after33_g_ci'")
-          test "$remaining" = 0
           python3 - <<'PY'
-          import json
+          import json, os, subprocess
           from pathlib import Path
-          path = Path('.test-results/go/after33-database.json')
-          record = json.loads(path.read_text()) if path.exists() else {'database': 'multirag_after33_g_ci'}
-          record.update(status='cleaned', independent_database_absent=True)
-          path.parent.mkdir(parents=True, exist_ok=True)
-          path.write_text(json.dumps(record, indent=2))
+          databases = {'after33': 'multirag_after33_g_ci', 'after298': 'multirag_after298_i_20261030',
+                       'afterff': 'multirag_batch_g_afterff_20261028'}
+          for case, database in databases.items():
+              path = Path('.test-results/go') / (case + '-database.json')
+              if not path.exists():
+                  continue
+              record = json.loads(path.read_text())
+              if (record['database'], record['host'], record['port'], record['container']) != (
+                  database, os.environ['PGHOST'], int(os.environ['PGPORT']), os.environ['PG_CONTAINER']
+              ):
+                  raise RuntimeError('Refuse cleanup of unowned Go database')
+              subprocess.run(['psql', '-v', 'ON_ERROR_STOP=1', '-c',
+                              f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)'], check=True)
+              remaining = subprocess.check_output(['psql', '-At', '-v', 'ON_ERROR_STOP=1', '-c',
+                  f"SELECT count(*) FROM pg_database WHERE datname = '{database}'"], text=True).strip()
+              if remaining != '0':
+                  raise RuntimeError('Owned Go database remains')
+              record.update(status='cleaned', independent_database_absent=True)
+              path.write_text(json.dumps(record, indent=2))
           PY
       - name: MinIO diagnostics and cleanup
         if: always()
@@ -476,7 +533,7 @@ jobs:
           docker logs --tail 200 ci-go-minio > .test-results/go/minio.log 2>&1 || true
           docker rm -f -v ci-go-minio >/dev/null 2>&1 || true
           rm -f "$MULTIRAG_GO_TEST_MINIO_CONFIG"
-          rm -f "$RUNNER_TEMP/go-after10bbe.json" "$RUNNER_TEMP/go-after10bbe-probe.json"
+          rm -f "$RUNNER_TEMP/go-after10bbe.json" "$RUNNER_TEMP/go-after10bbe-probe.json" "$RUNNER_TEMP/go-afterff.json"
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
