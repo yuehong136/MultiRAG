@@ -146,8 +146,11 @@ def shared_api(shared_database: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_
             storage_calls.append("unexpected object mutation")
             raise AssertionError("Text chunk contract must not mutate object storage")
 
-        monkeypatch.setattr(settings.STORAGE_IMPL, "put", forbidden_storage)
-        monkeypatch.setattr(settings.STORAGE_IMPL, "rm", forbidden_storage)
+        # Restore the original instance dictionary so later copies do not carry
+        # methods bound to the shared client's bucket.
+        storage_attributes = vars(settings.STORAGE_IMPL)
+        monkeypatch.setitem(storage_attributes, "put", forbidden_storage)
+        monkeypatch.setitem(storage_attributes, "rm", forbidden_storage)
 
         class Embedding:
             db = None
