@@ -3,10 +3,12 @@
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import httpx
 import numpy as np
 import pytest
+import requests
 from openai import AsyncOpenAI, OpenAI
 from sqlalchemy.orm import Session
 
@@ -30,8 +32,8 @@ def test_catalog_and_litellm_metadata() -> None:
     assert len(entries) == 1
     assert entries[0]["url"] == DEFAULT
     assert len(entries[0]["llm"]) == 14
-    assert next(m for m in entries[0]["llm"] if m["llm_name"] == "gpt-4o")["mdl_type"] == "image2text"
-    assert {m["mdl_type"] for m in entries[0]["llm"]} == {"chat", "embedding", "image2text", "rerank", "speech2text", "tts"}
+    assert next(m for m in entries[0]["llm"] if m["llm_name"] == "gpt-4o")["mdl_type"] == ["image2text", "chat"]
+    assert {kind for m in entries[0]["llm"] for kind in (m["mdl_type"] if isinstance(m["mdl_type"], list) else [m["mdl_type"]])} == {"chat", "embedding", "image2text", "rerank", "speech2text", "tts"}
     assert all("model_type" not in m for m in entries[0]["llm"])
     assert FACTORY_DEFAULT_BASE_URL[SupportedLiteLLMProvider.FuturMix] == DEFAULT
     assert LITELLM_PROVIDER_PREFIX[SupportedLiteLLMProvider.FuturMix] == "openai/"
@@ -104,30 +106,33 @@ async def test_tenant_adapters_send_and_consume_protocol(monkeypatch: pytest.Mon
 
     http_calls: list[tuple[str, dict[str, Any]]] = []
 
-    class Response:
-        status_code = 200
+    responses: list[requests.Response] = []
 
-        def json(self) -> dict[str, Any]:
-            return {"results": [{"index": 1, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.1}]}
-
-        def iter_content(self) -> Any:
-            return iter([b"audio", b"", b"bytes"])
-
-    def post(url: str, **kwargs: Any) -> Response:
+    def post(url: str, **kwargs: Any) -> requests.Response:
         assert kwargs["headers"]["Authorization"] == "Bearer fixture-key"
         http_calls.append((url, kwargs))
-        return Response()
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        response._content = json.dumps({"results": [{"index": 1, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.1}]}).encode() if url.endswith("/rerank") else b"audiobytes"
+        response._content_consumed = True
+        response.close = Mock(wraps=response.close)
+        responses.append(response)
+        return response
 
     monkeypatch.setattr(rerank.requests, "post", post)
     monkeypatch.setattr(tts.requests, "post", post)
     scores, tokens = model("rerank", "jina-reranker-v2-base-multilingual").similarity("query", ["first", "second"])
-    np.testing.assert_array_equal(scores, [0.0, 1.0])
+    np.testing.assert_array_equal(scores, [0.1, 0.9])
     assert tokens == sum(num_tokens_from_string(s) for s in ["first", "second"])
     assert http_calls[-1][0] == base + "/rerank"
     assert http_calls[-1][1]["json"]["documents"] == ["first", "second"]
     assert b"".join(model("tts", "tts-1").tts("hello")) == b"audiobytes"
     assert http_calls[-1][0] == base + "/audio/speech"
     assert http_calls[-1][1]["json"] == {"model": "tts-1", "voice": "alloy", "input": "hello"}
+    assert len(responses) == 2
+    for response in responses:
+        response.close.assert_called_once_with()
     await chat.async_client.close()
     await vision.async_client.close()
     for instance in (chat, vision, embed):

@@ -3,11 +3,16 @@ from __future__ import annotations
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from PIL import Image
+from sqlalchemy.orm import Session
 
 import deepdoc.parser.opendataloader_parser as opendataloader_module
+from api.db import model_backfill
+from api.db.db_models import TenantLLM
+from api.db.services import provider_model_resolution
 from api.db.services.tenant_llm_service import TenantLLMService
 from core.llm import OcrModel
 from deepdoc.parser.opendataloader_parser import OpenDataLoaderParser
@@ -91,31 +96,44 @@ def test_crop_rejects_out_of_range_page_tag() -> None:
     assert parser.crop("@@5\t10.0\t100.0\t20.0\t80.0##") is None
 
 
-def test_opendataloader_env_config_creates_ocr_model(monkeypatch, db) -> None:
+def test_opendataloader_env_config_creates_ocr_model(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
     monkeypatch.setenv("OPENDATALOADER_APISERVER", "http://opendataloader.local")
-    saved: dict[str, Any] = {}
-    monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, _db, **_kwargs: []))
+    saved: list[TenantLLM] = []
+    monkeypatch.setattr(db, "scalar", Mock(side_effect=["tenant-1", None]))
+    monkeypatch.setattr(db, "scalars", Mock(return_value=[]))
+    monkeypatch.setattr(db, "add", saved.append)
 
-    def fake_save(cls, _db, **kwargs: Any) -> None:
-        saved.update(kwargs)
+    def flush() -> None:
+        assert len(saved) == 1
+        saved[0].id = 101
 
-    monkeypatch.setattr(TenantLLMService, "save", classmethod(fake_save))
+    monkeypatch.setattr(db, "flush", flush)
+    connection = object()
+    monkeypatch.setattr(db, "connection", Mock(return_value=connection))
+    backfill = Mock()
+    monkeypatch.setattr(model_backfill, "backfill", backfill)
 
     name = TenantLLMService.ensure_opendataloader_from_env(db, "tenant-1")
 
-    assert name == "opendataloader-from-env-1"
-    assert saved["llm_factory"] == "OpenDataLoader"
-    assert saved["mdl_type"] == "ocr"
-    assert "http://opendataloader.local" in saved["api_key"]
+    assert name == "101"
+    assert saved[0].tenant_id == "tenant-1"
+    assert saved[0].llm_name == "opendataloader-from-env-1"
+    assert saved[0].llm_factory == "OpenDataLoader"
+    assert saved[0].mdl_type == "ocr"
+    assert "http://opendataloader.local" in saved[0].api_key
+    backfill.assert_called_once_with(connection, "tenant-1")
 
 
-def test_opendataloader_env_config_reuses_matching_model(monkeypatch, db) -> None:
+def test_opendataloader_env_config_reuses_matching_model(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
     monkeypatch.setenv("OPENDATALOADER_APISERVER", "http://opendataloader.local")
-    existing = SimpleNamespace(
-        llm_name="configured-odl",
-        api_key='{"OPENDATALOADER_APISERVER": "http://opendataloader.local"}',
-    )
-    monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, _db, **_kwargs: [existing]))
-    monkeypatch.setattr(TenantLLMService, "save", classmethod(lambda cls, _db, **_kwargs: pytest.fail("must reuse existing model")))
+    existing = TenantLLM(id=102, tenant_id="tenant-1", llm_name="configured-odl", llm_factory="OpenDataLoader", mdl_type="ocr", status="1")
+    monkeypatch.setattr(db, "scalar", Mock(side_effect=["tenant-1", SimpleNamespace(status="active")]))
+    monkeypatch.setattr(db, "scalars", Mock(return_value=[existing]))
+    linked = Mock(return_value=(SimpleNamespace(model_types=["ocr"]), SimpleNamespace(api_key='{"OPENDATALOADER_APISERVER": "http://opendataloader.local"}', status="active")))
+    monkeypatch.setattr(provider_model_resolution, "linked_model", linked)
+    add = Mock(side_effect=AssertionError("must reuse existing model"))
+    monkeypatch.setattr(db, "add", add)
 
-    assert TenantLLMService.ensure_opendataloader_from_env(db, "tenant-1") == "configured-odl"
+    assert TenantLLMService.ensure_opendataloader_from_env(db, "tenant-1") == "102"
+    linked.assert_called_once_with(db, 102, "tenant-1")
+    add.assert_not_called()
