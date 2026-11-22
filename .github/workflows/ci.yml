@@ -188,6 +188,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-python
+        with:
+          assets: 'true'
       - name: Real Infinity contracts
         run: make integration-infinity
       - if: ${{ !cancelled() }}

@@ -21,6 +21,9 @@ jobs:
       PYTEST_ADDOPTS: ''
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
+      F_ATTACH_EVIDENCE: ${{ github.workspace }}/.test-results/file-document-attach
+      AFTER5E_EXTRA_CONSUMER_EVIDENCE: ${{ github.workspace }}/.test-results/after5e-extra-consumer
+      MULTIRAG_AFTER1E_WEB_EVIDENCE: ${{ github.workspace }}/.test-results/after1e-metadata-web
     services:
       postgres:
         image: postgres:16-alpine
@@ -93,7 +96,7 @@ jobs:
         env:
           LANE: ${{ inputs.lane }}
         run: |
-          mkdir -p .test-results
+          mkdir -p .test-results/file-document-attach .test-results/after5e-extra-consumer .test-results/after1e-metadata-web
           python - <<'PY'
           import json, os, subprocess
           from pathlib import Path
@@ -125,6 +128,8 @@ jobs:
           WEB_DATASET_CHECKOUT: ${{ github.workspace }}/consumer-web
           WEB_COMPLETION_CHECKOUT: ${{ github.workspace }}/consumer-web
           WEB_SANDBOX_CHECKOUT: ${{ github.workspace }}/consumer-web
+          WEB_SESSION_CLEANUP_CHECKOUT: ${{ github.workspace }}/consumer-web
+          SALESFORCE_WEB_CONSUMER: ${{ github.workspace }}/tests/support/salesforce_web_consumer.mts
         run: make integration-consumer
       - name: API startup and health
         if: inputs.lane == 'smoke'
