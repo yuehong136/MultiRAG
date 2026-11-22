@@ -69,7 +69,14 @@ func TestAgentSessionsScratchPostgres(t *testing.T) {
 	}
 	t.Cleanup(func() { admin.Close() })
 	name := "multirag_after5e_a_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
-	tables := []string{"t_ai_users", "t_ai_tenants", "t_ai_user_tenants", "t_ai_user_canvases", "t_ai_api_tokens", "t_ai_api4conversations"}
+	tables := []string{
+		"t_ai_users",
+		"t_ai_tenants",
+		"t_ai_user_tenants",
+		"t_ai_user_canvases",
+		entity.APIToken{}.TableName(),
+		"t_ai_api4conversations",
+	}
 	journal.Event("reserve-database", map[string]any{"endpoint": u.Host, "database": name, "config_file": path, "tables": tables})
 	var present bool
 	if err = admin.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", name).Scan(&present); err != nil || present {

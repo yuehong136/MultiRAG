@@ -66,7 +66,7 @@ class _FakeDocStore:
 def _patch_common(monkeypatch: pytest.MonkeyPatch, module: ModuleType, store: _FakeDocStore) -> None:
     monkeypatch.setattr(module, "db_connection", _fake_db)
     monkeypatch.setattr(kg_index.KnowledgebaseService, "get_by_id", classmethod(lambda cls, db, kb_id: SimpleNamespace(name="kb", tenant_id="t1")))
-    monkeypatch.setattr(settings, "docStoreConn", store)
+    monkeypatch.setitem(vars(settings), "docStoreConn", store)
     monkeypatch.setattr(document_history, "document_history", store.history)
 
 

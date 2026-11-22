@@ -48,7 +48,6 @@ class TableStructureRecognizer(Recognizer):
                 snapshot_download(
                     repo_id="InfiniFlow/deepdoc",
                     local_dir=os.path.join(get_project_base_directory(), "core/res/deepdoc"),
-                    local_dir_use_symlinks=False,
                 ),
             )
 

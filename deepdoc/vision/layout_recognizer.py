@@ -58,7 +58,7 @@ class LayoutRecognizer(Recognizer):
             model_dir = os.path.join(get_project_base_directory(), "core/res/deepdoc")
             super().__init__(self.labels, domain, model_dir)
         except Exception:
-            model_dir = snapshot_download(repo_id="InfiniFlow/deepdoc", local_dir=os.path.join(get_project_base_directory(), "core/res/deepdoc"), local_dir_use_symlinks=False)
+            model_dir = snapshot_download(repo_id="InfiniFlow/deepdoc", local_dir=os.path.join(get_project_base_directory(), "core/res/deepdoc"))
             super().__init__(self.labels, domain, model_dir)
 
     @staticmethod

@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
 from alembic import command
-from alembic.script import ScriptDirectory
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,7 @@ from api.identity.principal import AuthenticatedActor, AuthenticationContext, Au
 from api.identity.run_context import RunContext
 from tests.support.agent_update_release import join_member, message_dsl, read_state, update
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.database import scratch_database
 
 
 def create_agent(env: dict[str, Any]) -> str:
@@ -151,14 +153,20 @@ async def test_origin_failure_rolls_back_the_session_row(bootstrapped_async_engi
         assert await db.get(API4Conversation, identifier) is None and await db.get(AgentExecutionOrigin, identifier) is None
 
 
-def test_origin_migration_preserves_material_and_refuses_destructive_downgrade(bootstrapped_engine: sa.Engine, alembic_cfg: Any) -> None:
+@pytest.fixture
+def origin_migration_engine(postgres_service: None, tmp_path: Path) -> Iterator[sa.Engine]:
+    with scratch_database(tmp_path) as engine:
+        yield engine
+
+
+def test_origin_migration_preserves_material_and_refuses_destructive_downgrade(origin_migration_engine: sa.Engine, alembic_cfg: Any) -> None:
     table = AgentExecutionOrigin.__table__
     identifier = uuid4().hex
-    expected_head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
-    with bootstrapped_engine.begin() as connection:
+    expected_revision = "b0d2e4f6a8c0"
+    with origin_migration_engine.begin() as connection:
         alembic_cfg.attributes["connection"] = connection
         command.stamp(alembic_cfg, "a9c810f1d2e3")
-        command.upgrade(alembic_cfg, "head")
+        command.upgrade(alembic_cfg, expected_revision)
         connection.execute(API4Conversation.__table__.insert().values(id=identifier, dialog_id=identifier, user_id=identifier, source="agent", dsl={}))
         connection.execute(
             table.insert().values(
@@ -173,12 +181,12 @@ def test_origin_migration_preserves_material_and_refuses_destructive_downgrade(b
             )
         )
     try:
-        with pytest.raises(RuntimeError, match="provenance"), bootstrapped_engine.begin() as connection:
+        with pytest.raises(RuntimeError, match="provenance"), origin_migration_engine.begin() as connection:
             alembic_cfg.attributes["connection"] = connection
             command.downgrade(alembic_cfg, "a9c810f1d2e3")
-        with bootstrapped_engine.connect() as connection:
+        with origin_migration_engine.connect() as connection:
             assert connection.scalar(sa.select(table.c.id).where(table.c.id == identifier)) == identifier
-            assert connection.scalar(sa.text("SELECT version_num FROM usr_ai.alembic_version")) == expected_head
+            assert connection.scalar(sa.text("SELECT version_num FROM usr_ai.alembic_version")) == expected_revision
     finally:
-        with bootstrapped_engine.begin() as connection:
+        with origin_migration_engine.begin() as connection:
             connection.execute(sa.delete(API4Conversation).where(API4Conversation.id == identifier))

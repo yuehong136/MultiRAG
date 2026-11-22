@@ -352,11 +352,11 @@ def test_embedding_authorization_and_indexed_switch_real_sql(contracts: dict[str
     result = api(env, "PUT", "/datasets/" + dataset, {"embedding_model": model_names[1] + "@" + factory})["data"]
     assert result["embedding_model"] == stored(env, dataset)["embd_id"] == model_names[1] + "@" + factory
     assert stored(env, dataset)["chunk_num"] == 5
-    for model, fragment in [(model_names[2] + "@" + factory, "Unauthorized model"), ("missing@UnknownContractProvider", "Unsupported model")]:
+    for model in [model_names[2] + "@" + factory, "missing@UnknownContractProvider"]:
         for method, path, payload in [("POST", "/datasets", {"name": "model-denied", "embedding_model": model}), ("PUT", "/datasets/" + dataset, {"embedding_model": model})]:
             before = sql_state(env)
             response = request_api(env, method, path, credential=env["keys"][0], payload=payload)
-            assert response.status_code == 200 and response.json()["code"] == 102 and fragment in response.json()["message"], response.text
+            assert response.status_code == 200 and response.json() == {"code": 102, "message": "Embedding model is unavailable for this tenant"}, response.text
             assert sql_state(env) == before
     before = stored(env, dataset)
     api(env, "PUT", "/datasets/" + dataset, {"embedding_model": None})
@@ -390,7 +390,7 @@ def test_pagerank_zero_store_scope_and_infinity_denial(contracts: dict[str, Any]
     assert sql_state(env) == before and len(calls) == 3
 
 
-def test_delete_contract_real_sql_objects_and_indexes(contracts: dict[str, Any]) -> None:
+def test_delete_contract_real_sql_objects_and_indexes(contracts: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     import io
 
     from minio import Minio
@@ -398,6 +398,7 @@ def test_delete_contract_real_sql_objects_and_indexes(contracts: dict[str, Any])
 
     from common.config_utils import CONFIGS
     from core.nlp import search
+    from core.utils.minio_conn import MultiRAGMinio
 
     env = contracts
     owner, foreign = env["users"][:2]
@@ -413,9 +414,17 @@ def test_delete_contract_real_sql_objects_and_indexes(contracts: dict[str, Any])
     cfg = CONFIGS["minio"]
     object_reader = Minio(cfg["host"], access_key=cfg["user"], secret_key=cfg["password"], secure=bool(cfg.get("secure", False)))
     assert settings.docStoreConn.db_type() == "milvus"
-    # This fixture owns physical buckets; shared-bucket deployments have separate tests.
-    assert not cfg.get("bucket"), "This physical bucket acceptance requires a local multi-bucket MinIO configuration"
+    # Use a fresh real adapter in physical-bucket mode for this test.
+    storage = type(MultiRAGMinio())()
+    storage.bucket = storage.prefix_path = None
+    monkeypatch.setitem(vars(settings), "STORAGE_IMPL", storage)
+    owned_buckets: list[str] = []
+    owned_collections: list[str] = []
     try:
+        assert all(not object_reader.bucket_exists(bucket) for bucket in targets)
+        assert all(not reader.has_collection(collection) for collection in collections)
+        owned_buckets.extend(targets)
+        owned_collections.extend(collections)
         with Session(env["engine"]) as db:
             db.execute(sa.update(Knowledgebase).where(Knowledgebase.id.in_(targets)).values(name=name))
             for identifier, tenant in zip(record["folders"], [owner, foreign], strict=True):
@@ -454,23 +463,34 @@ def test_delete_contract_real_sql_objects_and_indexes(contracts: dict[str, Any])
         after = sql_state(env)
         assert set(after[Knowledgebase.__tablename__]) == {targets[2]}
         assert set(after[Document.__tablename__]) == {env["documents"][2]}
-        assert not any(object_reader.bucket_exists(bucket) for bucket in targets[:2])
-        assert not reader.has_collection(collections[0]) and reader.has_collection(collections[1])
-        assert object_reader.bucket_exists(targets[2]) and object_reader.stat_object(targets[2], "contract.txt").size == len(b"owned bytes")
+        bucket_readback = [object_reader.bucket_exists(bucket) for bucket in targets]
+        collection_readback = [reader.has_collection(collection) for collection in collections]
+        foreign_object_size = object_reader.stat_object(targets[2], "contract.txt").size
+        assert bucket_readback == [False, False, True]
+        assert collection_readback == [False, True]
+        assert foreign_object_size == len(b"owned bytes")
         with env["engine"].connect() as db:
             assert db.scalar(sa.select(sa.func.count()).select_from(File).where(File.id == record["folders"][1])) == 1
             assert db.scalar(sa.select(sa.func.count()).select_from(File).where(File.id == record["folders"][0])) == 0
         repeated = request_api(env, "DELETE", "/datasets", credential=env["keys"][0], payload={"ids": targets[:2]})
         assert repeated.status_code == 200 and repeated.json()["code"] == 102
         assert sql_state(env) == after
+        record["delete_readback"] = {
+            "datasets": list(after[Knowledgebase.__tablename__]),
+            "documents": list(after[Document.__tablename__]),
+            "buckets_exist": bucket_readback,
+            "collections_exist": collection_readback,
+            "foreign_object_size": foreign_object_size,
+        }
+        env["save_record"]()
     finally:
-        for bucket in targets:
+        for bucket in owned_buckets:
             if object_reader.bucket_exists(bucket):
                 for item in object_reader.list_objects(bucket, recursive=True):
                     object_reader.remove_object(bucket, item.object_name)
                 object_reader.remove_bucket(bucket)
             assert not object_reader.bucket_exists(bucket)
-        for collection in collections:
+        for collection in owned_collections:
             if reader.has_collection(collection):
                 reader.drop_collection(collection)
             assert not reader.has_collection(collection)

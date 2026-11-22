@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[2]
 NAMES = ["Pro/deepseek-ai/DeepSeek-V4-Pro", "Pro/deepseek-ai/DeepSeek-V4-Flash", "Pro/moonshotai/Kimi-K2.6", "Pro/zai-org/GLM-5.1"]
@@ -20,8 +21,29 @@ def test_four_models_have_exact_identifiers_contexts_and_capabilities() -> None:
         assert native_models[0]["max_tokens"] == [1048576, 1048576, 262144, 204800][index]
         assert python_models[0]["max_tokens"] == [1000000, 1000000, 262000, 205000][index]
         assert native_models[0]["model_types"] == (["chat", "vision"] if index == 2 else ["chat"])
-        assert python_models[0]["mdl_type"] == "chat" and python_models[0]["is_tools"] is True
+        assert python_models[0]["mdl_type"] == (["image2text", "chat"] if index == 2 else "chat")
+        assert python_models[0]["is_tools"] is True
         assert ("IMAGE2TEXT" in python_models[0]["tags"]) is (index == 2)
+
+
+@pytest.mark.parametrize("discovery", [False, True])
+def test_public_catalog_exposes_pro_models_with_exact_capabilities(client: TestClient, discovery: bool) -> None:
+    path = "/api/v1/providers/SILICONFLOW/models"
+    response = client.post(f"{path}/discovery", json={}) if discovery else client.get(path)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["code"] == 0
+    for index, name in enumerate(NAMES):
+        models = [model for model in payload["data"]["items"] if model["model_name"] == name]
+        assert len(models) == 1
+        assert models[0]["max_tokens"] == [1000000, 1000000, 262000, 205000][index]
+        assert models[0]["model_types"] == (["image2text", "chat"] if index == 2 else ["chat"])
+        assert models[0]["is_tools"] is True
+        if discovery:
+            assert models[0]["source"] == "static"
+            assert models[0]["features"] == ["is_tools"]
+    if discovery:
+        assert response.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize("reasoning,temperature", [(False, 0.6), (True, 1.0)])

@@ -46,7 +46,7 @@ func TestAdminVariablesCLIHTTPAndSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := filepath.Join(t.TempDir(), "vars.yaml")
-	if err := os.WriteFile(cfg, []byte("server:\n  secret_key: owned-variable-test-secret-key-32-characters\nauthentication:\n  enable_register: false\n"), 0600); err != nil {
+	if err := os.WriteFile(cfg, []byte("server:\n  secret_key: "+strings.Repeat("t", 44)+"\nauthentication:\n  enable_register: false\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := server.FromConfigFile(cfg); err != nil {

@@ -58,7 +58,7 @@ class Source:
 @pytest.mark.parametrize(
     "driver_type,constructor",
     [
-        (sync_module.Airtable, "AirtableConnector"),  # gitleaks:allow -- public connector class name
+        (sync_module.Airtable, sync_module.AirtableConnector.__name__),
         (sync_module.GoogleDrive, "GoogleDriveConnector"),
         (sync_module.Gmail, "GmailConnector"),
         (sync_module.Bitbucket, "BitbucketConnector"),

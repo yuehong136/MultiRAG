@@ -121,7 +121,7 @@ func TestAfter298RoutesHTTPAndSQL(t *testing.T) {
 	}
 	private := filepath.Join(os.Getenv("TMPDIR"), schema+".yaml")
 	j.Event("reserve-private-signing-config", map[string]any{"path": private})
-	if err = os.WriteFile(private, []byte("multirag:\n  secret_key: owned-after298-signing-fixture-32-characters\n"), 0600); err != nil {
+	if err = os.WriteFile(private, []byte("multirag:\n  secret_key: "+strings.Repeat("t", 44)+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

@@ -198,7 +198,7 @@ def mineru_http() -> Iterator[Any]:
 
 @pytest.fixture
 def tenant_models(monkeypatch: pytest.MonkeyPatch, db: Session, mineru_http: Any) -> Iterator[Any]:
-    state = SimpleNamespace(open=False, defaults=[], bundles=[], usages=[], missing=False)
+    state = SimpleNamespace(open=False, defaults=[], bundles=[], usages=[], ocr_references=[], missing=False)
     parser = MinerUParser(mineru_api=mineru_http.url)
     vision = OpenAI_APICV("controlled-test-key", "tenant-vision", base_url=mineru_http.url)
 
@@ -213,7 +213,8 @@ def tenant_models(monkeypatch: pytest.MonkeyPatch, db: Session, mineru_http: Any
     def ocr_config(session: Session, tenant_id: str, model_type: str, name: str) -> dict[str, Any]:
         assert session is db and tenant_id == "tenant-f" and model_type == LLMType.OCR.value
         assert name in {"mineru@MinerU", "mineru@MinerU@MinerU"}
-        return {"id": 10, "tenant_id": tenant_id, "llm_name": name, "mdl_type": model_type, "llm_factory": "MinerU"}
+        state.ocr_references.append(name)
+        return {"id": 10, "tenant_id": tenant_id, "llm_name": "mineru@MinerU", "mdl_type": model_type, "llm_factory": "MinerU"}
 
     def default_config(session: Session, tenant_id: str, model_type: Any) -> dict[str, Any]:
         assert session is db and tenant_id == "tenant-f" and model_type == LLMType.IMAGE2TEXT
@@ -267,6 +268,7 @@ def test_naive_chunk_real_pdf_zip_vlm_http_and_searchable_positions(tenant_model
     assert figure["page_num_int"] == [1] and figure["position_int"]
     assert "@@" not in figure["content_with_weight"]
     assert tenant_models.defaults == ["tenant-f"]
+    assert tenant_models.ocr_references == ["mineru@MinerU@MinerU"]
     assert tenant_models.bundles == [(10, language), (20, language)]
     assert tenant_models.usages == [(20, 7)]
     assert [path for path, _ in mineru_http.requests] == ["/file_parse", "/v1/chat/completions"]

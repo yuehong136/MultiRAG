@@ -28,7 +28,7 @@ from tests.support.agent_update_release import release_api as release_api
 from tests.support.resource_journal import ResourceJournal
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
-from tests.support.web_consumer import tsx_runner
+from tests.support.web_consumer import pinned_web_checkout, tsx_runner
 
 pytestmark = pytest.mark.external_consumer
 
@@ -47,7 +47,7 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
     monkeypatch.setitem(apps.app.dependency_overrides, get_db, scratch_db)
     monkeypatch.setattr(TenantLLMService, "ensure_mineru_from_env", classmethod(lambda cls, db, tenant_id: None))
     monkeypatch.setattr(TenantLLMService, "ensure_opendataloader_from_env", classmethod(lambda cls, db, tenant_id: None))
-    checkout = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
+    checkout, _ = pinned_web_checkout()
     script = Path(__file__).resolve().parents[1] / "support/chat_model_web_consumer.mts"
     provider_id, instance_id = uuid4().hex, uuid4().hex
     cache = tmp_path / "web-consumer-vite-cache"
@@ -109,9 +109,9 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
 
 
 def run_web(env: dict[str, Any], mode: str, **values: str) -> dict[str, Any]:
-    checkout = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
+    checkout, _ = pinned_web_checkout()
     runner = tsx_runner(checkout)
-    script = checkout / "scripts/verify-model-document-routes.ts"
+    script = Path(__file__).resolve().parents[1] / "support/model_registration_web_consumer.mts" if mode == "model" else checkout / "scripts/verify-model-document-routes.ts"
     assert runner.exists() and script.exists(), "Production Web consumer checkout is required"
     completed = subprocess.run(
         [str(runner), "--tsconfig", str(checkout / "tsconfig.app.json"), str(script)],

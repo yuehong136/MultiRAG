@@ -25,13 +25,15 @@ from tests.support.resource_journal import ResourceJournal
 
 
 @pytest.fixture
-def attach_rows(bootstrapped_engine: sa.Engine, request: pytest.FixtureRequest) -> Iterator[dict[str, Any]]:
+def attach_rows(bootstrapped_engine: sa.Engine, request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[dict[str, Any]]:
     engine = bootstrapped_engine
     journal = ResourceJournal(request.node.nodeid)
     ids = {
         name: uuid4().hex for name in ["owner", "member", "other", "team", "private", "foreign", "member_file", "shared_file", "foreign_file", "target", "source", "foreign_doc", "existing", "link"]
     }
-    evidence = Path(os.environ["F_ATTACH_EVIDENCE"])
+    report_dir = request.config.getoption("--test-report-dir")
+    default_evidence = Path(report_dir) / "file-document-attach" if report_dir else tmp_path
+    evidence = Path(os.environ.get("F_ATTACH_EVIDENCE", str(default_evidence)))
     evidence.mkdir(parents=True, exist_ok=True)
     path = evidence / (journal.run_id + ".json")
     report: dict[str, Any] = {"ids": ids, "database": engine.url.database, "host": engine.url.host, "port": engine.url.port, "events": [], "cleanup": {}}

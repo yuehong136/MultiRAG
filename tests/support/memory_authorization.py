@@ -63,6 +63,7 @@ def memory_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
     journal = ResourceJournal("memory-authorization-http")
     journal.event("reserve-memory-resources", database=env["engine"].url.database, memories=memories, tenants=tenants, queue=queue, counter=counter)
     redis = REDIS_CONN.REDIS
+    env["reserve_redis_keys"](queue, f"{queue}:memory", counter)
     increment = REDIS_CONN.generate_auto_increment_id
     monkeypatch.setattr(settings, "get_svr_queue_name", lambda priority: queue)
     monkeypatch.setattr(REDIS_CONN, "generate_auto_increment_id", lambda **kwargs: increment(key_prefix=queue, **kwargs))

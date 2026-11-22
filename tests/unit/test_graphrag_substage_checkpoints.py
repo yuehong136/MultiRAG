@@ -211,11 +211,15 @@ async def test_entry_envelope_cannot_be_swapped_within_scope(monkeypatch: pytest
 
 @pytest.mark.parametrize("stage", ["resolution", "community"])
 async def test_cancellation_drains_all_model_children(model_boundary: None, monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
-    started, settled = asyncio.Event(), []
+    started = asyncio.Event()
+    entered: list[str] = []
+    settled: list[str] = []
     model = Model()
 
     async def chat(system: str, *args: Any) -> str:
-        started.set()
+        entered.append(system)
+        if len(entered) == 2:
+            started.set()
         try:
             await asyncio.Event().wait()
         finally:
@@ -229,8 +233,14 @@ async def test_cancellation_drains_all_model_children(model_boundary: None, monk
     else:
         operation = EntityResolution(model)(graph(), set(graph()), callback=lambda **kwargs: None)
     task = asyncio.create_task(operation)
-    await started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
     assert len(settled) == 2
+    assert sorted(settled) == sorted(entered)

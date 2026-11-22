@@ -27,10 +27,20 @@ def test_failed_shared_http_setup_removes_committed_rows(bootstrapped_engine: sa
         raise RuntimeError("controlled failure after SQL commit")
 
     monkeypatch.setattr(support, "create_async_engine", fail_engine)
-    args = [bootstrapped_engine, monkeypatch]
     if fixture_name == "management_api":
-        args.append(tmp_path)
-    fixture = getattr(support, fixture_name).__wrapped__(*args)
+        # This fixture now owns its database; inject the same borrowed scratch
+        # boundary so the outer independent row snapshot observes its cleanup.
+        from collections.abc import Iterator
+        from contextlib import contextmanager
+
+        @contextmanager
+        def scratch(_evidence: Path) -> Iterator[sa.Engine]:
+            yield bootstrapped_engine
+
+        monkeypatch.setattr(support, "scratch_database", scratch)
+        fixture = support.management_api.__wrapped__(monkeypatch, tmp_path)
+    else:
+        fixture = support.release_api.__wrapped__(bootstrapped_engine, monkeypatch)
     with pytest.raises(RuntimeError, match="controlled failure"):
         next(fixture)
     assert rows() == before

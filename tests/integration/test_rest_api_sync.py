@@ -191,6 +191,11 @@ async def test_saved_test_sync_duplicates_failure_and_denial(connector_sync_api:
         vendor["mode"], vendor["category"] = "failed-page", "updated"
         await run(config, False)
         vendor["mode"] = "ok"
+        # Failed connectors are fenced against direct worker dispatch. Re-enter
+        # the real scheduling API before dispatching the next owned attempt.
+        resumed = requests.patch(f"{url}/{connector_id}", headers=headers, json={"status": TaskStatus.SCHEDULE}, timeout=30)
+        assert resumed.status_code == 200 and resumed.json()["retcode"] == 0, resumed.text
+        assert snapshot(env, connector_id)["connector"]["status"] == TaskStatus.SCHEDULE
         recovered = await run(config, True)
         assert len(recovered["documents"]) == 2 and all(d["content_hash"] != hashes[d["id"]] for d in recovered["documents"])
         with env["engine"].connect() as db:

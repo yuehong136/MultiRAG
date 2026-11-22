@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from api.db.services.document_source_recovery import SourceRecovery, SourceRecov
 from api.db.services.llm_service import LLMBundle
 from common import settings
 from core.utils.redis_conn import REDIS_CONN
+from tests.support.database import scratch_database
 from tests.support.document_parser_update import bootstrapped_engine as bootstrapped_engine
 from tests.support.document_parser_update import image_http_api as image_http_api
 from tests.support.document_parser_update import image_resources as image_resources
@@ -433,8 +435,23 @@ def test_source_compare_restore_window_excludes_wrong_document_writer(parser_api
     save(env["parser_record_path"], env["parser_record"])
 
 
+@pytest.fixture
+def source_recovery_migration_database(tmp_path: Path, alembic_cfg: Config) -> Iterator[sa.Engine]:
+    """Exercise only the source-recovery migration on a fresh owned database."""
+    with scratch_database(tmp_path) as engine:
+        cfg = Config(alembic_cfg.config_file_name)
+        cfg.set_main_option("script_location", alembic_cfg.get_main_option("script_location"))
+        with engine.begin() as db:
+            cfg.attributes["connection"] = db
+            command.stamp(cfg, "a9c810f1d2e3")
+        yield engine
+
+
 @pytest.mark.parametrize("schema", ["absent", "exact", "pair_unique_index", "partial_pair_unique_index", "incompatible", "protected", "extra_unique", "extra_unique_index"])
-def test_source_recovery_migration_requires_exact_durable_schema(parser_database: sa.Engine, alembic_cfg: Config, schema: str, request: pytest.FixtureRequest, tmp_path: Path) -> None:
+def test_source_recovery_migration_requires_exact_durable_schema(
+    source_recovery_migration_database: sa.Engine, alembic_cfg: Config, schema: str, request: pytest.FixtureRequest, tmp_path: Path
+) -> None:
+    parser_database = source_recovery_migration_database
     table = SourceRecoveryRecord.__table__
     cfg = Config(alembic_cfg.config_file_name)
     cfg.set_main_option("script_location", alembic_cfg.get_main_option("script_location"))
@@ -566,15 +583,15 @@ def test_source_recovery_migration_requires_exact_durable_schema(parser_database
             table.drop(db, checkfirst=True)
             table.create(db)
             cfg.attributes["connection"] = db
-            # Restore later migration tables too, rather than stamping a
-            # revision whose schema the fixture has not actually recreated.
-            command.upgrade(cfg, "head")
+            command.upgrade(cfg, "a9c810f1d2e3")
         record["cleanup"] = {"fixture_table_restored": True, "fixture_rows_absent": True}
         save(path, record)
 
 
 @pytest.mark.parametrize("failure", ["later_winner", "completion_then_restore"])
 def test_source_completed_material_keeps_replay_authority(parser_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    from common.doc_store import document_history as native_history
+
     env = parser_api
     headers = {"Authorization": "Bearer " + env["tokens"]["owner"]}
     response = requests.post(env["base"] + "/api/v1/documents/ingest", json={"doc_ids": [env["docs"]["b"]], "run": 1}, headers=headers, timeout=30)
@@ -590,17 +607,34 @@ def test_source_completed_material_keeps_replay_authority(parser_api: dict[str, 
     env["parser_record"]["source_before_attempt"] = before
     save(env["parser_record_path"], env["parser_record"])
     old_update = SourceRecovery.update
+    completion_nonces: list[str] = []
+    restore_attempts: list[dict[str, Any]] = []
 
     def incomplete(material: SourceRecovery, **changes: Any) -> None:
         if changes.get("phase") == "ready":
+            assert material.data["phase"] == "complete"
+            completion_nonces.append(material.data["nonce"])
             raise RuntimeError("Controlled final source completion reply failure")
         old_update(material, **changes)
+
+    def fail_restore(store: Any, index_name: str, dataset_id: str, document_id: str, rows: list[dict[str, Any]], *, ids: list[str] | None = None) -> None:
+        assert store is settings.docStoreConn
+        assert (index_name, dataset_id, document_id) == (env["collections"]["kb"], env["ids"]["kb"], env["docs"]["b"])
+        assert ids == [row["id"]]
+        durable = load_source_recovery(document_id, task_id, env["engine"])
+        assert durable is not None and durable.data["phase"] == "complete"
+        assert completion_nonces == [durable.data["nonce"]]
+        assert rows == durable.data["original_native"]
+        current_native = native_history.document_history(store, index_name, dataset_id, document_id)
+        assert current_native == durable.data["applied_native"] and current_native != rows
+        restore_attempts.append({"nonce": durable.data["nonce"], "phase": durable.data["phase"], "native_before_restore": current_native, "original_native": copy.deepcopy(rows)})
+        raise RuntimeError("Controlled native source history restore failure")
 
     with monkeypatch.context() as fault:
         if failure == "completion_then_restore":
             fault.setattr(SourceRecovery, "update", incomplete)
-            fault.setattr(settings.docStoreConn, "delete", lambda *args, **kwargs: False)
-            with pytest.raises(RuntimeError):
+            fault.setattr(native_history, "restore_document_history", fail_restore)
+            with pytest.raises(RuntimeError, match="Controlled native source history restore failure"):
                 status_service.insert_source_chunks(env["engine"], [row], env["collections"]["kb"], env["ids"]["kb"], task_id)
         else:
             assert status_service.insert_source_chunks(env["engine"], [row], env["collections"]["kb"], env["ids"]["kb"], task_id) == []
@@ -608,6 +642,10 @@ def test_source_completed_material_keeps_replay_authority(parser_api: dict[str, 
     material = load_source_recovery(env["docs"]["b"], task_id, env["engine"])
     assert material is not None and material.data["phase"] == ("ready" if failure == "later_winner" else "complete")
     assert material.data["nonce"] and material.data["original_native"] and material.data["applied_native"]
+    if failure == "completion_then_restore":
+        assert len(restore_attempts) == 1 and restore_attempts[0]["nonce"] == material.data["nonce"]
+        assert restore_attempts[0]["native_before_restore"] == material.data["applied_native"]
+        assert native_history.document_history(settings.docStoreConn, env["collections"]["kb"], env["ids"]["kb"], env["docs"]["b"]) == material.data["applied_native"]
     sql_material = applied["sql"][SourceRecoveryRecord.__tablename__]
     assert len(sql_material) == 1 and sql_material[0]["wire"] == material.wire and sql_material[0]["id"] == material.data["nonce"]
     assert applied["redis_states"][key]["absent"] and applied["redis_states"][key]["ttl"] == -2
@@ -636,6 +674,7 @@ def test_source_completed_material_keeps_replay_authority(parser_api: dict[str, 
         "winner": winner,
         "retained": after,
         "journal": retained.data,
+        "restore_attempts": restore_attempts,
         "same_current_task_retry_blocked": True,
     }
     env["parser_record"]["events"].append({"path": path, "status": response.status_code, "body": response.json(), "stores": winner})

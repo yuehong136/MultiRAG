@@ -6,8 +6,10 @@ import asyncio
 import re
 import threading
 import uuid
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -34,6 +36,27 @@ from api.db.db_models import (
     Tenant,
     User,
 )
+from tests.support.database import scratch_database
+
+
+@pytest.fixture(name="bootstrapped_engine")
+def identity_migration_engine(postgres_service: None, tmp_path: Path, alembic_cfg: Config) -> Iterator[sa.Engine]:
+    """Keep destructive migration scenarios outside the session's shared DB."""
+    with scratch_database(tmp_path) as engine:
+        with engine.begin() as connection:
+            # This suite covers EIM's revision chain. Later provider migrations
+            # intentionally cannot be downgraded, even on an empty database.
+            for name in (
+                "t_ai_identity_reconciliation_targets",
+                "t_ai_identity_reconciliation_checkpoints",
+                "t_ai_mcp_interaction_callback_receipts",
+                "t_ai_mcp_interaction_presentations",
+            ):
+                assert connection.scalar(sa.text(f'SELECT count(*) FROM usr_ai."{name}"')) == 0
+                connection.execute(sa.text(f'DROP TABLE usr_ai."{name}"'))
+            command.stamp(_migration_config(alembic_cfg, connection), _I6_REVISION)
+        yield engine
+
 
 _I6_REVISION = "b4c6d8e0f2a4"
 _EXECUTION_ORIGIN_REVISION = "b0d2e4f6a8c0"

@@ -22,7 +22,7 @@ from requests import Session as HTTPSession
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
-from api.db.db_models import API4Conversation, APIToken
+from api.db.db_models import AgentExecutionOrigin, API4Conversation, APIToken
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.task_runtime import read_binding
 from tests.support.agent_update_release import message_dsl, read_state, update
@@ -133,7 +133,11 @@ def close_case(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, *, surface:
                 replica_at_gate = REDIS_CONN.REDIS.get(replica_key)
                 if surface == "debug":
                     with Session(env["engine"]) as db:
-                        assert db.scalar(sa.select(sa.func.count()).select_from(API4Conversation).where(API4Conversation.dialog_id == agent_id)) == 0
+                        conversations = list(db.scalars(sa.select(API4Conversation).where(API4Conversation.dialog_id == agent_id)))
+                        assert len(conversations) == 1 and conversations[0].id == gate["session_id"]
+                        origin = db.get(AgentExecutionOrigin, conversations[0].id)
+                        assert origin is not None and origin.execution_mode == "draft"
+                        assert origin.agent_id == agent_id and origin.platform_user_id == env["owners"][0]
                     assert (replica_at_gate != replica) is (winner == "finish")
                 cancel_logs = {key: REDIS_CONN.REDIS.get(key) for key in REDIS_CONN.REDIS.scan_iter(match=f"{task_id}*-logs")}
                 if cancel_base:
@@ -147,7 +151,7 @@ def close_case(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, *, surface:
                 assert bool(nonce) is (winner == "cancel")
                 if winner == "finish":
                     assert {key: REDIS_CONN.REDIS.get(key) for key in REDIS_CONN.REDIS.scan_iter(match=f"{task_id}*-logs")} == cancel_logs
-                if surface != "debug" and winner == "finish":
+                if winner == "finish":
                     with Session(env["engine"]) as db:
                         committed = deepcopy(db.get(API4Conversation, gate["session_id"]).to_dict())
                 connection = response.raw._connection
@@ -158,27 +162,22 @@ def close_case(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, *, surface:
                 assert response_closed.wait(5), "ASGI did not observe actual socket disconnect"
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline:
-                    if surface == "debug":
-                        if REDIS_CONN.REDIS.exists(f"{task_id}-cancel") and canvas_closed.is_set():
+                    with Session(env["engine"]) as db:
+                        row = db.get(API4Conversation, gate["session_id"])
+                        if row.round == prior_round + 1 and (winner == "finish" or row.errors) and REDIS_CONN.REDIS.exists(f"{task_id}-cancel"):
                             break
-                    else:
-                        with Session(env["engine"]) as db:
-                            row = db.get(API4Conversation, gate["session_id"])
-                            if row.round == prior_round + 1 and (winner == "finish" or row.errors) and REDIS_CONN.REDIS.exists(f"{task_id}-cancel"):
-                                break
                     time.sleep(0.05)
                 assert canvas_closed.is_set(), "response left actual Canvas iterator open"
                 if winner == "cancel":
                     assert gate["canvas_close_exception"] == ("GeneratorExit" if window == "send" else "CancelledError")
-                if surface != "debug":
-                    assert row.round == prior_round + 1 and row.message[: len(previous)] == previous
-                    if winner == "cancel":
-                        assert [m["role"] for m in row.message[len(previous) :]] == ["user"]
-                        assert "canceled" in row.errors and "disconnected" in row.errors
-                        assert_failed_history(row.dsl, prior_dsl, "close window", env["owners"][0], agent_id)
-                    else:
-                        assert row.to_dict() == committed
-                        assert not row.errors and row.message[-1]["role"] == "assistant"
+                assert row.round == prior_round + 1 and row.message[: len(previous)] == previous
+                if winner == "cancel":
+                    assert [m["role"] for m in row.message[len(previous) :]] == ["user"]
+                    assert "canceled" in row.errors and "disconnected" in row.errors
+                    assert_failed_history(json.dumps(row.dsl) if isinstance(row.dsl, dict) else row.dsl, prior_dsl, "close window", env["owners"][0], agent_id)
+                else:
+                    assert row.to_dict() == committed
+                    assert not row.errors and row.message[-1]["role"] == "assistant"
                 assert REDIS_CONN.REDIS.get(f"{task_id}-cancel") == (nonce if winner == "cancel" else "x")
                 ttl = REDIS_CONN.REDIS.ttl(f"{task_id}-cancel")
                 assert ttl > 86000 if winner == "cancel" else 3590 <= ttl <= 3600
@@ -201,10 +200,9 @@ def close_case(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, *, surface:
                 patch.setattr(StreamingResponse, "stream_response", actual_stream)
                 retry = client.post(env["base"] + path, headers=headers, json={**payload, "session_id": gate.get("session_id"), "stream": False}, timeout=30)
                 assert retry.status_code == 200
-                if surface != "debug":
-                    body = retry.json()
-                    assert "choices" in body if surface == "openai" else body.get("retcode", body.get("code")) == 0
-                    assert resumed_history == [Canvas(row.dsl, env["owners"][0], canvas_id=agent_id).get_history(100)]
+                body = retry.json()
+                assert "choices" in body if surface == "openai" else body.get("retcode", body.get("code")) == 0
+                assert resumed_history == [Canvas(json.dumps(row.dsl) if isinstance(row.dsl, dict) else row.dsl, env["owners"][0], canvas_id=agent_id).get_history(100)]
                 assert read_state(env, agent_id) == before
             finally:
                 released.set()

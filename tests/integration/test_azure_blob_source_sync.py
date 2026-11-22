@@ -21,7 +21,7 @@ from common.config_utils import CONFIGS
 from common.constants import ConnectorTaskType, TaskStatus
 from common.data_source import azure_blob_connector as azure
 from core.svr.sync_data_source import AzureBlob
-from tests.support.azure_blob_source_transport import BlobSourceTransport, BlobVersion
+from tests.support.azure_blob_source_transport import ACCOUNT_KEY_FIXTURE, BlobSourceTransport, BlobVersion
 from tests.support.connector_deleted_sync import connector_sync_api as connector_sync_api
 from tests.support.resource_journal import ResourceJournal
 from tests.support.runtime_upload import read_object
@@ -90,7 +90,7 @@ def azure_sync_env(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPat
             "batch_size": 1,
             "allow_images": False,
             "sync_deleted_files": False,
-            "credentials": {"account_name": "ownedaccount", "account_key": "Y29udHJvbGxlZC1rZXk=", "container_name": "container"},
+            "credentials": {"account_name": "ownedaccount", "account_key": ACCOUNT_KEY_FIXTURE, "container_name": "container"},
         }
         headers = {"Authorization": "Bearer " + env["jwt"]}
         response = requests.post(

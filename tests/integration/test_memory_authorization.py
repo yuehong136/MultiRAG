@@ -52,7 +52,7 @@ def snapshot(env: dict[str, Any]) -> Any:
         tasks = [t.to_dict() for t in db.scalars(sa.select(Task).where(Task.doc_id.in_(list(env["memories"].values()))))]
     messages = {key: MessageService.get_by_message_id(mid, 900, env["tenants"][key]) for key, mid in env["memories"].items()}
     redis = REDIS_CONN.REDIS
-    return rows, tasks, messages, redis.xrange(env["queue"]), redis.get(f"{env['queue']}:memory"), {mid: redis.get(mid) for mid in env["memories"].values()}
+    return rows, tasks, messages, redis.xrange(env["queue"]), redis.get(f"{env['queue']}:memory"), redis.get(env["counter"]), {mid: redis.get(mid) for mid in env["memories"].values()}
 
 
 def fixed_context_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,6 +286,8 @@ def test_team_and_personal_messages_real_readback(memory_api: dict[str, Any]) ->
         append = db.scalar(sa.select(MemoryWriterAdmission).where(MemoryWriterAdmission.memory_id == mid, MemoryWriterAdmission.kind == "append_raw"))
         assert append is not None and append.publication_state == "ready" and len(append.message_ids) == 1
         raw_id = append.message_ids[0]
+    assert raw_id > 0
+    assert int(REDIS_CONN.REDIS.get(env["counter"])) == raw_id
     assert "hello" in MessageService.get_by_message_id(mid, raw_id, env["tenants"]["personal"])["content"]
     assert REDIS_CONN.REDIS.xlen(env["queue"]) == 0
     assert request(env, "DELETE", f"/memories/{mid}")["retcode"] == 0

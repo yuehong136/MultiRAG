@@ -116,7 +116,7 @@ func runSearchRouterSQLAndElasticsearch(t *testing.T, searchbot bool) {
 	}
 	configPath := filepath.Join(runtimeRoot, "afteraab-g-server-"+uuid.NewString()+".json")
 	configBody, err := json.Marshal(map[string]interface{}{
-		"server":     map[string]interface{}{"mode": "release", "secret_key": "afteraab-g-owned-fixture-signing-key-20261029"},
+		"server":     map[string]interface{}{"mode": "release", "secret_key": strings.Repeat("t", 45)},
 		"database":   map[string]interface{}{"driver": "postgres", "host": cfg.Host, "port": cfg.Port, "database": cfg.Database, "username": cfg.User, "password": cfg.Password, "schema": "public"},
 		"doc_engine": map[string]interface{}{"type": "elasticsearch", "es": map[string]interface{}{"hosts": cfg.Elasticsearch.Hosts, "username": cfg.Elasticsearch.Username, "password": cfg.Elasticsearch.Password}},
 	})

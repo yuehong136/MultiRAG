@@ -39,7 +39,6 @@ DATABASE_TESTS = frozenset(
         "test_enterprise_subject_repository.py",
         "test_evaluation_token_usage.py",
         "test_exesql_recovery.py",
-        "test_file_document_attach_locks.py",
         "test_identity_channel_credentials.py",
         "test_identity_directory_events.py",
         "test_identity_onboarding.py",
@@ -71,6 +70,8 @@ DATABASE_TESTS = frozenset(
         "test_llm_embedding_inputs.py",
         "test_llm_tool_capability.py",
         "test_model_config_resolution.py",
+        "test_model_type_resolution.py",
+        "test_delta_model_consumers.py",
         "test_model_gateway.py",
         "test_provider_instances.py",
         "test_rdbms_state_sql.py",
@@ -196,6 +197,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_after53_dataset_create_web.py",
                 "test_agent_draft_session_persistence.py",
                 "test_browser_web_consumer.py",
+                "test_completion_consumers.py",
                 "test_app_list_web_consumers.py",
                 "test_dataset_search_http.py",
                 "test_dataset_management_http.py",
@@ -245,6 +247,10 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
+        if path.name == "test_file_document_attach_locks.py":
+            # This suite also imports the normal file-conversion entry point.
+            required.update(("postgresql", "redis", "minio", "milvus"))
+            continue
         if path.name in {
             "test_memory_revision_repository.py",
             "test_memory_bank_deletion.py",

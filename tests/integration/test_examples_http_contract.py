@@ -56,7 +56,14 @@ def test_chat_examples_modes_cleanup_and_provider_failure(rest_chat_contract: Re
     assert ctx.snapshot() == before and ctx.provider["calls"] == []
     result = run_example(language, "chat_assistant", ctx.runtime, write=True)
     assert result.returncode == 0 and "Controlled answer" in result.stdout, result.stderr
-    assert len(ctx.provider["calls"]) == 2
+    # The second completion reuses this session, so the configured multi-turn
+    # refinement runs once before its normal streamed answer.
+    first, refinement, streamed = ctx.provider["calls"]
+    question = {"role": "user", "content": "What is retrieval augmented generation?"}
+    assert first["history"] == [question]
+    assert refinement["history"] == [{"role": "user", "content": "Output: "}]
+    assert "Controlled answer" in refinement["system"] and question["content"] in refinement["system"]
+    assert streamed["history"] == [question, {"role": "assistant", "content": "Controlled answer"}, question]
     snapshot = ctx.snapshot()
     owned = [row for row in snapshot["chats"] if row["name"].startswith("example-")]
     assert len(owned) == 1 and owned[0]["status"] == "0"

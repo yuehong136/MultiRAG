@@ -29,8 +29,8 @@ globalThis.fetch=(input,init)=>{const url=new URL(String(input),base);assert.ok(
 const id='TitleChunker:contract', mode=process.env.TITLE_MODE;
 const legacy={components:{[id]:{obj:{component_name:'TitleChunker',params:{method:'hierarchy',hierarchy:2,levels:[['^Part','^Chapter']]}},upstream:[],downstream:[]}},history:[],path:[]};
 const created=await agentAPI.setAgent({title:'Title rules '+mode,canvas_type:'pipeline',canvas_category:'dataflow_canvas',dsl:legacy});
-assert.ok(created.data?.id);
-const graph=deserializeDslToGraph(legacy), form=graph.nodes.find(node=>node.id===id).data.form;
+assert.ok(created.id);
+const graph=deserializeDslToGraph(legacy).graph, form=graph.nodes.find(node=>node.id===id).data.form;
 assert.equal(form.hierarchyRules.length,1);
 form.hierarchyRules[0].levels[0].expression='^PartEdited';
 form.groupRules=[{levels:[{expression:'^GroupOnly'}]}];
@@ -38,13 +38,13 @@ form.method=mode;
 const dsl=serializeGraphToDsl({graph,baseDsl:legacy});
 const expected=mode==='group'?[['^GroupOnly']]:[['^PartEdited','^Chapter']];
 assert.deepEqual(dsl.components[id].obj.params.levels,expected);
-await agentAPI.setAgent({id:created.data.id,dsl});
-const loaded=await agentAPI.fetchAgent(created.data.id);
-const readDsl=typeof loaded.data.dsl==='string'?JSON.parse(loaded.data.dsl):loaded.data.dsl;
-const again=serializeGraphToDsl({graph:deserializeDslToGraph(readDsl),baseDsl:readDsl});
+await agentAPI.setAgent({id:created.id,dsl});
+const loaded=await agentAPI.fetchAgent(created.id);
+const readDsl=typeof loaded.dsl==='string'?JSON.parse(loaded.dsl):loaded.dsl;
+const again=serializeGraphToDsl({graph:deserializeDslToGraph(readDsl).graph,baseDsl:readDsl});
 assert.deepEqual(again.components[id].obj.params.levels,expected);
 assert.ok(paths.length===3);
-console.log(JSON.stringify({id:created.data.id,node:id,mode,levels:expected,paths}));
+console.log(JSON.stringify({id:created.id,node:id,mode,levels:expected,paths}));
 """
 
 

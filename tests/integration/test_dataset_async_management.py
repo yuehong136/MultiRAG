@@ -65,7 +65,10 @@ async def test_async_dataset_detail_summary_logs_and_scoping(bootstrapped_async_
         )
         assert ok and listed["total"] == 1 and listed["logs"][0]["id"] == logs[0].id
         ok, detail_log = await dataset_api_service.get_ingestion_log(db, uid, kid, logs[0].id)
-        assert ok and detail_log == listed["logs"][0]
+        assert ok and {key: detail_log[key] for key in listed["logs"][0]} == listed["logs"][0]
+        assert detail_log["document_id"] == GRAPH_RAPTOR_FAKE_DOC_ID
+        assert detail_log["document_name"] == "test" and detail_log["dsl"] == {}
+        assert detail_log["parser_id"] == "naive" and detail_log["source_from"] == "local"
         assert await dataset_api_service.get_ingestion_log(db, uid, kid, logs[-1].id) == (False, "Log not found")
         assert await dataset_api_service.trace_index(db, uid, kid, "raptor") == (True, {})
         assert (await dataset_api_service.get_dataset(db, "outsider", kid))[0] is False

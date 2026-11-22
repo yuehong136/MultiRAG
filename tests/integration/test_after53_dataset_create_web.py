@@ -53,6 +53,7 @@ def test_actual_web_defaults_create_numeric_embedding_dataset(rest_documents: di
                 "DOMAIN_ACCEPTANCE_MODEL_REFERENCE": str(model_id),
                 "DOMAIN_ACCEPTANCE_DATASET_NAME": name,
                 "DOMAIN_ACCEPTANCE_MODE": "create",
+                "MULTIRAG_RUN_JOURNAL": str(journal.path),
                 "TSX_TSCONFIG_PATH": str(checkout / "tsconfig.app.json"),
             },
             capture_output=True,

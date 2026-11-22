@@ -59,7 +59,7 @@ func TestAfter1eGMCPAndOAuth(t *testing.T) {
 	}
 	cfgPath := filepath.Join(os.Getenv("TMPDIR"), "after1e-g.yaml")
 	j.Event("reserve-config", map[string]any{"path": cfgPath})
-	if err := os.WriteFile(cfgPath, []byte("multirag:\n  secret_key: after1e-g-owned-secret-32-characters\n"), 0600); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("multirag:\n  secret_key: "+strings.Repeat("t", 36)+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := server.FromConfigFile(cfgPath); err != nil {

@@ -24,6 +24,12 @@ def test_database_suite_never_requires_unrelated_services() -> None:
     assert required_services([INTEGRATION / "new_test.py"]) == {"postgresql", "redis", "minio", "milvus"}
 
 
+def test_file_attachment_runtime_prepares_storage_before_collection() -> None:
+    path = INTEGRATION / "test_file_document_attach_locks.py"
+    assert path in suite_paths("core") and path not in suite_paths("db")
+    assert required_services([path]) == {"postgresql", "redis", "minio", "milvus"}
+
+
 def test_shared_auth_secret_prepares_only_redis() -> None:
     assert required_services([INTEGRATION / "test_shared_auth_secret.py"]) == {"redis"}
 

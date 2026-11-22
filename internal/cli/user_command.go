@@ -1288,7 +1288,7 @@ func (c *MultiRAGClient) CheckProviderWithKey(cmd *Command) (ResponseIf, error) 
 		payload[field] = text
 	}
 	path := fmt.Sprintf("/providers/%s/connection", url.PathEscape(providerName))
-	resp, err := c.HTTPClient.RequestBounded(http.MethodGet, path, "api", nil, payload, 64*1024)
+	resp, err := c.HTTPClient.RequestBounded(http.MethodPost, path, "api", nil, payload, 64*1024)
 	if err != nil {
 		// Transport errors may contain a URL, proxy credentials or response text.
 		return nil, fmt.Errorf("failed to check provider connection")
