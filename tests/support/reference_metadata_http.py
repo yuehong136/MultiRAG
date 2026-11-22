@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 from api.apps.services import dataset_search_service
 from api.db.db_models import APIToken, Conversation, Dialog, Document, DocumentMetadata, Knowledgebase, Search, get_db
 from api.db.services import dialog_service
+from api.db.services.llm_service import LLMBundle
 from common import resources
+from common.constants import LLMType
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
@@ -55,9 +57,16 @@ def metadata_http(runtime_upload_api: dict[str, Any], monkeypatch: pytest.Monkey
     ]
     prompts: list[str] = []
 
-    class Model:
+    class Model(LLMBundle):
         db = None
         max_length = 8192
+
+        def __init__(self) -> None:
+            self.tenant_id = owner
+            self.is_tools = False
+
+        async def aclose(self) -> None:
+            pass
 
         async def async_chat(self, system: str, *args: Any, **kwargs: Any) -> str:
             prompts.append(system)
@@ -87,16 +96,29 @@ def metadata_http(runtime_upload_api: dict[str, Any], monkeypatch: pytest.Monkey
     async def bundle(*args: Any, **kwargs: Any) -> Any:
         return model
 
+    def config(db: Session, tenant_id: str, model_type: str | LLMType, name: str) -> dict[str, Any]:
+        assert tenant_id == owner
+        return {"mdl_type": model_type.value if isinstance(model_type, LLMType) else model_type, "max_tokens": 8192, "llm_name": name, "llm_factory": "controlled"}
+
+    def resolve(db: Session, tenant_id: str, model_id: int | None, model_type: str | LLMType, name: str) -> dict[str, Any]:
+        return config(db, tenant_id, model_type, name)
+
+    def detached(db: Session, tenant_id: str, model_config: dict[str, Any], **kwargs: Any) -> Model:
+        assert tenant_id == owner
+        assert model_config["mdl_type"] in {"chat", "embedding"}
+        return model
+
     monkeypatch.setitem(resources._state, "retriever", Retriever())
     monkeypatch.setattr(dialog_service, "get_models", models)
-    monkeypatch.setattr(dialog_service, "_resolve_dialog_primary_model_config", lambda *a: {"max_tokens": 8192, "llm_name": "controlled"})
+    monkeypatch.setattr(dialog_service, "_resolve_dialog_primary_model_config", lambda db, dialog: config(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id))
     monkeypatch.setattr(dialog_service, "resolve_model_type", lambda *a: ["chat"])
     monkeypatch.setattr(dialog_service.TenantLangfuseService, "filter_by_tenant", lambda *a, **k: None)
     monkeypatch.setattr(dialog_service.KnowledgebaseService, "get_field_map", lambda *a: {})
     monkeypatch.setattr(dialog_service, "label_question", lambda *a: {})
-    monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda *a: {})
-    monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda *a: {})
-    monkeypatch.setattr(dialog_service, "LLMBundle", lambda *a: model)
+    monkeypatch.setattr(dialog_service, "_resolve_model_config", resolve)
+    monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", config)
+    monkeypatch.setattr(dialog_service, "get_tenant_default_model_by_type", lambda db, tenant_id, model_type: config(db, tenant_id, model_type, "controlled"))
+    monkeypatch.setattr(dialog_service, "detached_bundle", detached)
     monkeypatch.setattr(dataset_search_service, "label_question", lambda *a: {})
     monkeypatch.setattr(dataset_search_service, "_bundle", bundle)
     import sys

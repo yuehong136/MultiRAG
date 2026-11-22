@@ -9,6 +9,7 @@ import copy
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -32,6 +33,7 @@ from api.db.services.task_service import TaskService, prepare_parse_tasks
 from common import settings
 from core.nlp import search
 from core.svr import task_executor as worker
+from tests.support.database import scratch_database
 from tests.support.document_parse_retirement import index_snapshot
 from tests.support.document_parse_retirement import parse_api as parse_api
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
@@ -47,19 +49,21 @@ class Encoder:
         return np.array([[0.2] * 768 for _ in texts]), len(texts)
 
 
-def test_migration_preserves_existing_metadata(bootstrapped_engine: sa.Engine, alembic_cfg: Any) -> None:
-    identifier = uuid4().hex
-    with bootstrapped_engine.begin() as db:
-        db.execute(sa.insert(DocumentMetadata).values(id=identifier, tenant_id=identifier, kb_id=identifier, meta_fields={"manual": ["keep"]}))
-        alembic_cfg.attributes["connection"] = db
-        command.downgrade(alembic_cfg, "d6f8a0b2c4e6")
-        assert "table_metadata_state" not in {c["name"] for c in sa.inspect(db).get_columns("t_ai_document_metadata", schema="usr_ai")}
-        command.upgrade(alembic_cfg, "head")
-    alembic_cfg.attributes.pop("connection", None)
-    with bootstrapped_engine.begin() as db:
-        row = db.execute(sa.select(DocumentMetadata.__table__).where(DocumentMetadata.id == identifier)).mappings().one()
-        assert row["meta_fields"] == {"manual": ["keep"]} and row["table_metadata_state"] == {}
-        db.execute(sa.delete(DocumentMetadata).where(DocumentMetadata.id == identifier))
+def test_migration_preserves_existing_metadata(tmp_path: Path, alembic_cfg: Any) -> None:
+    with scratch_database(tmp_path) as bootstrapped_engine:
+        identifier = uuid4().hex
+        with bootstrapped_engine.begin() as db:
+            db.execute(sa.insert(DocumentMetadata).values(id=identifier, tenant_id=identifier, kb_id=identifier, meta_fields={"manual": ["keep"]}))
+            alembic_cfg.attributes["connection"] = db
+            command.stamp(alembic_cfg, "e7a9b1c3d5f0")
+            command.downgrade(alembic_cfg, "d6f8a0b2c4e6")
+            assert "table_metadata_state" not in {c["name"] for c in sa.inspect(db).get_columns("t_ai_document_metadata", schema="usr_ai")}
+            command.upgrade(alembic_cfg, "e7a9b1c3d5f0")
+        alembic_cfg.attributes.pop("connection", None)
+        with bootstrapped_engine.begin() as db:
+            row = db.execute(sa.select(DocumentMetadata.__table__).where(DocumentMetadata.id == identifier)).mappings().one()
+            assert row["meta_fields"] == {"manual": ["keep"]} and row["table_metadata_state"] == {}
+            db.execute(sa.delete(DocumentMetadata).where(DocumentMetadata.id == identifier))
 
 
 @pytest.mark.parametrize("fault", [False, True])

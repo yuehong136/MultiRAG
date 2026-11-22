@@ -100,6 +100,7 @@ def test_upload_completion_and_delete_real_routes(session_upload_api: dict[str, 
     assert response.status_code == 200 and response.json()["code"] == 0, response.text
     session_id = response.json()["data"]["id"]
     env["session_ids"].append(session_id)
+    initial_messages = snapshot(env)[0][session_id]["message"]
 
     async def controlled_model(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         yield {"answer": "captured", "reference": {}, "final": True}
@@ -112,7 +113,11 @@ def test_upload_completion_and_delete_real_routes(session_upload_api: dict[str, 
         timeout=30,
     )
     assert response.status_code == 200 and response.json()["code"] == 0, response.text
-    assert snapshot(env)[0][session_id]["message"][0]["files"] == [descriptor, descriptor]
+    messages = snapshot(env)[0][session_id]["message"]
+    assert messages[: len(initial_messages)] == initial_messages
+    assert [message["role"] for message in messages[len(initial_messages) :]] == ["user", "assistant"]
+    # Trusted registry resolution canonicalizes repeated upload IDs once.
+    assert messages[len(initial_messages)]["files"] == [descriptor]
     calls: list[tuple[str, str]] = []
     original_rm = env["storage_adapter"].rm
 

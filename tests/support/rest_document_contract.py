@@ -176,10 +176,20 @@ def rest_documents(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
             if thread.ident is not None:
                 thread.join(timeout=15)
             listener.close()
-            with socket.socket() as probe:
+            with ExitStack() as probes:
+                probe = probes.enter_context(socket.socket())
+                probe.bind(("127.0.0.1", 0))
+                if probe.getsockname()[1] == port:
+                    # Keep the first reservation until a distinct source port
+                    # is bound so Linux cannot create a TCP self-connection.
+                    probe = probes.enter_context(socket.socket())
+                    probe.bind(("127.0.0.1", 0))
+                probe.settimeout(1)
+                source = probe.getsockname()
+                assert source[1] != port
                 closed = probe.connect_ex(("127.0.0.1", port)) != 0
-            journal.event("listener-cleanup", port=port, thread_stopped=not thread.is_alive(), closed=closed)
-            assert closed and not thread.is_alive()
+            journal.event("listener-cleanup", port=port, thread_stopped=not thread.is_alive(), closed=closed, original_socket_closed=listener.fileno() == -1, probe_source=source)
+            assert closed and not thread.is_alive() and listener.fileno() == -1
 
         cleanup.callback(stop)
         thread.start()

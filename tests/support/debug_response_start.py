@@ -19,7 +19,7 @@ from requests import Session as HTTPSession
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
-from api.db.db_models import API4Conversation, Task
+from api.db.db_models import AgentExecutionOrigin, API4Conversation, Task
 from api.utils.agent_streaming import AgentStreamingResponse
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.task_runtime import binding_key, read_binding
@@ -141,7 +141,15 @@ def debug_start_case(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, *, fa
             assert REDIS_CONN.REDIS.ttl(binding_key(task_id)) > 86000
             with Session(env["engine"]) as db:
                 assert db.get(Task, task_id) is None
-                assert db.scalar(sa.select(sa.func.count()).select_from(API4Conversation).where(API4Conversation.dialog_id == agent_id)) == 0
+                conversation = db.scalar(sa.select(API4Conversation).where(API4Conversation.dialog_id == agent_id))
+                assert conversation is not None and conversation.round == 1
+                assert [message["role"] for message in conversation.message] == ["user"]
+                assert conversation.message[0]["content"] == "header window"
+                assert "disconnected" in conversation.errors
+                assert ("canceled" in conversation.errors) is cancelled
+                origin = db.get(AgentExecutionOrigin, conversation.id)
+                assert origin is not None and origin.execution_mode == "draft"
+                assert origin.platform_user_id == env["owners"][0] and origin.agent_id == agent_id
             assert read_state(env, agent_id) == before and REDIS_CONN.REDIS.get(replica_key) == replica
         finally:
             release.set()
