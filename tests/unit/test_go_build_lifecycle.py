@@ -18,8 +18,22 @@ def test_go_launcher_returns_child_failure_and_stops_sibling(tmp_path: Path, fir
         path = tmp_path / name
         binaries[name] = path
         journal.event("reserve-file", path=str(path), purpose="controlled Go launcher child")
-        action = "sleep 0.2\nexit 7\n" if name == first else "trap 'exit 0' TERM\nwhile true; do sleep 0.1; done\n"
-        path.write_text(f"#!/bin/bash\necho $$ > {shlex.quote(str(tmp_path / (name + '.pid')))}\n" + action)
+        pid_file = shlex.quote(str(tmp_path / (name + ".pid")))
+        record_pid = f'printf "%s\\n" "$$" > {pid_file}\n'
+        if name == first:
+            sibling = "api" if first == "admin" else "admin"
+            sibling_pid_file = shlex.quote(str(tmp_path / (sibling + ".pid")))
+            action = (
+                record_pid + "for ((attempt=0; attempt<100; attempt++)); do\n"
+                f"  if [ -s {sibling_pid_file} ]; then exit 7; fi\n"
+                "  sleep 0.02\n"
+                "done\n"
+                f"echo 'Timed out waiting for {sibling} PID readiness' >&2\n"
+                "exit 8\n"
+            )
+        else:
+            action = "trap 'exit 0' TERM\n" + record_pid + "while true; do sleep 0.1; done\n"
+        path.write_text("#!/bin/bash\n" + action)
         path.chmod(0o700)
     build = Path(__file__).resolve().parents[2] / "build.sh"
     command = [
