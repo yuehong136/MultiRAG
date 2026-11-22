@@ -54,6 +54,33 @@ def test_real_compaction_reuse(memory_live_api: dict[str, Any], monkeypatch: pyt
 EXPANSION_CASES = expansion_cases()
 
 
+def fidelity_cases() -> list[tuple[int, str, dict[str, Any]]]:
+    if os.environ.get("MULTIRAG_COMPACTION_FIDELITY") != "1":
+        return []
+    previous_holdout = reuse.load_expansion_cases(BASELINE.with_name("memory_compaction_expansion_holdout.json"), "expansion_holdout")
+    provenance = next(case for case in previous_holdout if case["id"] == "held_cabinet_provenance")
+    development = reuse.load_expansion_cases(BASELINE.with_name("memory_compaction_expansion.json"), "expansion_development")
+    renderer = next(case for case in development if case["id"] == "renderer-zero-and-empty")
+    background_questions = (
+        "白椋后来只切换预览背景。这次改动有没有改变闲置保持、主动推送或外部受众？请给出当前三个设置、含义和适用范围。",
+        "复核白椋换背景后的三个配置。哪些功能仍关闭？外部账户白名单有谁？请给出准确配置值和范围，并说明背景修改是否改变它们。",
+        "如果只发生白椋已经记录的那次视觉改动，闲置保持、主动推送和外部受众各保持什么设置？逐项列出原值、含义和适用范围。",
+    )
+    renderer.update(reuse_kind="longitudinal", followups=[{"question": question, "rubric": renderer["rubric"]["answer"]} for question in background_questions])
+    cases = [(0, "fixed_provenance", provenance), (1, "fixed_retained", renderer)]
+    if holdout_path := os.environ.get("MULTIRAG_COMPACTION_FIDELITY_HOLDOUT"):
+        payload = json.loads(Path(holdout_path).read_text())
+        assert isinstance(payload, dict) and set(payload) == {"schema_version", "kind", "cases"}
+        assert type(payload["schema_version"]) is int and payload["schema_version"] == 1 and payload["kind"] == "fidelity_holdout"
+        assert isinstance(payload["cases"], list) and len(payload["cases"]) == 1
+        sealed = payload["cases"][0]
+        checked, _ = reuse.expansion_trajectory(sealed)
+        historical = [case for _, case in CASES] + development + previous_holdout
+        assert all(checked["id"] != case["id"] and checked["sources"] != case["sources"] for case in historical)
+        cases.append((2, "independent_holdout", sealed))
+    return cases
+
+
 @pytest.mark.parametrize(("case_index", "kind", "case"), EXPANSION_CASES, ids=[case["id"] for _, _, case in EXPANSION_CASES])
 def test_real_compaction_expansion(memory_live_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, case_index: int, kind: str, case: dict[str, Any]) -> None:
     env = memory_live_api
@@ -69,6 +96,33 @@ def test_real_compaction_expansion(memory_live_api: dict[str, Any], monkeypatch:
     assert len(report["actual_attempts"]) == reuse.MAX_SDK_PER_CASE
     assert report["semantic_prefixes"]["4"]["complete_pairs"] is True
     assert report["cumulative_cost"]["unattributed_answer_attempts"]["attempt_count"] == 0
+
+
+FIDELITY_CASES = fidelity_cases()
+
+
+@pytest.mark.parametrize(("case_index", "kind", "case"), FIDELITY_CASES, ids=[case["id"] for _, _, case in FIDELITY_CASES])
+def test_real_compaction_fidelity(memory_live_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, case_index: int, kind: str, case: dict[str, Any]) -> None:
+    env = memory_live_api
+    assert os.environ.get("MULTIRAG_MEMORY_LIVE_PROVIDER") == "OpenAI"
+    require_direct_openai_models(env)
+    env["journal"].event("reuse-fidelity-fixture", kind=kind, case_id=case["id"], SDK_maximum=reuse.MAX_SDK_PER_CASE)
+    report = reuse.run_case(env, monkeypatch, case, case_index, Path(request.config.getoption("--test-report-dir")))
+    assert report["mechanism_complete"] is True and report["withdrawal_prepare_rejected_no_model"] is True
+    assert len(report["actual_attempts"]) == reuse.MAX_SDK_PER_CASE
+    if kind == "fixed_retained":
+        suffix = report["sources"][1]
+        retained = {"source_id": suffix["source_id"], "content": suffix["content"]}
+        assert "只切换预览背景，控制值没有修改" in retained["content"]
+        row = next(answer for answer in report["answers"] if answer["mode"] == "compacted" and answer["reuse_index"] == 2)
+        assert row["fresh_get_count"] == 1
+        prepared = row["prepared"]["request"]
+        assert prepared == row["actual_wire"][0]["body"]
+        payload = json.loads(prepared["messages"][1]["content"])["retained"]
+        assert payload == row["fresh_result"]["artifact"]["package"]["retained"] and len(payload) == 1
+        assert {key: payload[0][key] for key in retained} == retained
+        assert prepared["messages"][2]["content"] == case["followups"][0]["question"]
+    assert report["semantic_answers_accepted"] is True
 
 
 @pytest.mark.parametrize("expansion", [False, True], ids=["legacy", "expanded"])

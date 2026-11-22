@@ -739,6 +739,35 @@ API 包预算仍是估算，真实 SDK 包装计量及供应商回执分别记�
 独立读回确认试验拥有的 PostgreSQL 临时库、Milvus 集合、Redis 键和监听器已清理。厂商模型绑定只读解析，评估写入只发生在临时库和隔离命名空间。
 三存储同恢复点仍按单独演练排期。
 
+### 定向保真复跑
+
+摘要提示明确要求将关键状态或术语的含义、适用范围和证据不能证明的事项一并保留。仍用现有产物格式和逐次来源复核。
+旧出处定义留出例转为固定回归，保留原来源、问题和判据。背景漏答例沿用原始来源、首问和判据，并增加三条明确追问。
+第二次消费逐项核对旧 RAW 后缀、原操作读回、准备请求和实际模型请求中的后缀一致。该证据链用于判断背景事实有没有到达模型。
+
+`MULTIRAG_COMPACTION_FIDELITY=1` 启用 `tests/evals/test_memory_compaction_reuse.py::test_real_compaction_fidelity`。
+可用 `MULTIRAG_COMPACTION_FIDELITY_HOLDOUT` 加载一条独立封存的新用例。每例沿用两次向量化、一次摘要和四对答复，最多 11 次调用。
+摘要及分组掩码答复继续独立代理评阅。短文本的无效产物门禁保持严格，生成前可按完整包装估计说明低收益风险，
+当前仍保留显式选择。上面的八例扩测保留原结果。
+
+本轮直接复核 [OpenClaw 精确信息保留测试](https://github.com/openclaw/openclaw/blob/3a4f6b75a01d5b3294040d3bf1b0b6afdd0c3817/src/agents/compaction.summary-format.test.ts#L77)
+及 [DeepSeek Harness 完整包装后的缩减检查](https://github.com/deepseek-ai/deepseek-harness/blob/d98f5d68519215da48f3002da2cb9c9d2068d81d/packages/compaction/compaction-basic/src/region.ts#L416)。
+
+2026-11-22 的直连 OpenAI 复跑使用 `gpt-6.1-terra` 和 `text-embedding-3-small`。
+新留出在打开前已封存并固定判据，摘要保留了「套准已点检」的正面定义和核验边界，独立代理评阅通过，四对答复均通过。
+已开放的样本按原字节归档在 `tests/fixtures/memory_compaction_fidelity_holdout.json`，此后作为固定回归使用。
+旧馆藏例在原 512 输出预算内返回 `finish_reason=length`，512 个输出 token 全是推理，没有可用摘要。
+服务以 `empty_compaction_summary` 拒绝消费，旧固定例的保真仍未证实。背景例首轮在第一条向量化出现 `APIConnectionError`。
+原始运行保留 1 项通过、2 项失败，失败向量调用的供应商用量未知，保留已知与未知尝试，不调高预算或重跑馆藏例。
+
+另行登记背景例的单次传输失败复跑，摘要与 RAW／压缩四对答复均通过独立代理评阅。第二次显式追问重新读取原操作一次，
+核对保留后缀与 RAW 来源一致、准备请求与实际 SDK 请求一致，答复明确说背景修改未改变三个控制值。
+两次运行共 26 个 SDK 尝试，已知供应商用量小计 27,197 token，仍有一次连接失败用量未知。
+这是分组掩码的合成代理评阅，记忆人工审核发布沿用原流程。
+
+相关 81 项单测、2 项受控协议、5 项 HTTP 回归和定向 Ruff、格式、类型检查均通过。受控请求实查已收到新提示，输出预算仍是 512。
+独立读回验证隔离资源已清理，业务数据保持只读边界。
+
 ## 原生 LLM→Message 与严格语义回归
 
 此组从已认证的 Agent API 执行 `Begin → LLM → Message`，由原生 LLM 节点真实生成资料，

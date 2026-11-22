@@ -16,9 +16,11 @@ from tests.support import memory_compaction_evaluation as original
 from tests.support import memory_compaction_reuse_evaluation as reuse
 
 
-def current() -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[original.Mode, dict[str, Any]]]:
+def current(
+    retained_content: str = "完整保留：限额0，待办[]，不能把0或[]当未知。",
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[original.Mode, dict[str, Any]]]:
     sources: list[dict[str, Any]] = []
-    for index, content in enumerate(("第一完整原文：只能演练，禁止生产，编号KEEP-001。", "完整保留：限额0，待办[]，不能把0或[]当未知。")):
+    for index, content in enumerate(("第一完整原文：只能演练，禁止生产，编号KEEP-001。", retained_content)):
         identity = str(2**53 + 101 + index)
         sources.append(
             {
@@ -134,6 +136,18 @@ def test_original_arm_keeps_all_roots_and_uses_same_system_and_exact_three_key_s
     assert json.loads(body["messages"][1]["content"]) == packages["uncompressed"]
     assert all(source["content"] in body["messages"][1]["content"] for source in sources)
     assert row["prepared"]["budget"]["request_sha256"] == original.digest(body)
+
+
+def test_background_followup_carries_unchanged_settings_evidence_from_retained_source() -> None:
+    evidence = "本轮只切换预览背景，三个控制值没有修改。"
+    sources, result, request, packages = current(evidence)
+    question = "预览背景切换是否改变三个控制值？"
+    row = reuse.prepare_for_mode(reuse.reference_from(result), lambda *_: result, mode="compacted", sources=sources, compaction_request=request, expected_packages=packages, question=question)
+    messages = row["prepared"]["request"]["messages"]
+    retained = json.loads(messages[1]["content"])["retained"]
+    assert row["fresh_get_count"] == 1
+    assert len(retained) == 1 and retained[0]["source_id"] == sources[1]["source_id"] and retained[0]["content"] == evidence
+    assert messages[2]["content"] == question
 
 
 def trajectory() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
