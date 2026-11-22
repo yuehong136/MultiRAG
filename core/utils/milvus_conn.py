@@ -430,14 +430,13 @@ class MilvusConnection(MilvusConnectionBase):
                     native_query_attempt = native_page and bool(order_by and order_by.fields)
                     native_order_by = self._build_native_query_order_by(conn, collection_name, order_by) if native_page else None
                     native_query_attempt = bool(native_order_by)
-                    query_kwargs = {}
+                    query_kwargs = {"consistency_level": "Strong"}
                     query_limit = 10000
                     # Multi-collection, aggregation and incomparable logical fields
                     # retain the existing bounded read and application-side merge.
                     if native_order_by:
                         query_kwargs["order_by"] = native_order_by
                         query_kwargs["offset"] = offset
-                        query_kwargs["consistency_level"] = "Strong"
                         query_limit = limit
                         counts = conn.query(collection_name, filter_expr, output_fields=["count(*)"], consistency_level="Strong")
                         total_hits_count = int(counts[0]["count(*)"])

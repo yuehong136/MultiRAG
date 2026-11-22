@@ -979,10 +979,10 @@ class MilvusConnectionBase(DocStoreConnection):
             try:
                 collection_select_fields = self._filter_collection_output_fields(conn, collection, select_fields)
                 res = conn.search(
-                    collection,
-                    [vector_data],
-                    vector_field,
-                    search_params,
+                    collection_name=collection,
+                    data=[vector_data],
+                    anns_field=vector_field,
+                    param=search_params,
                     expression=filter_expr,
                     output_fields=collection_select_fields,
                     limit=query_limit,
@@ -1252,10 +1252,10 @@ class MilvusConnectionBase(DocStoreConnection):
             try:
                 collection_output_fields = self._filter_collection_output_fields(conn, coll, output_fields)
                 res = conn.search(
-                    coll,
-                    data,
-                    anns_field or "",
-                    search_params or {},
+                    collection_name=coll,
+                    data=data,
+                    anns_field=anns_field or "",
+                    param=search_params or {},
                     expression=filter,
                     limit=limit,
                     output_fields=collection_output_fields,

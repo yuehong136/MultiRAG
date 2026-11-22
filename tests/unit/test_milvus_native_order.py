@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from pymilvus.client.prepare import Prepare
+from pymilvus.client.ts_utils import construct_guarantee_ts
 from pymilvus.client.types import get_consistency_level
 from pymilvus.orm.types import DataType
 
@@ -21,6 +22,8 @@ from core.utils import milvus_conn
         ("3.0.3", "3.0.6", True),
         ("3.0.3", "v3.0.6", True),
         ("3.0.3", "3.0-20261110-63100f8f5b4", True),
+        ("3.0.3", "3.0-20261110-63100f8f5b", True),
+        ("3.0.3", "3.0-20261110-63100f8f5b-extra", False),
         ("3.0.3rc1", "3.0.6", False),
         ("3.0.3", "3.0.6-rc1", False),
         ("3.0.3", "3.0-unknown-build", False),
@@ -76,9 +79,8 @@ class QueryConnection:
     def query(self, collection_name: str, expr: str, *, output_fields: list[str], **kwargs: Any) -> list[dict[str, Any]]:
         self.calls.append({"collection": collection_name, "expr": expr, "output_fields": output_fields, **kwargs})
         request_options = dict(kwargs)
-        if "consistency_level" in request_options:
-            request_options["consistency_level"] = get_consistency_level(request_options["consistency_level"])
-        self.requests.append(Prepare.query_request(collection_name, expr, output_fields, None, **request_options))
+        use_default = construct_guarantee_ts(collection_name, request_options)
+        self.requests.append(Prepare.query_request(collection_name, expr, output_fields, None, use_default_consistency=use_default, **request_options))
         if self.failure is not None and (self.failure_on_call is None or self.failure_on_call == len(self.calls)):
             raise self.failure
         if output_fields == ["count(*)"]:
@@ -168,6 +170,8 @@ def test_incomparable_or_unsupported_queries_keep_legacy_fallback(store: tuple[A
 
     assert rpc.calls and all(call["limit"] == 10000 for call in rpc.calls)
     assert not any("order_by" in call or "offset" in call for call in rpc.calls)
+    assert all(request.consistency_level == get_consistency_level("Strong") for request in rpc.requests)
+    assert not any(request.use_default_consistency for request in rpc.requests)
 
 
 def test_nullable_ascending_order_has_the_same_nulls_last_semantics() -> None:

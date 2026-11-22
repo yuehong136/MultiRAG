@@ -4,9 +4,17 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
+import sqlalchemy as sa
+from sqlalchemy.orm import Session, sessionmaker
+
+from api.db import db_models
+from api.db.memory_revision_models import MEMORY_REVISION_MODELS
+from api.db.memory_writer_models import MEMORY_WRITER_MODELS
 from common import resources, settings
 from common.bootstrap import ensure_initialized
-from memory.services.messages import MessageService
+from memory.services.messages import MessageService, index_name
+from tests.support.resource_journal import ResourceJournal
 
 
 def _message(
@@ -33,7 +41,8 @@ def _message(
     }
 
 
-def test_current_message_store_filters_same_tenant_users() -> None:
+def test_current_message_store_filters_same_tenant_users(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(db_models, "SessionLocal", sessionmaker(bootstrapped_engine))
     ensure_initialized()
     store = settings.msgStoreConn
     assert store is resources.msg_store()
@@ -42,6 +51,8 @@ def test_current_message_store_filters_same_tenant_users() -> None:
     suffix = uuid4().hex[:12]
     tenant_id = f"eimp2tenant{suffix}"
     memory_id = f"eimp2memory{suffix}"
+    journal = ResourceJournal("memory-principal-isolation")
+    journal.event("reserve-memory-scope", database=bootstrapped_engine.url.database, tenant=tenant_id, memory_id=memory_id)
     try:
         assert MessageService.create_index(tenant_id, memory_id, vector_size=2) is True
         failures = MessageService.insert_message(
@@ -70,6 +81,7 @@ def test_current_message_store_filters_same_tenant_users() -> None:
             [tenant_id],
             [],
             10,
+            strict=True,
         )
         visible_to_b = MessageService.search_message(
             [memory_id],
@@ -77,9 +89,19 @@ def test_current_message_store_filters_same_tenant_users() -> None:
             [tenant_id],
             [],
             10,
+            strict=True,
         )
 
+        unfiltered = MessageService.search_message([memory_id], {}, [tenant_id], [], 10, strict=True)
+        assert {message["content"] for message in unfiltered} == {"only-a", "only-b"}
         assert {message["content"] for message in visible_to_a} == {"only-a"}
         assert {message["content"] for message in visible_to_b} == {"only-b"}
     finally:
         MessageService.delete_index(tenant_id, memory_id)
+        assert not store.index_exists_strict(index_name(tenant_id), memory_id)
+        with Session(bootstrapped_engine) as reader:
+            remaining = {
+                model.__tablename__: reader.scalar(sa.select(sa.func.count()).select_from(model).where(model.memory_id == memory_id)) for model in (*MEMORY_REVISION_MODELS, *MEMORY_WRITER_MODELS)
+            }
+        assert not any(remaining.values()), remaining
+        journal.event("principal-memory-cleanup-readback", memory_index_absent=True, sql_rows=remaining)
