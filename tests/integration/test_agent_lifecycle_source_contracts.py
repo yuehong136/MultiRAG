@@ -148,7 +148,8 @@ async def test_missing_storage_stops_worker_and_pdf_recovery_with_sql_readback(s
     try:
         for key, data in [("empty.txt", b""), ("sibling.txt", b"preserve sibling")]:
             storage.conn.put_object(bucket, key, BytesIO(data), len(data))
-        monkeypatch.setattr(task_executor.settings, "STORAGE_IMPL", storage)
+        # Restore the namespace entry so undo never materializes the lazy storage handle.
+        monkeypatch.setitem(vars(task_executor.settings), "STORAGE_IMPL", storage)
         task = {
             "id": task_id,
             "doc_id": doc_id,
