@@ -272,7 +272,7 @@ def test_shared_chunk_routes_and_dify_use_owner_with_denial_readback(shared_api:
             assert response.status_code == 403 and response.json()["error_code"] == 109, response.text
             assert _snapshot(env) == before
     before = _snapshot(env)
-    for headers in [{}, {"Authorization": "Bearer invalid-fixture-key"}, {"Authorization": "Bearer " + env["jwt"]["owner"]}]:
+    for headers in [{}, {"Authorization": "Bearer invalid-fixture-key"}]:
         response = requests.post(env["base"] + "/api/v1/dify/retrieval", headers=headers, json={"knowledge_id": ids["team"], "query": "denied"}, timeout=30)
         assert response.status_code == 403 and response.json()["error_code"] == 403, response.text
     response = _request(env, "POST", "/api/v1/dify/retrieval", mode="tokens", json={"knowledge_id": uuid4().hex, "query": "absent"})
@@ -284,9 +284,10 @@ def test_shared_chunk_routes_and_dify_use_owner_with_denial_readback(shared_api:
         # The retrieval exercise starts from independently verified native data.
         native = env["reader"].search(env["collections"][key], data=[[1.0] * 768], anns_field="q_768_vec", limit=3, consistency_level="Strong")
         assert len(native[0]) == 1
-        response = _request(env, "POST", "/api/v1/dify/retrieval", role=role, mode="tokens", json={"knowledge_id": ids[key], "query": "owner", "retrieval_setting": {"top_k": 3}})
-        assert response.status_code == 200 and response.json()["records"], response.text
-        assert response.json()["records"][0]["metadata"]["document_id"] == ids["private_doc" if key == "private" else "doc"]
+        for mode in ["tokens", "jwt"]:
+            response = _request(env, "POST", "/api/v1/dify/retrieval", role=role, mode=mode, json={"knowledge_id": ids[key], "query": "owner", "retrieval_setting": {"top_k": 3}})
+            assert response.status_code == 200 and response.json()["records"], response.text
+            assert response.json()["records"][0]["metadata"]["document_id"] == ids["private_doc" if key == "private" else "doc"]
         before = _snapshot(env)
         response = _request(env, "GET", "/api/v1/dify/retrieval/health", role=role, mode="tokens", params={"knowledge_id": ids[key], "query": "owner", "top_k": "3", "score_threshold": "0"})
         assert response.status_code == 200 and response.json() == {"retcode": 0, "retmsg": "success", "data": True}, response.text
