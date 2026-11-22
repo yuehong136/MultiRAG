@@ -49,14 +49,21 @@ def test_every_mapped_model_is_returned() -> None:
 
     module = sys.modules["api.db.db_models"]
     expected = {obj for _, obj in inspect.getmembers(module, inspect.isclass) if obj is not BaseModel and issubclass(obj, BaseModel)}
+    from api.db.memory_compaction_models import MEMORY_COMPACTION_MODELS
     from api.db.memory_execution_models import MEMORY_EXECUTION_MODELS
+    from api.db.memory_incremental_models import MEMORY_INCREMENTAL_MODELS, MemoryMaintenanceFragmentCoverage
     from api.db.memory_maintenance_models import MEMORY_MAINTENANCE_MODELS
     from api.db.memory_revision_models import MEMORY_REVISION_MODELS
+    from api.db.memory_verification_models import MEMORY_VERIFICATION_MODELS
     from api.db.memory_writer_models import MEMORY_WRITER_MODELS
 
     expected.update(MEMORY_REVISION_MODELS)
     expected.update(MEMORY_WRITER_MODELS)
     expected.update(MEMORY_MAINTENANCE_MODELS)
     expected.update(MEMORY_EXECUTION_MODELS)
+    expected.update(MEMORY_INCREMENTAL_MODELS)
+    expected.add(MemoryMaintenanceFragmentCoverage)
+    expected.update(MEMORY_VERIFICATION_MODELS)
+    expected.update(MEMORY_COMPACTION_MODELS)
 
     assert set(models_in_fk_creation_order()) == expected
