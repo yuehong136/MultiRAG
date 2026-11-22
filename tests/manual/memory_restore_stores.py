@@ -27,6 +27,7 @@ import sqlalchemy as sa
 import yaml
 from minio import Minio
 from pymilvus import MilvusClient
+from pymilvus.exceptions import MilvusException
 
 from tests.manual import memory_milvus_cold_volumes as cold
 from tests.support.resource_journal import ResourceJournal
@@ -326,6 +327,37 @@ class RestoreStores:
         _wait(self._milvus_ready, "cold Milvus startup")
         self.journal.event("milvus-cold-services-ready", project=self.project, seconds=time.monotonic() - started)
 
+    def _wait_cold_collections(self, collections: list[str]) -> None:
+        started = time.monotonic()
+        deadline = started + 45
+        retries = 0
+        with closing(self._milvus()) as client:
+            if not collections or set(client.list_collections(timeout=5)) != set(collections):
+                raise ValueError("Cold Milvus collection inventory differs from the owned checkpoint")
+            for name in collections:
+                last_error: MilvusException | None = None
+                while (remaining := deadline - time.monotonic()) > 0:
+                    try:
+                        # Let the server's shard wait report its own status.
+                        client.query(collection_name=name, filter="", output_fields=["id"], limit=1, consistency_level="Strong", timeout=min(15, remaining))
+                    except MilvusException as error:
+                        # /healthz can pass before the restored channel has a
+                        # shard leader or a readable query-node distribution.
+                        startup_errors = (
+                            "no available shard leaders: channel not available[",
+                            "channel distribution is not serviceable: channel not available[",
+                        )
+                        if error.code != 503 or not any(reason in str(error.message) for reason in startup_errors):
+                            raise
+                        last_error = error
+                        retries += 1
+                        time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+                    else:
+                        break
+                else:
+                    raise TimeoutError(f"Cold Milvus collection {name!r} did not become readable") from last_error
+        self.journal.event("milvus-cold-collections-ready", project=self.project, collections=collections, channel_retries=retries, seconds=time.monotonic() - started)
+
     def _backup_cold_milvus(self, path: Path, collections: list[str]) -> None:
         with closing(self._milvus()) as milvus:
             if set(collections) - set(milvus.list_collections()):
@@ -339,10 +371,12 @@ class RestoreStores:
         self._start_cold_milvus()
         if self._cold_profile() != profile:
             raise ValueError("Cold source profile changed after restart")
+        self._wait_cold_collections(collections)
 
-    def restart_cold_milvus(self) -> None:
+    def restart_cold_milvus(self, collections: list[str]) -> None:
         self._stop_cold_milvus()
         self._start_cold_milvus()
+        self._wait_cold_collections(collections)
         self.assert_alive()
 
     def backup(self, destination: Path, collections: list[str]) -> dict[str, Path]:
@@ -400,6 +434,8 @@ class RestoreStores:
             subprocess.run(self._postgres("pg_restore", "--single-transaction", "--exit-on-error", "--no-owner", "--no-acl"), stdin=source, check=True, timeout=120)
         if self.backup_program is not None:
             self._restore_milvus(archives["milvus"], collections)
+        else:
+            self._wait_cold_collections(collections)
         subprocess.run(self._docker("stop", "--timeout", "10", "redis"), check=True, timeout=25)
         subprocess.run(self._docker("cp", str(archives["redis"]), "redis:/data/dump.rdb"), check=True, timeout=25)
         subprocess.run(self._docker("start", "redis"), check=True, timeout=25)

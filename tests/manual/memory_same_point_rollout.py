@@ -427,7 +427,7 @@ def _run(*, milvus_cold: bool = False) -> None:
             if milvus_cold:
                 written = _cold_probe(target, capture.bindings, "write")
                 assert written["memory"]["rows_sha256"] != capture.bindings["coldProbeSnapshot"]["memory"]["rows_sha256"]
-                target.restart_cold_milvus()
+                target.restart_cold_milvus(collections)
                 assert _cold_probe(target, capture.bindings, "verify") == written
                 journal.event("milvus-cold-new-writes-restarted", project=target.project, insert=True, upsert=True, delete=True, restart_readback=True)
         journal.event("same-point-complete", point="point-a", negative_cases=4 if milvus_cold else 2, source_stack_stopped_before_restore=True)
