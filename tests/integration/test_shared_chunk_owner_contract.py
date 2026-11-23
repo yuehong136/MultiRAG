@@ -340,7 +340,10 @@ def test_shared_chunk_routes_and_dify_use_owner_with_denial_readback(shared_api:
         db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == ids["team"]).values(tenant_embd_id=env["foreign_id"]))
     calls = len(env["calls"])
     response = _request(env, "POST", collection, json={"content": "foreign model must fail"})
-    assert response.json()["retcode"] == 100 and "Tenant Model with id" in response.json()["retmsg"] and len(env["calls"]) == calls, response.text
+    error = response.json()
+    assert error["retcode"] == 100 and error["data"] is None, response.text
+    assert "Model not found or not authorized" in error["retmsg"] and env["foreign_id"] not in error["retmsg"], response.text
+    assert len(env["calls"]) == calls
     assert _snapshot(env)["index"] == before["index"]
     with env["engine"].begin() as db:
         db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == ids["team"]).values(tenant_embd_id=env["model_id"]))

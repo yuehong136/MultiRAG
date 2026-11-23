@@ -302,30 +302,30 @@ def migrate_references(bind: Connection, tables: dict[str, sa.Table], references
                     bind.execute(table.update().where(*(key == row[key.name] for key in keys)).values(values))
 
 
-def has_model_first_schema(bind: Connection) -> bool:
+def has_model_first_schema(bind: Connection, *, schema: str = SCHEMA) -> bool:
     """Recognize an exact post-cutover model-first layout, never an incomplete upgrade."""
     inspector = sa.inspect(bind)
-    if inspector.has_table("t_ai_tenant_llms", schema=SCHEMA):
+    if inspector.has_table("t_ai_tenant_llms", schema=schema):
         return False
     model = "t_ai_tenant_models"
-    if not inspector.has_table(model, schema=SCHEMA):
+    if not inspector.has_table(model, schema=schema):
         return False
-    columns = {column["name"]: column for column in inspector.get_columns(model, schema=SCHEMA)}
+    columns = {column["name"]: column for column in inspector.get_columns(model, schema=schema)}
     if (
         not {"id", "instance_id", "provider_id", "model_name", "model_type", "status", "extra", "used_tokens"} <= columns.keys()
         or {"model_types", "is_tools"} & columns.keys()
         or not isinstance(columns["id"]["type"], sa.String)
         or columns["id"]["type"].length != 32
-        or inspector.get_pk_constraint(model, schema=SCHEMA)["constrained_columns"] != ["id"]
+        or inspector.get_pk_constraint(model, schema=schema)["constrained_columns"] != ["id"]
     ):
         return False
-    links = {(tuple(key["constrained_columns"]), key["referred_table"]) for key in inspector.get_foreign_keys(model, schema=SCHEMA)}
+    links = {(tuple(key["constrained_columns"]), key["referred_table"]) for key in inspector.get_foreign_keys(model, schema=schema)}
     if not {(("provider_id",), "t_ai_tenant_model_providers"), (("instance_id",), "t_ai_tenant_model_instances")} <= links:
         return False
     for name, fields in SCALAR_REFERENCES.items():
-        if not inspector.has_table(name, schema=SCHEMA):
+        if not inspector.has_table(name, schema=schema):
             continue
-        types = {column["name"]: column["type"] for column in inspector.get_columns(name, schema=SCHEMA)}
+        types = {column["name"]: column["type"] for column in inspector.get_columns(name, schema=schema)}
         for field, capability in fields.items():
             bound = field if capability is not None else f"tenant_{field}"
             if not isinstance(types.get(bound), sa.String) or types[bound].length != 32:
