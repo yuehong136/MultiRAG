@@ -134,11 +134,12 @@ def _exercise_discovery(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, 
             return [reader.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM)]
 
     with ExitStack() as cleanup:
-        address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
-        journal.event("reserve-listener", address=list(address), input_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
-        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+        journal.event("reserve-listener", address=["127.0.0.1", 0], input_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Provider, bind_and_activate=False)
         cleanup.callback(server.server_close)
         server.server_bind()
+        address = server.server_address
+        journal.event("listener-bound", address=list(address))
         server.server_activate()
         thread = threading.Thread(target=server.serve_forever, name="discovery-provider-fixture")
         thread.start()
@@ -1209,11 +1210,12 @@ def test_provider_connection_and_atomic_create_use_real_adapter_and_zero_write_f
             return tuple(db.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM))
 
     with ExitStack() as cleanup:
-        address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
-        journal.event("reserve-listener", address=list(address))
-        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+        journal.event("reserve-listener", address=["127.0.0.1", 0])
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Provider, bind_and_activate=False)
         cleanup.callback(server.server_close)
         server.server_bind()
+        address = server.server_address
+        journal.event("listener-bound", address=list(address))
         server.server_activate()
         thread = threading.Thread(target=server.serve_forever, name="owned-provider-probe")
         thread.start()
