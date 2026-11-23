@@ -50,12 +50,8 @@ def _pg_role_can_create_db(url: sa.engine.URL) -> bool:
 
 
 @contextmanager
-def scratch_database(evidence: Path) -> Iterator[sa.Engine]:
-    """Bootstrap and always drop the exact owned DB, even after a lost create reply."""
-    from alembic import command
-
-    from api.db.db_models import Base
-
+def scratch_database(evidence: Path, *, bootstrap: bool = True) -> Iterator[sa.Engine]:
+    """Optionally bootstrap and always drop the exact owned DB."""
     evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
     journal = ResourceJournal("scratch_database")
     name = f"multirag_test_{uuid4().hex[:12]}"
@@ -107,11 +103,16 @@ def scratch_database(evidence: Path) -> Iterator[sa.Engine]:
             identity = reader.execute(sa.text("SELECT current_database(), current_user, inet_server_addr()::text, inet_server_port()")).one()
             assert identity[0] == name
             journal.event("database-created-readback", database=identity[0], role=identity[1], address=identity[2], port=identity[3])
-        with engine.begin() as connection:
-            connection.execute(sa.text("CREATE SCHEMA usr_ai"))
-        Base.metadata.create_all(engine)
-        with engine.begin() as connection:
-            cfg = _alembic_config()
-            cfg.attributes["connection"] = connection
-            command.stamp(cfg, "head")
+        if bootstrap:
+            from alembic import command
+
+            from api.db.db_models import Base
+
+            with engine.begin() as connection:
+                connection.execute(sa.text("CREATE SCHEMA usr_ai"))
+            Base.metadata.create_all(engine)
+            with engine.begin() as connection:
+                cfg = _alembic_config()
+                cfg.attributes["connection"] = connection
+                command.stamp(cfg, "head")
         yield engine

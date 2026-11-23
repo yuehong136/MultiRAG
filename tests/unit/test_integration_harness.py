@@ -24,6 +24,12 @@ def test_database_suite_never_requires_unrelated_services() -> None:
     assert required_services([INTEGRATION / "new_test.py"]) == {"postgresql", "redis", "minio", "milvus"}
 
 
+def test_file_attachment_runtime_prepares_storage_before_collection() -> None:
+    path = INTEGRATION / "test_file_document_attach_locks.py"
+    assert path in suite_paths("core") and path not in suite_paths("db")
+    assert required_services([path]) == {"postgresql", "redis", "minio", "milvus"}
+
+
 def test_shared_auth_secret_prepares_only_redis() -> None:
     assert required_services([INTEGRATION / "test_shared_auth_secret.py"]) == {"redis"}
 
@@ -116,6 +122,104 @@ def test_metadata_es_container_and_endpoint_are_scoped(monkeypatch: pytest.Monke
             assert manager.ready["elasticsearch"]["source"] == "testcontainers"
     assert events == ["start", "stop"]
     assert "METADATA_TEST_ES_URL" not in os.environ
+
+
+@pytest.mark.parametrize("explicit_uri", [None, "explicit.invalid:25432"])
+def test_ready_infinity_publishes_one_endpoint_and_restores_configuration(monkeypatch: pytest.MonkeyPatch, explicit_uri: str | None) -> None:
+    configured = {"infinity": {"uri": "configured.invalid:23817", "db_name": "default_db"}}
+    original = json.loads(json.dumps(configured))
+    if explicit_uri is None:
+        monkeypatch.delenv("INFINITY_TEST_URI", raising=False)
+    else:
+        monkeypatch.setenv("INFINITY_TEST_URI", explicit_uri)
+    calls: list[str] = []
+    monkeypatch.setattr(services, "probe", lambda name, configs: calls.append(name))
+    with services.ServiceManager(configured, allow_containers=False) as manager:
+        manager.ensure("infinity")
+        expected = explicit_uri or original["infinity"]["uri"]
+        assert os.environ["INFINITY_TEST_URI"] == configured["infinity"]["uri"] == expected
+        manager.ensure("infinity")
+        assert calls == ["infinity"]
+    assert configured == original
+    assert os.environ.get("INFINITY_TEST_URI") == explicit_uri
+
+
+@pytest.mark.parametrize("fail_readiness", [False, True])
+def test_owned_infinity_endpoint_survives_collection_and_is_removed_on_exit(monkeypatch: pytest.MonkeyPatch, fail_readiness: bool) -> None:
+    import testcontainers.core.container
+
+    monkeypatch.delenv("INFINITY_TEST_URI", raising=False)
+    monkeypatch.delenv("INTEGRATION_NO_TESTCONTAINERS", raising=False)
+    configured = {"infinity": {"uri": "unavailable.invalid:23817"}}
+    events: list[str] = []
+
+    class Container:
+        def __init__(self, image: str) -> None:
+            assert "infinity" in image and "${" not in image
+
+        def with_exposed_ports(self, port: int) -> "Container":
+            assert port == 23817
+            return self
+
+        def start(self) -> None:
+            events.append("start")
+
+        def stop(self) -> None:
+            events.append("stop")
+
+        def get_container_host_ip(self) -> str:
+            return "127.0.0.1"
+
+        def get_exposed_port(self, port: int) -> int:
+            assert port == 23817
+            return 25432
+
+    def probe(name: str, configs: dict[str, Any]) -> None:
+        assert name == "infinity"
+        if configs[name]["uri"].startswith("unavailable") or fail_readiness:
+            raise ConnectionError("readiness failure")
+
+    monkeypatch.setattr(testcontainers.core.container, "DockerContainer", Container)
+    monkeypatch.setattr(services, "probe", probe)
+    monkeypatch.setattr(services.time, "monotonic", iter([0.0, 0.0, 61.0, 62.0]).__next__)
+    if fail_readiness:
+        with pytest.raises(services.ServiceError, match="not ready"):
+            with services.ServiceManager(configured) as manager:
+                manager.ensure("infinity")
+    else:
+        with pytest.raises(RuntimeError, match="collection failed"):
+            with services.ServiceManager(configured) as manager:
+                manager.ensure("infinity")
+                assert os.environ["INFINITY_TEST_URI"] == configured["infinity"]["uri"] == "127.0.0.1:25432"
+                raise RuntimeError("collection failed")
+    assert configured == {"infinity": {"uri": "unavailable.invalid:23817"}}
+    assert "INFINITY_TEST_URI" not in os.environ
+    assert events == ["start", "stop"]
+
+
+@pytest.mark.parametrize("pytest_exit", [0, 1])
+def test_infinity_runner_environment_matches_overlay_before_collection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pytest_exit: int) -> None:
+    from common.config_utils import CONFIGS
+
+    monkeypatch.delenv("INFINITY_TEST_URI", raising=False)
+    monkeypatch.setitem(CONFIGS, "infinity", {"uri": "selected.invalid:25432"})
+    monkeypatch.setattr(services, "probe", lambda name, configs: None)
+    collected: list[bool] = []
+
+    def collect(args: list[str]) -> int:
+        overlay = json.loads(Path(os.environ["MULTIRAG_CONFIG_OVERLAY_FILE"]).read_text())
+        assert os.environ["INFINITY_TEST_URI"] == overlay["infinity"]["uri"] == "selected.invalid:25432"
+        assert any(arg.startswith("--allow-hosts=") and "selected.invalid" in arg for arg in args)
+        collected.append(True)
+        return pytest_exit
+
+    monkeypatch.setattr(pytest, "main", collect)
+    assert main(["--suite", "infinity", "--report-dir", str(tmp_path), "--", "-q"]) == pytest_exit
+    assert collected == [True]
+    report = json.loads((tmp_path / "run.json").read_text())
+    assert report["exit_code"] == pytest_exit
+    assert report["services"]["infinity"]["source"] == "existing"
+    assert "INFINITY_TEST_URI" not in os.environ
 
 
 def test_explicit_node_selection_prepares_only_its_dependencies() -> None:

@@ -160,6 +160,7 @@ def _modern_probe(
 ) -> dict[str, Any]:
     command = [
         uv,
+        "--no-config",
         "run",
         "--locked",
         "--no-project",
@@ -233,6 +234,7 @@ def run_matrix() -> list[dict[str, Any]]:
         raise RuntimeError("uv is required for the isolated MCP SDK 2 fixture")
     modern_script_command = [
         uv,
+        "--no-config",
         "run",
         "--locked",
         "--no-project",
@@ -242,6 +244,7 @@ def run_matrix() -> list[dict[str, Any]]:
     modern_command = [*modern_script_command, "--serve"]
     legacy_command = [
         uv,
+        "--no-config",
         "run",
         "--locked",
         "--no-project",

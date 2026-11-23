@@ -63,7 +63,7 @@ async def test_selected_message_template_preserves_structured_downloads(monkeypa
     monkeypatch.setattr(module.random, "choice", lambda choices: choices[1])
     monkeypatch.setattr(message, "check_if_canceled", lambda context: False)
     monkeypatch.setattr(message, "_convert_content", lambda content: None)
-    monkeypatch.setattr(message, "_save_to_memory", AsyncMock() if mode == "stream" else lambda content: None)
+    monkeypatch.setattr(message, "_save_to_memory", AsyncMock())
     with caplog.at_level(logging.DEBUG):
         message._invoke()
         content = message.output("content")

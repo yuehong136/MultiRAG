@@ -14,7 +14,6 @@
 #  limitations under the License.
 #
 from common.constants import MemoryType
-from common.time_utils import current_timestamp
 
 
 class PromptAssembler:
@@ -106,6 +105,13 @@ You are an expert at analyzing conversations to extract structured memory.
 
 **CONVERSATION TIME:** {conversation_time}
 **CURRENT TIME:** {current_time}
+
+**REFERENCE TIME RULES:**
+- Resolve relative dates such as today, yesterday and tomorrow against CONVERSATION TIME only, never the processing/current time.
+- The conversation timestamp is the recorded receipt time, not proof of when an event occurred. Preserve explicit event dates and do not invent an event time or timezone.
+- If CONVERSATION TIME is not specified, relative event dates are unknown; do not substitute the current date.
+- 中文相对日期（今天、昨天、明天、上周）只能以对话时间为参照，不能以后台处理或重试时间为参照；未提供的具体发生时刻和时区不得猜测。
+- For episodic memory, invalid_at remains the event end time; it is not a memory expiration or the processing time.
 """
 
     @classmethod
@@ -162,7 +168,8 @@ You are an expert at analyzing conversations to extract structured memory.
         if MemoryType.EPISODIC.name.lower() in types_to_extract:
             examples.append("""
             **Episodic Example:**
-            Input: "I deployed the new feature yesterday afternoon."
+            Conversation Time: "2024-01-15T10:00:00"
+            Input: "I deployed the new feature yesterday from 14:00 to 18:00."
             Output: {"episodic": [{"content": "User deployed new feature", "valid_at": "2024-01-14T14:00:00", "invalid_at": "2024-01-14T18:00:00"}]}
             """)
 
@@ -180,7 +187,7 @@ You are an expert at analyzing conversations to extract structured memory.
         return cls.BASE_USER_PROMPT.format(
             conversation=conversation,
             conversation_time=conversation_time or "Not specified",
-            current_time=current_time or current_timestamp(),
+            current_time=current_time or "Not specified",
         )
 
     @classmethod

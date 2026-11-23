@@ -1,10 +1,13 @@
 import logging
+from typing import Any
 
-from sqlalchemy import desc, func, select, update
+from sqlalchemy import desc, exists, func, select, update
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from api.constants import MEMORY_NAME_LIMIT
 from api.db.db_models import Memory, User, UserTenant
+from api.db.memory_revision_models import ManagedMemoryState
 from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService
 from api.utils.memory_utils import calculate_memory_type
@@ -22,6 +25,16 @@ class MemoryService(CommonService):
     """
 
     model = Memory
+
+    @classmethod
+    def active_clause(cls) -> ColumnElement[bool]:
+        return ~exists().where(ManagedMemoryState.memory_id == cls.model.id, ManagedMemoryState.state != "active")
+
+    @classmethod
+    def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] | None = None) -> list[Any]:
+        if cols:
+            return list(db.execute(select(*[getattr(cls.model, column) for column in cols]).where(cls.model.id.in_(pids), cls.active_clause())))
+        return list(db.scalars(select(cls.model).where(cls.model.id.in_(pids), cls.active_clause())))
 
     @classmethod
     def accessible_tenant_ids(cls, db: Session, user_id: str) -> set[str]:
@@ -172,7 +185,9 @@ class MemoryService(CommonService):
         ).join(User, cls.model.tenant_id == User.id)
 
         # Authorization precedes count and pagination; filters only narrow it.
-        stmt = stmt.where((cls.model.tenant_id == user_id) | ((cls.model.tenant_id.in_(cls.accessible_tenant_ids(db, user_id))) & (cls.model.permissions == TenantPermission.TEAM.value)))
+        stmt = stmt.where(
+            cls.active_clause(), (cls.model.tenant_id == user_id) | ((cls.model.tenant_id.in_(cls.accessible_tenant_ids(db, user_id))) & (cls.model.permissions == TenantPermission.TEAM.value))
+        )
         if "tenant_id" in filter_dict:
             tenant_ids = filter_dict["tenant_id"]
             if isinstance(tenant_ids, list):

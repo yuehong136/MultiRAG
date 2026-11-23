@@ -1,0 +1,104 @@
+[
+  {
+    "case_id": "chinese_correction_finds_prior_target",
+    "title": "A Chinese port correction recommends the prior project entry and preserves its sibling",
+    "query": "东篱项目纠正：隔离演练端口从7401改成7409，访问限制和审计期限不变。",
+    "sources": [
+      {"source_id": 101, "content": "东篱项目隔离演练端口为7401，仅限演练内网，禁止公网。审计日志保留30天。", "user_id": "alpha", "agent_id": "assistant", "session_id": "old"},
+      {"source_id": 102, "content": "东篱项目纠正：隔离演练端口从7401改成7409，访问限制和审计期限不变。", "user_id": "alpha", "agent_id": "assistant", "session_id": "new"}
+    ],
+    "entries": [
+      {"entry_id": "11111111111111111111111111111111", "content": "东篱项目隔离演练端口为7401，仅限演练内网，禁止公网。审计日志保留30天。", "source_ids": [101]},
+      {"entry_id": "22222222222222222222222222222222", "content": "另一个课程偏好是先给数学推导。", "source_ids": [101]}
+    ],
+    "reference_proposals": [{"action": "patch", "target_entry_id": "11111111111111111111111111111111", "patch": {"old_text": "端口为7401", "new_text": "端口为7409"}, "source_input_ids": ["source-101", "source-102"], "reason": "Apply the explicit port correction only; preserve network restrictions and audit retention."}],
+    "expected": {"target_entry_id": "11111111111111111111111111111111", "content": "东篱项目隔离演练端口为7409，仅限演练内网，禁止公网。审计日志保留30天。", "closure_source_ids": [101]},
+    "upstream_basis": ["https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/hindsight_api/engine/consolidation/consolidator.py#L3723"],
+    "semantic_review": "Lexical target ranking and an authored exact patch are mechanism checks, not evidence that a model reliably understands every Chinese correction. Selection does not approve or publish the patch.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "semantic_top_survives_lexical_prefix",
+    "title": "The strongest semantic target gets a seat even outside the lexical prefix",
+    "query": "服务的对外监听入口需要变更。",
+    "sources": [{"source_id": 201, "content": "服务的对外监听入口需要变更。", "user_id": "alpha", "agent_id": "assistant", "session_id": "new"}],
+    "entries": [{"entry_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "content": "北斗入口端口已定为8731。", "source_ids": [201]}],
+    "semantic_order": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "dddddddddddddddddddddddddddddddd"],
+    "lexical_order": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "cccccccccccccccccccccccccccccccc"],
+    "expected": {"first_entry_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "first_two": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]},
+    "upstream_basis": ["https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/tests/test_interleave_fusion.py#L25"],
+    "semantic_review": "The ranked semantic arm is an authored fixture input. This tests fusion preserving a supplied top hit, not real embedding recall or the SQL beyond-prefix lookup, which have separate integration evidence.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "deduplicate_ids_not_equal_text",
+    "title": "Duplicate arm hits coalesce while distinct same-text entries retain separate lineage",
+    "query": "只读接口可用。",
+    "sources": [{"source_id": 301, "content": "第一份授权记录说明只读接口可用。", "user_id": "alpha", "agent_id": "assistant", "session_id": "one"}, {"source_id": 302, "content": "第二份独立记录说明只读接口可用。", "user_id": "alpha", "agent_id": "assistant", "session_id": "two"}],
+    "entries": [{"entry_id": "11111111111111111111111111111111", "content": "只读接口可用。", "source_ids": [301]}, {"entry_id": "22222222222222222222222222222222", "content": "只读接口可用。", "source_ids": [302]}],
+    "semantic_order": ["11111111111111111111111111111111", "11111111111111111111111111111111", "22222222222222222222222222222222"],
+    "lexical_order": ["22222222222222222222222222222222", "11111111111111111111111111111111"],
+    "expected": {"entry_ids": ["11111111111111111111111111111111", "22222222222222222222222222222222"]},
+    "upstream_basis": ["https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/tests/test_interleave_fusion.py#L36"],
+    "semantic_review": "Identical prose alone cannot collapse independent logical entries and source closures. This does not claim the two records should remain semantically separate forever; that requires explicit review.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "empty_subject_is_exact",
+    "title": "An empty subject remains distinct from another subject or whitespace",
+    "query": "云桥教程的示例语言是什么？",
+    "sources": [{"source_id": 401, "content": "我的云桥教程默认Python。", "user_id": "", "agent_id": "assistant", "session_id": "old"}, {"source_id": 402, "content": "调整我的云桥教程偏好。", "user_id": "", "agent_id": "assistant", "session_id": "new"}, {"source_id": 403, "content": "另一主体的云桥教程默认R。", "user_id": "alpha", "agent_id": "assistant", "session_id": "other"}],
+    "entries": [{"entry_id": "11111111111111111111111111111111", "content": "云桥教程默认Python。", "source_ids": [401]}, {"entry_id": "22222222222222222222222222222222", "content": "云桥教程默认R。", "source_ids": [403]}],
+    "expected": {"exact_user_id": "", "foreign_source_error": "target_scope_mismatch", "cross_principal_patch_error": "maintenance_evidence_principal_mismatch"},
+    "upstream_basis": ["https://github.com/mem0ai/mem0/blob/f1791daa86d469249c9b002f62644d58a1eb96a0/tests/memory/test_main.py#L478", "https://github.com/openclaw/openclaw/blob/270b338edea53c5fb8778d60e5ba7f68d36c31fd/extensions/memory-core/src/dreaming-consolidation-projects.test.ts#L97"],
+    "semantic_review": "Host canonical preconditions and proposal validation test the identity boundary. SQL pre-filtering and absence of foreign-body exposure are separately integration-tested, not inferred from a pure rank fixture.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "similarity_is_not_semantic_approval",
+    "title": "A similar target still requires review of the new negative condition",
+    "query": "在线禁止并行检索，只有批量离线任务允许并行，审计15天不变。",
+    "sources": [{"source_id": 501, "content": "星河项目在线默认允许并行检索。审计记录保留15天。", "user_id": "alpha", "agent_id": "assistant", "session_id": "old"}, {"source_id": 502, "content": "星河项目修订：在线禁止并行检索，只有批量离线任务允许并行，审计15天不变。", "user_id": "alpha", "agent_id": "assistant", "session_id": "new"}],
+    "entries": [{"entry_id": "11111111111111111111111111111111", "content": "星河项目在线默认允许并行检索。审计记录保留15天。", "source_ids": [501]}],
+    "reference_proposals": [{"action": "patch", "target_entry_id": "11111111111111111111111111111111", "patch": {"old_text": "在线默认允许并行检索。", "new_text": "在线禁止并行检索；只有批量离线任务允许并行检索。"}, "source_input_ids": ["source-501", "source-502"], "reason": "Keep the explicit prohibition, limited exception and unchanged audit sibling."}],
+    "known_wrong_host_valid_proposals": [{"action": "patch", "target_entry_id": "11111111111111111111111111111111", "patch": {"old_text": "在线默认允许并行检索。", "new_text": "所有任务都禁止并行检索。"}, "source_input_ids": ["source-501", "source-502"], "reason": "Deliberately overgeneralized negative control; host validity must not be confused with truth."}],
+    "expected": {"content": "星河项目在线禁止并行检索；只有批量离线任务允许并行检索。审计记录保留15天。", "wrong_content": "星河项目所有任务都禁止并行检索。审计记录保留15天。", "verification_status": "unverified"},
+    "upstream_basis": ["https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/hindsight_api/engine/consolidation/consolidator.py#L208"],
+    "semantic_review": "The wrong all-task prohibition is source-inconsistent yet can pass structural patch checks. It is intentionally retained as a negative control requiring human rejection, not treated as automatic semantic success.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "shown_target_requires_full_closure",
+    "title": "A chosen target requires its full source closure and cannot name a hidden entry",
+    "query": "纠正服务端口。",
+    "sources": [{"source_id": 601, "content": "入口端口8080。", "user_id": "alpha", "agent_id": "assistant", "session_id": "old-one"}, {"source_id": 602, "content": "备份每天02:00。", "user_id": "alpha", "agent_id": "assistant", "session_id": "old-two"}, {"source_id": 603, "content": "更正：入口端口改为8081，备份不变。", "user_id": "alpha", "agent_id": "assistant", "session_id": "new"}],
+    "entries": [{"entry_id": "11111111111111111111111111111111", "content": "入口端口8080。备份每天02:00。", "source_ids": [601, 602]}],
+    "reference_proposals": [{"action": "patch", "target_entry_id": "11111111111111111111111111111111", "patch": {"old_text": "入口端口8080。", "new_text": "入口端口8081。"}, "source_input_ids": ["source-601", "source-602", "source-603"], "reason": "Only update the shown target with every required prior source and the new correction."}],
+    "expected": {"content": "入口端口8081。备份每天02:00。", "missing_closure_error": "maintenance_target_evidence_mismatch", "hidden_target_error": "maintenance_target_out_of_scope", "hidden_entry_id": "ffffffffffffffffffffffffffffffff"},
+    "upstream_basis": ["https://github.com/vectorize-io/hindsight/blob/5318be8ea572aa00ceae636c71c1d8d334f805b6/hindsight-api-slim/tests/test_consolidation_merge_target.py#L38", "https://github.com/openclaw/openclaw/blob/270b338edea53c5fb8778d60e5ba7f68d36c31fd/extensions/memory-core/src/dreaming-consolidation.test.ts#L322"],
+    "semantic_review": "This verifies explicit target and source dependencies. It does not authorize arbitrary merges, implicit target adoption or a fallback delete of the hidden target.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "confirmation_changes_are_observable",
+    "title": "Target/source versions and physical projection details affect the confirmation fingerprint",
+    "query": "核对当前旧记忆。",
+    "sources": [{"source_id": 701, "content": "旧决定依赖此原始记录。", "user_id": "alpha", "agent_id": "assistant", "session_id": "old"}, {"source_id": 702, "content": "需要核对旧决定。", "user_id": "alpha", "agent_id": "assistant", "session_id": "new"}],
+    "entries": [{"entry_id": "11111111111111111111111111111111", "content": "当前决定需要人工复核。", "source_ids": [701]}],
+    "expected": {"decimal_message_id": "9007199254740993", "fingerprint_changes": ["target_revision", "source_generation", "target_projection"]},
+    "upstream_basis": ["https://github.com/openclaw/openclaw/blob/270b338edea53c5fb8778d60e5ba7f68d36c31fd/extensions/memory-core/src/dreaming-consolidation.test.ts#L392", "https://github.com/mem0ai/mem0/blob/f1791daa86d469249c9b002f62644d58a1eb96a0/tests/memory/test_main.py#L1338"],
+    "semantic_review": "Pure canonicalization and projection hashes prove that these changes are bound and detectable. Actual fresh-SQL rejection of stale confirmations and delete races requires independent integration tests.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  },
+  {
+    "case_id": "bounded_target_body_not_a_prefix",
+    "title": "A budgeted target is shown whole or omitted, never replaced with a misleading prefix",
+    "query": "源记录的保存期限与访问条件是什么？",
+    "sources": [{"source_id": 801, "content": "旧来源含有完整条件和末尾否定。", "user_id": "alpha", "agent_id": "assistant", "session_id": "old"}, {"source_id": 802, "content": "需要核对当前条件。", "user_id": "alpha", "agent_id": "assistant", "session_id": "new"}],
+    "entries": [{"entry_id": "11111111111111111111111111111111", "content": "重复的背景只说明记录位置，不增设新规则。", "repeat": 80, "suffix": "最终限制：仅演练内网，禁止公网；日志保留30天。", "source_ids": [801]}],
+    "expected": {"tail_fact": "最终限制：仅演练内网，禁止公网；日志保留30天。", "prefix_is_not_complete_target": true},
+    "upstream_basis": ["https://github.com/agentscope-ai/ReMe/blob/9c4f7621d7608af66043d11bc48ec0eb7dfc93e0/reme/steps/index/_single_search.py#L11", "https://github.com/openclaw/openclaw/blob/270b338edea53c5fb8778d60e5ba7f68d36c31fd/extensions/memory-core/src/dreaming-consolidation-projects.test.ts#L126"],
+    "semantic_review": "The authored target tail contains the meaningful constraint. Pure regression binds the complete body and tail in the confirmation fingerprint; it does not execute the service budget-packing loop. Whole-or-omitted packing and response bounds need separate service/integration evidence, and do not certify model comprehension or overall recall completeness.",
+    "manual_semantic_review_required": true, "publication_performed": false, "answer_accuracy_measured": false
+  }
+]

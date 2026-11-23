@@ -3,6 +3,13 @@
 `/api/v1/memories` 与 `/api/v1/messages` 使用服务器认证得到的用户 ID，
 请求中的 `tenant_id`、`owner_ids`、消息 `user_id` 均不能授予 Memory 权限。
 
+查询上下文、来源摘录与单 Memory 分页读取沿用相同权限策略；每次来源续取重新检查成员关系。
+参数、预算及快照边界见 [Memory 查询与来源](memory-query.md)。
+显式接管、正文预览／修订、历史、操作记录及来源登记／撤回沿用相同授权；服务器确定 actor、
+所属租户及模型绑定，外部发布前重新核对。启用范围与恢复边界见 [修订与来源撤回](memory-revisions.md)。
+[结构化来源](memory-structured-sources.md)的提交及凭据读取也使用同一授权，提交者来自认证身份；
+客户端分段角色、事件时间及 SDK 外部主体不会提升访问权或核验状态。
+
 - 个人租户（Memory 的 `tenant_id == 当前用户 ID`）中的 Memory 对所有者可见。
 - 其他租户的 Memory 仅在 `permissions=team` 且用户存在当前有效
   owner/admin/normal 成员关系时可见。`me`、邀请、停用及未加入租户均拒绝。

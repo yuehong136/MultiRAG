@@ -41,7 +41,10 @@ async def run_probe(report_dir: Path) -> dict[str, Any]:
 
     uv = shutil.which("uv")
     assert uv is not None
-    managed = {key: ManagedServer(f"agent-binding-{key}", [uv, "run", "--locked", "--no-project", "--script", str(MODERN_SERVER), "--serve", "--binding-server-id", key]) for key in CANONICAL_TOOLS}
+    managed = {
+        key: ManagedServer(f"agent-binding-{key}", [uv, "--no-config", "run", "--locked", "--no-project", "--script", str(MODERN_SERVER), "--serve", "--binding-server-id", key])
+        for key in CANONICAL_TOOLS
+    }
     servers: dict[str, SimpleNamespace] = {}
     metadata: dict[str, dict[str, Any]] = {}
     sessions: list[MCPToolCallSession] = []

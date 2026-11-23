@@ -230,7 +230,7 @@ def test_ann_sdk_hit_decodes_tags_and_preserves_payload(mutation_row: dict[str, 
     assert len(results) == 1 and len(results[0]) == 1
     hit = results[0][0]
     assert isinstance(hit, Hit)
-    before = copy.deepcopy(hit.data)
+    before = copy.deepcopy(dict(hit))
     fields = env["store"].get_fields([hit], [*selected_fields, "_score"])
     decoded = fields["owned-chunk"]
     assert decoded["tag_kwd"] == ["原标签"]
@@ -239,7 +239,7 @@ def test_ann_sdk_hit_decodes_tags_and_preserves_payload(mutation_row: dict[str, 
     assert decoded["q_2_vec"] == [0.25, -0.5]
     assert decoded["_score"] == pytest.approx(float(hit.distance))
     assert fields["distance"] == [hit.distance]
-    assert hit.data == before
+    assert dict(hit) == before
     assert _read_row(env) == env["before"]
 
 

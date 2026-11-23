@@ -1,0 +1,609 @@
+[
+  {
+    "case_id": "preference",
+    "title": "保留偏好的适用条件",
+    "policy": "general",
+    "output_budget_tokens": 2048,
+    "sources": [
+      {
+        "source_id": 11,
+        "content": "用户明确要求：代码示例优先使用 Python 3.12，除非项目另有约束。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      }
+    ],
+    "entries": [],
+    "reference_proposals": [
+      {
+        "action": "add",
+        "content": "代码示例优先使用 Python 3.12，除非项目另有约束。",
+        "message_type": "semantic",
+        "source_input_ids": [
+          "source-11"
+        ],
+        "reason": "保留可追溯的具体陈述，等待人工审核。"
+      }
+    ],
+    "gold": {
+      "facts": [
+        {
+          "fact_id": "conditional-preference",
+          "statements": [
+            "代码示例优先使用 Python 3.12，除非项目另有约束。"
+          ],
+          "source_ids": [
+            11
+          ]
+        }
+      ],
+      "expected_records": [
+        {
+          "entry_id": null,
+          "content": "代码示例优先使用 Python 3.12，除非项目另有约束。",
+          "source_ids": [
+            11
+          ]
+        }
+      ],
+      "recognized_records": [
+        {
+          "content": "代码示例优先使用 Python 3.12，除非项目另有约束。",
+          "fact_ids": [
+            "conditional-preference"
+          ],
+          "preserved_sibling_statements": []
+        }
+      ],
+      "known_incorrect_records": []
+    }
+  },
+  {
+    "case_id": "correction",
+    "title": "只修端口，保留同条备份事实",
+    "policy": "general",
+    "output_budget_tokens": 2048,
+    "sources": [
+      {
+        "source_id": 11,
+        "content": "用户纠正服务监听端口应为 8080；数据库每天 02:00 备份不变。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      }
+    ],
+    "entries": [
+      {
+        "entry_id": "service",
+        "content": "服务监听端口为 80。数据库每天 02:00 备份。",
+        "source_ids": [
+          11
+        ]
+      }
+    ],
+    "reference_proposals": [
+      {
+        "action": "patch",
+        "target_entry_id": "service",
+        "patch": {
+          "old_text": "端口为 80",
+          "new_text": "端口为 8080"
+        },
+        "source_input_ids": [
+          "source-11"
+        ],
+        "reason": "精确纠正端口。"
+      }
+    ],
+    "gold": {
+      "facts": [
+        {
+          "fact_id": "port",
+          "statements": [
+            "服务监听端口为 8080。"
+          ],
+          "source_ids": [
+            11
+          ]
+        },
+        {
+          "fact_id": "backup",
+          "statements": [
+            "数据库每天 02:00 备份。"
+          ],
+          "source_ids": [
+            11
+          ]
+        }
+      ],
+      "expected_records": [
+        {
+          "entry_id": "service",
+          "content": "服务监听端口为 8080。数据库每天 02:00 备份。",
+          "source_ids": [
+            11
+          ]
+        }
+      ],
+      "siblings": [
+        {
+          "entry_id": "service",
+          "statement": "数据库每天 02:00 备份。"
+        }
+      ],
+      "forbidden_statements": [
+        "服务监听端口为 80。"
+      ],
+      "recognized_records": [
+        {
+          "content": "服务监听端口为 8080。数据库每天 02:00 备份。",
+          "fact_ids": [
+            "port",
+            "backup"
+          ],
+          "preserved_sibling_statements": [
+            "数据库每天 02:00 备份。"
+          ]
+        },
+        {
+          "content": "服务监听端口为 80。数据库每天 02:00 备份。",
+          "fact_ids": [
+            "backup"
+          ],
+          "preserved_sibling_statements": [
+            "数据库每天 02:00 备份。"
+          ]
+        },
+        {
+          "content": "服务监听端口为 8080。",
+          "fact_ids": [
+            "port"
+          ],
+          "preserved_sibling_statements": []
+        },
+        {
+          "content": "数据库每天 02:00 备份。",
+          "fact_ids": [
+            "backup"
+          ],
+          "preserved_sibling_statements": [
+            "数据库每天 02:00 备份。"
+          ]
+        }
+      ],
+      "known_incorrect_records": [
+        {
+          "content": "服务监听端口为 80。数据库每天 02:00 备份。",
+          "errors": [
+            "服务监听端口为 80。"
+          ]
+        },
+        {
+          "content": "服务监听端口为 80。",
+          "errors": [
+            "服务监听端口为 80。"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "conditional-rule",
+    "title": "一次失败经验不能升级为通用规则",
+    "policy": "general",
+    "output_budget_tokens": 2048,
+    "sources": [
+      {
+        "source_id": 11,
+        "content": "上次 CI 因网络限流失败，重试后成功；其他故障尚未验证。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      }
+    ],
+    "entries": [],
+    "reference_proposals": [
+      {
+        "action": "add",
+        "content": "该次 CI 因网络限流失败，重试后成功；其他故障的处理方式尚未验证。",
+        "message_type": "semantic",
+        "source_input_ids": [
+          "source-11"
+        ],
+        "reason": "保留可追溯的具体陈述，等待人工审核。"
+      }
+    ],
+    "gold": {
+      "facts": [
+        {
+          "fact_id": "observed-only",
+          "statements": [
+            "该次 CI 因网络限流失败，重试后成功；其他故障的处理方式尚未验证。"
+          ],
+          "source_ids": [
+            11
+          ]
+        }
+      ],
+      "expected_records": [
+        {
+          "entry_id": null,
+          "content": "该次 CI 因网络限流失败，重试后成功；其他故障的处理方式尚未验证。",
+          "source_ids": [
+            11
+          ]
+        }
+      ],
+      "forbidden_statements": [
+        "所有 CI 失败都应无限重试。",
+        "所有 CI 失败都可以通过重试解决。"
+      ],
+      "recognized_records": [
+        {
+          "content": "该次 CI 因网络限流失败，重试后成功；其他故障的处理方式尚未验证。",
+          "fact_ids": [
+            "observed-only"
+          ],
+          "preserved_sibling_statements": []
+        }
+      ],
+      "known_incorrect_records": [
+        {
+          "content": "所有 CI 失败都应无限重试。",
+          "errors": [
+            "所有 CI 失败都应无限重试。"
+          ]
+        },
+        {
+          "content": "所有 CI 失败都可以通过重试解决。",
+          "errors": [
+            "所有 CI 失败都可以通过重试解决。"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "cross-session",
+    "title": "同用户跨会话拼出完整决策",
+    "policy": "general",
+    "output_budget_tokens": 2048,
+    "sources": [
+      {
+        "source_id": 11,
+        "content": "项目决定任务通知采用 Redis Stream。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      },
+      {
+        "source_id": 12,
+        "content": "后续确认结果状态以 PostgreSQL 为准。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s2"
+      }
+    ],
+    "entries": [],
+    "reference_proposals": [
+      {
+        "action": "add",
+        "content": "任务通知采用 Redis Stream；结果状态以 PostgreSQL 为准。",
+        "message_type": "semantic",
+        "source_input_ids": [
+          "source-11",
+          "source-12"
+        ],
+        "reason": "保留可追溯的具体陈述，等待人工审核。"
+      }
+    ],
+    "gold": {
+      "facts": [
+        {
+          "fact_id": "notice",
+          "statements": [
+            "任务通知采用 Redis Stream"
+          ],
+          "source_ids": [
+            11
+          ]
+        },
+        {
+          "fact_id": "truth",
+          "statements": [
+            "结果状态以 PostgreSQL 为准"
+          ],
+          "source_ids": [
+            12
+          ]
+        }
+      ],
+      "expected_records": [
+        {
+          "entry_id": null,
+          "content": "任务通知采用 Redis Stream；结果状态以 PostgreSQL 为准。",
+          "source_ids": [
+            11,
+            12
+          ]
+        }
+      ],
+      "recognized_records": [
+        {
+          "content": "任务通知采用 Redis Stream；结果状态以 PostgreSQL 为准。",
+          "fact_ids": [
+            "notice",
+            "truth"
+          ],
+          "preserved_sibling_statements": []
+        },
+        {
+          "content": "任务通知采用 Redis Stream",
+          "fact_ids": [
+            "notice"
+          ],
+          "preserved_sibling_statements": []
+        },
+        {
+          "content": "结果状态以 PostgreSQL 为准",
+          "fact_ids": [
+            "truth"
+          ],
+          "preserved_sibling_statements": []
+        }
+      ],
+      "known_incorrect_records": []
+    }
+  },
+  {
+    "case_id": "source-closure",
+    "title": "修订保留原条目全部必要来源",
+    "policy": "general",
+    "output_budget_tokens": 2048,
+    "sources": [
+      {
+        "source_id": 11,
+        "content": "本项目需要单租户隔离。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      },
+      {
+        "source_id": 12,
+        "content": "用户决定任务状态持久化到 PostgreSQL。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s2"
+      }
+    ],
+    "entries": [
+      {
+        "entry_id": "task",
+        "content": "本项目需要单租户隔离；任务状态仅保存在进程内存。",
+        "source_ids": [
+          11,
+          12
+        ]
+      }
+    ],
+    "reference_proposals": [
+      {
+        "action": "patch",
+        "target_entry_id": "task",
+        "patch": {
+          "old_text": "任务状态仅保存在进程内存",
+          "new_text": "任务状态持久化到 PostgreSQL"
+        },
+        "source_input_ids": [
+          "source-11",
+          "source-12"
+        ],
+        "reason": "保持租户隔离不变，仅更新状态存储。"
+      }
+    ],
+    "gold": {
+      "facts": [
+        {
+          "fact_id": "isolation",
+          "statements": [
+            "本项目需要单租户隔离"
+          ],
+          "source_ids": [
+            11
+          ]
+        },
+        {
+          "fact_id": "durability",
+          "statements": [
+            "任务状态持久化到 PostgreSQL"
+          ],
+          "source_ids": [
+            12
+          ]
+        }
+      ],
+      "expected_records": [
+        {
+          "entry_id": "task",
+          "content": "本项目需要单租户隔离；任务状态持久化到 PostgreSQL。",
+          "source_ids": [
+            11,
+            12
+          ]
+        }
+      ],
+      "siblings": [
+        {
+          "entry_id": "task",
+          "statement": "本项目需要单租户隔离"
+        }
+      ],
+      "recognized_records": [
+        {
+          "content": "本项目需要单租户隔离；任务状态持久化到 PostgreSQL。",
+          "fact_ids": [
+            "isolation",
+            "durability"
+          ],
+          "preserved_sibling_statements": [
+            "本项目需要单租户隔离"
+          ]
+        },
+        {
+          "content": "本项目需要单租户隔离；任务状态仅保存在进程内存。",
+          "fact_ids": [
+            "isolation"
+          ],
+          "preserved_sibling_statements": [
+            "本项目需要单租户隔离"
+          ]
+        },
+        {
+          "content": "本项目需要单租户隔离",
+          "fact_ids": [
+            "isolation"
+          ],
+          "preserved_sibling_statements": [
+            "本项目需要单租户隔离"
+          ]
+        },
+        {
+          "content": "任务状态持久化到 PostgreSQL",
+          "fact_ids": [
+            "durability"
+          ],
+          "preserved_sibling_statements": []
+        }
+      ],
+      "known_incorrect_records": []
+    }
+  },
+  {
+    "case_id": "cross-user-rejection",
+    "title": "禁止合并不同用户的记忆",
+    "policy": "general",
+    "output_budget_tokens": 2048,
+    "sources": [
+      {
+        "source_id": 11,
+        "content": "Alice 偏好简短中文回答。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      },
+      {
+        "source_id": 12,
+        "content": "Bob 偏好完整英文回答。",
+        "user_id": "bob",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      }
+    ],
+    "entries": [],
+    "reference_proposals": [
+      {
+        "action": "add",
+        "content": "两位用户都偏好简短中文回答。",
+        "message_type": "semantic",
+        "source_input_ids": [
+          "source-11",
+          "source-12"
+        ],
+        "reason": "保留可追溯的具体陈述，等待人工审核。"
+      }
+    ],
+    "gold": {
+      "facts": [],
+      "expected_records": null,
+      "expected_rejection": "maintenance_evidence_principal_mismatch",
+      "forbidden_statements": [
+        "两位用户都偏好简短中文回答。"
+      ],
+      "recognized_records": [],
+      "known_incorrect_records": [
+        {
+          "content": "两位用户都偏好简短中文回答。",
+          "errors": [
+            "两位用户都偏好简短中文回答。"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "malformed-rejection",
+    "title": "模型不能自行标为已验证",
+    "policy": "general",
+    "output_budget_tokens": 2048,
+    "sources": [
+      {
+        "source_id": 11,
+        "content": "这是一条需要人工确认的项目猜测。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      }
+    ],
+    "entries": [],
+    "reference_proposals": [
+      {
+        "action": "add",
+        "content": "项目猜测已经确定。",
+        "message_type": "semantic",
+        "source_input_ids": [
+          "source-11"
+        ],
+        "reason": "保留可追溯的具体陈述，等待人工审核。",
+        "verification_status": "verified"
+      }
+    ],
+    "gold": {
+      "facts": [],
+      "expected_records": null,
+      "expected_rejection": "invalid_maintenance_action_fields",
+      "recognized_records": [],
+      "known_incorrect_records": []
+    }
+  },
+  {
+    "case_id": "abstention",
+    "title": "没有验证依据时明确不生成规则",
+    "policy": "general",
+    "output_budget_tokens": 2048,
+    "sources": [
+      {
+        "source_id": 11,
+        "content": "助手推测数据库慢可能因为缺少索引，但没有查询执行计划；用户没有确认。",
+        "user_id": "alice",
+        "agent_id": "assistant",
+        "session_id": "s1"
+      }
+    ],
+    "entries": [],
+    "reference_proposals": [
+      {
+        "action": "noop",
+        "source_input_ids": [
+          "source-11"
+        ],
+        "reason": "没有足够证据建立确定性规则。"
+      }
+    ],
+    "gold": {
+      "facts": [],
+      "expected_records": [],
+      "forbidden_statements": [
+        "数据库慢的原因是缺少索引。"
+      ],
+      "recognized_records": [],
+      "known_incorrect_records": [
+        {
+          "content": "数据库慢的原因是缺少索引。",
+          "errors": [
+            "数据库慢的原因是缺少索引。"
+          ]
+        }
+      ]
+    }
+  }
+]

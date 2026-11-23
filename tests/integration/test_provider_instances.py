@@ -84,9 +84,12 @@ def _exercise_discovery(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, 
     async def owned_probe(provider: str, key: str, base: str, declaration: ModelRegistration) -> dict[str, Any]:
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        assert GLOBAL_LOGGING_WORKER._worker_task is None
+        task = GLOBAL_LOGGING_WORKER._worker_task
+        assert task is None or task.done()
+        assert not GLOBAL_LOGGING_WORKER._running_tasks
         journal.event("reserve-sdk-logging-worker", model=declaration.model_name, purpose="owned isolated provider probe")
         try:
+            GLOBAL_LOGGING_WORKER.start()
             return await REAL_VERIFY_MODEL(provider, key, base, declaration)
         finally:
             await GLOBAL_LOGGING_WORKER.stop()
@@ -131,11 +134,12 @@ def _exercise_discovery(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, 
             return [reader.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM)]
 
     with ExitStack() as cleanup:
-        address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
-        journal.event("reserve-listener", address=list(address), input_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
-        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+        journal.event("reserve-listener", address=["127.0.0.1", 0], input_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Provider, bind_and_activate=False)
         cleanup.callback(server.server_close)
         server.server_bind()
+        address = server.server_address
+        journal.event("listener-bound", address=list(address))
         server.server_activate()
         thread = threading.Thread(target=server.serve_forever, name="discovery-provider-fixture")
         thread.start()
@@ -913,12 +917,13 @@ def test_real_model_http_and_worker_rebind_keep_instance_identity(http: tuple[An
             self.wfile.write(content)
 
     with ExitStack() as cleanup:
-        port = 30000 + int(uuid4().hex[:4], 16) % 20000
-        address = ("127.0.0.1", port)
-        journal.event("reserve-listener", address=list(address))
-        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+        journal.event("reserve-listener", address=["127.0.0.1", 0])
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Provider, bind_and_activate=False)
         cleanup.callback(server.server_close)
         server.server_bind()
+        address = server.server_address
+        port = address[1]
+        journal.event("listener-bound", address=list(address))
         server.server_activate()
         thread = threading.Thread(target=server.serve_forever, name="provider-fixture")
         thread.start()
@@ -937,13 +942,17 @@ def test_real_model_http_and_worker_rebind_keep_instance_identity(http: tuple[An
             from litellm.caching.llm_caching_handler import LLMClientCache
             from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-            assert GLOBAL_LOGGING_WORKER._worker_task is None
+            task = GLOBAL_LOGGING_WORKER._worker_task
+            assert task is None or task.done()
+            assert not GLOBAL_LOGGING_WORKER._running_tasks
             owned_cache = LLMClientCache()
             monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", owned_cache)
             async_engine = create_async_engine(engine.url)
             event.listen(async_engine.sync_engine, "before_cursor_execute", engine._provider_reserve)
             monkeypatch.setattr(tenant_llm_service, "async_session_factory", async_sessionmaker(async_engine, expire_on_commit=False))
+            journal.event("reserve-sdk-logging-worker", purpose="owned isolated model inference")
             try:
+                GLOBAL_LOGGING_WORKER.start()
                 for identifier in identifiers:
                     with Session(engine) as db:
                         config = get_model_config_by_id(db, identifier, tenant_id=owner, model_type="chat")
@@ -998,7 +1007,14 @@ def test_real_model_http_and_worker_rebind_keep_instance_identity(http: tuple[An
         assert requests_seen == [("/first/v1/chat/completions", "Bearer fixture-first", "same-raw-name"), ("/second/v1/chat/completions", "Bearer fixture-second", "same-raw-name")]
         with Session(engine) as db:
             assert [db.get(TenantLLM, identifier).used_tokens for identifier in identifiers] == [3, 3]
-    with socket.socket() as probe:
+    with ExitStack() as probes:
+        probe = probes.enter_context(socket.socket())
+        probe.bind(("127.0.0.1", 0))
+        if probe.getsockname()[1] == port:
+            probe = probes.enter_context(socket.socket())
+            probe.bind(("127.0.0.1", 0))
+        probe.settimeout(1)
+        assert probe.getsockname()[1] != port
         assert probe.connect_ex(address) != 0
     assert not thread.is_alive()
     journal.event("listener-cleaned", address=list(address), absent=True, thread_stopped=True)
@@ -1194,11 +1210,12 @@ def test_provider_connection_and_atomic_create_use_real_adapter_and_zero_write_f
             return tuple(db.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM))
 
     with ExitStack() as cleanup:
-        address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
-        journal.event("reserve-listener", address=list(address))
-        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+        journal.event("reserve-listener", address=["127.0.0.1", 0])
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Provider, bind_and_activate=False)
         cleanup.callback(server.server_close)
         server.server_bind()
+        address = server.server_address
+        journal.event("listener-bound", address=list(address))
         server.server_activate()
         thread = threading.Thread(target=server.serve_forever, name="owned-provider-probe")
         thread.start()
@@ -1479,8 +1496,12 @@ def test_after298_fixed_web_regions_and_ocr(http: tuple[Any, ...], monkeypatch: 
     async def owned_probe(provider: str, key: str, base: str, model: ModelRegistration) -> dict[str, Any]:
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
+        task = GLOBAL_LOGGING_WORKER._worker_task
+        assert task is None or task.done()
+        assert not GLOBAL_LOGGING_WORKER._running_tasks
         journal.event("reserve-sdk-logging-worker", model=model.model_name)
         try:
+            GLOBAL_LOGGING_WORKER.start()
             return await REAL_VERIFY_MODEL(provider, key, base, model)
         finally:
             await GLOBAL_LOGGING_WORKER.stop()

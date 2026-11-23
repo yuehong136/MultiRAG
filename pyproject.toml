@@ -3,9 +3,7 @@ name = "multirag"
 version = "0.9.9"
 description = "基于RAG、Agent、Workflow体系赋能LLM应用"
 readme = "README.md"
-# 上界 <3.14：CI 矩阵 3.12/3.13、Docker 3.12.10，3.14 无真实消费者；
-# 且 3.14 解析分支会迫使 pymilvus 静默换 3.0.0（grpcio 钉子冲突）——收紧上界
-# 将解析限制在两个经过验证的解释器系列内。
+# CI 矩阵 3.12/3.13、Docker 3.12.10；将解析限制在已有消费者的解释器系列内。
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "aiohttp>=3.9.0,<4.0.0",
@@ -53,7 +51,7 @@ dependencies = [
     "fastapi-login>=1.10.1",
     "feedparser>=6.0.11,<7.0.0",
     "ffmpeg-python>=0.2.0",
-    "flagembedding==1.2.10",
+    "flagembedding==1.4.2",
     "google-api-python-client>=2.190.0,<3.0.0",
     "google-auth-oauthlib>=1.2.0,<2.0.0",
     "google-cloud-storage>=2.19.0,<3.0.0",
@@ -85,12 +83,11 @@ dependencies = [
     "markdown==3.8.2",
     "markdown-to-json==2.1.1",
     "markdownify>=1.2.0",
-    # FastMCP 4 is still a prerelease; pin the verified beta exactly so a future
-    # beta cannot enter the runtime without rerunning the MCP compatibility gate.
-    # MCP SDK 2 and httpx2 are direct dependencies because MultiRAG implements
-    # the client and owns the HTTP transport lifecycle.
-    "fastmcp==4.0.0b3",
-    "mcp==2.0.0",
+    # Keep the MCP compatibility gate bound to exact stable security fixes:
+    # FastMCP GHSA-vqqp-x5qm-5qp4 and the MCP SDK 2.2 security line.
+    # MCP SDK 2 and httpx2 are direct consumers of our HTTP transport lifecycle.
+    "fastmcp==4.1.2",
+    "mcp==2.2.0",
     "httpx2>=2.10.0,<3.0.0",
     "mini-racer>=0.12.4,<0.13.0",
     "minio==7.2.4",
@@ -125,7 +122,7 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",
     "paramiko>=5.0.0,<6",
     "pdfplumber==0.10.4",
-    "pillow>=12.2.0,<13.0.0",
+    "pillow>=13.0.0,<14.0.0",
     "pluginlib>=0.10.0",
     # task_executor /metrics 端点（指标定义与启动见 core/svr/executor_metrics.py）
     "prometheus-client>=0.21.0",
@@ -137,8 +134,8 @@ dependencies = [
     "psycopg2-binary>=2.9.11,<3.0.0",
     "pyclipper>=1.4.0,<2.0.0",
     "pycryptodomex==3.20.0",
-    # <3：生产主向量库客户端不敞口大版本；敞口时解析器曾在部分分支静默换 3.0.0
-    "pymilvus>=2.5.11,<3.0.0",
+    # ORM 接口将在 3.1 移除；迁移到 MilvusClient 后再放宽上界。
+    "pymilvus>=3.0.3,<3.1.0",
     "pymssql>=2.3,<3.0.0",
     "pyobvector==0.2.22",
     "pyodbc>=5.2.0,<6.0.0",
@@ -175,7 +172,7 @@ dependencies = [
     "tencentcloud-sdk-python==3.0.1478",
     "tika==2.6.0",
     "torch>=2.5.0,<3.0.0",
-    "transformers>=4.35.0,<5.0.0",
+    "transformers==5.23.0",
     "uvicorn>=0.30.1",
     "valkey==6.0.2",
     "volcengine==1.0.194",
@@ -185,7 +182,7 @@ dependencies = [
     "webdriver-manager==4.0.1",
     "wikipedia==1.4.0",
     "word2number==1.1",
-    "xgboost==1.6.0",
+    "xgboost==1.7.6",
     "xpinyin==0.7.6",
     "xxhash>=3.5.0,<4.0.0",
     "yfinance==0.2.65",
@@ -232,7 +229,7 @@ dev = [
     "pytest-xdist>=3.8,<4",
     # EIM-A1 contract oracle: direct test dependency rather than relying on
     # the MCP SDK's transitive dependency. A2 may promote it to runtime later.
-    "PyJWT[crypto]==2.13.0",
+    "PyJWT[crypto]==2.15.0",
     "ruff",
     "testcontainers[minio,postgres,redis]>=4.8",
     "types-python-dateutil>=2.9.0.20241206",
@@ -254,6 +251,11 @@ required-version = ">=0.12,<0.13"
 # Keep one owner of those modules so install order cannot change the runtime.
 exclude-dependencies = ["unclecode-litellm"]
 override-dependencies = [
+    # Infinity SDK 0.7.0's wheel declares a historical setuptools<81 bound,
+    # but none of its 24 Python source files uses setuptools/pkg_resources.
+    # Keep the SDK/protocol pinned; bound the build-tool security replacement
+    # for GHSA-xmj3-9gf7-h52w and verify it with the Infinity compatibility gate.
+    "setuptools>=84.1.0,<85.0.0",
     # moodlepy 0.24.1（最新版、上游停更）pin attrs/cattrs <23.0，与现代栈硬冲突，
     # override 是唯一出路；日落点 = 弃用或内联 moodlepy 连接器
     "attrs>=23.1.0",
@@ -264,9 +266,14 @@ override-dependencies = [
     "numpy>=2.1,<2.2; python_version >= '3.13'",
 ]
 constraint-dependencies = [
-    # FastMCP 4 remains a prerelease. Keep the wrapper and slim runtime on the
-    # same verified beta even if a future package metadata range becomes wider.
-    "fastmcp-slim==4.0.0b3",
+    # Exact public upstream PR #4214 patch, pending an equivalent fixed release.
+    # A registry version alone does not fix GHSA-4j2p-28q2-5m79.
+    # Lifecycle/compatibility bounds: docs/references/python-dependency-repairs.md.
+    "accelerate @ git+https://github.com/huggingface/accelerate@a35af225361fe0097900680e850c84bae97340b7",
+    # Bind the in-process embedding adapters to the verified Transformers 5 API.
+    "sentence-transformers==5.6.0",
+    # Keep the wrapper and slim runtime on the same exact security release.
+    "fastmcp-slim==4.1.2",
     # CVE-2026-30922: pyasn1 < 0.6.3 ASN.1 解码无界递归 DoS（CVSS 7.5）；
     # 依赖图内无任何 <0.6.3 上界的冲突方，constraint 即可钳住（曾误放 override，
     # 那会抹掉 pyasn1-modules 的 <0.7.0 上界，未来 0.7 破坏版会静默越界）
@@ -277,6 +284,20 @@ constraint-dependencies = [
     "datasets>=5.0.1,<6.0.0",
 ]
 python-install-mirror = "http://maven.datav.com/repository/static/indygreg/python-build-standalone/"
+# BCEmbedding 0.1.5 pins Transformers <4.37 in historical wheel metadata.
+# Its unchanged AutoModel/AutoTokenizer/sequence-classification inference APIs
+# are verified with local random BERT weights against exactly this release.
+# Scope the correction to this wheel; retain every other original dependency.
+[[tool.uv.dependency-metadata]]
+name = "bcembedding"
+version = "0.1.5"
+requires-dist = [
+    "torch>=1.6.0",
+    "transformers==5.23.0",
+    "datasets",
+    "sentence-transformers",
+]
+
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple"
 trusted-host = "mirrors.aliyun.com"

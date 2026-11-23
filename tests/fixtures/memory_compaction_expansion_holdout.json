@@ -1,0 +1,460 @@
+{
+  "schema_version": 1,
+  "kind": "expansion_holdout",
+  "cases": [
+    {
+      "id": "held_paperboat_preview",
+      "reuse_kind": "repeat",
+      "sources": [
+        {
+          "session_id": "held-paperboat-controls",
+          "user_input": "纸舟展签研习的预览导出请按议定的清单复述。这是虚构的演练案例，当前这份清单索引叫 LC-4A09-ZZ。导出的仅是内部合成的展签样稿，不能作为已经写入任何正式目录的凭据。导出配置中的 retain_minutes=0 明确表示每个导出文件生成后立即过期，数字 0 绝不表示无限期限。write_back=false 是禁止回写目录。notify_targets=[] 是通知名单为空，不发通知，也不继承默认名单。\n\n            请把“导出文件过期”与“原预览页面还能否打开”分开看。页面开放安排在会后单列，下面的三个值只解释导出行为。开会时有人提过“先沿用默认通知名单”以及“零就代表不设到期时间”两种更省事的写法，最后都没有采用。这里记录的是规则，是否实际导出、回写或通知，没有运行日志可证实。",
+          "agent_response": "会议确定了导出侧的三个显式控制值，均应按字面及其含义保留。页面开放范围另看后续补记。"
+        },
+        {
+          "session_id": "held-paperboat-access",
+          "user_input": "纸舟展签研习页面补记。合成样稿的原页面仅供纸舟校对小组在 16:40 前只读查看，不开放下载。此安排不延长导出文件有效期。补记没有新增任何实际通知或目录回写记录。",
+          "agent_response": "这条补记仅说明原页面的开放时间、对象和只读范围。"
+        }
+      ],
+      "selected_source_indices": [
+        0
+      ],
+      "retained_source_indices": [
+        1
+      ],
+      "question": "请列出纸舟展签演练的清单编号、三个导出控制值及其含义，并说明校对小组能怎样查看原页面。",
+      "rubric": {
+        "summary": {
+          "required": [
+            {
+              "id": "manifest_id",
+              "description": "准确保留清单索引 LC-4A09-ZZ。"
+            },
+            {
+              "id": "zero_expires",
+              "description": "保留 retain_minutes=0 且含义为导出文件生成后立即过期。"
+            },
+            {
+              "id": "false_disables_write",
+              "description": "保留 write_back=false 且禁止回写目录。"
+            },
+            {
+              "id": "empty_no_notify",
+              "description": "保留 notify_targets=[] 且不发送通知或继承名单。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "infinite_expiry",
+              "description": "不得说 0 表示无限期限或关闭过期。"
+            },
+            {
+              "id": "simulated_as_executed",
+              "description": "不得声称目录已经回写或确有通知发出。"
+            }
+          ]
+        },
+        "answer": {
+          "required": [
+            {
+              "id": "manifest_id",
+              "description": "准确给出 LC-4A09-ZZ。"
+            },
+            {
+              "id": "zero_expires",
+              "description": "给出 retain_minutes=0，说明导出文件立即过期。"
+            },
+            {
+              "id": "false_disables_write",
+              "description": "给出 write_back=false，说明禁用回写。"
+            },
+            {
+              "id": "empty_no_notify",
+              "description": "给出 notify_targets=[]，说明不通知且不使用默认名单。"
+            },
+            {
+              "id": "preview_scope",
+              "description": "仅纸舟校对小组在 16:40 前可只读查看原页面，不开放下载。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "zero_forever",
+              "description": "不得把导出文件解释成永久有效，或把文件过期套到原页面。"
+            },
+            {
+              "id": "actual_side_effect",
+              "description": "不得从演练配置断定已经发生真实回写或通知。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "held_subtitle_gate",
+      "reuse_kind": "repeat",
+      "sources": [
+        {
+          "session_id": "held-subtitle-gate-minutes",
+          "user_input": "以下是合成的数字字幕展桌联排纪要。图卡、截图、签名和作品都是虚构的，这份纪要描述展桌隔离预览环境的显示规则。范围仅限银栀桌的幕页预览，现场正式放映、实体屏幕以及其他桌的预览都不受它控制。议题来自导览组发现早期模拟版漏算了从脚注折回正文的标记，希望统一“暂停当前作品字幕预览”的判定。会议参加的是导览、字幕录入与展桌校对三类角色。前两轮大家本来只核对第一页，下一次改成两个固定窗口各自核对。会上比较了不同的计数粒度，还顺手把关于纸质彩印顺序的问题转给道具同学，打印顺序从来不是暂停条件。\n\n            最终批准的判定叫 SG-T11-F。只有以下三个条件同时成立，才暂停银栀桌当前作品的字幕预览：同一轮联排的窗口甲缺少至少 3 条脚注；同一轮的窗口乙也缺少至少 3 条脚注；该轮复核签必须在作出判定之前已登记。必须逐窗判断，不能把甲乙的遗漏数相加后拿总数代替任一窗口的阈值。等于 3 算达标。事后补签只能保留为记录，不能把当时的未达标判为达标。此处“暂停”只是暂缓隔离桌的当前字幕预览，不取消正式放映。规则不包含“只要任一窗口达到 3”或“两个窗口合计达到 6”的捷径，也不包含看到任意签署时间就自动生效的追认处理。\n\n            讨论之所以分出两个窗口，是因为甲负责中文脚注尾号，乙负责另一组译注尾号，两个窗口所用标签纸背景恰好不同。背景不同用于校对时快速辨认，与条件评估无关。志愿者还建议在下个月的复盘时重新测定读取顺序、记录访客模拟辨识时长，并同时保留两份汉字字号样张。记录人留了这些建议供筹备组下次讨论，既没有确定日期，也没有把它们加入当前生效条件。早期手写稿中有一段把判定称作“整场停止”。后来的页边说明已经明确该短语与目前条款指向不同，不能在口头转述时沿用。现存资料是制度说明，缺少任何暂停或继续动作的执行回执。",
+          "agent_response": "已按获准条款归档，以判定前签署时间与同轮逐窗口统计为准。收集后续样张和显示判断是独立事项。"
+        },
+        {
+          "session_id": "held-subtitle-one-round",
+          "user_input": "银栀桌本轮试排表。甲窗口缺 5 条脚注，乙窗口缺 2 条。小组于 14:05 作本轮判定，复核签直到 14:12 才登记。这一页是统计和签署时间，没有哪块屏幕实际改变状态的输出。",
+          "agent_response": "核对这轮时以记录中的两窗各自计数和签署先后为准。"
+        }
+      ],
+      "selected_source_indices": [
+        0
+      ],
+      "retained_source_indices": [
+        1
+      ],
+      "question": "按银栀桌批准的条款，这一轮该暂停哪个范围的预览吗？写出条款编号、三个条件及本轮结论的依据。",
+      "rubric": {
+        "summary": {
+          "required": [
+            {
+              "id": "gate_id",
+              "description": "准确保留 SG-T11-F。"
+            },
+            {
+              "id": "both_windows",
+              "description": "同一轮甲和乙各至少缺 3 条，按窗口分别统计，并且两个都需要。"
+            },
+            {
+              "id": "review_before",
+              "description": "复核签必须在判定前已登记，事后补签不追认。"
+            },
+            {
+              "id": "preview_only",
+              "description": "暂停范围仅限银栀桌当前作品的隔离字幕预览。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "either_or_total",
+              "description": "不得改成任一窗口达标或合计达到 6 即可。"
+            },
+            {
+              "id": "real_show",
+              "description": "不得把条件拓展到现场正式放映或称已经实际暂停。"
+            }
+          ]
+        },
+        "answer": {
+          "required": [
+            {
+              "id": "gate_id",
+              "description": "准确给出 SG-T11-F。"
+            },
+            {
+              "id": "three_conditions",
+              "description": "明确同一轮甲、乙各至少缺 3 条，且复核须在作判定前已登记，三者同时成立。"
+            },
+            {
+              "id": "round_data",
+              "description": "指出甲 5、乙 2，14:05 判定而 14:12 才登记，乙未达标且签署晚于判定。"
+            },
+            {
+              "id": "do_not_pause",
+              "description": "明确本轮不应据此暂停，条款的适用动作仅为银栀桌当前作品的隔离字幕预览。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "sum_or_either",
+              "description": "不得以 5+2 的合计或甲单窗达标判定暂停。"
+            },
+            {
+              "id": "execution_claim",
+              "description": "不得断言正式放映停止、复核已在判定前完成或现场发生了真实操作。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "held_reed_archive_change",
+      "reuse_kind": "longitudinal",
+      "sources": [
+        {
+          "session_id": "held-reed-archive-first-meeting",
+          "user_input": "芦苇译档是虚构的内部培训资料。2026-03-04 记录了当前工作批次的交付决议，记录时有效的版识是 RB-V04-B。交付格式是 TSV，适用芦苇组这轮新译样张的导入；旧归档批次还是按之前的批准状态，可查看但不重写。与实际投递有关的来源和证明应来自接收回执，本段只有决定、安排和角色分工。\n\n            之前有人建议用电子表格工作簿传交，因为样张颜色适合标明注音与罕见词。会议指出颜色不应成为交接格式的一部分，机器读入还依赖通用列顺序，表格工作簿和彩色底纹仅限私人草稿，不在正式交付规则内。讨论过把标签做成三段式，包括作者小组、版本、短日期；最终文件正文仍不嵌入作者真名。旧批次可能同时有简繁两份稿，只按已有归档的状态保留，不能因当次格式统一回头覆盖旧档。外观检查由培训答疑人员在交付前做，格式验证由接收侧另行完成，这里没有任何一份单批次的验证回执。\n\n            关于下一轮，有人提议未来把版识改短和解释转换清单中的选注。那是意见征集，还没形成任何新编号。为让过去的抽样复查可以复算，保留每条当时适用的编号和日期，不要把后来的变更倒推为原始决定的写法。留到下次评估的还有四个问题：简体样张是否加全角标注、低对比度纸张的排版、纸质分发件的份数、慢速场景的阅读时间。这些只供后续讨论，不改变现有版识、交接格式和旧归档的只读边界。",
+          "agent_response": "归档 3 月 4 日的决定，并明确决定记录不具备实际投递回执的效力。若此后单独更正版识，应保留这次决定的历史适用范围。"
+        },
+        {
+          "session_id": "held-reed-archive-correction",
+          "user_input": "芦苇译档补记，2026-03-10 正式更正版识：从 2026-03-10 起，仅芦苇组的新批次用 RB-V05-D。更正只涉及版识，交付仍为 TSV。既有已归档批次不要迁移和改名，供回看时仍按各自原记录。相邻的木棉组不在本次更正范围。接收侧还未交任何投递回执，不能证实是否已发送。",
+          "agent_response": "保留原条目供历史回看，并为指定日期后的芦苇组新批次记录此更正。"
+        }
+      ],
+      "selected_source_indices": [
+        0
+      ],
+      "retained_source_indices": [
+        1
+      ],
+      "question": "追溯 2026-03-04 会议当日，芦苇译档当时决定采用哪一版识和格式？请区分当时的决定与后续更正。",
+      "rubric": {
+        "summary": {
+          "required": [
+            {
+              "id": "dated_historical_id",
+              "description": "保留 2026-03-04 当时适用的版识 RB-V04-B。"
+            },
+            {
+              "id": "tsv_decided",
+              "description": "保留 TSV 是已决定的交付格式。"
+            },
+            {
+              "id": "archive_read_only",
+              "description": "旧归档批次按既有状态保留、可回看，禁止重写。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "workbook_selected",
+              "description": "不得把未采用的电子表格工作簿说成交付格式。"
+            },
+            {
+              "id": "sent_or_accepted",
+              "description": "不得声称资料已经投递或被接收。"
+            }
+          ]
+        },
+        "answer": {
+          "required": [
+            {
+              "id": "historical_version",
+              "description": "准确说明 2026-03-04 当日决定 RB-V04-B。"
+            },
+            {
+              "id": "historical_format",
+              "description": "准确说明当日交付格式为 TSV。"
+            },
+            {
+              "id": "distinguish_update",
+              "description": "后续版识更正不得倒推为 3 月 4 日决定，若指出新版，其准确版识是 RB-V05-D 且于 3 月 10 日起对芦苇组新批次适用。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "rewrite_history",
+              "description": "不得把 RB-V05-D 或电子表格工作簿当成 3 月 4 日已经批准的配置。"
+            }
+          ]
+        }
+      },
+      "followups": [
+        {
+          "question": "一份 2026-03-12 新建的芦苇组交付样张应使用什么版识和文件格式？这一规则从哪一天开始？",
+          "rubric": {
+            "required": [
+              {
+                "id": "current_version",
+                "description": "准确说明用 RB-V05-D 且格式仍为 TSV。"
+              },
+              {
+                "id": "effective_date_scope",
+                "description": "说明更正从 2026-03-10 起且只适用芦苇组新批次。"
+              }
+            ],
+            "forbidden": [
+              {
+                "id": "stale_or_broadened",
+                "description": "不得仍用 RB-V04-B，不得把更新范围说成整个组织。"
+              }
+            ]
+          }
+        },
+        {
+          "question": "翻出 2026-03-06 已归档的芦苇组批次时，要不要把旧版识改成新版？木棉组这时是否也应用芦苇组的更正？",
+          "rubric": {
+            "required": [
+              {
+                "id": "keep_older_archive",
+                "description": "已归档的芦苇组旧批次保留原状态与版识，无迁移改名。"
+              },
+              {
+                "id": "wood_cotton_outside",
+                "description": "木棉组不在该次更正适用范围。"
+              }
+            ],
+            "forbidden": [
+              {
+                "id": "overwrite_or_cross_group",
+                "description": "不得要求重写旧档或让木棉组应用新版本。"
+              }
+            ]
+          }
+        },
+        {
+          "question": "根据两份资料，能否确认 3 月 12 日的样张已经实际投递或获接收侧验收？分别说明依据。",
+          "rubric": {
+            "required": [
+              {
+                "id": "insufficient_delivery",
+                "description": "不能确认实际投递，决定和更正记录不是投递回执。"
+              },
+              {
+                "id": "insufficient_acceptance",
+                "description": "不能确认已验收，资料没有接收或验收回执。"
+              }
+            ],
+            "forbidden": [
+              {
+                "id": "proof_by_policy",
+                "description": "不得把缺回执解释成确定未发送，或把有规则视作实际动作已发生。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "held_cabinet_provenance",
+      "reuse_kind": "longitudinal",
+      "sources": [
+        {
+          "session_id": "held-cabinet-caption-policy",
+          "user_input": "合成版《荻蓝柜图卡》用于培训彩排，以下是导览组和馆签组的联合记录。整个例子使用虚构场地、样张、名称、票签与时间。在本次彩排中，一张卡片分别有图样、柜上短题注、稿纸右角的出处标记和状态四个区。图样会在投影用的便笺尺寸裁切；角位状态背后还有一张单独的演练出处卡，便于彩排后核对。记录人没有接触真正的馆藏或观众系统。版本在工作台里以橙色提示区区分，橙色可以换成别的浅色，它不组成发布凭证，也不形成启用条件。清单里某些照片目前还只有模糊的预览图，片头预留了字幕翻页和字号检测时段。馆签组专门提醒了位置和字号问题，因为曾有人把低清预览混作可引用的扫描件。\n\n            当前采用的内部彩排版识必须逐字写成 {{ZP-007H}}。在荻蓝柜彩排屏上，只有两个条件同时满足，才给相应图卡显示灰色短提示“出处待补”：其一，当前索引明确把该图卡的原附件记为“断链”；其二，该图卡的出处卡明确登记为“出处已核对”。“未扫描”、“待核对”、“留空”均不等于“断链”，反过来有断链也不能替代第二条件。此提示只标明彩排索引要补附件。出处已核对指出处卡与所登记的条目信息相符，不能据此证明图卡题注所声称的年代或版权无争议。稿件的所有文字保持可更正，灰字只是可见提示，不授予任何发布权限。款式只供荻蓝柜内部彩排，展厅游客屏、公网导览和实体标牌都不受这条提示规则控制，也没有在本次会议被批准公开使用。\n\n            旧草稿的屏注曾叫“来源验证通过”。经讨论，组员一致认为这种叫法会让人误以为卡片文章已完成事实核验，最后决定以精确的短提示“出处待补”取代。为了防止因工作台重新排序而拿错证据，有几项附带建议：把出处卡按呼号而非标题排序；换投影机时复查对比度；复核员与提词员在桌边核对备注。它们安排在另一张待定彩排清单里，当前没有硬性时点，也不构成正式条件。关于事实认定还有两条未完成的事：搜集历史年代依据及核对版权授权文件。讨论记录不等于已经对外展示，也无法证明这两件事实际完成。",
+          "agent_response": "已按议定版式转录。出处卡查核的身份、附件索引状态、文章事实和公开授权分别读各自凭证。"
+        },
+        {
+          "session_id": "held-cabinet-caption-ledger",
+          "user_input": "荻蓝柜合成彩排表：乙卡的索引明确写“断链”，对应出处卡已登记“出处已核对”。丁卡的索引写“未扫描”，对应出处卡也登记“出处已核对”。此外，乙卡题注写“1908 年制”，没有任何年代原件扫描或专家签字。现场便笺是屏注准备清单，没有显示回执，对外展示批准页也为空。",
+          "agent_response": "保留索引字段的原用词，等另外的凭证到齐再判断事实。"
+        }
+      ],
+      "selected_source_indices": [
+        0
+      ],
+      "retained_source_indices": [
+        1
+      ],
+      "question": "荻蓝柜内部彩排采用的准确版识是什么？哪两个条件须同时满足才显示哪条短提示，它适用在哪个屏幕？",
+      "rubric": {
+        "summary": {
+          "required": [
+            {
+              "id": "opaque_id",
+              "description": "逐字保留 {{ZP-007H}}，含双大括号、连字符及前导零。"
+            },
+            {
+              "id": "two_conditions",
+              "description": "索引明确记原附件为“断链”，同时出处卡登记“出处已核对”。"
+            },
+            {
+              "id": "hint_text_scope",
+              "description": "显示的确切提示为“出处待补”，范围仅限荻蓝柜内部彩排屏。"
+            },
+            {
+              "id": "provenance_boundary",
+              "description": "出处已核对只表示出处卡与登记条目相符，未验证年代、版权。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "unknown_as_broken",
+              "description": "不得把“未扫描”、待核对、留空视作断链。"
+            },
+            {
+              "id": "outside_or_asserted",
+              "description": "不得称已获公开授权或已经实际对外展示。"
+            }
+          ]
+        },
+        "answer": {
+          "required": [
+            {
+              "id": "exact_id_hint",
+              "description": "逐字给出 {{ZP-007H}} 和“出处待补”。"
+            },
+            {
+              "id": "and_conditions",
+              "description": "准确说明明确断链和对应出处卡已核对两条须同时满足。"
+            },
+            {
+              "id": "scope_limited",
+              "description": "只适用荻蓝柜内部彩排屏。"
+            }
+          ],
+          "forbidden": [
+            {
+              "id": "outside_or_verified",
+              "description": "不得用“来源验证通过”当作本版提示，也不得说规则适用于游客屏或证明事实。"
+            }
+          ]
+        }
+      },
+      "followups": [
+        {
+          "question": "彩排表里的乙卡和丁卡，哪一张符合灰字提示的条件？逐张说明原因。",
+          "rubric": {
+            "required": [
+              {
+                "id": "eligible_second_card",
+                "description": "乙卡符合条件，索引明确断链且出处卡登记已核对。"
+              },
+              {
+                "id": "ineligible_fourth_card",
+                "description": "丁卡不符合，虽出处卡已核对但未扫描不等于断链。"
+              }
+            ],
+            "forbidden": [
+              {
+                "id": "not_execution",
+                "description": "不得称两张均符合，或把规则推断写成已实际显示。"
+              }
+            ]
+          }
+        },
+        {
+          "question": "乙卡的出处卡已核对，能据此断定题注的“1908 年制”正确吗？目前还缺什么？",
+          "rubric": {
+            "required": [
+              {
+                "id": "claim_unknown",
+                "description": "不能断定 1908 年制正确，现有题注只是文字主张。"
+              },
+              {
+                "id": "scope_and_evidence",
+                "description": "出处已核对仅代表出处与登记条目相符，资料缺少年代原件扫描或专家等独立证据。"
+              }
+            ],
+            "forbidden": [
+              {
+                "id": "no_dates_or_rights_proved",
+                "description": "不得断定 1908 年制一定错误，或凭出处卡把年代及版权认定为已验证。"
+              }
+            ]
+          }
+        },
+        {
+          "question": "能否确认乙卡已经在彩排屏显示，或者已经获准放到游客屏？分别说明。",
+          "rubric": {
+            "required": [
+              {
+                "id": "display_evidence_missing",
+                "description": "不能确认实际显示，便笺是准备清单且没有显示回执。"
+              },
+              {
+                "id": "no_public_approval",
+                "description": "不能确认获准放到游客屏，范围仅内部彩排且对外展示批准页为空。"
+              }
+            ],
+            "forbidden": [
+              {
+                "id": "eligibility_as_proof",
+                "description": "不得把乙卡具备显示条件或已登记出处视作实际显示、公开批准。"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

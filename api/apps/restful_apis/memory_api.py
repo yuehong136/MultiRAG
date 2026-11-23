@@ -9,13 +9,15 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.apps.services import memory_api_service
+from api.apps.services import memory_api_service, memory_context_service
+from api.apps.services.memory_revision_service import LegacyStateReconciliationRequired
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from api.db.db_models import get_async_db
 from api.identity.principal import AuthenticationSource
@@ -24,6 +26,8 @@ from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import RetCode
 from common.exceptions import ArgumentException, NotFoundException
+from memory.revisions.domain import RevisionConflict
+from memory.revisions.identifiers import wire_message_identifiers
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -100,6 +104,8 @@ async def update_memory(memory_id: str, request_body: UpdateMemoryRequest, user:
             return get_json_result(data=result)
         else:
             return get_json_result(data=False, retmsg=result, retcode=RetCode.SERVER_ERROR)
+    except RevisionConflict as error:
+        return get_json_result(data=False, retmsg=error.code, retcode=RetCode.CONFLICT)
     except NotFoundException as e:
         logger.error(e)
         return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
@@ -112,11 +118,15 @@ async def update_memory(memory_id: str, request_body: UpdateMemoryRequest, user:
 
 
 @router.delete("/memories/{memory_id}", summary="删除Memory", response_description="成功删除Memory")
-async def delete_memory(memory_id: str, user: Principal = Depends(async_current_user)) -> JSONResponse:
+async def delete_memory(memory_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
     try:
         # msg_store 索引删除与 DB 交错：整块在工作线程 + 自开短会话执行
-        await memory_api_service.delete_memory_async(memory_id, user_id=user.id)
+        await memory_api_service.delete_memory_async(memory_id, user_id=user.id, db=db)
         return get_json_result(data=True)
+    except LegacyStateReconciliationRequired as error:
+        return get_json_result(data={"operation_id": error.operation_id, "error_code": error.code, "requires_reconciliation": True}, retmsg=error.code, retcode=RetCode.CONFLICT)
+    except RevisionConflict as error:
+        return get_json_result(data=False, retmsg=error.code, retcode=RetCode.CONFLICT)
     except NotFoundException as e:
         logger.error(e)
         return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
@@ -202,6 +212,7 @@ class AddMessageRequest(BaseModel):
     user_input: str = Field(..., description="User input message")
     agent_response: str = Field(..., description="Agent response message")
     user_id: str = Field(default="", description="External subject for API-key authentication; otherwise the authenticated user is used")
+    operation_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 
 
 class UpdateMessageRequest(BaseModel):
@@ -228,9 +239,21 @@ async def add_message(
         "agent_response": request_body.agent_response,
     }
 
-    res, msg = await memory_api_service.add_message(db, memory_ids, message_dict, user_id=user.id)
+    from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
+
+    operations: list[dict[str, Any]] = []
+    if supports_coordinated_writes():
+        res, msg = await memory_api_service.add_message(db, memory_ids, message_dict, user_id=user.id, operation_id=request_body.operation_id, operation_results=operations)
+    else:
+        if request_body.operation_id is not None:
+            return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg="This backend does not support operation-based memory appends.")
+        res, msg = await memory_api_service.add_message(db, memory_ids, message_dict, user_id=user.id)
     if res:
+        if request_body.operation_id is not None:
+            return get_json_result(retmsg=msg, data=wire_message_identifiers({"operations": operations}))
         return get_json_result(retmsg=msg)
+    if operations:
+        return get_json_result(retcode=RetCode.CONFLICT, retmsg=msg, data=wire_message_identifiers({"operations": operations, "requires_reconciliation": True}))
     return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg="Some messages failed to add. Detail:" + msg)
 
 
@@ -238,12 +261,17 @@ async def add_message(
 async def forget_message(
     memory_id: str,
     message_id: int,
+    db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
     try:
         # DB 读 + msg_store 更新交错：整块在工作线程 + 自开短会话执行
-        await memory_api_service.forget_message_async(memory_id, message_id, user_id=user.id)
+        await memory_api_service.forget_message_async(memory_id, message_id, user_id=user.id, db=db)
         return get_json_result(data=True)
+    except LegacyStateReconciliationRequired as error:
+        return get_json_result(data={"operation_id": error.operation_id, "error_code": error.code, "requires_reconciliation": True}, retmsg=error.code, retcode=RetCode.CONFLICT)
+    except RevisionConflict as error:
+        return get_json_result(data=False, retmsg=error.code, retcode=RetCode.CONFLICT)
     except NotFoundException as e:
         logger.error(e)
         return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
@@ -257,17 +285,22 @@ async def update_message(
     memory_id: str,
     message_id: int,
     request_body: UpdateMessageRequest,
+    db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
     if not isinstance(request_body.status, bool):
         return get_error_argument_result("Status must be a boolean.")
     try:
         # DB 读 + msg_store 更新交错：整块在工作线程 + 自开短会话执行
-        update_succeed = await memory_api_service.update_message_status_async(memory_id, message_id, request_body.status, user_id=user.id)
+        update_succeed = await memory_api_service.update_message_status_async(memory_id, message_id, request_body.status, user_id=user.id, db=db)
         if update_succeed:
             return get_json_result(data=update_succeed)
         else:
             return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg=f"Failed to set status for message '{message_id}' in memory '{memory_id}'.")
+    except LegacyStateReconciliationRequired as error:
+        return get_json_result(data={"operation_id": error.operation_id, "error_code": error.code, "requires_reconciliation": True}, retmsg=error.code, retcode=RetCode.CONFLICT)
+    except RevisionConflict as error:
+        return get_json_result(data=False, retmsg=error.code, retcode=RetCode.CONFLICT)
     except NotFoundException as e:
         logger.error(e)
         return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
@@ -286,10 +319,39 @@ async def search_message(
     agent_id: str = Query(default="", description="Optional Agent ID filter"),
     session_id: str = Query(default="", description="Optional Session ID filter"),
     user_id: str = Query(default="", description="Optional User ID filter"),
+    include_sources: bool = Query(default=False, description="Include bounded provenance diagnostics"),
+    db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
     if len(memory_id) == 1 and "," in memory_id[0]:
         memory_id = memory_id[0].split(",")
+    if include_sources:
+        if (
+            len(memory_api_service._split_filter_values(memory_id)) > 100
+            or not query.strip()
+            or len(query) > 8192
+            or not 1 <= top_n <= 100
+            or not 0 <= similarity_threshold <= 1
+            or not 0 <= keywords_similarity_weight <= 1
+        ):
+            return get_error_argument_result("Invalid bounded source-search parameters.")
+        try:
+            enriched = await memory_context_service.search_with_sources(
+                db,
+                memory_id,
+                query.strip(),
+                actor_id=user.id,
+                top_n=top_n,
+                subject_id=user_id or None,
+                agent_id=agent_id or None,
+                session_id=session_id or None,
+                similarity_threshold=similarity_threshold,
+                keywords_similarity_weight=keywords_similarity_weight,
+            )
+            return get_json_result(data=enriched)
+        except Exception as error:
+            logger.error("Memory source search failed (%s)", type(error).__name__)
+            return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
     filter_dict = {"memory_id": memory_id, "agent_id": agent_id, "session_id": session_id, "user_id": user_id}
     params = {
         "query": query,
@@ -308,6 +370,9 @@ async def get_messages(
     agent_id: str = Query(default="", description="Agent ID"),
     session_id: str = Query(default="", description="Session ID"),
     limit: int = Query(default=10, description="Maximum number of messages"),
+    message_type: Literal["raw", "semantic", "episodic", "procedural"] | None = Query(default=None, description="Optional memory type filter"),
+    user_id: str | None = Query(default=None, max_length=256, description="Optional message subject filter"),
+    status: bool | None = Query(default=None, description="Optional active-state filter"),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
     if len(memory_id) == 1 and "," in memory_id[0]:
@@ -316,7 +381,14 @@ async def get_messages(
         return get_error_argument_result("memory_ids is required.")
     try:
         # DB 读 + msg_store 最近消息交错：整块在工作线程 + 自开短会话执行
-        res = await memory_api_service.get_messages_async(memory_id, agent_id, session_id, limit, user_id=user.id)
+        options: dict[str, str | bool] = {}
+        if message_type is not None:
+            options["message_type"] = message_type
+        if user_id is not None:
+            options["subject_id"] = user_id
+        if status is not None:
+            options["status"] = status
+        res = await memory_api_service.get_messages_async(memory_id, agent_id, session_id, limit, user_id=user.id, **options)
         return get_json_result(data=res)
     except Exception as e:
         logger.error(e)

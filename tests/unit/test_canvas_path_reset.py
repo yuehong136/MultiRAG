@@ -34,13 +34,13 @@ def messages(events: list[dict[str, Any]]) -> str:
 
 async def test_two_pauses_keep_completed_outputs_without_recomputing(runtime: list[Canvas], monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    original = Message._invoke
+    original = Message._invoke_async
 
-    def track(self: Message, **kwargs: Any) -> None:
+    async def track(self: Message, **kwargs: Any) -> None:
         calls.append(self._id)
-        original(self, **kwargs)
+        await original(self, **kwargs)
 
-    monkeypatch.setattr(Message, "_invoke", track)
+    monkeypatch.setattr(Message, "_invoke_async", track)
     canvas = load(runtime, paused_dsl())
     first = [event async for event in canvas.run(query="email")]
     assert messages(first) == "Draft:email"

@@ -100,6 +100,7 @@ def test_upload_completion_and_delete_real_routes(session_upload_api: dict[str, 
     assert response.status_code == 200 and response.json()["code"] == 0, response.text
     session_id = response.json()["data"]["id"]
     env["session_ids"].append(session_id)
+    initial_messages = snapshot(env)[0][session_id]["message"]
 
     async def controlled_model(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         yield {"answer": "captured", "reference": {}, "final": True}
@@ -112,7 +113,11 @@ def test_upload_completion_and_delete_real_routes(session_upload_api: dict[str, 
         timeout=30,
     )
     assert response.status_code == 200 and response.json()["code"] == 0, response.text
-    assert snapshot(env)[0][session_id]["message"][0]["files"] == [descriptor, descriptor]
+    messages = snapshot(env)[0][session_id]["message"]
+    assert messages[: len(initial_messages)] == initial_messages
+    assert [message["role"] for message in messages[len(initial_messages) :]] == ["user", "assistant"]
+    # Trusted registry resolution canonicalizes repeated upload IDs once.
+    assert messages[len(initial_messages)]["files"] == [descriptor]
     calls: list[tuple[str, str]] = []
     original_rm = env["storage_adapter"].rm
 
@@ -381,7 +386,14 @@ def test_pinned_web_remove_conversation_client(session_upload_api: dict[str, Any
     result = subprocess.run(
         [str(tsx_runner(root)), "--tsconfig", str(root / "tsconfig.app.json"), str(script)],
         cwd=root,
-        env={**os.environ, "SESSION_CLEANUP_BASE": env["base"], "SESSION_CLEANUP_TOKEN": env["jwt"], "SESSION_CLEANUP_ID": session_id},
+        env={
+            **os.environ,
+            "SESSION_CLEANUP_BASE": env["base"],
+            "SESSION_CLEANUP_TOKEN": env["jwt"],
+            "SESSION_CLEANUP_ID": session_id,
+            "SESSION_CLEANUP_CHAT": env["chats"][0],
+            "SESSION_CLEANUP_WEB_SHA": expected,
+        },
         capture_output=True,
         text=True,
         timeout=45,

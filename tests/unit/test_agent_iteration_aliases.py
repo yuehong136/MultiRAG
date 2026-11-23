@@ -40,7 +40,7 @@ def _canvas(items: list[Any], content: str = "{item}/{index}/{result}", *, strea
 async def test_real_canvas_runs_every_iteration_with_aliases(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
     canvas = _canvas([0, False, "", {"value": 1}], stream=stream)
     # Memory persistence is an external boundary; no model/storage/component is replaced.
-    monkeypatch.setattr(Message, "_save_to_memory", AsyncMock() if stream else lambda *args: None)
+    monkeypatch.setattr(Message, "_save_to_memory", AsyncMock())
     try:
         events = [event async for event in canvas.run()]
         assert not canvas.error
@@ -104,7 +104,7 @@ async def test_message_keeps_falsy_values_and_literal_backslashes(monkeypatch: p
     canvas = _canvas([0], "{env.zero}|{env.false}|{env.empty}|{env.none}|{env.path}", stream=stream)
     canvas.globals.update({"env.zero": 0, "env.false": False, "env.empty": "", "env.none": None, "env.path": r"C:\10\report"})
     message = canvas.get_component_obj("Message:child")
-    monkeypatch.setattr(message, "_save_to_memory", AsyncMock() if stream else lambda *args: None)
+    monkeypatch.setattr(message, "_save_to_memory", AsyncMock())
     try:
         message._invoke()
         result = message.output("content")
@@ -151,7 +151,7 @@ def test_alias_substitution_preserves_literal_alias_words(monkeypatch: pytest.Mo
     try:
         if component == "message":
             node = canvas.get_component_obj("Message:child")
-            monkeypatch.setattr(node, "_save_to_memory", lambda *args: None)
+            monkeypatch.setattr(node, "_save_to_memory", AsyncMock())
             node._invoke()
             actual = node.output("content")
         else:

@@ -150,7 +150,7 @@ class ESConnection(ESConnectionBase):
         condition["memory_id"] = memory_ids
         for k, v in condition.items():
             field_name = self.convert_field_name(k)
-            if field_name == "session_id" and v:
+            if field_name == "session_id" and isinstance(v, str) and v:
                 bool_query.filter.append(Q("query_string", **{"query": f"*{v}*", "fields": ["session_id"], "analyze_wildcard": True}))
                 continue
             if not v:

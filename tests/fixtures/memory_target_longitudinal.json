@@ -1,0 +1,47 @@
+{
+  "scope": "Known synthetic longitudinal cases. Expected facts are review data, never model input.",
+  "cases": [
+    {
+      "id": "correction_preserves_siblings",
+      "policy": "decisions",
+      "initial_source": "东篱项目2026年10月20日定案：隔离演练服务端口为7401，仅允许演练内网访问，禁止公网。审计日志保留30天。",
+      "initial_memory": "东篱项目的隔离演练服务端口为7401，仅允许演练内网访问，禁止公网。审计日志保留30天。",
+      "new_source": "东篱项目2026年11月16日明确纠正：隔离演练服务端口从7401改为7409。仅演练内网、禁止公网和审计日志保留30天的规则都不变。",
+      "question": "东篱项目当前演练服务端口是什么，允许哪些网络访问，审计日志保留多久？",
+      "requires_update": true,
+      "review_expectations": ["当前端口7409", "仅演练内网且禁止公网", "审计日志30天", "不能保留7401为当前端口"]
+    },
+    {
+      "id": "late_historical_decision",
+      "policy": "decisions",
+      "initial_source": "青岚项目2026年10月20日审批最终定案：生产归档采用Zstandard压缩，关闭此前gzip试验。归档保留60天。",
+      "initial_memory": "青岚项目生产归档已于2026年10月20日定案采用Zstandard，关闭此前gzip试验。归档保留60天。",
+      "new_source": "2026年11月16日补录青岚项目的旧会议：2026年9月15日的试验当时采用gzip。这是历史试验记录，不修改10月20日已经定案的Zstandard，归档保留60天规则也没有改变。",
+      "question": "青岚项目当前生产归档采用什么压缩方式，归档保留多久？补录旧会议是否改变了定案？",
+      "requires_update": false,
+      "review_expectations": ["当前仍为Zstandard", "gzip只属于9月历史试验", "归档60天", "不能根据晚到时间把当前决定倒退为gzip"]
+    },
+    {
+      "id": "new_negative_condition",
+      "policy": "procedures",
+      "initial_source": "星河检索项目的运行说明：默认启用并行检索，审计记录保留15天。",
+      "initial_memory": "星河检索项目默认启用并行检索，审计记录保留15天。",
+      "new_source": "星河检索项目修订运行说明：在线请求禁止并行检索，只有批量离线任务允许并行检索。审计记录仍保留15天。这是对原来无条件默认并行说明的限制。",
+      "question": "星河检索项目的在线请求能否并行，哪些任务允许并行，审计记录保留多久？",
+      "requires_update": true,
+      "review_expectations": ["在线禁止并行", "仅批量离线任务允许并行", "审计15天", "不能继续无条件默认并行"]
+    },
+    {
+      "id": "similar_different_subject",
+      "policy": "preferences",
+      "initial_source": "云桥教程的个人长期偏好：工程实践教程先给步骤再给代码，示例代码默认Python。",
+      "initial_memory": "云桥工程实践教程先给步骤再给代码，示例代码默认Python。",
+      "new_source": "调整我的云桥教程偏好：先步骤再代码只适用于排障教程；概念课先讲直觉。示例代码默认Python这一点不变。",
+      "distractor_source": "另一主体的云桥教程偏好：所有教程先讲数学推导再给结论，示例代码默认R。",
+      "distractor_memory": "云桥教程总是先数学推导再给结论，示例代码默认R。",
+      "question": "我的云桥排障教程和概念课分别怎样组织，示例代码默认什么语言？",
+      "requires_update": true,
+      "review_expectations": ["排障先步骤再代码", "概念课先直觉", "代码默认Python", "不能混入另一主体的数学推导或R偏好"]
+    }
+  ]
+}

@@ -19,6 +19,7 @@ Joint service for memory and message operations.
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -41,7 +42,9 @@ from common.doc_store.doc_store_base import FusionExpr
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, format_iso_8601_to_ymd_hms, timestamp_to_date
 from core.utils.redis_conn import REDIS_CONN
-from memory.services.messages import MessageService
+from memory.revisions.domain import RevisionConflict
+from memory.revisions.gate import assert_legacy_write_allowed
+from memory.services.messages import MessageService, SourceMessageBindingError
 from memory.services.query import MsgTextQuery, get_vector
 from memory.utils.msg_util import get_json_result_from_llm_response
 from memory.utils.prompt_util import PromptAssembler
@@ -49,7 +52,7 @@ from memory.utils.prompt_util import PromptAssembler
 logger = logging.getLogger("multirag.memory_message_service")
 
 
-async def save_to_memory(db: Session, memory_id: str, message_dict: dict):
+async def save_to_memory(db: Session, memory_id: str, message_dict: dict[str, Any]) -> tuple[bool, str]:
     """
     Save user input and agent response to memory.
 
@@ -66,11 +69,20 @@ async def save_to_memory(db: Session, memory_id: str, message_dict: dict):
     Returns:
         Tuple of (success, message)
     """
+    from api.db.joint_services.memory_write_runtime import save_input, supports_coordinated_writes
+
+    if supports_coordinated_writes():
+        return await save_input(memory_id, message_dict)
     memory = MemoryService.get_by_memory_id(db, memory_id)
     if not memory:
         return False, f"Memory '{memory_id}' not found."
 
     tenant_id = memory.tenant_id
+    try:
+        await finish_owned_work(asyncio.to_thread(assert_legacy_write_allowed, tenant_id, memory_id))
+    except RevisionConflict:
+        return False, "Managed memory requires coordinated writes; legacy append is disabled."
+    conversation_time = timestamp_to_date(current_timestamp())
     extracted_content = (
         await extract_by_llm(
             db,
@@ -81,6 +93,7 @@ async def save_to_memory(db: Session, memory_id: str, message_dict: dict):
             get_memory_type_human(memory.memory_type),
             message_dict.get("user_input", ""),
             message_dict.get("agent_response", ""),
+            conversation_time=conversation_time,
         )
         if memory.memory_type != MemoryType.RAW.value
         else []
@@ -97,7 +110,7 @@ async def save_to_memory(db: Session, memory_id: str, message_dict: dict):
             "agent_id": message_dict["agent_id"],
             "session_id": message_dict["session_id"],
             "content": f"User Input: {message_dict.get('user_input')}\nAgent Response: {message_dict.get('agent_response')}",
-            "valid_at": timestamp_to_date(current_timestamp()),
+            "valid_at": conversation_time,
             "invalid_at": None,
             "forget_at": None,
             "status": True,
@@ -123,7 +136,42 @@ async def save_to_memory(db: Session, memory_id: str, message_dict: dict):
     return await embed_and_save(db, memory, message_list)
 
 
-async def save_extracted_to_memory_only(db: Session, memory_id: str, message_dict: dict, source_message_id: int, task_id: str | None = None):
+def _conversation_reference_time(value: object) -> str:
+    """Validate the stored receipt timestamp without inventing a timezone or epoch unit."""
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?", value.strip()):
+        raise ValueError("Source raw message has no valid conversation reference timestamp (valid_at).")
+    try:
+        return datetime.fromisoformat(value.strip()).isoformat(sep=" ")
+    except ValueError as exc:
+        raise ValueError("Source raw message has an invalid conversation reference timestamp (valid_at).") from exc
+
+
+def _raw_conversation_reference(memory_id: str, message_dict: dict[str, Any], source_message_id: int, raw_message: dict[str, Any] | None) -> tuple[str, str]:
+    """Bind the extraction input and its reference time to one persisted RAW record."""
+    if not raw_message:
+        raise ValueError("Source raw message was not found.")
+    raw_parent = raw_message.get("source_id")
+    valid_raw_parent = "source_id" in raw_message and (raw_parent is None or (type(raw_parent) is int and raw_parent == 0) or (isinstance(raw_parent, str) and raw_parent in ("", "0")))
+    identities = ((field, message_dict.get(field, "") if field == "user_id" else message_dict.get(field)) for field in ("user_id", "agent_id", "session_id"))
+    if (
+        isinstance(source_message_id, bool)
+        or source_message_id <= 0
+        or str(raw_message.get("message_id")) != str(source_message_id)
+        or raw_message.get("memory_id") != memory_id
+        or raw_message.get("message_type") != MemoryType.RAW.name.lower()
+        or not valid_raw_parent
+        or any(not isinstance(expected, str) or not isinstance(raw_message.get(field), str) or raw_message[field] != expected for field, expected in identities)
+    ):
+        raise ValueError("Source raw message does not match the memory task.")
+    content = raw_message.get("content")
+    if not isinstance(content, str) or not content:
+        raise ValueError("Source raw message has no conversation content.")
+    return content, _conversation_reference_time(raw_message.get("valid_at"))
+
+
+async def save_extracted_to_memory_only(db: Session, memory_id: str, message_dict: dict[str, Any], source_message_id: int, task_id: str | None = None) -> tuple[bool, str]:
     """
     Save only extracted messages to memory (for task processing).
 
@@ -137,6 +185,13 @@ async def save_extracted_to_memory_only(db: Session, memory_id: str, message_dic
     Returns:
         Tuple of (success, message)
     """
+    from api.db.joint_services.memory_write_runtime import handle_coordinated_task, supports_coordinated_writes
+
+    if supports_coordinated_writes():
+        if task_id is None:
+            return False, "Coordinated extraction requires a persisted task."
+        completed = await handle_coordinated_task({"id": task_id, "memory_id": memory_id, "source_id": source_message_id}, trusted_internal=True)
+        return completed, "Memory extraction is recorded by its stable task operation."
     memory = MemoryService.get_by_memory_id(db, memory_id)
     if not memory:
         msg = f"Memory '{memory_id}' not found."
@@ -151,6 +206,21 @@ async def save_extracted_to_memory_only(db: Session, memory_id: str, message_dic
         return True, msg
 
     tenant_id = memory.tenant_id
+    try:
+        await finish_owned_work(asyncio.to_thread(assert_legacy_write_allowed, tenant_id, memory_id))
+    except RevisionConflict:
+        return False, "Managed memory requires coordinated writes; legacy extraction is disabled."
+    if not isinstance(source_message_id, int) or isinstance(source_message_id, bool) or source_message_id <= 0:
+        return False, "Source raw message does not match the memory task."
+    try:
+        raw_messages = await asyncio.to_thread(MessageService.get_source_messages, tenant_id, memory_id, [source_message_id])
+    except SourceMessageBindingError:
+        return False, "Source raw message does not match the memory task."
+    raw_message = raw_messages.get(source_message_id)
+    try:
+        conversation_content, conversation_time = _raw_conversation_reference(memory_id, message_dict, source_message_id, raw_message)
+    except ValueError as exc:
+        return False, str(exc)
     extracted_content = await extract_by_llm(
         db,
         tenant_id,
@@ -161,6 +231,8 @@ async def save_extracted_to_memory_only(db: Session, memory_id: str, message_dic
         message_dict.get("user_input", ""),
         message_dict.get("agent_response", ""),
         task_id=task_id,
+        conversation_time=conversation_time,
+        conversation_content=conversation_content,
     )
     message_list = [
         {
@@ -196,28 +268,33 @@ async def extract_by_llm(
     tenant_id: str,
     llm_id: str,
     tenant_llm_id: int | None,
-    extract_conf: dict,
+    extract_conf: dict[str, Any],
     memory_type: list[str],
     user_input: str,
     agent_response: str,
     system_prompt: str = "",
     user_prompt: str = "",
     task_id: str | None = None,
-) -> list[dict]:
+    *,
+    conversation_time: str | None = None,
+    conversation_content: str | None = None,
+) -> list[dict[str, Any]]:
+    if conversation_time is not None:
+        conversation_time = _conversation_reference_time(conversation_time)
     model_types = resolve_model_type(db, tenant_id, llm_id)
     llm_type = "chat" if "chat" in model_types else model_types[0]
     if not llm_type:
         raise RuntimeError(f"Unknown type of LLM '{llm_id}'")
     if not system_prompt:
         system_prompt = PromptAssembler.assemble_system_prompt({"memory_type": memory_type})
-    conversation_content = f"User Input: {user_input}\nAgent Response: {agent_response}"
-    conversation_time = timestamp_to_date(current_timestamp())
+    if conversation_content is None:
+        conversation_content = f"User Input: {user_input}\nAgent Response: {agent_response}"
     user_prompts = []
     if user_prompt:
         user_prompts.append({"role": "user", "content": user_prompt})
-        user_prompts.append({"role": "user", "content": f"Conversation: {conversation_content}\nConversation Time: {conversation_time}\nCurrent Time: {conversation_time}"})
+        user_prompts.append({"role": "user", "content": PromptAssembler.assemble_user_prompt(conversation_content, conversation_time)})
     else:
-        user_prompts.append({"role": "user", "content": PromptAssembler.assemble_user_prompt(conversation_content, conversation_time, conversation_time)})
+        user_prompts.append({"role": "user", "content": PromptAssembler.assemble_user_prompt(conversation_content, conversation_time)})
     if tenant_llm_id:
         llm_config = get_model_config_by_id(db, tenant_llm_id, tenant_id=tenant_id, model_type="chat")
     else:
@@ -256,6 +333,11 @@ def _embed_and_save_messages(embedding_model: LLMBundle, memory: Memory, message
     不触碰关系型 DB（用量记账自开短连接）；进度上报经 report 回调注入——任务轨携带
     db+task_id，请求轨为 no-op。因而异步轨可将其整体放进工作线程执行。
     """
+    try:
+        assert_legacy_write_allowed(memory.tenant_id, memory.id)
+    except RevisionConflict:
+        report(-1, "Managed memory requires coordinated writes; legacy append and FIFO are disabled.")
+        return False, "Managed memory requires coordinated writes; legacy append and FIFO are disabled."
     report(0.65, "Prepared embedding model.")
     vector_list, _ = embedding_model.encode([msg["content"] for msg in message_list])
     for idx, msg in enumerate(message_list):
@@ -381,8 +463,17 @@ def init_message_id_sequence(db: Session):
         logging.info(f"Init message_id sequence done, current max id is {max_id}.")
 
 
-def get_memory_size_cache(uid: str, memory_id: str):
+def get_memory_size_cache(uid: str, memory_id: str) -> int:
     """Get memory size from cache or calculate it."""
+    from api.db.joint_services.memory_write_runtime import supports_coordinated_writes
+    from memory.revisions.storage import ManagedMessageStore
+
+    if supports_coordinated_writes():
+        # The ingestion ledger owns reservations; legacy cache values are not an
+        # authority for model changes or the displayed physical occupancy.
+        memory_size = sum(MessageService.calculate_message_size(row) for row in ManagedMessageStore(uid, memory_id)._inventory())
+        set_memory_size_cache(memory_id, memory_size)
+        return memory_size
     redis_key = f"memory_{memory_id}"
     if REDIS_CONN.exist(redis_key):
         return int(REDIS_CONN.get(redis_key))
@@ -454,6 +545,9 @@ async def queue_save_to_memory_task(
     message_dict: dict,
     *,
     run_context: RunContext | None = None,
+    actor_id: str | None = None,
+    operation_id: str | None = None,
+    operation_results: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, str]:
     """
     Queue save to memory tasks.
@@ -471,6 +565,11 @@ async def queue_save_to_memory_task(
     Returns:
         Tuple of (success, message)
     """
+
+    from api.db.joint_services.memory_write_runtime import queue_messages, supports_coordinated_writes
+
+    if supports_coordinated_writes():
+        return await queue_messages(db, memory_ids, message_dict, actor_id=actor_id, operation_id=operation_id, run_context=run_context, operation_results=operation_results)
 
     def new_task(_memory_id: str, _source_id: int) -> dict[str, Any]:
         return {"id": get_uuid(), "doc_id": _memory_id, "task_type": "memory", "progress": 0.0, "begin_at": datetime.now(), "digest": str(_source_id)}
@@ -498,6 +597,12 @@ async def queue_save_to_memory_task(
         )
         if not memory:
             not_found_memory.append(memory_id)
+            continue
+
+        try:
+            await finish_owned_work(asyncio.to_thread(assert_legacy_write_allowed, memory.tenant_id, memory.id))
+        except RevisionConflict:
+            failed_memory.append({"memory_id": memory_id, "fail_msg": "Managed memory requires coordinated writes; legacy append is disabled."})
             continue
 
         raw_message_id = await asyncio.to_thread(REDIS_CONN.generate_auto_increment_id, namespace="memory")
@@ -576,6 +681,11 @@ async def handle_save_to_memory_task(db: Session, task_param: dict) -> tuple[boo
     Returns:
         Tuple of (success, message)
     """
+    from api.db.joint_services.memory_write_runtime import handle_coordinated_task, supports_coordinated_writes
+
+    if supports_coordinated_writes():
+        completed = await handle_coordinated_task(task_param)
+        return completed, "Memory extraction is recorded by its stable task operation."
     task = TaskService.get_by_id(db, task_param["id"])
     if not task:
         return False, f"Task {task_param['id']} is not found."

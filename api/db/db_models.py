@@ -1,9 +1,7 @@
 import functools
 import hashlib
-import inspect
 import logging
 import os
-import sys
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -4540,7 +4538,7 @@ def ensure_skill_deferred_constraints(bind: Any) -> None:
                 bind.execute(sa.schema.AddConstraint(constraint))
 
 
-def models_in_fk_creation_order() -> list[type[BaseModel]]:
+def models_in_fk_creation_order() -> list[type[Base]]:
     """按外键拓扑序返回全部映射模型类——父表一定排在引用它的子表之前。
 
     `init_database_tables` 是逐张 `Table.create()` 建表，而 `inspect.getmembers`
@@ -4554,8 +4552,7 @@ def models_in_fk_creation_order() -> list[type[BaseModel]]:
     `metadata.sorted_tables` 是 SQLAlchemy 依据外键算出的拓扑序，用它排序即可
     一次修好，也自动覆盖以后任何新增的带外键模型。
     """
-    members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
-    models = [obj for _, obj in members if obj is not BaseModel and issubclass(obj, BaseModel)]
+    models = [mapper.class_ for mapper in Base.registry.mappers]
     creation_order = {table: index for index, table in enumerate(Base.metadata.sorted_tables)}
     # 未映射到具体 Table 的（抽象基类等）排到末尾，保持原有的宽松行为
     return sorted(models, key=lambda model: creation_order.get(getattr(model, "__table__", None), len(creation_order)))
@@ -4629,7 +4626,7 @@ def init_database_tables() -> str:
     return "Success"
 
 
-def upgrade_database_tables(is_fresh_install: bool = False):
+def upgrade_database_tables(is_fresh_install: bool = False) -> str:
     logging.info("开始执行数据库结构升级...")
 
     # 获取项目根目录
@@ -4662,23 +4659,24 @@ def upgrade_database_tables(is_fresh_install: bool = False):
 
             # 获取当前数据库版本
             context = MigrationContext.configure(connection, opts={"version_table_schema": schema_name})
-            current_rev = context.get_current_revision()
+            current_revisions = context.get_current_heads()
 
             # 获取最新迁移版本
             script_directory = ScriptDirectory.from_config(alembic_cfg)
             head_rev = script_directory.get_current_head()
+            target_revisions = (head_rev,) if head_rev is not None else ()
 
-            if current_rev == head_rev:
-                logging.info(f"数据库已经是最新版本: {current_rev}")
+            if current_revisions == target_revisions:
+                logging.info(f"数据库已经是最新版本: {head_rev}")
                 return "数据库已经是最新版本"
 
-            logging.info(f"当前数据库版本: {current_rev or '无版本'}")
+            logging.info(f"当前数据库版本: {', '.join(current_revisions) or '无版本'}")
             logging.info(f"目标数据库版本: {head_rev or '无版本'}")
 
             # 全新环境：表刚由 init_web_db() 按最新 db_models.py 创建，
             # 无需跑历史迁移（历史迁移只针对老环境做列/重命名补丁），
             # 直接 stamp 到 head 即可。
-            if current_rev is None and is_fresh_install:
+            if not current_revisions and is_fresh_install:
                 logging.info("检测到全新环境，跳过历史迁移，直接 stamp 到最新版本...")
                 command.stamp(alembic_cfg, "head")
                 logging.info(f"全新环境已 stamp 到最新版本: {head_rev}")
@@ -4739,6 +4737,17 @@ def with_retry(max_retries=3, retry_delay=1.0):
         return wrapper
 
     return decorator
+
+
+# Extension tables share this metadata without expanding the legacy model file.
+# Importing the module (rather than its classes) also permits its Base import.
+from api.db import memory_compaction_models as _memory_compaction_models  # noqa: F401
+from api.db import memory_execution_models as _memory_execution_models  # noqa: F401
+from api.db import memory_incremental_models as _memory_incremental_models  # noqa: F401
+from api.db import memory_maintenance_models as _memory_maintenance_models  # noqa: F401
+from api.db import memory_revision_models as _memory_revision_models  # noqa: F401
+from api.db import memory_verification_models as _memory_verification_models  # noqa: F401
+from api.db import memory_writer_models as _memory_writer_models  # noqa: F401
 
 
 class PostgreSQLDatabaseLock:

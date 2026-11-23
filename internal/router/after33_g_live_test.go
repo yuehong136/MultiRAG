@@ -54,9 +54,13 @@ func TestAfter33GManagementHTTPAndSQL(t *testing.T) {
 		t.Fatal("owned TCP SQL required")
 	}
 	j := testsupport.NewCase(t)
-	cfg := filepath.Join(os.Getenv("TMPDIR"), "after33-g.yaml")
+	cfg := filepath.Join(t.TempDir(), "after33-g.yaml")
 	j.Event("reserve-config", map[string]any{"path": cfg})
-	if os.WriteFile(cfg, []byte("multirag:\n  secret_key: after33-g-owned-secret-32-characters\n"), 0600) != nil {
+	signingKey, err := utility.GenerateSecretKey()
+	if err != nil {
+		t.Fatal("generate test signing key")
+	}
+	if os.WriteFile(cfg, []byte(fmt.Sprintf("multirag:\n  secret_key: %q\n", signingKey)), 0600) != nil {
 		t.Fatal("config write")
 	}
 	if err := server.FromConfigFile(cfg); err != nil {
@@ -256,7 +260,7 @@ func TestAfter33GManagementHTTPAndSQL(t *testing.T) {
 		body := fmt.Sprintf(`{"api_key":"secret-key","region":"default","base_url":%q}`, base)
 		for _, test := range []struct{ user, body string }{{"", body}, {"member", body}, {"revoked", body}, {"owner", `{"api_key":"secret-key","region":"missing"}`}, {"owner", `{"api_key":null}`}, {"owner", `{"api_key":"a","api_key":"b"}`}, {"owner", `{"api_key":"a","extra":true}`}, {"owner", `{"api_key":"secret-key","region":false}`}, {"owner", `{"api_key":"secret-key","base_url":"http://user:pass@example.invalid"}`}} {
 			count := calls.Load()
-			p, _ := request("GET", "/api/v1/providers/OpenAI/connection", test.user, test.body)
+			p, _ := request(http.MethodPost, "/api/v1/providers/OpenAI/connection", test.user, test.body)
 			assertCode(p, false)
 			if calls.Load() != count {
 				t.Fatal("denied request called provider")
@@ -266,16 +270,16 @@ func TestAfter33GManagementHTTPAndSQL(t *testing.T) {
 			}
 		}
 		count := calls.Load()
-		missingKey, _ := request("GET", "/api/v1/providers/vllm/connection", "owner", fmt.Sprintf(`{"region":"default","base_url":%q}`, base))
+		missingKey, _ := request(http.MethodPost, "/api/v1/providers/vllm/connection", "owner", fmt.Sprintf(`{"region":"default","base_url":%q}`, base))
 		if missingKey["code"] != float64(common.CodeArgumentError) || calls.Load() != count || snapshot() != before {
 			t.Fatal("missing local api_key must fail before provider I/O or SQL mutation")
 		}
 
-		p, _ := request("GET", "/api/v1/providers/OpenAI/connection", "owner", body)
+		p, _ := request(http.MethodPost, "/api/v1/providers/OpenAI/connection", "owner", body)
 		assertCode(p, true)
-		p, _ = request("GET", "/api/v1/providers/OpenAI/connection", "owner", strings.Replace(body, "secret-key", "secret-fail", 1))
+		p, _ = request(http.MethodPost, "/api/v1/providers/OpenAI/connection", "owner", strings.Replace(body, "secret-key", "secret-fail", 1))
 		assertCode(p, false)
-		p, _ = request("GET", "/api/v1/providers/LM-Studio/connection", "owner", fmt.Sprintf(`{"api_key":"","base_url":%q}`, base))
+		p, _ = request(http.MethodPost, "/api/v1/providers/LM-Studio/connection", "owner", fmt.Sprintf(`{"api_key":"","base_url":%q}`, base))
 		assertCode(p, true)
 		if snapshot() != before {
 			t.Fatal("provider check persisted data")
@@ -286,7 +290,7 @@ func TestAfter33GManagementHTTPAndSQL(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		body := fmt.Sprintf(`{"api_key":"secret-slow","base_url":%q}`, provider.URL+"/v1")
-		req, _ := http.NewRequestWithContext(ctx, "GET", api.URL+"/api/v1/providers/OpenAI/connection", strings.NewReader(body))
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, api.URL+"/api/v1/providers/OpenAI/connection", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+tokens["owner"])
 		req.Header.Set("Content-Type", "application/json")
 		done := make(chan error, 1)
@@ -475,7 +479,7 @@ func TestAfter33GManagementHTTPAndSQL(t *testing.T) {
 		before := snapshot()
 		count := calls.Load()
 		for _, test := range []struct{ method, path, body string }{
-			{"GET", "/api/v1/providers/OpenAI/connection", fmt.Sprintf(`{"api_key":"secret-key","base_url":%q}`, provider.URL+"/v1")},
+			{http.MethodPost, "/api/v1/providers/OpenAI/connection", fmt.Sprintf(`{"api_key":"secret-key","base_url":%q}`, provider.URL+"/v1")},
 			{"GET", metadataPath, ""}, {"PUT", metadataPath, `{"enabled":true}`},
 			{"PUT", "/api/v1/mcp/servers/one", `{"name":"disabled"}`},
 			{"PATCH", "/api/v1/connectors/owned", `{"refresh_freq":7}`},

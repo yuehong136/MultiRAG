@@ -94,7 +94,7 @@ func TestAfter53GHTTPAndSQL(t *testing.T) {
 	}
 	cfgPath := filepath.Join(os.Getenv("TMPDIR"), "after53-g.yaml")
 	j.Event("reserve-config", map[string]any{"path": cfgPath})
-	if err := os.WriteFile(cfgPath, []byte("multirag:\n  secret_key: after53-g-owned-jwt-key-32-characters\n"), 0600); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("multirag:\n  secret_key: "+strings.Repeat("t", 37)+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := server.FromConfigFile(cfgPath); err != nil {

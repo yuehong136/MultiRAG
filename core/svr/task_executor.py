@@ -27,13 +27,16 @@ from typing import Any
 import numpy as np
 import xxhash
 from pymilvus import DataType
+from sqlalchemy import select
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import NoResultFound
 
-from api.db.db_models import db_connection
+from api.db.db_models import Memory, Task, db_connection
 from api.db.joint_services.memory_message_service import handle_save_to_memory_task, memory_for_task
+from api.db.joint_services.memory_write_runtime import MemoryTaskPending, handle_coordinated_task, supports_coordinated_writes
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, rebind_model_config
+from api.db.memory_writer_models import MemoryWriterAdmission
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import finish_status_write, insert_source_chunks
@@ -175,6 +178,17 @@ TASK_TYPE_TO_PIPELINE_TASK_TYPE = {
 }
 
 UNACKED_ITERATOR = None
+_MEMORY_RETRY_PENDING = False
+
+
+class _MemoryTaskTimer(executor_metrics.TaskTimer):
+    """Pending memory publication is neither completed nor failed work."""
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: object) -> None:
+        if exc_type is not None and issubclass(exc_type, MemoryTaskPending):
+            return
+        super().__exit__(exc_type, exc, tb)
+
 
 CONSUMER_NO = "0"
 CONSUMER_NAME = "task_executor_" + CONSUMER_NO
@@ -288,7 +302,13 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
 
 async def collect(db: Session) -> tuple[Any, Any]:
     global CONSUMER_NAME, DONE_TASKS, FAILED_TASKS
-    global UNACKED_ITERATOR
+    global UNACKED_ITERATOR, _MEMORY_RETRY_PENDING
+
+    # Revisit deferred work only after other admitted tasks leave this worker.
+    # Rescanning while a document task is active could execute it a second time.
+    if _MEMORY_RETRY_PENDING and not CURRENT_TASKS:
+        UNACKED_ITERATOR = None
+        _MEMORY_RETRY_PENDING = False
 
     svr_queue_names = settings.get_svr_queue_names()
     redis_msg = None
@@ -443,7 +463,8 @@ async def collect(db: Session) -> tuple[Any, Any]:
                 else:
                     FAILED_TASKS += 1
                 return None, None
-            if await asyncio.to_thread(_memory_task_has_extracted_messages, memory.tenant_id, memory.id, msg["source_id"]):
+            coordinated = supports_coordinated_writes() and _memory_task_has_writer_admission(db, task_obj, memory, msg["source_id"])
+            if not coordinated and await asyncio.to_thread(_memory_task_has_extracted_messages, memory.tenant_id, memory.id, msg["source_id"]):
                 # Message storage and SQL are not one transaction. An older
                 # attempt may have saved some/all derived messages before its
                 # SQL commit failed. Do not extract again or call it complete.
@@ -480,6 +501,29 @@ async def collect(db: Session) -> tuple[Any, Any]:
         task["source_id"] = msg["source_id"]
         task["message_dict"] = msg["message_dict"]
     return redis_msg, task
+
+
+def _memory_task_has_writer_admission(db: Session, task: Task, memory: Memory, source_id: int) -> bool:
+    """Only the persisted extraction identity may replay its fixed publication plan."""
+    with db.no_autoflush:
+        row = db.scalar(
+            select(MemoryWriterAdmission).where(
+                MemoryWriterAdmission.memory_id == memory.id,
+                MemoryWriterAdmission.tenant_id == memory.tenant_id,
+                MemoryWriterAdmission.task_id == task.id,
+                MemoryWriterAdmission.operation_id == task.id,
+                MemoryWriterAdmission.kind == "extract",
+                MemoryWriterAdmission.source_message_id == source_id,
+            )
+        )
+    return (
+        isinstance(row, MemoryWriterAdmission)
+        and row.kind == "extract"
+        and row.task_id == row.operation_id == task.id
+        and row.memory_id == memory.id
+        and row.tenant_id == memory.tenant_id
+        and row.source_message_id == source_id
+    )
 
 
 def _memory_task_has_extracted_messages(tenant_id: str, memory_id: str, source_id: int) -> bool:
@@ -2756,6 +2800,13 @@ async def do_handle_task(db: Session, task: Any) -> None:
     task_type = task.get("task_type", "")
 
     if task_type == "memory":
+        if supports_coordinated_writes():
+            if db.new or db.dirty or db.deleted:
+                raise RuntimeError("Coordinated memory work requires a session without pending changes")
+            if db.in_transaction():
+                db.rollback()
+            if await handle_coordinated_task(task):
+                return
         await handle_save_to_memory_task(db, task)
         return
 
@@ -3053,7 +3104,7 @@ async def do_handle_task(db: Session, task: Any) -> None:
 
 async def handle_task() -> None:
 
-    global DONE_TASKS, FAILED_TASKS
+    global DONE_TASKS, FAILED_TASKS, _MEMORY_RETRY_PENDING
     with db_connection() as db:
         task_dict = None  # 确保变量初始化
         try:
@@ -3066,6 +3117,7 @@ async def handle_task() -> None:
             pipeline_task_type = TASK_TYPE_TO_PIPELINE_TASK_TYPE.get(task_type, PipelineTaskType.PARSE) or PipelineTaskType.PARSE
 
             task_id = task["id"]
+            acknowledge = True
             # 日志上下文（§8-3）：task_id 充当 request_id，本任务全部日志可按其聚合
             bind_log_context(request_id=str(task_id), tenant_id=str(task.get("tenant_id") or ""), doc_id=str(task.get("doc_id") or ""))
             try:
@@ -3104,7 +3156,7 @@ async def handle_task() -> None:
                         pass
 
                 CURRENT_TASKS[task["id"]] = task_for_tracking
-                with executor_metrics.TaskTimer(task_type, task.get("parser_id")):
+                with _MemoryTaskTimer(task_type, task.get("parser_id")):
                     await do_handle_task(db, task)
                 DONE_TASKS += 1
                 CURRENT_TASKS.pop(task_id, None)
@@ -3116,6 +3168,10 @@ async def handle_task() -> None:
                 DONE_TASKS += 1
                 CURRENT_TASKS.pop(task_id, None)
                 logging.info(f"handle_task canceled for task {task_id}: {getattr(e, 'msg', str(e))}")
+            except MemoryTaskPending as e:
+                acknowledge = e.acknowledge
+                _MEMORY_RETRY_PENDING = _MEMORY_RETRY_PENDING or not acknowledge
+                logging.warning("Memory task %s remains pending at operation %s: %s (acknowledge=%s)", task_id, e.operation_id, e.code, acknowledge)
             except Exception as e:
                 FAILED_TASKS += 1
                 CURRENT_TASKS.pop(task_id, None)
@@ -3136,6 +3192,7 @@ async def handle_task() -> None:
                 logging.exception(f"handle_task got exception for task {json.dumps(task_error_dict, default=str)}")
 
             finally:
+                CURRENT_TASKS.pop(task_id, None)
                 # Expiring ownership is shared by Python and Go. Preserve a
                 # cancel_requested state; only active attempts become terminal.
                 await asyncio.to_thread(finish_runtime, task_id)
@@ -3155,10 +3212,11 @@ async def handle_task() -> None:
                 clear_log_context()
 
             if task_type == PipelineTaskType.MEMORY.lower():
-                # Keep a failed SQL commit retryable after an independent
-                # message-store write. The replay guard above reconciles it.
+                # A failed legacy SQL commit must leave the queue message unacked.
+                # Coordinated work persists its operation in its own async session.
                 db.commit()
-            redis_msg.ack()
+            if acknowledge:
+                redis_msg.ack()
         except Exception:
             logging.exception("Error in main loop")
             db.rollback()  # 回滚事务

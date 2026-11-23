@@ -112,9 +112,18 @@ def main(argv: list[str] | None = None) -> int:
     exit_code = 125
     cancelled: int | None = None
     previous: dict[signal.Signals, Any] = {}
+    recording_process = False
+    deferred_signal: int | None = None
 
     def cancel(signum: int, _frame: FrameType | None) -> None:
-        raise Cancelled(signum)
+        nonlocal deferred_signal
+        if recording_process:
+            # Another unmasked thread can reach CPython's signal handler while
+            # Popen has started the child but has not yet returned its handle.
+            if deferred_signal is None:
+                deferred_signal = signum
+            return
+        raise Cancelled(deferred_signal if deferred_signal is not None else signum)
 
     try:
         journal.event(
@@ -172,14 +181,20 @@ def main(argv: list[str] | None = None) -> int:
             env["TRANSFORMERS_OFFLINE"] = "1"
         journal.event("reserve-process", run_id=run_id, parent_pid=os.getpid(), session="new session, pgid=child pid", output=str(root / (run_id + ".output")))
         with (root / (run_id + ".output")).open("xb") as output:
+            recording_process = True
             blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
             try:
+                if deferred_signal is not None:
+                    raise Cancelled(deferred_signal)
                 process = subprocess.Popen(
                     [sys.executable, str(Path(__file__).resolve()), "--child", str(journal_path), *command], env=env, stdout=output, stderr=subprocess.STDOUT, start_new_session=True
                 )
+                journal.event("spawned", run_id=run_id, pid=process.pid, pgid=process.pid)
             finally:
                 signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
-            journal.event("spawned", run_id=run_id, pid=process.pid, pgid=process.pid)
+                recording_process = False
+            if deferred_signal is not None:
+                raise Cancelled(deferred_signal)
             raw_exit = process.wait()
             exit_code = raw_exit if raw_exit >= 0 else 128 - raw_exit
     except Cancelled as exc:

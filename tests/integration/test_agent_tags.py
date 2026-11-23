@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 import sqlalchemy as sa
 from alembic import command
-from alembic.script import ScriptDirectory
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Tenant, UserTenant
@@ -145,9 +144,9 @@ def test_existing_row_migration_and_fresh_schema(tmp_path: Path) -> None:
             cfg = _alembic_config()
             cfg.attributes["connection"] = conn
             command.stamp(cfg, "e7a9b1c3d5f0")
-            command.upgrade(cfg, "head")
+            command.upgrade(cfg, "f1a3c5e7b9d0")
         with engine.connect() as reader:
             assert reader.scalar(sa.text("SELECT tags FROM usr_ai.t_ai_user_canvases WHERE id=:id"), {"id": agent_id}) == ""
-            assert reader.scalar(sa.text("SELECT version_num FROM usr_ai.alembic_version")) == ScriptDirectory.from_config(_alembic_config()).get_current_head()
+            assert reader.scalar(sa.text("SELECT version_num FROM usr_ai.alembic_version")) == "f1a3c5e7b9d0"
         index = next(index for index in sa.inspect(engine).get_indexes("t_ai_user_canvases", schema="usr_ai") if index["name"] == "ix_usr_ai_t_ai_user_canvases_tags")
         assert index["column_names"] == ["tags"]

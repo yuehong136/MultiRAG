@@ -14,6 +14,7 @@ from agent.canvas import Canvas
 from agent.tools import retrieval as module
 from agent.tools.retrieval import Retrieval
 from api.db.db_models import Knowledgebase
+from core.nlp.search import Dealer
 from tests.support.dataset_access_permissions import permission_rows as permission_rows
 
 
@@ -101,8 +102,19 @@ async def test_workflow_retrieval_preserves_limit_weight_and_sql_scope(
         assert args[6:9] == (3, 0.2, 1 - keyword_weight)
         assert options["top"] == top_k
         assert options["kb_ids"] == [ids["private"]]
-        assert options["doc_ids"] == []
+        assert options["doc_ids"] is None
         with Session(bootstrapped_engine) as db:
             assert list(db.execute(sa.select(Knowledgebase.__table__).where(Knowledgebase.tenant_id == ids["tenant"]))) == before
     finally:
         canvas._thread_pool.shutdown(wait=True)
+
+
+async def test_explicit_empty_document_scope_never_calls_model_or_store() -> None:
+    class NoIO:
+        def __getattr__(self, name: str) -> Any:
+            pytest.fail(f"Explicit empty document selection performed IO: {name}")
+
+    dealer = object.__new__(Dealer)
+    dealer.dataStore = NoIO()
+    result = await dealer.retrieval("exact recall", None, NoIO(), ["tenant"], ["dataset"], 1, 3, doc_ids=[], kb_ids=["kb"])
+    assert result == {"total": 0, "chunks": [], "doc_aggs": []}

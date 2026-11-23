@@ -14,9 +14,9 @@ from azure.storage.blob import ContainerClient
 from common.data_source import azure_blob_connector as azure
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError
 from common.data_source.interfaces import CheckpointOutputWrapper
-from tests.support.azure_blob_source_transport import BlobSourceTransport, BlobVersion
+from tests.support.azure_blob_source_transport import ACCOUNT_KEY_FIXTURE, BlobSourceTransport, BlobVersion
 
-ACCOUNT_KEY = "Y29udHJvbGxlZC1rZXk="
+ACCOUNT_KEY = ACCOUNT_KEY_FIXTURE
 SECRET = "synthetic-sas-secret"
 
 

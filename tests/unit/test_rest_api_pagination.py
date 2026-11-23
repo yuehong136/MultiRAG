@@ -93,9 +93,9 @@ def test_invalid_query_stops_before_handler(client: TestClient, monkeypatch: pyt
 
 
 def test_retrieval_body_page_size_is_strict(client: TestClient) -> None:
-    from api.utils.api_utils import token_required
+    from api.utils.api_utils import async_current_user, current_user
 
-    client.app.dependency_overrides[token_required] = lambda: "tenant-unit"
+    client.app.dependency_overrides[current_user] = client.app.dependency_overrides[async_current_user]
     for value in [0, 101, True, 1.0, "1", None, [], {}]:
         response = client.post("/api/v1/retrieval", json={"question": "q", "dataset_ids": ["kb"], "page_size": value})
         assert response.status_code == 422, (value, response.text)

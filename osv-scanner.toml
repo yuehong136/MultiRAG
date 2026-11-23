@@ -19,12 +19,6 @@ ignore = true
 reason = "2.6.0 锁定：升级归依赖现代化批次 3（transformers/torch 同批），多数告警为 torch.load 反序列化面且无统一修复版本；模型文件为自管资源非用户可控输入。复查：批次 3 启动时。"
 
 [[PackageOverrides]]
-name = "transformers"
-ecosystem = "PyPI"
-ignore = true
-reason = "4.36.2 锁定：升级需 4.48+，模型加载行为面大需专项验证，归批次 3。复查：批次 3 启动时。"
-
-[[PackageOverrides]]
 name = "litellm"
 ecosystem = "PyPI"
 ignore = true
@@ -47,10 +41,6 @@ reason = "orjson 修复线 3.11.5 被 mistralai==0.4.2 pin <3.11 挡死（别名
 [[IgnoredVulns]]
 id = "GHSA-rgxp-2hwp-jwgg"
 reason = "pyarrow 修复线 23.0.1 被 infinity-sdk pin <23 挡死（别名 PYSEC-2026-113）；CVSS 7.0。复查：infinity-sdk 放开 pin。"
-
-[[IgnoredVulns]]
-id = "GHSA-h35f-9h28-mq5c"
-reason = "setuptools 修复线 83.0.0 被 infinity-sdk pin <81 挡死（别名 PYSEC-2026-3447/CVE-2026-59890，0.7.0 正式版仍未放开）；CVSS 6.1。复查：infinity-sdk 放开 pin。"
 
 # cryptography 三条：修复线 49.0.0 / 50.0.0 全被 agentrun-sdk>=0.0.23 →
 # alibabacloud-tea-openapi 的 cryptography>=3.0.0,<49.0.0 结构性挡死

@@ -146,8 +146,11 @@ def shared_api(shared_database: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_
             storage_calls.append("unexpected object mutation")
             raise AssertionError("Text chunk contract must not mutate object storage")
 
-        monkeypatch.setattr(settings.STORAGE_IMPL, "put", forbidden_storage)
-        monkeypatch.setattr(settings.STORAGE_IMPL, "rm", forbidden_storage)
+        # Restore the original instance dictionary so later copies do not carry
+        # methods bound to the shared client's bucket.
+        storage_attributes = vars(settings.STORAGE_IMPL)
+        monkeypatch.setitem(storage_attributes, "put", forbidden_storage)
+        monkeypatch.setitem(storage_attributes, "rm", forbidden_storage)
 
         class Embedding:
             db = None
@@ -228,9 +231,11 @@ def _request(env: dict[str, Any], method: str, path: str, role: str = "member", 
 def test_shared_chunk_routes_and_dify_use_owner_with_denial_readback(shared_api: dict[str, Any]) -> None:
     env, ids = shared_api, shared_api["ids"]
     before = _snapshot(env)
+    assert requests.get(env["base"] + "/api/v1/dify/retrieval", timeout=30).status_code == 405
+    assert _snapshot(env) == before
     for headers in [{}, {"Authorization": "Bearer invalid-fixture-key"}]:
         for params in [{}, {"knowledge_id": ids["private"], "query": "probe", "top_k": "invalid", "use_kg": "true"}]:
-            response = requests.get(env["base"] + "/api/v1/dify/retrieval", headers=headers, params=params, timeout=30)
+            response = requests.get(env["base"] + "/api/v1/dify/retrieval/health", headers=headers, params=params, timeout=30)
             assert response.status_code == 200 and response.json() == {"retcode": 0, "retmsg": "success", "data": True}, response.text
             assert _snapshot(env) == before
     collection = f"/api/v1/datasets/{ids['team']}/documents/{ids['doc']}/chunks"
@@ -270,7 +275,7 @@ def test_shared_chunk_routes_and_dify_use_owner_with_denial_readback(shared_api:
             assert response.status_code == 403 and response.json()["error_code"] == 109, response.text
             assert _snapshot(env) == before
     before = _snapshot(env)
-    for headers in [{}, {"Authorization": "Bearer invalid-fixture-key"}, {"Authorization": "Bearer " + env["jwt"]["owner"]}]:
+    for headers in [{}, {"Authorization": "Bearer invalid-fixture-key"}]:
         response = requests.post(env["base"] + "/api/v1/dify/retrieval", headers=headers, json={"knowledge_id": ids["team"], "query": "denied"}, timeout=30)
         assert response.status_code == 403 and response.json()["error_code"] == 403, response.text
     response = _request(env, "POST", "/api/v1/dify/retrieval", mode="tokens", json={"knowledge_id": uuid4().hex, "query": "absent"})
@@ -282,11 +287,12 @@ def test_shared_chunk_routes_and_dify_use_owner_with_denial_readback(shared_api:
         # The retrieval exercise starts from independently verified native data.
         native = env["reader"].search(env["collections"][key], data=[[1.0] * 768], anns_field="q_768_vec", limit=3, consistency_level="Strong")
         assert len(native[0]) == 1
-        response = _request(env, "POST", "/api/v1/dify/retrieval", role=role, mode="tokens", json={"knowledge_id": ids[key], "query": "owner", "retrieval_setting": {"top_k": 3}})
-        assert response.status_code == 200 and response.json()["records"], response.text
-        assert response.json()["records"][0]["metadata"]["document_id"] == ids["private_doc" if key == "private" else "doc"]
+        for mode in ["tokens", "jwt"]:
+            response = _request(env, "POST", "/api/v1/dify/retrieval", role=role, mode=mode, json={"knowledge_id": ids[key], "query": "owner", "retrieval_setting": {"top_k": 3}})
+            assert response.status_code == 200 and response.json()["records"], response.text
+            assert response.json()["records"][0]["metadata"]["document_id"] == ids["private_doc" if key == "private" else "doc"]
         before = _snapshot(env)
-        response = _request(env, "GET", "/api/v1/dify/retrieval", role=role, mode="tokens", params={"knowledge_id": ids[key], "query": "owner", "top_k": "3", "score_threshold": "0"})
+        response = _request(env, "GET", "/api/v1/dify/retrieval/health", role=role, mode="tokens", params={"knowledge_id": ids[key], "query": "owner", "top_k": "3", "score_threshold": "0"})
         assert response.status_code == 200 and response.json() == {"retcode": 0, "retmsg": "success", "data": True}, response.text
         assert _snapshot(env) == before
     # All visibility helper consumers use active membership/status and private creator rules.
@@ -356,11 +362,11 @@ def test_actual_web_member_chunk_client(shared_api: dict[str, Any]) -> None:
         + "const p = {kb_id: process.env.C_KB!, doc_id: process.env.C_DOC!};\n"
         + "const list = await api.listChunks(p); assert.equal(list.total, 1);\n"
         + "await api.setChunk({...p, chunk_id: process.env.C_CHUNK!, content_with_weight: 'web member updated'});\n"
-        + "const item = await api.getChunk({...p, chunk_id: process.env.C_CHUNK!}); assert.equal(item.content_with_weight, 'web member updated');\n"
+        + "const item = (await api.listChunks(p)).chunks.find(row => row.chunk_id === process.env.C_CHUNK!); assert.equal(item?.content_with_weight, 'web member updated');\n"
         + "await api.switchChunks({...p, chunk_ids: [process.env.C_CHUNK!], available_int: 0});\n"
-        + "assert.equal((await api.getChunk({...p, chunk_id: process.env.C_CHUNK!})).available_int, 0);\n"
+        + "assert.equal((await api.listChunks(p)).chunks.find(row => row.chunk_id === process.env.C_CHUNK!)?.available_int, 0);\n"
         + "await api.switchChunks({...p, chunk_ids: [process.env.C_CHUNK!], available_int: 1});\n"
-        + "console.log('actual Web member list/update/get/toggle passed');\n"
+        + "console.log('actual Web member list/update/reload/toggle passed');\n"
     )
     execution = subprocess.run(
         [str(tsx_runner(web)), "--tsconfig", str(web / "tsconfig.app.json"), str(script)],

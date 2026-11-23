@@ -9,6 +9,7 @@ from contextlib import ExitStack, asynccontextmanager, contextmanager
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -194,7 +195,7 @@ async def test_canvas_iteration_retrieves_new_metadata_value_each_round(scoped_r
     config = {"method": "manual", "manual": [{"key": "tag", "op": "in", "value": "{IterationItem:outer@item}"}]}
     canvas = _canvas(env, config, iteration=True)
     monkeypatch.setattr(canvas, "is_canceled", lambda: False)
-    monkeypatch.setattr(canvas.get_component_obj("Message:done"), "_save_to_memory", lambda *_: None)
+    monkeypatch.setattr(canvas.get_component_obj("Message:done"), "_save_to_memory", AsyncMock())
     try:
         events = [event async for event in canvas.run()]
         assert not canvas.error

@@ -1,111 +1,78 @@
-import importlib.util
-import sys
-import types
-from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from sqlalchemy.orm import Session
 
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def _load_tenant_utils(monkeypatch, calls, *, responses=None, tags="CHAT"):
-    responses = responses or {}
-
-    class _TenantLLMService:
-        @staticmethod
-        def get_api_key(db, tenant_id, model_name, model_type=None):
-            calls.append((db, tenant_id, model_name, model_type))
-            model_type_value = model_type.value if hasattr(model_type, "value") else model_type
-            if model_type_value in responses:
-                return responses[model_type_value]
-            return types.SimpleNamespace(id=f"{model_type.value}:{model_name}")
-
-    class _LLMService:
-        @staticmethod
-        def query(db, **kwargs):
-            return [types.SimpleNamespace(tags=tags)]
-
-    fake_api = types.ModuleType("api")
-    fake_api_db = types.ModuleType("api.db")
-    fake_api_db_services = types.ModuleType("api.db.services")
-    fake_llm_service = types.ModuleType("api.db.services.llm_service")
-    fake_llm_service.LLMService = _LLMService
-    fake_tenant_llm_service = types.ModuleType("api.db.services.tenant_llm_service")
-    fake_tenant_llm_service.TenantLLMService = _TenantLLMService
-
-    for name, module in {
-        "api": fake_api,
-        "api.db": fake_api_db,
-        "api.db.services": fake_api_db_services,
-        "api.db.services.llm_service": fake_llm_service,
-        "api.db.services.tenant_llm_service": fake_tenant_llm_service,
-    }.items():
-        monkeypatch.setitem(sys.modules, name, module)
-
-    spec = importlib.util.spec_from_file_location(
-        "tenant_utils_subject",
-        ROOT / "api/utils/tenant_utils.py",
-    )
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+from api.utils import tenant_utils
+from common.constants import LLMType
 
 
-def test_ensure_tenant_model_id_passes_expected_model_type(monkeypatch):
-    calls = []
-    module = _load_tenant_utils(monkeypatch, calls)
+def _patch_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: list[tuple[Session, str, str, LLMType | None]],
+    *,
+    responses: dict[str | None, SimpleNamespace | None] | None = None,
+    tags: str = "CHAT",
+) -> None:
+    def get_api_key(_cls: type, db: Session, tenant_id: str, model_name: str, model_type: LLMType | None = None) -> SimpleNamespace | None:
+        calls.append((db, tenant_id, model_name, model_type))
+        value = model_type.value if model_type is not None else None
+        if responses is not None and value in responses:
+            return responses[value]
+        return SimpleNamespace(id=f"{value}:{model_name}")
 
-    params = module.ensure_tenant_model_id_for_params(
-        db="db",
+    def query(_cls: type, db: Session, **filters: Any) -> list[SimpleNamespace]:
+        return [SimpleNamespace(tags=tags)]
+
+    monkeypatch.setattr(tenant_utils.TenantLLMService, "get_api_key", classmethod(get_api_key))
+    monkeypatch.setattr(tenant_utils.LLMService, "query", classmethod(query))
+
+
+def test_ensure_tenant_model_id_passes_expected_model_type(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
+    calls: list[tuple[Session, str, str, LLMType | None]] = []
+    _patch_lookup(monkeypatch, calls)
+    params = tenant_utils.ensure_tenant_model_id_for_params(
+        db=db,
         tenant_id="tenant-1",
-        param_dict={
-            "llm_id": "same-name",
-            "embd_id": "same-name",
-            "tenant_embd_id": "existing",
-            "rerank_id": "",
-        },
+        param_dict={"llm_id": "same-name", "embd_id": "same-name", "tenant_embd_id": "existing", "rerank_id": ""},
     )
-
     assert params["tenant_llm_id"] == "chat:same-name"
     assert params["tenant_embd_id"] == "existing"
     assert params["tenant_rerank_id"] is None
-    assert calls == [("db", "tenant-1", "same-name", module.LLMType.CHAT)]
+    assert calls == [(db, "tenant-1", "same-name", LLMType.CHAT)]
 
 
-def test_ensure_tenant_model_id_uses_capable_multimodal_chat_fallback(monkeypatch):
-    calls = []
-    fallback = types.SimpleNamespace(id=7, llm_name="gemini-2.5-flash", llm_factory="Gemini")
-    module = _load_tenant_utils(monkeypatch, calls, responses={"chat": None, None: fallback})
-
-    params = module.ensure_tenant_model_id_for_params(
-        db="db",
-        tenant_id="tenant-1",
-        param_dict={"llm_id": "gemini-2.5-flash@Gemini"},
-        strict=True,
-    )
-
+def test_ensure_tenant_model_id_uses_capable_multimodal_chat_fallback(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
+    calls: list[tuple[Session, str, str, LLMType | None]] = []
+    fallback = SimpleNamespace(id=7, llm_name="gemini-2.5-flash", llm_factory="Gemini")
+    _patch_lookup(monkeypatch, calls, responses={"chat": None, None: fallback})
+    params = tenant_utils.ensure_tenant_model_id_for_params(db, "tenant-1", {"llm_id": "gemini-2.5-flash@Gemini"}, strict=True)
     assert params["tenant_llm_id"] == 7
-    assert calls == [
-        ("db", "tenant-1", "gemini-2.5-flash@Gemini", module.LLMType.CHAT),
-        ("db", "tenant-1", "gemini-2.5-flash@Gemini", None),
-    ]
+    assert calls == [(db, "tenant-1", "gemini-2.5-flash@Gemini", LLMType.CHAT), (db, "tenant-1", "gemini-2.5-flash@Gemini", None)]
 
 
-def test_ensure_tenant_model_id_strictly_rejects_incapable_fallback(monkeypatch):
-    calls = []
-    fallback = types.SimpleNamespace(id=7, llm_name="vision-only", llm_factory="Example")
-    module = _load_tenant_utils(
-        monkeypatch,
-        calls,
-        responses={"chat": None, None: fallback},
-        tags="IMAGE2TEXT",
-    )
+def test_ensure_tenant_model_id_strictly_rejects_incapable_fallback(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
+    calls: list[tuple[Session, str, str, LLMType | None]] = []
+    fallback = SimpleNamespace(id=7, llm_name="vision-only", llm_factory="Example")
+    _patch_lookup(monkeypatch, calls, responses={"chat": None, None: fallback}, tags="IMAGE2TEXT")
+    with pytest.raises(tenant_utils.ArgumentException, match=r"vision-only@Example.*chat"):
+        tenant_utils.ensure_tenant_model_id_for_params(db, "tenant-1", {"llm_id": "vision-only@Example"}, strict=True)
 
-    with pytest.raises(module.ArgumentException, match=r"vision-only@Example.*chat"):
-        module.ensure_tenant_model_id_for_params(
-            db="db",
-            tenant_id="tenant-1",
-            param_dict={"llm_id": "vision-only@Example"},
-            strict=True,
-        )
+
+@pytest.mark.parametrize("declared,expected", [("image2text", LLMType.IMAGE2TEXT), ("chat", LLMType.CHAT), ("embedding", LLMType.CHAT), (None, LLMType.CHAT), (["image2text"], LLMType.CHAT)])
+def test_chat_reference_keeps_declared_capability_without_changing_other_roles(monkeypatch: pytest.MonkeyPatch, db: Session, declared: Any, expected: LLMType) -> None:
+    calls: list[tuple[Session, str, str, LLMType | None]] = []
+    _patch_lookup(monkeypatch, calls)
+    params = tenant_utils.ensure_tenant_model_id_for_params(db, "tenant-1", {"llm_id": "17", "llm_setting": {"model_type": declared}, "embd_id": "18", "rerank_id": "19"}, strict=True)
+    assert params["tenant_llm_id"] == f"{expected.value}:17"
+    assert params["tenant_embd_id"] == "embedding:18" and params["tenant_rerank_id"] == "rerank:19"
+    assert calls == [(db, "tenant-1", "17", expected), (db, "tenant-1", "18", LLMType.EMBEDDING), (db, "tenant-1", "19", LLMType.RERANK)]
+
+
+def test_strict_vision_reference_rejects_unavailable_model_without_chat_fallback(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
+    calls: list[tuple[Session, str, str, LLMType | None]] = []
+    _patch_lookup(monkeypatch, calls, responses={"image2text": None, "chat": SimpleNamespace(id=99)})
+    with pytest.raises(tenant_utils.ArgumentException, match=r"17.*image2text"):
+        tenant_utils.ensure_tenant_model_id_for_params(db, "foreign-tenant", {"llm_id": "17", "llm_setting": {"model_type": "image2text"}}, strict=True)
+    assert calls == [(db, "foreign-tenant", "17", LLMType.IMAGE2TEXT)]

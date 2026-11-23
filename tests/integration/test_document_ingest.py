@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -434,7 +435,8 @@ def test_clear_fault_preserves_full_history_and_atomic_ledgers(ingest_api: dict[
     env = ingest_api
     completed(env, env["a"])
     before = snapshot(env)
-    original_delete = settings.docStoreConn.delete
+    native = settings.docStoreConn._get_connection()
+    original_delete = native.delete
     original_commit = Session.commit
     attempts = 0
 
@@ -445,7 +447,7 @@ def test_clear_fault_preserves_full_history_and_atomic_ledgers(ingest_api: dict[
             if fault in {"exception", "restore_failure"}:
                 original_delete(*args, **kwargs)
                 raise RuntimeError("Controlled store deletion failure")
-            return False if fault == "false" else 0
+            return SimpleNamespace(delete_count=False if fault == "false" else 0)
         return original_delete(*args, **kwargs)
 
     def failed_commit(db: Session) -> None:
@@ -473,7 +475,7 @@ def test_clear_fault_preserves_full_history_and_atomic_ledgers(ingest_api: dict[
             scope.setattr(service, "db_connection", connection)
             scope.setattr(Session, "commit", failed_commit)
         else:
-            scope.setattr(settings.docStoreConn, "delete", failed_delete)
+            scope.setattr(native, "delete", failed_delete)
         body = post(env, [env["a"]], delete=True)
     assert body["code"] == 500 and set(body["data"]["results"]) == {env["a"]}
     after = snapshot(env)
@@ -895,7 +897,7 @@ def test_source_batch_failure_restores_full_rows_and_task_ledger(ingest_api: dic
         else:
             scope.setattr(settings.docStoreConn, "insert", insert)
         if fault == "restore_failure":
-            scope.setattr(settings.docStoreConn, "delete", lambda *args, **kwargs: False)
+            scope.setattr(settings.docStoreConn._get_connection(), "delete", lambda *args, **kwargs: SimpleNamespace(delete_count=False))
         with pytest.raises(RuntimeError):
             insert_source_chunks(env["engine"], [replacement], env["collection"], env["kb"], task_id)
     after = snapshot(env)
@@ -1083,7 +1085,6 @@ def test_real_classic_multiple_tasks_partial_queue_and_history_retry(ingest_api:
 
 @pytest.mark.parametrize("enabled", [True, False])
 def test_actual_classic_worker_completes_child_mother_toc_ledgers(ingest_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
-    from types import SimpleNamespace
 
     from core.svr import task_executor as worker
 
@@ -1428,7 +1429,7 @@ def test_actual_bulk_visibility_reconciles_sql_and_commit_compensation(ingest_ap
         for identifier in ids:
             pending.pop(identifier, None)
         refresh(index=env["collection"])
-        return {"deleted": count}
+        return {"deleted": count, "timed_out": False, "failures": [], "version_conflicts": 0}
 
     client = SimpleNamespace(
         bulk=bulk, indices=SimpleNamespace(refresh=refresh, exists=lambda **kwargs: True), search=search_rows, scroll=scroll, clear_scroll=lambda **kwargs: None, delete_by_query=delete_by_query

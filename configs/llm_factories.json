@@ -3091,6 +3091,20 @@
                     "mdl_type": "chat"
                 },
                 {
+                    "llm_name": "Pro/deepseek-ai/DeepSeek-V4-Pro",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "Pro/deepseek-ai/DeepSeek-V4-Flash",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
                     "llm_name": "deepseek-ai/DeepSeek-V4-Flash",
                     "tags": "LLM,CHAT,1M",
                     "max_tokens": 1000000,

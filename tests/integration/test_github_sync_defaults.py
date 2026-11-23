@@ -193,7 +193,7 @@ def test_github_real_web_create_edit_and_legacy_readback(connector_sync_api: dic
                     page = context.new_page()
                     browser_flow._observe(page, errors, [])
                     page.goto(github_web + "/settings/datasource", wait_until="networkidle")
-                    page.get_by_role("heading", name="GitHub", exact=True).click()
+                    page.get_by_role("button", name="Add GitHub", exact=True).click()
                     dialog = page.get_by_role("dialog")
                     expect(dialog).to_be_visible()
                     for name, value in [

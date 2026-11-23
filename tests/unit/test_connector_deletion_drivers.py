@@ -57,7 +57,12 @@ class Source:
 
 @pytest.mark.parametrize(
     "driver_type,constructor",
-    [(sync_module.Airtable, "AirtableConnector"), (sync_module.GoogleDrive, "GoogleDriveConnector"), (sync_module.Gmail, "GmailConnector"), (sync_module.Bitbucket, "BitbucketConnector")],
+    [
+        (sync_module.Airtable, sync_module.AirtableConnector.__name__),
+        (sync_module.GoogleDrive, "GoogleDriveConnector"),
+        (sync_module.Gmail, "GmailConnector"),
+        (sync_module.Bitbucket, "BitbucketConnector"),
+    ],
 )
 @pytest.mark.parametrize("mode", ["incremental", "disabled", "first", "reindex", "content-failure"])
 async def test_real_driver_deletion_gate_and_failed_ingestion(sync_env: dict[str, Any], driver_type: Any, constructor: str, mode: str) -> None:

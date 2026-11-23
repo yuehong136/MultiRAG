@@ -205,6 +205,16 @@ class ServiceManager:
                     if time.monotonic() >= deadline:
                         raise ServiceError(f"Test container {service} is not ready ({type(error).__name__})") from None
                     time.sleep(0.25)
+        if service == "infinity":
+            # SDK fixtures use the environment, while application clients and
+            # subprocess overlays read CONFIGS. Publish only the ready endpoint.
+            uri = os.environ.get("INFINITY_TEST_URI", self.configs[service]["uri"])
+            if "INFINITY_TEST_URI" not in os.environ:
+                self.stack.callback(os.environ.pop, "INFINITY_TEST_URI", None)
+                os.environ["INFINITY_TEST_URI"] = uri
+            if self.configs[service]["uri"] != uri:
+                self.stack.callback(self._restore, service, copy.deepcopy(self.configs[service]))
+                self.configs[service] = dict(self.configs[service], uri=uri)
         self.ready[service] = {"source": source, "version": version, "seconds": round(time.monotonic() - started, 4)}
 
     def _start(self, service: str) -> None:

@@ -56,6 +56,16 @@ def test_cli_session_inventory_and_named_drop_read_back_real_sql(rest_chat_contr
 
     sa.event.listen(Session, "before_flush", reserve_rows)
     try:
+        # Exercise shared rows even when this case runs by itself.
+        existing_chat = ctx.create_chat(name="cli-existing-" + uuid4().hex)
+        existing_response = ctx.request("POST", f"/chats/{existing_chat['id']}/sessions", json={"name": "Existing session"})
+        assert existing_response.status_code == 200, existing_response.text
+        existing_body = existing_response.json()
+        assert existing_body["code"] == 0, existing_body
+        existing_id = existing_body["data"]["id"]
+        baseline = read_sessions()
+        assert baseline[existing_id]["dialog_id"] == existing_chat["id"]
+        record["preexisting_session_ids"] = sorted(baseline)
         chat_name = "cli-pages-" + uuid4().hex
         target_chat = ctx.create_chat(name=chat_name)
         other_owned_chat = ctx.create_chat(name="cli-owned-" + uuid4().hex)
@@ -81,7 +91,10 @@ def test_cli_session_inventory_and_named_drop_read_back_real_sql(rest_chat_contr
         env["record_path"].write_text(json.dumps(env["record"]))
         before = read_sessions()
         assert len(target_ids) == len(set(target_ids)) == 105
-        assert set(before) == {*target_ids, other_owned_id, foreign_id}
+        created_ids = {*target_ids, other_owned_id, foreign_id}
+        assert created_ids.isdisjoint(baseline)
+        assert set(before) == baseline.keys() | created_ids
+        assert {identifier: before[identifier] for identifier in baseline} == baseline
         assert all(before[identifier]["dialog_id"] == target_chat["id"] and before[identifier]["user_id"] == env["owners"][0] for identifier in target_ids)
         assert before[foreign_id]["user_id"] == env["owners"][1]
 
@@ -99,10 +112,24 @@ def test_cli_session_inventory_and_named_drop_read_back_real_sql(rest_chat_contr
         assert ctx.read_session(other_owned_id) == before[other_owned_id]
         assert ctx.read_session(foreign_id) == before[foreign_id]
         assert ctx.provider["calls"] == []
-        record.update(listed_ids=[row["id"] for row in listed], deleted_id=target_id, sql_before=json.loads(json.dumps(before, default=str)), sql_after=json.loads(json.dumps(after, default=str)))
+        record.update(
+            listed_ids=[row["id"] for row in listed],
+            deleted_id=target_id,
+            sql_baseline=json.loads(json.dumps(baseline, default=str)),
+            sql_before=json.loads(json.dumps(before, default=str)),
+            sql_after=json.loads(json.dumps(after, default=str)),
+        )
         env["record_path"].write_text(json.dumps(env["record"], default=str))
         journal.event(
-            "cli-session-consumer-readback", listed_ids=target_ids, deleted_id=target_id, before_count=len(before), after_count=len(after), other_owned_unchanged=True, foreign_unchanged=True
+            "cli-session-consumer-readback",
+            listed_ids=target_ids,
+            deleted_id=target_id,
+            baseline_count=len(baseline),
+            before_count=len(before),
+            after_count=len(after),
+            baseline_unchanged=True,
+            other_owned_unchanged=True,
+            foreign_unchanged=True,
         )
     finally:
         sa.event.remove(Session, "before_flush", reserve_rows)

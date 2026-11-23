@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from common.data_source import azure_blob_connector as azure
 from common.data_source.exceptions import ConnectorValidationError
 from core.svr import sync_data_source as sync
-from tests.support.azure_blob_source_transport import BlobSourceTransport
+from tests.support.azure_blob_source_transport import ACCOUNT_KEY_FIXTURE, BlobSourceTransport
 
 
 async def test_repeated_cancel_drains_get_and_closes_before_return(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -49,7 +49,7 @@ async def test_repeated_cancel_drains_get_and_closes_before_return(monkeypatch: 
     monkeypatch.setattr(sync.DocumentService, "list_doc_headers_by_kb_and_source_type", lambda *args: [])
     monkeypatch.setattr(sync.DocumentService, "list_id_content_hash_map_by_kb_and_source_type", lambda *args: {})
     monkeypatch.setattr(sync.SyncLogsService, "duplicate_and_parse", forbidden)
-    conf = {"auth_mode": "account_key", "prefix": "docs/", "credentials": {"account_name": "ownedaccount", "account_key": "Y29udHJvbGxlZC1rZXk=", "container_name": "container"}}
+    conf = {"auth_mode": "account_key", "prefix": "docs/", "credentials": {"account_name": "ownedaccount", "account_key": ACCOUNT_KEY_FIXTURE, "container_name": "container"}}
     task = asyncio.create_task(sync.AzureBlob(conf)._run_sync_task_logic({"id": "task", "kb_id": "kb", "connector_id": "connector", "poll_range_start": None, "reindex": "0"}))
     try:
         assert await asyncio.wait_for(asyncio.to_thread(entered.wait, 3), timeout=4)
@@ -78,7 +78,7 @@ def test_close_failure_keeps_original_business_error_and_clears_identity(monkeyp
 
     monkeypatch.setattr(azure, "ContainerClient", client)
     connector = azure.AzureBlobConnector(auth_mode="account_key")
-    credentials = {"account_name": "ownedaccount", "account_key": "Y29udHJvbGxlZC1rZXk=", "container_name": "container"}
+    credentials = {"account_name": "ownedaccount", "account_key": ACCOUNT_KEY_FIXTURE, "container_name": "container"}
     connector.load_credentials(credentials)
     with pytest.raises(ValueError, match="business error"), connector.session():
         connector._client()

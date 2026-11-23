@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -93,7 +94,7 @@ async def test_real_canvas_iteration_runs_local_code_and_message(monkeypatch: py
             provider.destroy_instance(instance.instance_id)
 
     monkeypatch.setattr(sandbox_client, "execute_code", execute)
-    monkeypatch.setattr(Message, "_save_to_memory", lambda *_: None)
+    monkeypatch.setattr(Message, "_save_to_memory", AsyncMock())
     canvas = _canvas()
     try:
         events = [event async for event in canvas.run()]

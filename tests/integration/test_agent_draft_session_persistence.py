@@ -43,14 +43,14 @@ def test_runtime_log_resumes_original_snapshot_and_retains_outputs(release_api: 
     agent_id = create_draft(env)
     owner = env["owners"][0]
     reference = {"chunks": {"0": {"id": "draft-reference", "content": "reference text"}}, "doc_aggs": []}
-    original = Message._invoke
+    original = Message._invoke_async
 
-    def outputs(self: Message, **kwargs: Any) -> None:
-        original(self, **kwargs)
+    async def outputs(self: Message, **kwargs: Any) -> None:
+        await original(self, **kwargs)
         self.set_output("structured", {"count": 0, "approved": False})
         self._canvas.retrieval.append(copy.deepcopy(reference))
 
-    monkeypatch.setattr(Message, "_invoke", outputs)
+    monkeypatch.setattr(Message, "_invoke_async", outputs)
     before = read_state(env, agent_id)
     response = env["client"].post(
         f"{env['base']}/api/v1/agents/chat/completions", json={"agent_id": agent_id, "name": "Recorded draft", "query": "first", "stream": stream, "return_trace": True}, timeout=30
@@ -242,9 +242,9 @@ def test_real_web_draft_log_and_resume(release_api: dict[str, Any]) -> None:
     runner = tsx_runner(root)
     assert runner.is_file(), "An installed, fixed Web checkout is required"
     completed = subprocess.run(
-        [str(runner), "--tsconfig", str(root / "tsconfig.app.json"), str(Path(__file__).resolve().parents[1] / "support/agent_draft_web_consumer.mts")],
+        ["node", "--import", "tsx", str(Path(__file__).resolve().parents[1] / "support/agent_draft_web_consumer.mts")],
         cwd=root,
-        env={**os.environ, "AGENT_DRAFT_BASE": env["base"], "AGENT_DRAFT_ID": agent_id, "AGENT_DRAFT_TOKEN": env["jwts"][0]},
+        env={**os.environ, "TSX_TSCONFIG_PATH": str(root / "tsconfig.app.json"), "AGENT_DRAFT_BASE": env["base"], "AGENT_DRAFT_ID": agent_id, "AGENT_DRAFT_TOKEN": env["jwts"][0]},
         capture_output=True,
         text=True,
         timeout=60,

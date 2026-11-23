@@ -151,6 +151,11 @@ async def test_worker_single_probe_real_dimension_and_failure_side_effects(worke
     async def parse(*args: Any) -> list[dict[str, Any]]:
         return [{"pk": env["chunk"], "id": env["chunk"], "doc_id": env["document"], "kb_id": [env["dataset"]], "docnm_kwd": "title", "content_with_weight": "body"}]
 
+    def read_native_rows() -> list[dict[str, Any]]:
+        result = env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*", "vector", "q_5_vec"], consistency_level="Strong")
+        # Iteration materializes all fields before comparing snapshots across deliveries.
+        return [dict(row) for row in result]
+
     monkeypatch.setattr(task_executor, "LLMBundle", model)
     monkeypatch.setattr(task_executor, "get_model_config_by_type_and_name", lambda *args: {})
     monkeypatch.setattr(task_executor, "get_tenant_default_model_by_type", lambda *args: {})
@@ -195,7 +200,7 @@ async def test_worker_single_probe_real_dimension_and_failure_side_effects(worke
         schema = env["reader"].describe_collection(env["collection"])
         dimensions = {field["name"]: field["params"]["dim"] for field in schema["fields"] if field["name"] in {"vector", "q_5_vec"}}
         assert dimensions == {"vector": 5, "q_5_vec": 5}
-        rows = env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*", "vector", "q_5_vec"], consistency_level="Strong")
+        rows = read_native_rows()
     with Session(env["engine"]) as reader:
         doc, kb, state = reader.get(Document, env["document"]), reader.get(Knowledgebase, env["dataset"]), reader.get(Task, env["task"])
         assert doc is not None and kb is not None and state is not None
@@ -228,11 +233,12 @@ async def test_worker_single_probe_real_dimension_and_failure_side_effects(worke
             assert await task_executor.collect(db) == (None, None)
         acknowledged.assert_called_once()
         assert task_executor.DONE_TASKS == 1 and calls == [["ok"], ["title"], ["body"]]
-        after = env["reader"].query(collection_name=env["collection"], filter=f'doc_id == "{env["document"]}"', output_fields=["*", "vector", "q_5_vec"], consistency_level="Strong")
+        after = read_native_rows()
         with Session(env["engine"]) as db:
             doc, kb, state = db.get(Document, env["document"]), db.get(Knowledgebase, env["dataset"]), db.get(Task, env["task"])
             assert doc is not None and kb is not None and state is not None
-            assert [doc.chunk_num, doc.token_num, kb.chunk_num, kb.token_num] == counters and state.progress == 1 and after == rows
+            assert [doc.chunk_num, doc.token_num, kb.chunk_num, kb.token_num] == counters and state.progress == 1
+            assert after == rows
         env["journal"].event("redelivery-independent-readback", controlled_delivery=True, ack_count=acknowledged.call_count, calls=calls, counters=counters, native_unchanged=after == rows)
 
 

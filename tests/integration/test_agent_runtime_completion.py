@@ -38,14 +38,14 @@ def test_complete_results_and_durable_state(release_api: dict[str, Any], monkeyp
     replica_key = CanvasReplicaService._replica_key(agent_id, owner, owner)
     replica_before = REDIS_CONN.get(replica_key)
     reference = {"chunks": {"0": {"chunk_id": "controlled-chunk", "content_with_weight": "controlled reference"}}, "doc_aggs": [{"doc_id": "controlled-doc"}]}
-    original = Message._invoke
+    original = Message._invoke_async
 
-    def model_outputs(self: Message, **kwargs: Any) -> None:
-        original(self, **kwargs)
+    async def model_outputs(self: Message, **kwargs: Any) -> None:
+        await original(self, **kwargs)
         self.set_output("structured", {"count": 2})
         self._canvas.retrieval.append(copy.deepcopy(reference))
 
-    monkeypatch.setattr(Message, "_invoke", model_outputs)
+    monkeypatch.setattr(Message, "_invoke_async", model_outputs)
     request = {"agent_id": agent_id, "query": "runtime question", "stream": stream, "return_trace": True}
     if surface == "session":
         session = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/sessions", json={}, timeout=30).json()

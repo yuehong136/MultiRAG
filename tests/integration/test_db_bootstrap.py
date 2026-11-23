@@ -216,15 +216,18 @@ def test_futurmix_catalog_initialization_is_complete_and_repeatable(llm_catalog_
 
 
 def test_model_first_existing_database_can_upgrade_candidate_revision(
-    bootstrapped_engine: sa.Engine,
+    postgres_service: None,
     alembic_cfg: Config,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The latest migration accepts an exact model-first schema from its predecessor.
+    """The latest migration accepts a model-first schema stamped at its direct parents.
 
     Historical migrations are immutable and cannot be expected to recognize the
     schema of a future head.  Stored old-schema upgrade paths are covered by each
     migration's dedicated integration tests.
     """
+    from api.db import db_models
 
     script = ScriptDirectory.from_config(alembic_cfg)
     head = script.get_current_head()
@@ -232,22 +235,42 @@ def test_model_first_existing_database_can_upgrade_candidate_revision(
     head_revision = script.get_revision(head)
     assert head_revision is not None
     predecessor = head_revision.down_revision
-    assert isinstance(predecessor, str), "latest migration must have one direct predecessor"
+    parents = (predecessor,) if isinstance(predecessor, str) else predecessor
+    assert parents, "latest migration must have at least one direct predecessor"
     cfg = Config(alembic_cfg.config_file_name)
     cfg.set_main_option(
         "script_location",
         alembic_cfg.get_main_option("script_location"),
     )
-    with bootstrapped_engine.begin() as connection:
-        connection.execute(
-            sa.text("UPDATE usr_ai.alembic_version SET version_num = :revision"),
-            {"revision": predecessor},
+    user_id = uuid.uuid4().hex
+    identity = {"id": user_id, "nickname": "Pre-upgrade user", "account_kind": UserAccountKind.EXTERNAL.value}
+    expected_columns = {(table.schema, table.name): set(table.columns.keys()) for table in Base.metadata.tables.values() if table.schema == "usr_ai"}
+    version_options = {"version_table_schema": "usr_ai"}
+    journal = ResourceJournal("model-first-candidate-upgrade")
+    with scratch_database(tmp_path) as engine:
+        with engine.begin() as connection:
+            cfg.attributes["connection"] = connection
+            command.stamp(cfg, list(parents), purge=True)
+            connection.execute(sa.insert(User.__table__).values(**identity))
+        with engine.connect() as reader:
+            assert set(MigrationContext.configure(reader, opts=version_options).get_current_heads()) == set(parents)
+        monkeypatch.setattr(db_models, "engine", engine)
+        assert db_models.upgrade_database_tables() == "数据库迁移成功完成"
+        with engine.connect() as reader:
+            assert MigrationContext.configure(reader, opts=version_options).get_current_heads() == (head,)
+            actual_identity = reader.execute(sa.select(User.id, User.nickname, User.account_kind).where(User.id == user_id)).mappings().one()
+            assert actual_identity == identity
+            actual_columns = sa.inspect(reader).get_multi_columns(schema="usr_ai", filter_names=[name for _, name in expected_columns])
+            assert {table: {column["name"] for column in columns} for table, columns in actual_columns.items()} == expected_columns
+        assert db_models.upgrade_database_tables() == "数据库已经是最新版本"
+        journal.event(
+            "model-first-candidate-upgrade-readback",
+            database=engine.url.database,
+            parents=parents,
+            head=head,
+            modeled_table_count=len(expected_columns),
+            entry_point="upgrade_database_tables",
         )
-        cfg.attributes["connection"] = connection
-        command.upgrade(cfg, "head")
-        version = connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one()
-
-    assert version == head
 
 
 def test_stored_database_bootstrap_migrates_parents_before_model_first_children(

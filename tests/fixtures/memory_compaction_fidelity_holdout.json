@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "kind": "fidelity_holdout",
+  "cases": [
+    {
+      "id": "sealed-registration-alignment",
+      "reuse_kind": "repeat",
+      "sources": [
+        {
+          "session_id": "synthetic-overlay-register",
+          "user_input": "这是白鹭纸模型教学的合成彩排资料。索引 tag `QR-M2-07x` 的 x 保持小写。状态“套准已点检”只表示透明叠片的两个印刷标记和登记坐标一致，没有验证实际展板尺寸，也没有批准面向游客展示。这个状态只适用于这一张训练卡。\n演练笔记记载了纸片的制作经过。10 日先清点描线草图和试印样张，核对墨色后把纸边裁到可以放进教学灯箱的长度，用于讲解斜边阴影。试印时替换过背景纸的粗糙度，选择了细纹样张。评审用台灯从左上方补了一束暖光，用灰格作亮度参考。11 日早上讲解员用一张磨砂叠片作屏幕指示，沿页底的虚线贴了三块无字便笺，每次只调整一格。另一位讲解员演示拿纸的顺序，先放图板再放投影比例尺。手柄转过四分之一圈后停下，灯圈右侧仍缺一块护片。缺少护片只记录在彩排工具清点表，与训练卡状态定义没有关联。11 日下午灯圈纸移动到另一张桌子，留下三枚可移除的透明胶角。12 日为录课把教学灯箱前的贴纸排序改成从上到下。墙面挂画是上一期工具样张，观众人数为题库设定。彩排稿的蓝色图例只标页脚观察位。白色图例只标摄影架。合成演练使用虚构标签、资料和场地，没有实际展出。",
+          "agent_response": "记录了这张训练卡的登记核对定义。"
+        },
+        {
+          "session_id": "synthetic-overlay-followup",
+          "user_input": "后来更换的是教学灯箱的灯罩，涉及暖光显色。更换灯罩没有复核展板尺寸，也没有改变训练卡的套准点检记录。游客展示的审批页仍为空。",
+          "agent_response": "登记为灯罩更换。"
+        }
+      ],
+      "selected_source_indices": [0],
+      "retained_source_indices": [1],
+      "question": "白鹭训练卡的原样 tag 是什么？‘套准已点检’确认了哪件具体的事，展板尺寸和游客展示是否已有结论？",
+      "rubric": {
+        "summary": {
+          "required": [
+            {"id": "exact-tag", "description": "逐字保留 QR-M2-07x，末尾小写 x。"},
+            {"id": "defined-positive-match", "description": "写出套准已点检表示透明叠片的两个印刷标记与登记坐标一致。"},
+            {"id": "bounded-meaning", "description": "明确它没有验证展板尺寸、没有批准游客展示。"}
+          ],
+          "forbidden": [{"id": "no-real-display", "description": "不得称已确认实际展板尺寸或批准、发生对外展示。"}]
+        },
+        "answer": {
+          "required": [
+            {"id": "exact-tag", "description": "逐字报告 QR-M2-07x，末尾小写 x。"},
+            {"id": "positive-match", "description": "报告透明叠片的两个印刷标记与登记坐标一致。"},
+            {"id": "negative-edge", "description": "实际展板尺寸仍未核验，且未批准对游客展示。"}
+          ],
+          "forbidden": [{"id": "no-stronger-conclusion", "description": "不得把套准点检或灯罩更换当成尺寸核验或展示审批。"}]
+        }
+      }
+    }
+  ]
+}

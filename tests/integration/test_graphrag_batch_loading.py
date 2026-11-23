@@ -54,7 +54,9 @@ async def test_saved_batch_budget_reaches_worker_and_resume_avoids_source_io(gra
         assert captured[0] == source
     assert reads.call_count == 1
     first = observe(env, "first batch-budget run")
-    assert any(row.get("knowledge_graph_kwd") == "graph" for row in first["rows"]) and not first["writer_active"]
+    # Materialize every field on both reads before comparing the SDK results.
+    first_rows = [dict(row) for row in first["rows"]]
+    assert any(row.get("knowledge_graph_kwd") == "graph" for row in first_rows) and not first["writer_active"]
     assert next(row for row in first["task_rows"] if row["id"] == task_id)["progress"] == 1
     # The second real queued invocation reuses the committed graph and performs
     # neither a source read nor extraction, even with zero new chunk batches.
@@ -62,7 +64,7 @@ async def test_saved_batch_budget_reaches_worker_and_resume_avoids_source_io(gra
     await worker(env, resumed_id, Model())
     assert reads.call_count == 1 and len(captured) == 1
     resumed = observe(env, "resumed without source read")
-    assert resumed["rows"] == first["rows"] and not resumed["writer_active"]
+    assert [dict(row) for row in resumed["rows"]] == first_rows and not resumed["writer_active"]
     env["record"]["batch_budget"] = {"method": method, "saved": budget, "batch_sizes": [len(batch) for batch in captured[0]], "source_reads_after_resume": reads.call_count}
 
 

@@ -158,7 +158,8 @@ services:
     restart: unless-stopped
 
   # ========== Milvus 向量数据库 ==========
-  # 参考官方配置：https://github.com/milvus-io/milvus/releases/download/v2.6.22/milvus-standalone-docker-compose.yml
+  # 升级现有卷前先完成备份/恢复演练：docs/references/milvus-upgrade.md
+  # 参考官方配置：https://github.com/milvus-io/milvus/releases/download/v3.0.6/milvus-standalone-docker-compose.yaml
   milvus-etcd:
     profiles:
       - milvus
@@ -204,10 +205,33 @@ services:
       - multirag
     restart: unless-stopped
 
+  milvus-volume-init:
+    profiles:
+      - milvus
+    image: milvusdb/milvus:v3.0.6
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        uid="$$(id -u milvus)"
+        gid="$$(id -g milvus)"
+        marker="/var/lib/milvus/.milvus-volume-owner-$${uid}-$${gid}"
+        if [ ! -e "$${marker}" ]; then
+          chown -R "$${uid}:$${gid}" /var/lib/milvus
+          touch "$${marker}"
+          chown "$${uid}:$${gid}" "$${marker}"
+        fi
+    volumes:
+      - milvus_data:/var/lib/milvus
+
   milvus-standalone:
     profiles:
       - milvus
-    image: milvusdb/milvus:v2.6.22
+    image: milvusdb/milvus:v3.0.6
     hostname: milvus
     container_name: multirag-milvus
     command: ["milvus", "run", "standalone"]
@@ -230,8 +254,12 @@ services:
       - "${MILVUS_PORT:-19530}:19530"
       - "${MILVUS_GRPC_PORT:-9091}:9091"
     depends_on:
-      - milvus-etcd
-      - milvus-minio
+      milvus-volume-init:
+        condition: service_completed_successfully
+      milvus-etcd:
+        condition: service_started
+      milvus-minio:
+        condition: service_started
     networks:
       - multirag
     restart: unless-stopped

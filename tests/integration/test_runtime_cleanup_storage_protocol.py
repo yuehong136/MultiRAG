@@ -3,6 +3,7 @@
 import inspect
 import json
 from io import BytesIO
+from secrets import token_hex
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -149,7 +150,7 @@ def adapter_for(kind: str) -> tuple[Any, Any, str]:
 @pytest.mark.parametrize("encrypted", [False, True])
 def test_cloud_sdk_cleanup_readback_and_idempotency(kind: str, encrypted: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     adapter, transport, prefix = adapter_for(kind)
-    storage = EncryptedStorageWrapper(adapter, key="0123456789abcdef0123456789abcdef") if encrypted else adapter
+    storage = EncryptedStorageWrapper(adapter, key=token_hex(16)) if encrypted else adapter
     descriptor = {"id": LOCATION, "created_by": OWNER, "name": "empty.txt", "mime_type": "text/plain", "extension": "txt", "size": 0, "created_at": 1.0, "preview_url": None}
     values = {LOCATION: b"", LOCATION + ".upload.json": json.dumps(descriptor).encode(), "unrelated": b"keep"}
     for key, binary in values.items():
@@ -186,7 +187,7 @@ def test_cloud_sdk_failures_are_not_absence(kind: str, fault: str, monkeypatch: 
 def test_opendal_native_operator_and_encryption_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = object.__new__(inspect.getclosurevars(OpenDALStorage).nonlocals["cls"])
     adapter._operator = opendal.Operator("memory")
-    storage = EncryptedStorageWrapper(adapter, key="0123456789abcdef0123456789abcdef")
+    storage = EncryptedStorageWrapper(adapter, key=token_hex(16))
     descriptor = {"id": LOCATION, "created_by": OWNER, "name": "empty.txt", "mime_type": "text/plain", "extension": "txt", "size": 0, "created_at": 1.0, "preview_url": None}
     for key, data in [(LOCATION, b""), (LOCATION + ".upload.json", json.dumps(descriptor).encode()), ("unrelated", b"keep")]:
         storage.put(NAMESPACE, key, data)

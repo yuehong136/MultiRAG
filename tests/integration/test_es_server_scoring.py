@@ -254,7 +254,7 @@ async def test_actual_chat_and_ask_finalize_citations_from_real_storage(scored_s
     monkeypatch.setattr(settings, "DOC_ENGINE", env["manifest"]["backend"])
     monkeypatch.setitem(settings.__dict__, "retriever", dealer)
     monkeypatch.setattr(dialog_service, "resolve_model_type", lambda *_: ["chat"])
-    monkeypatch.setattr(dialog_service, "_resolve_dialog_primary_model_config", lambda *_: {"llm_factory": "controlled", "max_tokens": 8192})
+    monkeypatch.setattr(dialog_service, "_resolve_dialog_primary_model_config", lambda *_: {"llm_factory": "controlled", "mdl_type": "chat", "max_tokens": 8192})
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda *_: {"llm_name": "controlled"})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda *_: {"llm_name": "controlled"})
     monkeypatch.setattr(dialog_service, "get_tenant_default_model_by_type", lambda *_: {"llm_name": "controlled"})

@@ -97,11 +97,12 @@ def rdbms_source(pg_scratch_engine: sa.Engine, tmp_path: Path) -> Iterator[dict[
             sa.Column("seq", sa.Numeric(30, 6)),
             sa.Column("active", sa.Boolean),
             sa.Column("stamp", sa.DateTime(timezone=True)),
+            schema="public" if backend == "postgresql" else None,
         )
 
         def remove_table() -> None:
             table.drop(engine, checkfirst=True)
-            assert table.name not in sa.inspect(engine).get_table_names()
+            assert table.name not in sa.inspect(engine).get_table_names(schema=table.schema)
             record["table_absent"] = True
             if backend == "postgresql":
                 record["absent"] = True
@@ -113,7 +114,7 @@ def rdbms_source(pg_scratch_engine: sa.Engine, tmp_path: Path) -> Iterator[dict[
         if backend == "postgresql":
             with engine.begin() as connection:
                 connection.exec_driver_sql(f'GRANT USAGE ON SCHEMA public TO "{role}"')
-                connection.exec_driver_sql(f'GRANT SELECT ON "{table.name}" TO "{role}"')
+                connection.exec_driver_sql(f'GRANT SELECT ON public."{table.name}" TO "{role}"')
 
         with engine.begin() as connection:
             connection.execute(
@@ -124,9 +125,12 @@ def rdbms_source(pg_scratch_engine: sa.Engine, tmp_path: Path) -> Iterator[dict[
                 ],
             )
         quote = "`" if backend == "mysql" else '"'
+        source_table = f"{quote}{table.name}{quote}"
+        if table.schema:
+            source_table = f"{quote}{table.schema}{quote}.{source_table}"
         configuration = {
             **config,
-            "query": f"SELECT * FROM {quote}{table.name}{quote} WHERE active = true ORDER BY id LIMIT 100",
+            "query": f"SELECT * FROM {source_table} WHERE active = true ORDER BY id LIMIT 100",
             "content_columns": "body",
             "metadata_columns": "category,seq",
             "id_column": "id",

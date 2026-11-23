@@ -1,0 +1,265 @@
+"""Pinned Web generation and reopened read-only consumers use real artifact APIs."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from pathlib import Path
+from typing import Any, Literal
+
+import pytest
+
+from tests.support.memory_compaction_http import compaction_api as compaction_api
+from tests.support.memory_compaction_http import release_api as release_api
+from tests.support.memory_compaction_http import request, retirement_commit_fault
+from tests.support.memory_compaction_http import writes_api as writes_api
+from tests.support.memory_message_recovery_web import memory_effects, no_sql_mutations
+from tests.support.memory_writes_http import api_request, result
+from tests.support.resource_journal import ResourceJournal
+from tests.support.web_consumer import pinned_web_checkout, private_consumer_file
+
+
+def _consumer(env: dict[str, Any], tmp_path: Path, *, label: str, mode: str, state: str) -> dict[str, Any]:
+    checkout, sha = pinned_web_checkout()
+    journal = ResourceJournal("memory-compaction-web")
+    config, receipt = tmp_path / f"{label}.private.json", tmp_path / f"{label}.receipt.json"
+    owned: list[Path] = []
+    try:
+        private_consumer_file(
+            config,
+            json.dumps(
+                {
+                    "baseURL": env["base"],
+                    "token": env["jwts"][1],
+                    "memoryId": env["memory_id"],
+                    "operationId": "compaction-web-owned",
+                    "sourceIds": env["compaction_source_ids"],
+                    "prefixCount": 1,
+                    "mode": mode,
+                    "expectedState": state,
+                    "ownedScratchConfirmed": True,
+                    "resultFile": str(receipt),
+                }
+            ),
+            journal,
+            owned,
+        )
+        private_consumer_file(receipt, "", journal, owned)
+        journal.event("reserve-compaction-consumer", web_sha=sha, memory_id=env["memory_id"], mode=mode, process_group=os.getpgrp())
+        completed = subprocess.run(
+            ["node", "--import", "tsx", "scripts/consumers/memory-compaction.ts", str(config)],
+            cwd=checkout,
+            env={**os.environ, "TSX_TSCONFIG_PATH": "tsconfig.app.json"},
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        value = json.loads(receipt.read_text())
+        assert value["passed"] and value["readOnlyRecovery"] and value["applicationRequests"] == 0
+        assert value["generationRequests"] == (1 if mode == "generate" else 0)
+        assert value["sourceIds"] == env["compaction_source_ids"]
+        journal.event("compaction-consumer-readback", web_sha=sha, receipt=value)
+        return value
+    finally:
+        for path in owned:
+            path.unlink(missing_ok=True)
+            assert not path.exists()
+        journal.event("compaction-consumer-private-files-cleaned", paths=[str(path) for path in owned], absent=True)
+
+
+@pytest.mark.external_consumer
+def test_pinned_web_generate_reopen_and_stale_read_have_no_hidden_generation(compaction_api: dict[str, Any], tmp_path: Path) -> None:
+    env, mid = compaction_api, compaction_api["memory_id"]
+    generated = _consumer(env, tmp_path, label="generate", mode="generate", state="generated")
+    assert len(env["summary_calls"]) == 1
+    before = memory_effects(env)
+    with no_sql_mutations() as writes:
+        first = _consumer(env, tmp_path, label="first-read", mode="read", state="generated")
+        second = _consumer(env, tmp_path, label="reopened", mode="read", state="generated")
+        assert first == second and first["artifactId"] == generated["artifactId"]
+        operation_path = f"/memories/{mid}/context-compaction-operations/compaction-web-owned"
+        assert api_request(env, "GET", operation_path, actor=2).status_code == 404
+        assert api_request(env, "GET", operation_path, token="invalid-session-token").status_code == 401
+    assert writes == [] and memory_effects(env) == before and len(env["summary_calls"]) == 1
+
+    source = result(api_request(env, "GET", operation_path))["artifact"]["sources"][1]
+    result(
+        api_request(
+            env,
+            "POST",
+            f"/memories/{mid}/sources/{source['source_id']}/withdrawals",
+            json={"operation_id": "web-withdraw-retained", "expected_source_revision": int(source["source_revision"]), "reason": "Remove retained evidence"},
+        )
+    )
+    before = memory_effects(env)
+    with no_sql_mutations() as writes:
+        stale = _consumer(env, tmp_path, label="stale-reopened", mode="read", state="stale")
+        assert stale["artifactId"] == generated["artifactId"]
+        replay = result(api_request(env, "POST", f"/memories/{mid}/context-compactions", json=request(env, "compaction-web-owned")))
+        assert replay["artifact"]["package"] is None
+    assert writes == [] and memory_effects(env) == before and len(env["summary_calls"]) == 1
+
+
+def _retention_consumer(env: dict[str, Any], tmp_path: Path, *, mode: str, artifact_id: str) -> dict[str, Any]:
+    checkout, sha = pinned_web_checkout()
+    journal = ResourceJournal("memory-compaction-retention-web")
+    config = tmp_path / f"retention-{mode}.private.json"
+    receipt = tmp_path / f"retention-{mode}.receipt.json"
+    owned: list[Path] = []
+    try:
+        private_consumer_file(
+            config,
+            json.dumps(
+                {
+                    "baseURL": env["base"],
+                    "token": env["jwts"][1],
+                    "memoryId": env["memory_id"],
+                    "operationId": "retention-web-owned",
+                    "artifactId": artifact_id,
+                    "mode": mode,
+                    "ownedScratchConfirmed": True,
+                    "resultFile": str(receipt),
+                }
+            ),
+            journal,
+            owned,
+        )
+        private_consumer_file(receipt, "", journal, owned)
+        journal.event("reserve-compaction-retention-consumer", web_sha=sha, memory_id=env["memory_id"], mode=mode, process_group=os.getpgrp())
+        completed = subprocess.run(
+            ["node", "--import", "tsx", "scripts/consumers/memory-compaction-retention.ts", str(config)],
+            cwd=checkout,
+            env={**os.environ, "TSX_TSCONFIG_PATH": "tsconfig.app.json"},
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        value = json.loads(receipt.read_text())
+        assert value["passed"] and value["readOnlyRecovery"]
+        assert value["generationRequests"] == value["applicationRequests"] == 0
+        assert value["artifactId"] == artifact_id and value["operationId"] == "retention-web-owned"
+        journal.event("compaction-retention-consumer-readback", web_sha=sha, receipt=value)
+        return value
+    finally:
+        for path in owned:
+            path.unlink(missing_ok=True)
+            assert not path.exists()
+        journal.event("compaction-retention-consumer-private-files-cleaned", paths=[str(path) for path in owned], absent=True)
+
+
+@pytest.mark.external_consumer
+def test_pinned_web_retire_and_reopen_preserve_generation_identity(compaction_api: dict[str, Any], tmp_path: Path) -> None:
+    env = compaction_api
+    path = f"/memories/{env['memory_id']}/context-compactions"
+    body = request(env, "retention-web-owned")
+    created = result(api_request(env, "POST", path, json=body))
+    assert created["operation"]["status"] == "generated"
+    artifact_id = created["artifact"]["artifact_id"]
+    previous = memory_effects(env)
+    retired = _retention_consumer(env, tmp_path, mode="retire", artifact_id=artifact_id)
+    assert retired["retirementRequests"] == 2
+    assert retired["retainedAfter"] == retired["retainedBefore"] - 1
+    after = memory_effects(env)
+    assert {key: value for key, value in previous.items() if key != "sql_sha256"} == {key: value for key, value in after.items() if key != "sql_sha256"}
+    with no_sql_mutations() as writes:
+        reopened = _retention_consumer(env, tmp_path, mode="read", artifact_id=artifact_id)
+        replay = result(api_request(env, "POST", path, json=body))
+    assert reopened["retirementRequests"] == 0 and reopened["retiredAt"] == retired["retiredAt"]
+    assert replay["operation"]["status"] == "stale" and replay["artifact"]["package"] is None
+    assert replay["artifact"]["error_code"] == "compaction_retired"
+    assert writes == [] and memory_effects(env) == after and len(env["summary_calls"]) == 1
+
+
+def _fault_consumer(env: dict[str, Any], tmp_path: Path, *, mode: str, artifact_id: str, operation_id: str, label: str) -> dict[str, Any]:
+    checkout, sha = pinned_web_checkout()
+    journal = ResourceJournal("memory-compaction-retirement-recovery-web")
+    config = tmp_path / f"{label}.private.json"
+    script = Path(__file__).resolve().parents[1] / "support" / "memory_compaction_retirement_consumer.mts"
+    owned: list[Path] = []
+    try:
+        private_consumer_file(
+            config,
+            json.dumps(
+                {
+                    "baseURL": env["base"],
+                    "token": env["jwts"][1],
+                    "memoryId": env["memory_id"],
+                    "operationId": operation_id,
+                    "artifactId": artifact_id,
+                    "sourceIds": env["compaction_source_ids"],
+                    "mode": mode,
+                    "ownedScratchConfirmed": True,
+                }
+            ),
+            journal,
+            owned,
+        )
+        journal.event("reserve-retirement-recovery-consumer", web_sha=sha, memory_id=env["memory_id"], operation_id=operation_id, artifact_id=artifact_id, mode=mode, process_group=os.getpgrp())
+        completed = subprocess.run(
+            ["node", "--import", "tsx", str(script), str(config)],
+            cwd=checkout,
+            env={**os.environ, "TSX_TSCONFIG_PATH": "tsconfig.app.json"},
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        observed = json.loads(completed.stdout)
+        journal.event("retirement-recovery-consumer-readback", web_sha=sha, observation=observed)
+        return observed
+    finally:
+        for file in owned:
+            file.unlink(missing_ok=True)
+            assert not file.exists()
+        journal.event("retirement-recovery-private-files-cleaned", paths=[str(file) for file in owned], absent=True)
+
+
+@pytest.mark.external_consumer
+@pytest.mark.parametrize("phase", ["before_commit", "after_commit"])
+def test_pinned_web_retirement_recovers_original_operation_after_commit_fault(
+    compaction_api: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: Literal["before_commit", "after_commit"]
+) -> None:
+    env, memory_id = compaction_api, compaction_api["memory_id"]
+    base = f"/memories/{memory_id}/context-compactions"
+    operation_id = "retention-fault-web-owned"
+    created = result(api_request(env, "POST", base, json=request(env, operation_id)))
+    artifact_id = created["artifact"]["artifact_id"]
+    inventory_path = f"{base}/inventory"
+    before_inventory = result(api_request(env, "GET", inventory_path))
+    original_effects = memory_effects(env)
+    committed = phase == "after_commit"
+    assert before_inventory["retained_count"] == 1 and before_inventory["retired_count"] == 0
+
+    with retirement_commit_fault(env, monkeypatch, artifact_id=artifact_id, operation_id=operation_id, phase=phase) as fault:
+        submitted = _fault_consumer(env, tmp_path, mode="submit", artifact_id=artifact_id, operation_id=operation_id, label="submit-fault")
+    assert fault.injected and fault.commit_completed is committed
+    ticket = submitted["receipt"]
+    assert ticket["operationId"] == operation_id and ticket["artifactId"] == artifact_id and ticket["status"] == 503
+    post_fault_effects = memory_effects(env)
+    assert (post_fault_effects["sql_sha256"] != original_effects["sql_sha256"]) is committed
+    assert {key: value for key, value in post_fault_effects.items() if key != "sql_sha256"} == {key: value for key, value in original_effects.items() if key != "sql_sha256"}
+
+    mode = "read-retired" if committed else "read-generated"
+    with no_sql_mutations() as writes:
+        reopened = _fault_consumer(env, tmp_path, mode=mode, artifact_id=artifact_id, operation_id=operation_id, label="reopen")
+        refreshed = _fault_consumer(env, tmp_path, mode=mode, artifact_id=artifact_id, operation_id=operation_id, label="refresh")
+        recovered_inventory = result(api_request(env, "GET", inventory_path))
+        preview = result(api_request(env, "GET", f"{base}/{artifact_id}/retention-preview"))
+    assert not writes and memory_effects(env) == post_fault_effects and len(env["summary_calls"]) == 1
+    assert refreshed == reopened
+    receipt = refreshed["receipt"]
+    assert receipt["readOnlyRecovery"] and receipt["generationRequests"] == receipt["applicationRequests"] == 0
+    assert recovered_inventory["retained_count"] == before_inventory["retained_count"] - int(committed)
+    assert recovered_inventory["retired_count"] == before_inventory["retired_count"] + int(committed)
+    assert recovered_inventory["available_slots"] == before_inventory["available_slots"] + int(committed)
+    if committed:
+        assert receipt["retirementRequests"] == 0 and receipt["retiredAt"] == preview["retired_at"] and not preview["eligible"]
+    else:
+        assert receipt["state"] == "generated" and receipt["reference"]["operation_id"] == operation_id
+        assert preview["eligible"] and preview["preview_sha256"] == ticket["previewSha256"] and preview["retired_at"] is None

@@ -67,11 +67,11 @@ def test_beta_http_structured_results_match_canvas_and_committed_session(release
     update(env, agent_id, {"dsl": message_dsl("new draft")})
     before = read_state(env, agent_id)
     reference = {"chunks": {"0": {"chunk_id": "controlled-source", "content_with_weight": "controlled reference"}}, "doc_aggs": [{"doc_id": "controlled-doc"}]}
-    original_invoke, original_run = Message._invoke, Canvas.run
+    original_invoke, original_run = Message._invoke_async, Canvas.run
     closed: list[str] = []
 
-    def node_output(self: Message, **kwargs: Any) -> None:
-        original_invoke(self, **kwargs)
+    async def node_output(self: Message, **kwargs: Any) -> None:
+        await original_invoke(self, **kwargs)
         self.set_output("structured", {"count": 2, "approved": False})
         self._canvas.retrieval.append(copy.deepcopy(reference))
 
@@ -83,7 +83,7 @@ def test_beta_http_structured_results_match_canvas_and_committed_session(release
         finally:
             closed.append(self.task_id)
 
-    monkeypatch.setattr(Message, "_invoke", node_output)
+    monkeypatch.setattr(Message, "_invoke_async", node_output)
     monkeypatch.setattr(Canvas, "run", track_close)
     response = env["client"].post(
         f"{env['base']}/api/v1/agentbots/{agent_id}/completions?release=true", headers=headers, json={"query": "beta question", "stream": stream, "return_trace": True}, timeout=30

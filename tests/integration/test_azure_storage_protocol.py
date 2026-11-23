@@ -9,6 +9,7 @@ import hashlib
 import hmac
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from secrets import token_hex
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
@@ -63,7 +64,7 @@ def test_azure_dataset_isolation_and_cleanup(kind: str, existing_directory_statu
 def test_azure_encrypted_wrapper_contract(kind: str) -> None:
     transport = AzureTransport()
     adapter = azure_adapter(kind, transport)
-    storage = EncryptedStorageWrapper(adapter, key="0123456789abcdef0123456789abcdef")
+    storage = EncryptedStorageWrapper(adapter, key=token_hex(16))
     storage.put("dataset", "file", b"payload", "tenant")
     assert transport.objects["dataset/file"] != b"payload"
     assert storage.get("dataset", "file", "tenant") == b"payload"

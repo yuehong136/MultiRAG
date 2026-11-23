@@ -19,7 +19,8 @@ import (
 func TestPaddleOCRJobHTTPContract(t *testing.T) {
 	for _, input := range []string{"bytes", "url"} {
 		t.Run(input, func(t *testing.T) {
-			name, key := "PaddleOCR-VL-1.5", "controlled-paddle-key"
+			name := "PaddleOCR-VL-1.5"
+			key := strings.Repeat("t", 21)
 			var polls atomic.Int32
 			var base string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

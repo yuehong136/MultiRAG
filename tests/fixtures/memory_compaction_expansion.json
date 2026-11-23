@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "kind": "expansion_development",
+  "cases": [
+    {
+      "id": "archive-switch-conditions",
+      "reuse_kind": "repeat",
+      "sources": [
+        {
+          "session_id": "synthetic-archive-review",
+          "user_input": "合成演练：青蓼档案导出，冻结清单的字面 ID 是 {{QD-04-B7}}，不能去掉花括号或改写大小写。只有签名校验连续两次失败且独立重读的校验和不一致，才从导出端切回只读视图。这两个条件必须同时满足。单次签名失败只记告警，重复签名失败但校验和一致也只记告警。只读视图仍接受查询，停止的是导出。任何这些记录都不是已经发生切回的证明。\n演练记录说明：第一张图显示建档阶段的吞吐，只用于对照环境搭建耗时。第二张图是旧合同结果，保存在纸鸢目录，在本次判定里不作证据。表 B 的空白列是待登记项，并没有失败次数。观察人用两套独立来源读取握手；只有一套账本返回相同摘要时也不能补造第二份读回。旧的基线样本故意混合了不同日期的源，因此单张统计表上的重试计数不能用于证明连续性。原始颜色规则按访问模式选择图例，颜色变化只涉及展示。值班检查表包含区域、日期、快照编号几列，若不在演练清单内无需附上整张检查表。对照组做的是健康探针，并非导出确认。用于提示的波形标题来自早期桌面稿，维护者可以调整字体与图例。切回条件只适用于这份演练记录；没有授权操作业务系统。",
+          "agent_response": "收到，登记的是条件和清单标识。我没有执行切回。"
+        },
+        {
+          "session_id": "synthetic-archive-latest",
+          "user_input": "演练复看时前两项检查尚未完成。没有独立校验和读回，也没有切回回执。当前给审阅人员的只读预览可以继续打开。",
+          "agent_response": "这是待查状态。"
+        }
+      ],
+      "selected_source_indices": [0],
+      "retained_source_indices": [1],
+      "question": "给我核对青蓼演练的清单 ID、切回条件、切回影响和当前是否已经切回。",
+      "rubric": {
+        "summary": {
+          "required": [
+            {"id": "literal-id", "description": "保留字面 {{QD-04-B7}}，包括花括号及大小写。"},
+            {"id": "joint-trigger", "description": "连续两次签名失败且独立重读校验和不一致，二者必须同时满足才切回。"},
+            {"id": "read-only-remains", "description": "切回停止导出，仍能查询只读视图。"}
+          ],
+          "forbidden": [
+            {"id": "no-confirmed-switch", "description": "不得把切回条件或例子叙述为实际发生。"},
+            {"id": "no-single-trigger", "description": "不得把任一条件或单次签名失败当成充分触发条件。"}
+          ]
+        },
+        "answer": {
+          "required": [
+            {"id": "literal-id", "description": "写出 {{QD-04-B7}}，包括花括号及大小写。"},
+            {"id": "both", "description": "切回必须满足连续两次签名失败和独立重读的校验和不一致。"},
+            {"id": "scope", "description": "切回停导出，仍保留只读查询。"},
+            {"id": "unconfirmed", "description": "没有切回回执，不能确认已切回。"}
+          ],
+          "forbidden": [
+            {"id": "or-and-confusion", "description": "不得把同时条件写成任一即可。"},
+            {"id": "faked-success", "description": "不得声称当前已切回或有独立校验和结果。"}
+          ]
+        }
+      }
+    },
+    {
+      "id": "renderer-zero-and-empty",
+      "reuse_kind": "repeat",
+      "sources": [
+        {
+          "session_id": "synthetic-renderer-controls",
+          "user_input": "合成项目白椋预览渲染器的三个固定设置是 `idle_hold_ms=0`、`push_enabled=false`、`audience=[]`。这里 0 明确关闭闲置保持，绝不表示无限保持。false 禁止主动推送。空数组是显式空白名单，任何外部账户均不被选中，不能解释成缺省或全员。三项设定只适用于合成预览。\nRender pipeline design notes, retained for historical reference. Intake accepts a synthetic batch with nested pages, optional rulers, and an explicit page order. Every page has a simple position model for annotations. The preview exists to compare line wraps by font and diagram label sizes. A presenter may stage a copy of the preflight board, reorder purely visual tiles, export a screenshot into the rehearsal binder, or add an observation to the private report. Tile ordering is independent of preview audience. Approving a screenshot means the position and contrast looked adequate for the exercise. It confers no publish authority. The binder illustration uses dark coral labels when a page first arrives and yellow labels when it has an unresolved placement note. A yellow label must not be reused as a network delivery retry cue. A different dashboard drafts notification copy for an unrelated volunteer rota. Its examples of recipient groups belong to that rota and supply no default for the white-starlings preview.\nMaintenance diary. On day one the runner recorded blank test cards and measured how they render on two font engines. One font engine uses optical sizing by default. On day two the runner explored deterministic render seeds with the animation clock paused. Compared traced borders with an earlier whiteboard sketch. The result was interesting for screenshot stability. Day three moved the caption under the illustration because a long device label can clip the arrow head. Yesterday's mock trace was designed to test line-breaking, so section headings contain exaggerated values. Use the measured plaque width only when comparing the two local font engines. The display helper pads some table cells to align a two-line footer. A review note may be echoed into a synthetic timeline to document the layout handoff. It remains a note, not a decision to change preview audience or turn on publication.\nUnrelated acceptance notebook. Diagram width and column wrap use different units; one uses pixels, the other uses display cells. When under nominal width, some icons switch to shorter descriptions. Inspect the glyph box, not the browser zoom percentage, when recording overflow. The Android screenshot is a mock prepared from the desktop renderer and cannot assert mobile behavior. Blue boxes show input groups. Gray boxes show optional report steps. The left inset may include an extra marker if the dataset contains cropped images. Exclude QA-only samples from public galleries. Empty visual layers are rendered as a transparent background so that a color picker can inspect other layers. An empty visual layer and a blank recipient allowlist are entirely separate settings. We usually keep the original snapshot around for pixel comparisons and fold the rulers horizontally for the printout. The bake duration in this notebook refers to drawing the preview, while idle hold controls the preview state after it is drawn. We do not have any observed external notification or production deployment in this material.\nAdditional comments on synthetic sample inventory. The source packet contains an editable vector overlay, a static image that renders a reference target, a plain text label glossary, and three versions of a reviewer sidebar. Record the version during screenshot triage so readers do not attribute font changes to the preview runtime. If a decorative divider is missing, link the comparison snapshot but do not open a network action. The offline preview supports a high contrast mode for readability, and manual operators can use browser zoom independently. No browser size or unsupported runtime from this note should be inferred from the classroom target. The clock used during render benchmarks is monotonic and the wall clock annotation is illustrative. This diary is background context. The three fixed preview settings above remain the only relevant defaults for this rehearsal.",
+          "agent_response": "收到。三项值对合成预览生效。"
+        },
+        {
+          "session_id": "synthetic-renderer-scope",
+          "user_input": "白椋这次只切换预览背景，控制值没有修改。背景更改不会扩大到正式配置。",
+          "agent_response": "只记录视觉改动。"
+        }
+      ],
+      "selected_source_indices": [0],
+      "retained_source_indices": [1],
+      "question": "白椋合成预览的闲置保持、主动推送及外部受众现在分别是什么值和含义？这些设置适用于哪里？",
+      "rubric": {
+        "summary": {
+          "required": [
+            {"id": "zero-disables", "description": "idle_hold_ms=0 关闭闲置保持。"},
+            {"id": "false-disables", "description": "push_enabled=false 禁止主动推送。"},
+            {"id": "explicit-empty", "description": "audience=[] 是显式空白名单，选中零个外部账户。"},
+            {"id": "rehearsal-scope", "description": "三个设定仅限合成预览。"}
+          ],
+          "forbidden": [
+            {"id": "no-reversed-control", "description": "不得把 0 解释为无限保持或把空白名单解释为缺省或允许全员。"},
+            {"id": "no-deployment-claim", "description": "不得声称存在生产部署或外部推送已发生的证据。"}
+          ]
+        },
+        "answer": {
+          "required": [
+            {"id": "exact-values", "description": "给出 idle_hold_ms=0、push_enabled=false、audience=[] 三个确切控制值。"},
+            {"id": "zero-and-false", "description": "0 关闭闲置保持，false 禁止主动推送。"},
+            {"id": "none-selected", "description": "显式空白名单没有选中任何外部账户。"},
+            {"id": "preview-only", "description": "这些值仅适用于合成预览，与后续背景改动无关。"}
+          ],
+          "forbidden": [
+            {"id": "no-infinite-allowance", "description": "0 不能写成无限等待，[] 不能写成采用默认或全员可见。"}
+          ]
+        }
+      }
+    },
+    {
+      "id": "atlas-timeline-correction",
+      "reuse_kind": "longitudinal",
+      "sources": [
+        {
+          "session_id": "synthetic-atlas-first-check",
+          "user_input": "合成项目银栎地图切片：11 月 3 日只讨论旧上限 36 片，记录为草案。11 月 5 日会议正式定为每批 24 片，且仅处理只读脱敏切片。证据索引 `YL-MAP-C8` 用于定位会议记录，并不表示切片已发布。之前先约定需要从 A、B 两台读者得到一致结果才进入发布审核。所有批次演练留档 19 天。\n早期讨论还包括给图角加页码、把底图换为黑白打印配色以及如何操作评审屏幕。在 11 月 3 日的试算里两张示意图的网格密度并不相同。试算表把不可见字段显示为空，因而不能自动用空白替代经过脱敏的记录。图号位于 footer，与会议索引独立。演练编排允许审阅公共示意图，未扩大输入权限。归档索引可以在可读报告中复用，不授权把会议记录发给外部。",
+          "agent_response": "已区分草案与 11 月 5 日定案，未发布。"
+        },
+        {
+          "session_id": "synthetic-atlas-later-check",
+          "user_input": "11 月 8 日复核修订银栎规则：仍是每批 24 片，只读脱敏和 19 天留档不变。审核条件替换为 A、C 两台读者结果一致，B 的读回现在只作诊断。A 已读回，C 尚无结果。没有进入发布审核，也没有发布。",
+          "agent_response": "记录了新条件和当前缺失的 C。"
+        }
+      ],
+      "selected_source_indices": [0],
+      "retained_source_indices": [1],
+      "question": "11 月 3 日与 11 月 5 日分别是什么状态和每批片数？11 月 5 日会议记录从哪里查？",
+      "followups": [
+        {
+          "question": "11 月 8 日后进入审核的条件是什么，B 的结果有什么用途？",
+          "rubric": {
+            "required": [{"id": "readers", "description": "A 与 C 两台结果一致才进入审核，B 只用于诊断。"}],
+            "forbidden": [{"id": "no-old-current-rule", "description": "不得把 A 与 B 的一致性当成当前审核条件。"}]
+          }
+        },
+        {
+          "question": "当前一批多少片、能用哪类输入，演练资料留多少天？",
+          "rubric": {
+            "required": [{"id": "current-controls", "description": "每批 24 片，限只读脱敏切片，留档 19 天。"}],
+            "forbidden": [{"id": "no-stale-batch", "description": "不得把 36 片当成当前上限。"}]
+          }
+        },
+        {
+          "question": "已知哪些读回，能确认进入审核或已经发布吗？",
+          "rubric": {
+            "required": [{"id": "under-review-status", "description": "A 已读回，C 无结果，尚未进入审核也未发布。"}],
+            "forbidden": [{"id": "no-missing-evidence", "description": "不得补造 C 的读回、审核或发布。"}]
+          }
+        }
+      ],
+      "rubric": {
+        "summary": {
+          "required": [
+            {"id": "dated-update", "description": "11 月 3 日 36 片是草案，11 月 5 日正式定为 24 片。"},
+            {"id": "archival-lookup", "description": "证据索引的字面 `YL-MAP-C8` 可定位会议记录。"},
+            {"id": "conditions", "description": "先前规则是 A、B 读者结果一致才进入审核，输入限只读脱敏，留档 19 天。"}
+          ],
+          "forbidden": [{"id": "no-confirmed-delivery", "description": "不得把证据索引当作已经发布的证明或把草案当定案。"}]
+        },
+        "answer": {
+          "required": [
+            {"id": "draft-to-approved", "description": "11 月 3 日 36 片为草案，11 月 5 日正式 24 片。"},
+            {"id": "meeting-index", "description": "给出会议记录索引 YL-MAP-C8。"}
+          ],
+          "forbidden": [{"id": "no-actual-publish", "description": "不得声称已发布或次序反转。"}]
+        }
+      }
+    },
+    {
+      "id": "sandbox-sensor-evidence",
+      "reuse_kind": "longitudinal",
+      "sources": [
+        {
+          "session_id": "synthetic-sensor-boundaries",
+          "user_input": "合成项目赤翎温度板只用于离线教学，传感器标签 `PF-0a-17` 字面区分大小写。讲解偏好是先写结论，再写来源；只有现场温度板排障才需要附电路图，普通课堂复盘无需附图。仪表显示缺失时应写未读回。上次演练中只产生了测试申请号 `LAB-T23`，台账没有物理传感器读数，也没有确认传感器已校准。手填便签写了‘校准已过’，未取得独立仪器回执。",
+          "agent_response": "已记为人工说明，尚未验证。"
+        },
+        {
+          "session_id": "synthetic-sensor-later-observation",
+          "user_input": "本次只读回示例数据文件的版本 `sheet-r3`。示例文件和传感器读数不是一回事。课堂安排没有改，未找到校准回执。",
+          "agent_response": "文件版本已知，校准及物理读数仍未知。"
+        }
+      ],
+      "selected_source_indices": [0],
+      "retained_source_indices": [1],
+      "question": "普通课堂复盘和现场温度板排障分别怎样呈现结论和图？",
+      "followups": [
+        {
+          "question": "温度板的传感器标签、演练申请号和允许用途是什么？",
+          "rubric": {
+            "required": [{"id": "labels-and-purpose", "description": "保持 PF-0a-17 的小写 a、申请号 LAB-T23，只用于离线教学。"}],
+            "forbidden": [{"id": "no-real-usage", "description": "不得宣称可用于生产或公网。"}]
+          }
+        },
+        {
+          "question": "本次从哪里读回了什么版本，可以用它作为物理温度读数吗？",
+          "rubric": {
+            "required": [{"id": "only-file-version", "description": "只读回示例数据文件版本 sheet-r3，不能当物理读数。"}],
+            "forbidden": [{"id": "no-temp-guess", "description": "不得给出实际温度数值或声称存在现场读数。"}]
+          }
+        },
+        {
+          "question": "校准有没有通过，我能写一个确认结论吗？",
+          "rubric": {
+            "required": [{"id": "unverified-result", "description": "不能确认校准通过，现有手填便签缺独立仪器回执。"}],
+            "forbidden": [{"id": "no-fabricated-verification", "description": "不得将便签或示例版本写成已校准的证据。"}]
+          }
+        }
+      ],
+      "rubric": {
+        "summary": {
+          "required": [
+            {"id": "conditional-preference", "description": "先写结论再写来源，只在现场温度板排障附电路图，普通复盘无需图。"},
+            {"id": "literal-boundary", "description": "标签 PF-0a-17、申请 LAB-T23，仅离线教学。"},
+            {"id": "uncertainty", "description": "没有实际传感器读数及校准回执，手填便签未经验证。"}
+          ],
+          "forbidden": [{"id": "no-invented-validation", "description": "不得声称获得物理温度读数或证实校准已过。"}]
+        },
+        "answer": {
+          "required": [
+            {"id": "first-conclusion", "description": "先结论后来源。"},
+            {"id": "only-conditional-diagram", "description": "仅现场温度板排障需要电路图，普通课堂复盘无需附图。"}
+          ],
+          "forbidden": [{"id": "no-universal-diagram", "description": "不得将电路图要求扩为所有任务。"}]
+        }
+      }
+    }
+  ]
+}

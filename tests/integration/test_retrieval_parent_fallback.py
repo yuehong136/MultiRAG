@@ -34,7 +34,7 @@ def parent_scope(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(search, "db_connection", connection)
     dealer = search.Dealer.__new__(search.Dealer)
-    dealer.dataStore = SimpleNamespace(get=Mock(return_value=None))
+    dealer.dataStore = SimpleNamespace(get=Mock(return_value=None), db_type=lambda: "milvus")
     children = [
         {"chunk_id": "child-" + kb, "kb_id": kb, "doc_id": doc, "mom_id": "shared-parent", "content_ltks": "matching child", "text": "child text", "similarity": score, "vector": [0.2, 0.3]}
         for kb, doc, score in zip(kbs, docs, [0.8, 0.9, 1.0], strict=True)

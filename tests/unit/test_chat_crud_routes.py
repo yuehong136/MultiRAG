@@ -10,6 +10,7 @@ list_chats/list_sessions/update_session 的 HTTP 契约测试在 test_chat_restf
 import sys
 import threading
 from types import SimpleNamespace
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -144,11 +145,12 @@ def test_chat_tts_streams_off_loop_with_stripped_bundle(client, monkeypatch):
     _assert_sync_facade(records)
 
 
-def test_all_chat_routes_have_pure_async_dependency_tree(client, route_dependency_calls):
+def test_all_chat_routes_have_pure_async_dependency_tree(client: Any, route_dependency_calls: Any) -> None:
     """全量扫 /api/v1/chat* 前缀（含 6baf74af 改名后的 /chat/* 静态路由）：现在与未来的路由都不得回到同步轨。"""
     import api.apps as api_apps
 
-    chat_routes = [(sorted(r.methods)[0], r.path) for r in iter_api_routes(client.app) if r.path.startswith(("/api/v1/chats", "/api/v1/chat/"))]
+    chat_routes = [(sorted(r.methods)[0], r.path) for r in iter_api_routes(client.app) if r.path.startswith(("/api/v1/chats", "/api/v1/chat/", "/api/v1/openai/"))]
+    assert ("POST", "/api/v1/openai/{chat_id}/chat/completions") in chat_routes
     assert len(chat_routes) >= 21  # chat 面路由全部在册
 
     for method, path in chat_routes:
