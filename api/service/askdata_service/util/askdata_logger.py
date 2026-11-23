@@ -221,7 +221,8 @@ def get_askdata_logger() -> logging.Logger:
     # 共享索引：INFO 级、滚动。重活都是 DEBUG，不会进这里，保持「瘦」。
     shared_path = os.path.join(get_project_base_directory(), "logs", "askdata.log")
     os.makedirs(os.path.dirname(shared_path), exist_ok=True)
-    shared_handler = RotatingFileHandler(shared_path, maxBytes=10 * 1024 * 1024, backupCount=5)
+    # 与每问文件一致显式 UTF-8，避免 Windows 默认 locale 编码（GBK）写不出的字符导致整条丢失
+    shared_handler = RotatingFileHandler(shared_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
     shared_handler.setLevel(logging.INFO)
     shared_handler.setFormatter(formatter)
     logger.addHandler(shared_handler)

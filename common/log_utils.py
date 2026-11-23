@@ -121,7 +121,8 @@ def init_root_logger(logfile_basename: str, log_format: str = "%(asctime)-15s %(
     context_filter = ContextInjectFilter()
     masking_filter = SecretMaskingFilter()
 
-    handler1 = RotatingFileHandler(log_path, maxBytes=10 * 1024 * 1024, backupCount=5)
+    # 显式 UTF-8：Windows 默认按 locale（中文系统为 GBK）写文件，¥、零宽空格等字符会编码失败、整条日志丢失
+    handler1 = RotatingFileHandler(log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
     handler1.setFormatter(formatter)
     handler1.addFilter(context_filter)
     handler1.addFilter(masking_filter)
