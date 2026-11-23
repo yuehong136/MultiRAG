@@ -168,17 +168,24 @@ def test_authenticated_image_http_full_storage_no_writes(image_http_api: dict[st
             image("legacy.png", kb="sibling", status=404, code=102)
             for bad in ["missinghyphen", "-key", ids["kb"] + "-"]:
                 get("/api/v1/documents/images/" + bad, status=400, code=101)
+            pagination = {"page": 1, "page_size": len(docs)}
+            target_id = docs[first]
             for method, url, kwargs in [
-                ("get", f"/api/v1/datasets/{ids['kb']}/documents", {}),
-                ("get", "/v1/document/list", {"params": {"kb_id": ids["kb"]}}),
-                ("post", "/v1/document/list", {"params": {"id": ids["kb"]}, "json": {}}),
+                ("get", f"/api/v1/datasets/{ids['kb']}/documents", {"params": pagination}),
+                ("get", "/v1/document/list", {"params": {"kb_id": ids["kb"], **pagination}}),
+                ("post", "/v1/document/list", {"params": {"id": ids["kb"], **pagination}, "json": {}}),
             ]:
                 response = requests.request(method, env["base"] + url, headers={"Authorization": "Bearer " + env["tokens"]["owner"]}, timeout=30, **kwargs)
-                assert response.status_code == 200 and response.json()["code"] == 0, response.content
-                listed = response.json()["data"]["docs"]
-                thumb = next(item["thumbnail"] for item in listed if item["id"] == docs[first])
-                assert thumb == expected[docs[first]]
-                record["calls"].append({"producer": url, "body": response.content, "thumbnail": thumb})
+                producer = f"{method.upper()} {url}"
+                assert response.status_code == 200, (producer, response.status_code, response.content)
+                body = response.json()
+                assert body["code"] == 0, (producer, body)
+                listed = body["data"]["docs"]
+                target_rows = [item for item in listed if item["id"] == target_id]
+                assert len(target_rows) == 1, f"{producer} page_size={pagination['page_size']} returned {len(target_rows)} rows for {target_id}; returned IDs: {[item['id'] for item in listed]}"
+                thumb = target_rows[0]["thumbnail"]
+                assert thumb == expected[target_id], (producer, target_id, thumb, expected[target_id])
+                record["calls"].append({"producer": url, "method": method, "pagination": pagination, "target_id": target_id, "body": response.content, "thumbnail": thumb})
                 get(thumb, binary=_image("PNG"), mime="image/png")
             for role, token_role in [("owner", "owner"), ("other", "api")]:
                 get(f"/api/v1/documents/runtime/{setup['runtimes'][role]['id']}/image", token_role, binary=_image("PNG"), mime="image/png")
