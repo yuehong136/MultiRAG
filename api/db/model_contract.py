@@ -8,7 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, Strict
 
 ModelType = Literal["chat", "embedding", "rerank", "image2text", "speech2text", "tts", "ocr"]
 ModelStatus = Literal["active", "inactive"]
-PositiveModelID = Annotated[StrictInt, Field(gt=0, le=9223372036854775807)]
+ModelID = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{32}$")]
+MODEL_TYPE_BITS = {"chat": 1, "embedding": 2, "speech2text": 4, "image2text": 8, "rerank": 16, "tts": 32, "ocr": 64}
 DEFAULT_MODEL_FIELDS = {"chat": "llm_id", "embedding": "embd_id", "rerank": "rerank_id", "image2text": "img2txt_id", "speech2text": "asr_id", "tts": "tts_id", "ocr": "ocr_id"}
 
 
@@ -113,22 +114,46 @@ class InstancePatch(ModelInput):
         return self
 
 
-class StatusPatch(ModelInput):
-    status: ModelStatus
+class InstanceModelInput(ModelInput):
+    model_name: StrictStr = Field(min_length=1, max_length=128)
+    model_type: list[ModelType] = Field(min_length=1, max_length=7)
+    max_tokens: StrictInt = Field(ge=0, le=2147483647)
+    extra: dict[Literal["is_tools", "thinking"], StrictBool] = Field(default_factory=dict)
+
+    def registration(self) -> ModelRegistration:
+        return ModelRegistration(model_name=self.model_name, model_types=self.model_type, max_tokens=self.max_tokens, is_tools=self.extra.get("is_tools", False))
+
+
+class ModelPatch(ModelInput):
+    model_id: ModelID | None = None
+    status: ModelStatus | None = None
+    model_type: list[ModelType] | None = Field(default=None, min_length=1, max_length=7)
+    max_tokens: StrictInt | None = Field(default=None, ge=0, le=2147483647)
+    extra: dict[Literal["is_tools", "thinking"], StrictBool] | None = None
+
+    @model_validator(mode="after")
+    def valid_patch(self) -> "ModelPatch":
+        fields = self.model_fields_set - {"model_id"}
+        if not fields or any(getattr(self, field) is None for field in fields):
+            raise ValueError("Supply at least one non-null model update")
+        if self.model_type is not None and len(self.model_type) != len(set(self.model_type)):
+            raise ValueError("Duplicate model capability")
+        return self
+
+
+class DropModelsInput(ModelInput):
+    model_name: Annotated[list[Annotated[StrictStr, Field(min_length=1, max_length=128)]], Field(min_length=1, max_length=100)]
+
+
+class DropInstancesInput(ModelInput):
+    instances: Annotated[list[Annotated[StrictStr, Field(min_length=1, max_length=128)]], Field(min_length=1, max_length=100)]
 
 
 class DefaultModelInput(ModelInput):
     model_type: ModelType
-    model_id: PositiveModelID | None
+    model_id: ModelID | Literal[""]
 
 
-def parse_model_id(value: str) -> int | None:
-    """Numeric strings are identities; malformed numeric-looking values fail."""
-    if re.fullmatch(r"[1-9][0-9]*", value):
-        identifier = int(value)
-        if identifier > 9223372036854775807:
-            raise ValueError("Invalid model ID")
-        return identifier
-    if re.fullmatch(r"[+\-0-9.]+", value):
-        raise ValueError("Invalid model ID")
-    return None
+def parse_model_id(value: object) -> str | None:
+    """Return a canonical, opaque RAGFlow model ID."""
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) else None

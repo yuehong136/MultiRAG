@@ -7,7 +7,7 @@ ChannelRuntimeStatus 都外键引用 ChatChannel，字母序上 "Chann..." < "Ch
 这条路径只在空库首启建表，已有库走 skip，所以本地长期不暴露、CI 每次新库必然复现。
 """
 
-from api.db.db_models import Base, BaseModel, models_in_fk_creation_order
+from api.db.db_models import Base, models_in_fk_creation_order
 
 
 def test_parent_tables_are_created_before_their_children() -> None:
@@ -43,27 +43,7 @@ def test_channel_parent_precedes_the_three_dependent_tables() -> None:
 
 
 def test_every_mapped_model_is_returned() -> None:
-    """排序不得丢模型：数量要和字母序那版完全一致。"""
-    import inspect
-    import sys
-
-    module = sys.modules["api.db.db_models"]
-    expected = {obj for _, obj in inspect.getmembers(module, inspect.isclass) if obj is not BaseModel and issubclass(obj, BaseModel)}
-    from api.db.memory_compaction_models import MEMORY_COMPACTION_MODELS
-    from api.db.memory_execution_models import MEMORY_EXECUTION_MODELS
-    from api.db.memory_incremental_models import MEMORY_INCREMENTAL_MODELS, MemoryMaintenanceFragmentCoverage
-    from api.db.memory_maintenance_models import MEMORY_MAINTENANCE_MODELS
-    from api.db.memory_revision_models import MEMORY_REVISION_MODELS
-    from api.db.memory_verification_models import MEMORY_VERIFICATION_MODELS
-    from api.db.memory_writer_models import MEMORY_WRITER_MODELS
-
-    expected.update(MEMORY_REVISION_MODELS)
-    expected.update(MEMORY_WRITER_MODELS)
-    expected.update(MEMORY_MAINTENANCE_MODELS)
-    expected.update(MEMORY_EXECUTION_MODELS)
-    expected.update(MEMORY_INCREMENTAL_MODELS)
-    expected.add(MemoryMaintenanceFragmentCoverage)
-    expected.update(MEMORY_VERIFICATION_MODELS)
-    expected.update(MEMORY_COMPACTION_MODELS)
-
-    assert set(models_in_fk_creation_order()) == expected
+    """Every declared table, including extension tables, is in the creation order."""
+    order = models_in_fk_creation_order()
+    assert {model.__table__ for model in order} == set(Base.metadata.tables.values())
+    assert len(order) == len(Base.metadata.tables)

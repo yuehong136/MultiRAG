@@ -94,12 +94,12 @@ def _service(db: AsyncSession, env: dict[str, Any]) -> AppendService:
         return env["counter"]
 
     async def binding(session: AsyncSession, memory_id: str, dimension: int) -> ModelBinding:
-        return ModelBinding(71, "controlled@Owned", dimension, "fixed-config")
+        return ModelBinding("00000000000000000000000000000047", "controlled@Owned", dimension, "fixed-config")
 
     async def embed(memory_id: str, messages: list[dict[str, Any]], expected: ModelBinding | None) -> dict[str, Any]:
         assert not db.in_transaction()
         env["embeddings"] += 1
-        return {"vectors": [[0.1, 0.2] for _ in messages], "model_binding": ModelBinding(71, "controlled@Owned", 2, "fixed-config")}
+        return {"vectors": [[0.1, 0.2] for _ in messages], "model_binding": ModelBinding("00000000000000000000000000000047", "controlled@Owned", 2, "fixed-config")}
 
     async def extract(memory_id: str, raw: dict[str, Any]) -> dict[str, Any]:
         assert not db.in_transaction() and raw["message_type"] == "raw"

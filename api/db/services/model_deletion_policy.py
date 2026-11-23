@@ -11,7 +11,8 @@ from typing import Any, TypedDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import Dialog, Knowledgebase, Memory, Search, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, UserCanvas, UserCanvasVersion
+from api.db.db_models import Dialog, Knowledgebase, Memory, Search, Tenant, UserCanvas, UserCanvasVersion
+from api.db.services.provider_model_resolution import ModelRecord
 
 
 class ModelReference(TypedDict):
@@ -47,20 +48,20 @@ _REFERENCE_KEYS = {
 }
 
 
-def _references(value: Any, identifiers: set[str], names: set[str], key: str = "") -> bool:
+def _references(value: Any, identifiers: set[str], key: str = "") -> bool:
     if isinstance(value, dict):
-        return any(_references(item, identifiers, names, "llm_id" if key == "search_config" and field == "chat_id" else field) for field, item in value.items())
+        return any(_references(item, identifiers, "llm_id" if key == "search_config" and field == "chat_id" else field) for field, item in value.items())
     if isinstance(value, list):
-        return any(_references(item, identifiers, names, key) for item in value)
+        return any(_references(item, identifiers, key) for item in value)
     if key in {"dsl", "snapshot_dsl"} and isinstance(value, str):
         try:
-            return _references(json.loads(value), identifiers, names)
+            return _references(json.loads(value), identifiers)
         except (TypeError, ValueError):
             return False
-    return key in _REFERENCE_KEYS and str(value) in identifiers | names
+    return key in _REFERENCE_KEYS and isinstance(value, str) and value in identifiers
 
 
-async def collect_blocking_model_references(db: AsyncSession, rows: list[tuple[TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider]]) -> list[ModelReference]:
+async def collect_blocking_model_references(db: AsyncSession, rows: list[ModelRecord]) -> list[ModelReference]:
     """Protect live consumers, including the snapshot serving published runs.
 
     Deleted resources and retained execution/version history are not ownership
@@ -70,29 +71,13 @@ async def collect_blocking_model_references(db: AsyncSession, rows: list[tuple[T
         return []
     from api.db.db_models import Document, PythonSkillCoreConfig, SkillSearchConfig
 
-    identifiers = {str(row.id) for row, *_ in rows}
-    owners = {row.tenant_id for row, *_ in rows}
-    aliases: dict[int | None, set[str]] = {
-        row.id: {
-            name
-            for name in (
-                row.llm_name,
-                model.model_name,
-                f"{model.model_name}@{provider.provider_name}",
-                f"{model.model_name}@{instance.instance_name}@{provider.provider_name}",
-                f"{model.model_name}@{provider.provider_name}@{provider.provider_name}",
-            )
-            if name
-        }
-        for row, model, instance, provider in rows
-    }
-    names = set().union(*aliases.values())
+    identifiers = {model.id for model, _, _ in rows}
+    owners = {provider.tenant_id for _, _, provider in rows}
     references: list[ModelReference] = []
     datasets: dict[str, Knowledgebase] = {}
     canvases: dict[str, UserCanvas] = {}
     published_times: dict[str, int | None] = {}
     # Numeric IDs are global identities, including explicitly shared consumers.
-    # Name aliases are tenant-local and count only in actual model-ref fields.
     for entity in (
         Tenant,
         Knowledgebase,
@@ -135,11 +120,11 @@ async def collect_blocking_model_references(db: AsyncSession, rows: list[tuple[T
                 if item.create_time is not None and published_times[item.user_canvas_id] != item.create_time:
                     continue
                 item_owner = canvas.user_id
-            if _references(data, identifiers, names if item_owner in owners else set()):
-                # Return only a whitelist of display metadata. Numeric model IDs
+            if _references(data, identifiers):
+                # Return only a whitelist of display metadata. Model IDs
                 # may be shared across owners; their consumers must stay private.
                 visible = item_owner in owners
-                model_names = sorted({model.model_name for row, model, *_ in rows if _references(data, {str(row.id)}, aliases[row.id] if item_owner in owners else set())})
+                model_names = sorted({model.model_name for model, _, _ in rows if _references(data, {model.id})})
                 references.append(
                     {
                         "resource_type": entity.__name__ if visible else "SharedResource",

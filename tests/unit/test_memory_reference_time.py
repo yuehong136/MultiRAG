@@ -211,16 +211,15 @@ async def test_chinese_relative_time_prompt_is_stable_and_keeps_event_end(db: Se
             prompts.append(messages)
             return json.dumps({"episodic": [{"content": "会议", "valid_at": "2026-11-02T15:00:00", "invalid_at": "2026-11-02T16:00:00"}]})
 
-    monkeypatch.setattr(mms, "resolve_model_type", lambda *args: ["chat"])
-    monkeypatch.setattr(mms, "get_model_config_by_type_and_name", lambda *args: {})
+    monkeypatch.setattr(mms, "get_model_config_by_id", lambda *args, **kwargs: {})
     monkeypatch.setattr(mms, "LLMBundle", lambda *args: ControlledModel())
     for worker_time in (1, 9999999999999):
         monkeypatch.setattr(mms, "current_timestamp", lambda now=worker_time: now)
         result = await mms.extract_by_llm(
             db,
             "owner",
-            "chat",
-            None,
+            "a" * 32,
+            "a" * 32,
             {},
             ["episodic"],
             "明天15:00到16:00开会",

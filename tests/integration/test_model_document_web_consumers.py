@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from agent.component.docs_generator import DocGenerator, DocGeneratorParam
 from agent.component.message import Message
-from api.db.db_models import Conversation, Dialog, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, UserCanvas, UserCanvasVersion, get_db
+from api.db.db_models import Conversation, Dialog, TenantModel, TenantModelInstance, TenantModelProvider, UserCanvas, UserCanvasVersion, get_db
+from api.db.model_contract import MODEL_TYPE_BITS
 from api.db.services.tenant_llm_service import TenantLLMService
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.resource_journal import ResourceJournal
@@ -54,6 +55,7 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
     env["journal"].event("reserve-web-vite-ssr-cache", path=str(cache), web_checkout=str(checkout))
     env["journal"].event("reserve-chat-model-registrations", tenant_id=env["owners"][0], provider_id=provider_id, instance_id=instance_id, names=["vision", "text"])
     try:
+        model_ids = []
         with sessions() as db:
             provider = TenantModelProvider(id=provider_id, tenant_id=env["owners"][0], provider_name="Ollama", status="active")
             instance = TenantModelInstance(id=instance_id, provider_id=provider.id, instance_name="chat-types", api_key="controlled-no-provider", base_url="http://127.0.0.1:1", status="active")
@@ -62,10 +64,10 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
             db.add(instance)
             db.flush()
             for name, kind in [("vision", "image2text"), ("text", "chat")]:
-                row = TenantLLM(tenant_id=env["owners"][0], llm_factory="Ollama", llm_name=name, mdl_type=kind, api_key=instance.api_key, status="1")
-                db.add(row)
+                model = TenantModel(provider_id=provider_id, instance_id=instance_id, model_name=name, model_type=MODEL_TYPE_BITS[kind], extra={})
+                db.add(model)
                 db.flush()
-                db.add(TenantModel(id=row.id, instance_id=instance.id, model_name=name, model_types=[kind], is_tools=False))
+                model_ids.append(model.id)
             db.commit()
         completed = subprocess.run(
             [str(tsx_runner(checkout)), "--tsconfig", str(checkout / "tsconfig.app.json"), str(script)],
@@ -78,11 +80,11 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
         assert completed.returncode == 0, completed.stdout + completed.stderr
         result = json.loads(completed.stdout.splitlines()[-1])
         with sessions() as db:
-            for identifier, reference, kind in zip(result["ids"], result["references"], ["image2text", "chat"], strict=True):
+            for identifier, reference, model_id, kind in zip(result["ids"], result["references"], model_ids, ["image2text", "chat"], strict=True):
                 row = db.get(Dialog, identifier)
                 assert row is not None and row.tenant_id == env["owners"][0]
+                assert row.llm_id == row.tenant_llm_id == model_id == reference
                 assert row.llm_setting == {"temperature": 0, "model_type": kind}
-                assert row.llm_id == reference and row.tenant_llm_id == int(reference)
                 assert row.prompt_config["quote"] is False
         record_property("actual_web_chat_model_sql_readback", json.dumps(result))
     finally:
@@ -94,15 +96,12 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
             ids = list(db.scalars(select(Dialog.id).where(Dialog.tenant_id == env["owners"][0])))
             db.execute(delete(Conversation).where(Conversation.dialog_id.in_(ids)))
             db.execute(delete(Dialog).where(Dialog.tenant_id == env["owners"][0]))
-            model_ids = list(db.scalars(select(TenantLLM.id).where(TenantLLM.tenant_id.in_(env["owners"]))))
             db.execute(delete(TenantModel).where(TenantModel.id.in_(model_ids)))
-            db.execute(delete(TenantLLM).where(TenantLLM.id.in_(model_ids)))
             db.execute(delete(TenantModelInstance).where(TenantModelInstance.id == instance_id))
             db.execute(delete(TenantModelProvider).where(TenantModelProvider.id == provider_id))
             db.commit()
         with sessions() as reader:
             assert reader.scalar(select(Dialog.id).where(Dialog.tenant_id == env["owners"][0])) is None
-            assert reader.scalar(select(TenantLLM.id).where(TenantLLM.id.in_(model_ids))) is None
             assert reader.scalar(select(TenantModel.id).where(TenantModel.id.in_(model_ids))) is None
             assert reader.get(TenantModelInstance, instance_id) is None
             assert reader.get(TenantModelProvider, provider_id) is None
@@ -111,7 +110,7 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
 def run_web(env: dict[str, Any], mode: str, **values: str) -> dict[str, Any]:
     checkout, _ = pinned_web_checkout()
     runner = tsx_runner(checkout)
-    script = Path(__file__).resolve().parents[1] / "support/model_registration_web_consumer.mts" if mode == "model" else checkout / "scripts/verify-model-document-routes.ts"
+    script = checkout / "scripts/verify-model-document-routes.ts"
     assert runner.exists() and script.exists(), "Production Web consumer checkout is required"
     completed = subprocess.run(
         [str(runner), "--tsconfig", str(checkout / "tsconfig.app.json"), str(script)],
@@ -145,10 +144,13 @@ def test_actual_web_model_save_reload(release_api: dict[str, Any], monkeypatch: 
 
         def do_POST(self) -> None:
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            assert body["model"] == "combined-fixture"
-            assert self.path == "/api/chat"
-            requests.append(self.path)
-            result = {"model": "combined-fixture", "message": {"role": "assistant", "content": "answer"}, "done": True, "eval_count": 3, "prompt_eval_count": 2}
+            if self.path == "/api/show":
+                assert (body.get("model") or body.get("name")) == "combined-fixture"
+                result = {"capabilities": ["completion", "tools"]}
+            else:
+                assert self.path == "/api/chat" and body.get("model") == "combined-fixture", (self.path, sorted(body))
+                requests.append(self.path)
+                result = {"model": "combined-fixture", "message": {"role": "assistant", "content": "answer"}, "done": True, "eval_count": 3, "prompt_eval_count": 2}
             payload = (json.dumps(result) + "\n").encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson")
@@ -164,17 +166,22 @@ def test_actual_web_model_save_reload(release_api: dict[str, Any], monkeypatch: 
     try:
         result = run_web(env, "model", DOMAIN_ACCEPTANCE_PROVIDER=f"http://127.0.0.1:{server.server_port}")
         assert result["flags"] == [False, True, False] and len(requests) == 3
+        assert result["paths"].count("/api/v1/providers/Ollama/instances") == 6
+        assert result["paths"].count("/api/v1/models") == 7
+        assert set(result["paths"]) == {"/api/v1/providers/Ollama/instances", "/api/v1/models"}
         with Session(env["engine"]) as db:
             for expected in result["models"]:
-                row = db.get(TenantLLM, expected["id"])
                 model = db.get(TenantModel, expected["id"])
                 assert model is not None
                 instance = db.get(TenantModelInstance, model.instance_id)
-                assert row is not None and row.tenant_id == env["owners"][0] and row.api_key == "fixture-key"
+                provider = db.get(TenantModelProvider, model.provider_id)
+                assert provider is not None and provider.tenant_id == env["owners"][0] and provider.provider_name == factory
                 assert model.model_name == "combined-fixture" and model.model_types == ["chat"] and model.is_tools is expected["is_tools"]
-                assert instance is not None and instance.instance_name == expected["instance"] and instance.api_key == "fixture-key" and instance.base_url == f"http://127.0.0.1:{server.server_port}"
+                assert model.max_tokens == 4096
+                assert instance is not None and instance.instance_name == expected["instance"] and instance.api_key == "fixture-key"
+                assert instance.base_url == f"http://127.0.0.1:{server.server_port}"
             assert result["anonymous_denied"] is True
-        record_property("web_consumer_readback", json.dumps({**result, "database": env["engine"].url.database, "stored_is_tools": False, "provider_http_requests": len(requests)}))
+        record_property("web_consumer_readback", json.dumps({**result, "database": env["engine"].url.database, "provider_http_requests": len(requests)}))
     finally:
         server.shutdown()
         server.server_close()
@@ -184,15 +191,13 @@ def test_actual_web_model_save_reload(release_api: dict[str, Any], monkeypatch: 
             assert probe.connect_ex(("127.0.0.1", server.server_port)) != 0
         journal.event("controlled-provider-cleanup-readback", thread_absent=True, listener_closed=True)
         with Session(env["engine"]) as db:
-            model_ids = list(db.scalars(select(TenantLLM.id).where(TenantLLM.tenant_id.in_(env["owners"]))))
-            providers = list(db.scalars(select(TenantModelProvider.id).where(TenantModelProvider.tenant_id.in_(env["owners"]))))
+            providers = list(db.scalars(select(TenantModelProvider.id).where(TenantModelProvider.tenant_id == env["owners"][0])))
+            model_ids = list(db.scalars(select(TenantModel.id).where(TenantModel.provider_id.in_(providers))))
             db.execute(delete(TenantModel).where(TenantModel.id.in_(model_ids)))
-            db.execute(delete(TenantLLM).where(TenantLLM.id.in_(model_ids)))
             db.execute(delete(TenantModelInstance).where(TenantModelInstance.provider_id.in_(providers)))
             db.execute(delete(TenantModelProvider).where(TenantModelProvider.id.in_(providers)))
             db.commit()
         with Session(env["engine"]) as reader:
-            assert reader.scalar(select(TenantLLM.id).where(TenantLLM.id.in_(model_ids))) is None
             assert reader.scalar(select(TenantModel.id).where(TenantModel.id.in_(model_ids))) is None
             assert reader.scalar(select(TenantModelInstance.id).where(TenantModelInstance.provider_id.in_(providers))) is None
             assert reader.scalar(select(TenantModelProvider.id).where(TenantModelProvider.id.in_(providers))) is None

@@ -15,6 +15,7 @@
 #
 import json
 import math
+import os
 import pathlib
 import re
 import string
@@ -650,63 +651,15 @@ class CreateDatasetReq(Base):
         else:
             raise PydanticCustomError("format_invalid", "Missing MIME prefix. Expected format: data:<mime>;base64,<data>")
 
-    @field_validator("embedding_model", mode="before")
+    @field_validator("embedding_model")
     @classmethod
-    def normalize_embedding_model(cls, v: Any) -> Any:
-        """Normalize embedding model string by stripping whitespace"""
-        if isinstance(v, str):
-            return v.strip()
-        return v
-
-    @field_validator("embedding_model", mode="after")
-    @classmethod
-    def validate_embedding_model(cls, v: str | None) -> str | None:
-        """
-        Validates embedding model identifier format compliance.
-
-        Validation pipeline:
-        1. Structural format verification
-        2. Component non-empty check
-        3. Value normalization
-
-        Args:
-            v (str): Raw model identifier
-
-        Returns:
-            str: A numeric tenant-model identity or <model_name>@<provider>.
-
-        Raises:
-            PydanticCustomError: For these violations:
-                - Missing @ separator
-                - Empty model_name/provider
-                - Invalid component structure
-
-        Examples:
-            Valid: "text-embedding-3-large@openai"
-            Invalid: "invalid_model" (no @)
-            Invalid: "@openai" (empty model_name)
-            Invalid: "text-embedding-3-large@" (empty provider)
-        """
-        if v is None:
-            return None
-
-        try:
-            if parse_model_id(v) is not None:
-                return v
-        except ValueError as error:
-            raise PydanticCustomError("format_invalid", "Invalid embedding model ID") from error
-
-        if "@" not in v:
-            raise PydanticCustomError("format_invalid", "Embedding model identifier must be a model ID or follow <model_name>@<provider> format")
-
-        components = v.split("@", 1)
-        if len(components) != 2 or not all(components):
-            raise PydanticCustomError("format_invalid", "Both model_name and provider must be non-empty strings")
-
-        model_name, provider = components
-        if not model_name.strip() or not provider.strip():
-            raise PydanticCustomError("format_invalid", "Model name and provider cannot be whitespace-only strings")
-        return v
+    def validate_embedding_model(cls, value: str | None) -> str | None:
+        if value is None or parse_model_id(value) is not None:
+            return value
+        builtin_name = os.getenv("TEI_MODEL")
+        if builtin_name and "tei-" in os.getenv("COMPOSE_PROFILES", "") and value in {builtin_name, f"{builtin_name}@Builtin"}:
+            return value
+        raise PydanticCustomError("format_invalid", "Embedding model must be a registered model ID.")
 
     # @field_validator("permission", mode="before")
     # @classmethod

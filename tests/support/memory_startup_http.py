@@ -11,7 +11,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Base, Memory, Task, TenantLLM
+from api.db.db_models import Base, Memory, Task, TenantModel, TenantModelProvider
 from api.db.memory_verification_models import MemoryVerificationHead, MemoryVerificationOperation, MemoryVerificationRecord, MemoryVerificationSource
 from tests.support.memory_writes_http import api_request, result
 
@@ -81,7 +81,8 @@ def sql_fingerprint(env: dict[str, Any]) -> str:
             if table.schema == "usr_ai" and "memory_id" in table.c:
                 rows = reader.execute(sa.select(table).where(table.c.memory_id == env["memory_id"])).mappings().all()
                 state[table.fullname] = sorted(json.dumps(dict(row), sort_keys=True, default=str) for row in rows)
-        for model, column, identity in ((Memory, Memory.id, env["memory_id"]), (Task, Task.doc_id, env["memory_id"]), (TenantLLM, TenantLLM.tenant_id, env["tenants"]["personal"])):
-            rows = reader.execute(sa.select(model.__table__).where(column == identity)).mappings().all()
+        models = TenantModel.provider_id.in_(sa.select(TenantModelProvider.id).where(TenantModelProvider.tenant_id == env["tenants"]["personal"]))
+        for model, predicate in ((Memory, Memory.id == env["memory_id"]), (Task, Task.doc_id == env["memory_id"]), (TenantModel, models)):
+            rows = reader.execute(sa.select(model.__table__).where(predicate)).mappings().all()
             state[model.__tablename__] = sorted(json.dumps(dict(row), sort_keys=True, default=str) for row in rows)
     return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()

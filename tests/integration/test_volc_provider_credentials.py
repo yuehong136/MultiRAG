@@ -16,8 +16,9 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from api.db.db_models import TenantLLM, TenantModel, TenantModelInstance
+from api.db.db_models import TenantModel, TenantModelInstance
 from api.db.joint_services.tenant_model_service import get_model_config_by_id
+from api.db.model_contract import parse_model_id
 from api.db.services import provider_verification
 from api.db.services.llm_service import LLMBundle
 from common import settings
@@ -87,7 +88,7 @@ def provider_http() -> Iterator[tuple[str, list[tuple[str, str, str]]]]:
 
 
 @pytest.mark.parametrize("capability", ["chat", "image2text", "embedding"])
-def test_verify_atomic_create_and_numeric_bundle_share_key_semantics(http: tuple[Any, ...], provider_http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, capability: str) -> None:
+def test_verify_atomic_create_and_registered_bundle_share_key_semantics(http: tuple[Any, ...], provider_http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, capability: str) -> None:
     client, owner, engine, _module = http
     base, seen = provider_http
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "VolcEngine", "llm": []}])
@@ -111,10 +112,10 @@ def test_verify_atomic_create_and_numeric_bundle_share_key_semantics(http: tuple
         assert response.json()["data"]["has_api_key"] is True and "ark" not in response.text
         model = client.get(f"/api/v1/providers/VolcEngine/instances/{name}/models").json()["data"]["items"][0]
         identifier = model["id"]
-        assert type(identifier) is int and model["max_tokens"] == 0
+        assert parse_model_id(identifier) == identifier and model["max_tokens"] == 0
         assert client.patch("/api/v1/models/default", json={"model_type": capability, "model_id": identifier}).status_code == 200
         edited_base = base + "/edited"
-        patched = client.patch(f"/api/v1/providers/VolcEngine/instances/{name}", json={"api_key": "", "base_url": edited_base})
+        patched = client.put(f"/api/v1/providers/VolcEngine/instances/{name}", json={"api_key": "", "base_url": edited_base})
         assert patched.status_code == 200 and patched.json()["data"]["has_api_key"] is True
         assert client.get(f"/api/v1/providers/VolcEngine/instances/{name}/models").json()["data"]["items"][0]["id"] == identifier
         with Session(engine) as reader:
@@ -153,5 +154,5 @@ def test_verify_atomic_create_and_numeric_bundle_share_key_semantics(http: tuple
     with Session(engine) as reader:
         assert reader.scalar(select(func.count()).select_from(TenantModelInstance)) == 3
         assert reader.scalar(select(func.count()).select_from(TenantModel)) == 3
-        assert reader.scalar(select(func.count()).select_from(TenantLLM)) == 3
-        assert all(tokens == 0 for tokens in reader.scalars(select(TenantLLM.used_tokens)))
+        assert reader.scalar(select(func.count()).select_from(TenantModel)) == 3
+        assert all(tokens == 0 for tokens in reader.scalars(select(TenantModel.used_tokens)))

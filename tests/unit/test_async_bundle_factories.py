@@ -49,8 +49,8 @@ async def test_named_factory_strips_session(factory_stubs):
 
 
 async def test_by_id_factory_strips_session(factory_stubs: None) -> None:
-    bundle = await tms.build_bundle_by_id_async("tenant-unit", 7, model_type="chat")
+    bundle = await tms.build_bundle_by_id_async("tenant-unit", "7" * 32, model_type="chat")
 
     assert bundle.db is None
     assert bundle.built_off_loop is True
-    assert bundle.model_config == {"llm_name": "id-7", "mdl_type": "chat"}
+    assert bundle.model_config == {"llm_name": "id-" + "7" * 32, "mdl_type": "chat"}

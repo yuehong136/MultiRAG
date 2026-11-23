@@ -73,6 +73,7 @@ DATABASE_TESTS = frozenset(
         "test_model_type_resolution.py",
         "test_delta_model_consumers.py",
         "test_model_gateway.py",
+        "test_model_identity_migration.py",
         "test_provider_instances.py",
         "test_rdbms_state_sql.py",
         "test_model_default_backfill.py",

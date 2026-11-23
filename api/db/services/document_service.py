@@ -86,7 +86,7 @@ class DocumentService(CommonService):
         super().__init__(Document)
 
     @classmethod
-    def get_tenant_embd_id(cls, db: Session, doc_id: str) -> int | None:
+    def get_tenant_embd_id(cls, db: Session, doc_id: str) -> str | None:
         stmt = (
             select(Knowledgebase.tenant_embd_id)
             .select_from(cls.model)

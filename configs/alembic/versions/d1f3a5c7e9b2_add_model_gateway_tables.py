@@ -4,10 +4,12 @@ Revision ID: d1f3a5c7e9b2
 Revises: c9e1f3a5b7d9
 """
 
+from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
+from alembic.util import load_python_file
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "d1f3a5c7e9b2"
@@ -27,7 +29,7 @@ def _timestamps(*, index: bool = True) -> list[sa.Column[Any]]:
     ]
 
 
-def _tables() -> tuple[sa.Table, sa.Table, sa.Table]:
+def _tables(*, model_first: bool = False) -> tuple[sa.Table, sa.Table, sa.Table]:
     metadata = sa.MetaData(schema=SCHEMA)
     models = sa.Table(
         "t_ai_gateway_models",
@@ -89,7 +91,7 @@ def _tables() -> tuple[sa.Table, sa.Table, sa.Table]:
         sa.Column("key_name", sa.String(128), nullable=False),
         sa.Column("model", sa.String(128), nullable=True),
         sa.Column("gateway_model_id", sa.String(32), nullable=True),
-        sa.Column("upstream_model_id", sa.BigInteger(), nullable=True),
+        sa.Column("upstream_model_id", sa.String(32) if model_first else sa.BigInteger(), nullable=True),
         sa.Column("upstream_model_name", sa.String(255), nullable=True),
         sa.Column("endpoint", sa.String(32), nullable=False),
         sa.Column("stream", sa.Boolean(), nullable=False, server_default=sa.false()),
@@ -143,7 +145,11 @@ def _validate(bind: sa.Connection, table: sa.Table) -> None:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    for table in _tables():
+    references = load_python_file(str(Path(__file__).parents[1]), "model_identity_references.py")
+    model_first = references.has_model_first_schema(bind, schema=SCHEMA)
+    published, keys, requests = _tables(model_first=model_first)
+    tables = (keys, requests) if model_first else (published, keys, requests)
+    for table in tables:
         if sa.inspect(bind).has_table(table.name, schema=SCHEMA):
             _validate(bind, table)
         else:

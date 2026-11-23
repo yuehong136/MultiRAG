@@ -24,7 +24,7 @@
                             "field_name": "metadata",
                             "frequencyPenaltyEnabled": true,
                             "frequency_penalty": 0.7,
-                            "llm_id": "THUDM/GLM-4.1V-9B-Thinking@SILICONFLOW",
+                            "llm_id": "",
                             "maxTokensEnabled": false,
                             "max_tokens": 256,
                             "outputs": {
@@ -44,7 +44,6 @@
                             "sys_prompt": "Act as a precise resume metadata extractor. Extract stable, chunk-supported metadata from the provided resume content.\n\nRules:\n1. Use only information explicitly stated in the content. Do not infer, guess, normalize, or add missing facts.\n2. The input may be only one chunk of a resume. Extract only what this content directly supports.\n3. Use only these field names:\ncandidate_name, gender, phone, email, city, location, nationality, linkedin, github, website, highest_degree, degree_levels, school_names, majors, graduation_years, work_experience_years, current_job_title, job_titles, company_names, job_experience, industries, target_job_titles, target_locations, employment_types, skills, certificates, awards, summary_tags\n4. Ignore detailed responsibilities, project descriptions, achievement narratives, self-evaluation, and other low-value local details.\n5. Keep values in the same language as the source text whenever possible.\n6. Remove duplicates and keep only concise, high-value metadata.\n7. Return only fields that are explicitly supported by the content. Do not return empty or unsupported fields.\n\nField guidance:\n- highest_degree: highest explicit degree level mentioned\n- degree_levels: all explicit degree levels mentioned\n- school_names: explicit school, college, or university names\n- majors: explicit fields of study\n- graduation_years: explicit graduation years only\n- work_experience_years: only if explicitly stated\n- current_job_title: only if explicitly current or most recent\n- job_titles: explicit role titles\n- company_names: explicit employer names\n- job_experience: concise structured work entries explicitly supported by the content, preferably including title, company, and time information when available\n- industries: explicit industry names only\n- target_job_titles: explicit desired roles only\n- target_locations: explicit desired work locations only\n- skills: concise, core, search-useful skills explicitly mentioned\n- certificates: explicit certificate names only\n- awards: explicit award names only\n- summary_tags: short, high-value tags strictly supported by the content\n\nReturn only the extracted metadata. Do not output explanatory text.",
                             "temperature": 0.1,
                             "temperatureEnabled": true,
-                            "tenant_llm_id": 29,
                             "topPEnabled": true,
                             "top_p": 0.3
                         }
@@ -560,7 +559,7 @@
                                 "field_name": "metadata",
                                 "frequencyPenaltyEnabled": true,
                                 "frequency_penalty": 0.7,
-                                "llm_id": "THUDM/GLM-4.1V-9B-Thinking@SILICONFLOW",
+                                "llm_id": "",
                                 "maxTokensEnabled": false,
                                 "max_tokens": 256,
                                 "outputs": {
@@ -575,7 +574,6 @@
                                 "sys_prompt": "Act as a precise resume metadata extractor. Extract stable, chunk-supported metadata from the provided resume content.\n\nRules:\n1. Use only information explicitly stated in the content. Do not infer, guess, normalize, or add missing facts.\n2. The input may be only one chunk of a resume. Extract only what this content directly supports.\n3. Use only these field names:\ncandidate_name, gender, phone, email, city, location, nationality, linkedin, github, website, highest_degree, degree_levels, school_names, majors, graduation_years, work_experience_years, current_job_title, job_titles, company_names, job_experience, industries, target_job_titles, target_locations, employment_types, skills, certificates, awards, summary_tags\n4. Ignore detailed responsibilities, project descriptions, achievement narratives, self-evaluation, and other low-value local details.\n5. Keep values in the same language as the source text whenever possible.\n6. Remove duplicates and keep only concise, high-value metadata.\n7. Return only fields that are explicitly supported by the content. Do not return empty or unsupported fields.\n\nField guidance:\n- highest_degree: highest explicit degree level mentioned\n- degree_levels: all explicit degree levels mentioned\n- school_names: explicit school, college, or university names\n- majors: explicit fields of study\n- graduation_years: explicit graduation years only\n- work_experience_years: only if explicitly stated\n- current_job_title: only if explicitly current or most recent\n- job_titles: explicit role titles\n- company_names: explicit employer names\n- job_experience: concise structured work entries explicitly supported by the content, preferably including title, company, and time information when available\n- industries: explicit industry names only\n- target_job_titles: explicit desired roles only\n- target_locations: explicit desired work locations only\n- skills: concise, core, search-useful skills explicitly mentioned\n- certificates: explicit certificate names only\n- awards: explicit award names only\n- summary_tags: short, high-value tags strictly supported by the content\n\nReturn only the extracted metadata. Do not output explanatory text.",
                                 "temperature": 0.1,
                                 "temperatureEnabled": true,
-                                "tenant_llm_id": 29,
                                 "topPEnabled": true,
                                 "top_p": 0.3
                             },

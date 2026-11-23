@@ -15,10 +15,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from api.apps.services import memory_revision_service
-from api.db.db_models import Memory, Task, TenantLLM, UserTenant
+from api.db.db_models import Memory, Task, TenantModel, UserTenant
 from api.db.joint_services import memory_write_runtime
 from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemoryMutationOperation, MemoryPublicationOutbox, MemoryRevisionSource, MemorySourceState
 from api.db.memory_writer_models import MemoryWriterAdmission, MemoryWriterFence
+from api.db.model_contract import parse_model_id
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import settings
 from common.constants import MemoryType
@@ -26,6 +27,7 @@ from core.utils.redis_conn import REDIS_CONN
 from memory.revisions.storage import ManagedMessageStore
 from memory.services.messages import MessageService, index_name
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.registered_model import register_model
 from tests.support.resource_journal import ResourceJournal
 
 _TABLES = (MemoryWriterAdmission, MemoryWriterFence, MemoryPublicationOutbox, MemoryRevisionSource, MemoryEntryRevision, MemoryMutationOperation, MemoryEntry, MemorySourceState, ManagedMemoryState)
@@ -75,14 +77,14 @@ def writes_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
     )
     embeddings: list[str] = []
     chats: list[str] = []
-    model_ids: list[int] = []
+    model_ids: list[str] = []
     created_indexes: set[str] = set()
     monkeypatch.setattr(memory_write_runtime, "_COUNTER_KEY", counter)
     monkeypatch.setattr(memory_revision_service, "_COUNTER_KEY", counter)
     monkeypatch.setattr(settings, "get_svr_queue_name", lambda priority: queue)
 
     def model(cls: type[TenantLLMService], config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> WriteEmbedding | WriteChat:
-        assert config["tenant_id"] in tenants.values() and type(config["id"]) is int
+        assert config["tenant_id"] in tenants.values() and parse_model_id(config["id"]) is not None
         if config["mdl_type"] == "embedding":
             return WriteEmbedding(embeddings)
         assert config["mdl_type"] == "chat"
@@ -135,7 +137,7 @@ def writes_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
                     db.execute(sa.delete(table).where(table.memory_id.in_(list(memories.values()))))
                 db.execute(sa.delete(Task).where(Task.doc_id.in_(list(memories.values()))))
                 db.execute(sa.delete(Memory).where(Memory.id.in_(list(memories.values()))))
-                db.execute(sa.delete(TenantLLM).where(TenantLLM.id.in_(model_ids)))
+                db.execute(sa.delete(TenantModel).where(TenantModel.id.in_(model_ids)))
                 db.commit()
             with Session(env["engine"]) as reader:
                 remaining = {table.__tablename__: reader.scalar(sa.select(sa.func.count()).select_from(table).where(table.memory_id.in_(list(memories.values())))) for table in _TABLES}
@@ -148,11 +150,9 @@ def writes_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
         with Session(env["engine"]) as db:
             db.add(UserTenant(id=uuid4().hex, user_id=member, tenant_id=owner, role="normal", status="1", invited_by=owner))
             for key, mid in memories.items():
-                models: dict[str, int] = {}
+                models: dict[str, str] = {}
                 for kind in ("embedding", "chat"):
-                    record = TenantLLM(tenant_id=tenants[key], llm_factory="controlled", llm_name="auth-" + kind, mdl_type=kind, api_key="unused-owned-test-value")
-                    db.add(record)
-                    db.flush()
+                    record = register_model(db, tenant_id=tenants[key], provider_name="controlled", model_name="auth-" + kind, model_types=(kind,), api_key="unused-owned-test-value")
                     models[kind] = record.id
                     model_ids.append(record.id)
                 db.add(
@@ -162,9 +162,9 @@ def writes_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
                         name=key,
                         permissions="team" if key == "team" else "me",
                         memory_type=MemoryType.RAW.value,
-                        embd_id="auth-embedding",
+                        embd_id=models["embedding"],
                         tenant_embd_id=models["embedding"],
-                        llm_id="auth-chat",
+                        llm_id=models["chat"],
                         tenant_llm_id=models["chat"],
                     )
                 )

@@ -20,7 +20,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.db_models import TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.model_contract import ModelRegistration
 from api.db.services import model_provider_service, provider_verification
 from common import settings
@@ -194,7 +194,7 @@ def test_after5e_provider_discovery_web_sql(
 
     def counts() -> list[int]:
         with Session(engine) as reader:
-            return [reader.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM)]
+            return [reader.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel)]
 
     with _supplier_http(provider, names, state, calls, journal) as supplier:
         base_url = "https://openrouter.ai/api/v1" if provider == "OpenRouter" else "https://ark.cn-beijing.volces.com/api/v3" if provider == "VolcEngine" else supplier + "/v1"
@@ -221,7 +221,7 @@ def test_after5e_provider_discovery_web_sql(
         auth_override = client.app.dependency_overrides.pop(async_current_user)
         try:
             denied = client.post(f"/api/v1/providers/{provider}/models/discovery", json=body, headers={"Authorization": "Bearer invalid-fixture-token"})
-            assert denied.status_code == 401 and not calls and counts() == [0, 0, 0, 0]
+            assert denied.status_code == 401 and not calls and counts() == [0, 0, 0]
         finally:
             client.app.dependency_overrides[async_current_user] = auth_override
         response = client.post(f"/api/v1/providers/{provider}/models/discovery", json=body)
@@ -242,18 +242,18 @@ def test_after5e_provider_discovery_web_sql(
                 "custom_models": [{key: item[key] for key in ("model_name", "model_types", "max_tokens", "is_tools")} for item in all_items[:101]],
             }
             assert client.post(f"/api/v1/providers/{provider}/instances", json=excessive).status_code == 422
-            assert len(calls) == before and counts() == [0, 0, 0, 0]
+            assert len(calls) == before and counts() == [0, 0, 0]
         items = inventory["items"][:2]
         candidate = {**body, "model_ids": [], "custom_models": [{key: item[key] for key in ("model_name", "model_types", "max_tokens", "is_tools")} for item in items]}
-        assert counts() == [0, 0, 0, 0]
+        assert counts() == [0, 0, 0]
         state["bad_inventory"] = True
         failed_inventory = client.post(f"/api/v1/providers/{provider}/models/discovery", json=body)
         assert failed_inventory.status_code == 502 and "fixture-discovery-key" not in failed_inventory.text
-        assert counts() == [0, 0, 0, 0]
+        assert counts() == [0, 0, 0]
         state["bad_inventory"] = False
         state["bad_chat"] = True
         assert client.post(f"/api/v1/providers/{provider}/connection", json=candidate).status_code == 400
-        assert counts() == [0, 0, 0, 0]
+        assert counts() == [0, 0, 0]
         state["bad_chat"] = False
         add_model = model_provider_service.add_model
 
@@ -265,7 +265,7 @@ def test_after5e_provider_discovery_web_sql(
         with monkeypatch.context() as patch:
             patch.setattr(model_provider_service, "add_model", fail_second)
             assert client.post(f"/api/v1/providers/{provider}/instances", json={**candidate, "instance_name": "rolled-back"}).status_code == 400
-        assert counts() == [0, 0, 0, 0]
+        assert counts() == [0, 0, 0]
         run_web_discovery(
             client,
             owner,
@@ -281,7 +281,7 @@ def test_after5e_provider_discovery_web_sql(
             controlled_transport=provider in {"OpenRouter", "VolcEngine"},
             invalid_base_url="http://arbitrary.invalid",
         )
-        assert counts() == [1, 0, 0, 0], "Only the registered parent provider may remain until scratch DB DROP"
+        assert counts() == [1, 0, 0], "Only the registered parent provider may remain until scratch DB DROP"
         assert calls and any(call["path"].endswith("/chat/completions") for call in calls) and not state["errors"]
         if provider == "OpenRouter":
             assert {item["path"] for item in official_requests} == {"/api/v1/models", "/api/v1/chat/completions"}

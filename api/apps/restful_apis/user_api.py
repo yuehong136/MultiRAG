@@ -4,7 +4,7 @@ import secrets
 import string
 from base64 import b64decode
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -16,6 +16,8 @@ from api.apps import manager
 from api.apps.auth import get_auth_client
 from api.db import UserAccountKind
 from api.db.db_models import User, get_async_db
+from api.db.model_contract import DEFAULT_MODEL_FIELDS, ModelID
+from api.db.services import model_provider_service
 from api.db.services import password_recovery_service as recovery
 from api.db.services.user_service import TenantService, UserService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
@@ -25,7 +27,6 @@ from api.utils.password_recovery import check_origin as check_recovery_origin
 from api.utils.password_recovery import clear_token as clear_recovery_token
 from api.utils.password_recovery import request_token as recovery_request_token
 from api.utils.password_recovery import set_token as set_recovery_token
-from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.utils.web_utils import (
     OTP_LENGTH,
     send_email_html,
@@ -39,6 +40,7 @@ from common.time_utils import current_timestamp, datetime_format, get_format_tim
 router = APIRouter()
 
 Nickname = Annotated[str, BeforeValidator(normalize_nickname)]
+TenantDefaultSelection = ModelID | Literal[""] | None
 
 
 class LoginRequest(BaseModel):
@@ -67,23 +69,26 @@ class SetTenantInfoRequest(BaseModel):
     name: str | None = None
     """租户的名称。"""
 
-    llm_id: str | None = None
+    llm_id: TenantDefaultSelection = None
     """大语言模型的ID。"""
 
-    embd_id: str | None = None
+    embd_id: TenantDefaultSelection = None
     """嵌入模型的ID。"""
 
-    asr_id: str | None = None
+    asr_id: TenantDefaultSelection = None
     """语音识别模型的ID。"""
 
-    img2txt_id: str | None = None
+    img2txt_id: TenantDefaultSelection = None
     """图像转文本模型的ID。"""
 
-    rerank_id: str | None = None
+    rerank_id: TenantDefaultSelection = None
     """重新排序模型的ID。"""
 
-    tts_id: str | None = None
+    tts_id: TenantDefaultSelection = None
     """文本转语音模型的ID。"""
+
+    ocr_id: TenantDefaultSelection = None
+    """OCR 模型的 ID。"""
 
 
 class UserUpdateRequest(BaseModel):
@@ -522,16 +527,26 @@ async def tenant_info(user: Principal = Depends(async_current_user), db: AsyncSe
 @router.patch("/users/me/models", summary="设置租户信息")
 async def set_tenant_info(
     request: SetTenantInfoRequest,
-    _user: Principal = Depends(async_current_user),
+    user: Principal = Depends(async_current_user),
     db: AsyncSession = Depends(get_async_db),
-):
-    req = request.model_dump()
+) -> JSONResponse:
+    if request.tenant_id != user.id:
+        return get_json_result(data=False, retcode=RetCode.FORBIDDEN, retmsg="You can only update model defaults for your own tenant.")
+    req = request.model_dump(exclude_unset=True)
     try:
-        tid = req.pop("tenant_id")
-        req = await db.run_sync(lambda s: ensure_tenant_model_id_for_params(s, tid, req))  # TODO(async-phase4)
-        await db.run_sync(lambda s: TenantService.update_by_id(s, tid, req))  # TODO(async-phase4)
+        for capability, field in DEFAULT_MODEL_FIELDS.items():
+            if field in req:
+                await model_provider_service.set_default(db, user.id, capability, req[field] or "")
+        if "name" in req:
+            tenant = await model_provider_service.lock_owner(db, user.id)
+            tenant.name = req["name"]
+        await db.commit()
         return get_json_result(data=True)
+    except (LookupError, ValueError) as exc:
+        await db.rollback()
+        return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg=str(exc))
     except Exception as e:
+        await db.rollback()
         return server_error_response(e)
 
 

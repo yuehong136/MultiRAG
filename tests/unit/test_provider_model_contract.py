@@ -10,7 +10,7 @@ def test_zero_context_and_empty_catalog_selection_are_explicit() -> None:
     model = ModelRegistration(model_name="ocr", model_types=["ocr"], max_tokens=0)
     assert model.max_tokens == 0
     assert InstanceInput(instance_name="local", api_key="", region="", model_ids=[]).model_ids == []
-    assert DefaultModelInput(model_type="ocr", model_id=None).model_id is None
+    assert DefaultModelInput(model_type="ocr", model_id="").model_id == ""
 
 
 @pytest.mark.parametrize("patch", [{}, {"api_key": None}, {"status": None}, {"region": None}, {"api_key": "secret", "clear_api_key": True}, {"base_url": "https://user:secret@host"}])
@@ -31,15 +31,17 @@ def test_capability_contract_rejects_invalid_lists(types: list[str]) -> None:
         ModelRegistration(model_name="model", model_types=types, max_tokens=0)
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "+1", "1.0", "01", "9223372036854775808"])
-def test_numeric_model_references_are_unambiguous(value: str) -> None:
-    with pytest.raises(ValueError):
-        parse_model_id(value)
+@pytest.mark.parametrize("value", [1, "0", "-1", "+1", "1.0", "01", "9223372036854775808", "model:" + "b" * 32, "F" * 32, "org/model@instance@provider", None])
+def test_model_references_reject_old_or_noncanonical_values(value: object) -> None:
+    assert parse_model_id(value) is None
+    with pytest.raises(ValidationError):
+        DefaultModelInput(model_type="chat", model_id=value)
 
 
-def test_numeric_and_legacy_references() -> None:
-    assert parse_model_id("12") == 12
-    assert parse_model_id("org/model@instance@provider") is None
+def test_registry_uses_canonical_opaque_model_ids() -> None:
+    identifier = "a1" * 16
+    assert parse_model_id(identifier) == identifier
+    assert DefaultModelInput(model_type="chat", model_id=identifier).model_id == identifier
     assert InstancePatch(api_key="").api_key == ""
 
 

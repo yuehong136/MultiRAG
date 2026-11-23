@@ -53,7 +53,7 @@ multirag> SHOW CURRENT USER;
 ### create_model_provider
 
 **Description**  
-Creates a new model provider.
+Creates a `default` instance for a provider using its catalog and the supplied key.
 
 **Usage**  
 ```
@@ -61,12 +61,12 @@ CREATE MODEL PROVIDER <provider_name> <provider_key>;
 ```
 
 **Parameters**  
-- `provider_name`: Provider name, quoted string.
+- Use the exact catalog provider name for `provider_name`.
 - `provider_key`: Provider key, quoted string.
 
 **Example**  
 ```
-multirag> CREATE MODEL PROVIDER 'openai' 'sk-...';
+multirag> CREATE MODEL PROVIDER 'OpenAI' 'example-api-key';
 ```
 
 **Display Effect**  
@@ -77,7 +77,7 @@ multirag> CREATE MODEL PROVIDER 'openai' 'sk-...';
 ### drop_model_provider
 
 **Description**  
-Deletes a model provider.
+Deletes a model provider and its instances and registrations when none of its models are in use.
 
 **Usage**  
 ```
@@ -89,7 +89,7 @@ DROP MODEL PROVIDER <provider_name>;
 
 **Example**  
 ```
-multirag> DROP MODEL PROVIDER 'openai';
+multirag> DROP MODEL PROVIDER 'OpenAI';
 ```
 
 **Display Effect**  
@@ -108,11 +108,11 @@ SET DEFAULT LLM <llm_id>;
 ```
 
 **Parameters**  
-- `llm_id`: LLM identifier, quoted string.
+- Quote the registered chat model ID shown by `LIST MODEL PROVIDERS`. Model IDs are 32 lowercase hexadecimal characters.
 
 **Example**  
 ```
-multirag> SET DEFAULT LLM 'gpt-4';
+multirag> SET DEFAULT LLM 'a6820e6ed2354cdd8399777a40c72674';
 ```
 
 **Display Effect**  
@@ -131,11 +131,11 @@ SET DEFAULT VLM <vlm_id>;
 ```
 
 **Parameters**  
-- `vlm_id`: VLM identifier, quoted string.
+- Quote the registered vision model ID.
 
 **Example**  
 ```
-multirag> SET DEFAULT VLM 'clip-vit-large';
+multirag> SET DEFAULT VLM 'd5b208a30c5a493392e98ff9a7a10577';
 ```
 
 **Display Effect**  
@@ -154,11 +154,11 @@ SET DEFAULT EMBEDDING <embedding_id>;
 ```
 
 **Parameters**  
-- `embedding_id`: Embedding model identifier, quoted string.
+- Quote the registered embedding model ID.
 
 **Example**  
 ```
-multirag> SET DEFAULT EMBEDDING 'text-embedding-ada-002';
+multirag> SET DEFAULT EMBEDDING 'eb26c5a0be544af5af0dbb95e8edbae2';
 ```
 
 **Display Effect**  
@@ -177,11 +177,11 @@ SET DEFAULT RERANKER <reranker_id>;
 ```
 
 **Parameters**  
-- `reranker_id`: Reranker model identifier, quoted string.
+- Quote the registered rerank model ID.
 
 **Example**  
 ```
-multirag> SET DEFAULT RERANKER 'bge-reranker-large';
+multirag> SET DEFAULT RERANKER '96d4225901ab401cb555903a9adb24ec';
 ```
 
 **Display Effect**  
@@ -200,11 +200,11 @@ SET DEFAULT ASR <asr_id>;
 ```
 
 **Parameters**  
-- `asr_id`: ASR model identifier, quoted string.
+- Quote the registered speech-to-text model ID.
 
 **Example**  
 ```
-multirag> SET DEFAULT ASR 'whisper-large';
+multirag> SET DEFAULT ASR 'f0ac0d4d56e148f589c77a8ddde5a6fd';
 ```
 
 **Display Effect**  
@@ -223,11 +223,11 @@ SET DEFAULT TTS <tts_id>;
 ```
 
 **Parameters**  
-- `tts_id`: TTS model identifier, quoted string.
+- Quote the registered text-to-speech model ID.
 
 **Example**  
 ```
-multirag> SET DEFAULT TTS 'tts-1';
+multirag> SET DEFAULT TTS '28f4abc0d84a4f549682386878b2d27e';
 ```
 
 **Display Effect**  
@@ -385,12 +385,12 @@ CREATE DATASET <dataset_name> WITH EMBEDDING <embedding> PARSER <parser_type>;
 
 **Parameters**  
 - `dataset_name`: Dataset name, quoted string.
-- `embedding`: Embedding model name, quoted string.
+- Quote the registered embedding model ID for `embedding`.
 - `parser_type`: Parser type, quoted string.
 
 **Example**  
 ```
-multirag> CREATE DATASET 'my_dataset' WITH EMBEDDING 'text-embedding-ada-002' PARSER 'pdf';
+multirag> CREATE DATASET 'my_dataset' WITH EMBEDDING 'eb26c5a0be544af5af0dbb95e8edbae2' PARSER 'pdf';
 ```
 
 **Display Effect**  
@@ -410,12 +410,12 @@ CREATE DATASET <dataset_name> WITH EMBEDDING <embedding> PIPELINE <pipeline>;
 
 **Parameters**  
 - `dataset_name`: Dataset name, quoted string.
-- `embedding`: Embedding model name, quoted string.
+- Quote the registered embedding model ID for `embedding`.
 - `pipeline`: Pipeline name, quoted string.
 
 **Example**  
 ```
-multirag> CREATE DATASET 'my_dataset' WITH EMBEDDING 'text-embedding-ada-002' PIPELINE 'standard';
+multirag> CREATE DATASET 'my_dataset' WITH EMBEDDING 'eb26c5a0be544af5af0dbb95e8edbae2' PIPELINE 'standard';
 ```
 
 **Display Effect**  
@@ -657,7 +657,7 @@ multirag> DROP CHAT 'my_chat';
 ### list_user_model_providers
 
 **Description**  
-Lists all model providers for the current user.
+Lists the current user's model registrations with provider, instance, name, ID, capabilities, and status.
 
 **Usage**  
 ```

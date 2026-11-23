@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from api.db.db_models import Knowledgebase
 from common.constants import StatusEnum
@@ -27,6 +28,7 @@ class Obj(SimpleNamespace):
 
 def _install_common_fakes(monkeypatch):
     monkeypatch.setattr(chat_api, "get_uuid", lambda: "chat-new")
+    monkeypatch.setattr(chat_api.KnowledgebaseService, "ensure_same_embedding_model", lambda *args, **kwargs: None)
     monkeypatch.setattr(chat_api.TenantService, "get_by_id", lambda _db, _tenant_id: Obj(llm_id="chat-model"))
     monkeypatch.setattr(chat_api.TenantLLMService, "get_api_key", lambda *_args, **_kwargs: Obj(id=7))
     monkeypatch.setattr(chat_api.KnowledgebaseService, "accessible", lambda *_args, **_kwargs: True)
@@ -591,18 +593,31 @@ def test_session_completion_non_stream_reads_ids_from_body(monkeypatch: pytest.M
     assert updates[0]["message"][-1]["content"] == "ok"
 
 
+def test_direct_completion_uses_registered_default_model_id(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
+    model_id = "b" * 32
+
+    def get_default(session: Session, tenant_id: str, capability: str) -> dict[str, str]:
+        assert (session, tenant_id, capability) == (db, "tenant-1", "chat")
+        return {"id": model_id, "llm_name": "display-name", "llm_factory": "OpenAI"}
+
+    monkeypatch.setattr(chat_api, "get_tenant_default_model_by_type", get_default)
+    dialog = chat_api._build_default_completion_dialog(db, "tenant-1", "")
+    assert dialog.llm_id == dialog.tenant_llm_id == model_id
+
+
 def test_related_questions_uses_search_chat_config(monkeypatch, async_db):
     monkeypatch.setattr(chat_api.UserTenantService, "get_membership", lambda *_a, **_kw: Obj(role="owner"))
     monkeypatch.setattr(chat_api.TenantService, "get_or_none", lambda *_a, **_kw: Obj(id="tenant-1", status="1"))
     """直调式：AsyncSession 化后 db 走 run_sync facade，桩收到的是 facade 同步 session。"""
     captured = {}
+    model_id = "5" * 32
     monkeypatch.setattr(
         chat_api.SearchService,
         "get_detail",
-        lambda _db, search_id: {
+        lambda _db, _search_id: {
             "tenant_id": "tenant-1",
             "search_config": {
-                "chat_id": f"{search_id}-model",
+                "chat_id": model_id,
                 "llm_setting": {"temperature": 0.4, "parameter": {"ignored": True}},
             },
         },
@@ -610,7 +625,7 @@ def test_related_questions_uses_search_chat_config(monkeypatch, async_db):
 
     def fake_get_model_config(db, tenant_id, model_type, model_name):
         captured["model_lookup"] = (db, tenant_id, model_type, model_name)
-        return {"id": 7}
+        return {"id": model_id}
 
     monkeypatch.setattr(chat_api, "get_model_config_by_type_and_name", fake_get_model_config)
     monkeypatch.setattr(chat_api, "get_tenant_default_model_by_type", lambda *_args: {"id": "default"})
@@ -636,8 +651,8 @@ def test_related_questions_uses_search_chat_config(monkeypatch, async_db):
     )
     body = json.loads(response.body)
 
-    assert captured["model_lookup"][1:] == ("tenant-1", "chat", "search-1-model")
-    assert captured["bundle"][1:] == ("tenant-1", {"id": 7})
+    assert captured["model_lookup"][1:] == ("tenant-1", "chat", model_id)
+    assert captured["bundle"][1:] == ("tenant-1", {"id": model_id})
     assert captured["chat"][0] == "prompt:related_question"
     assert captured["chat"][1][0]["content"] == "\nKeywords: hybrid search\nRelated search terms:\n    "
     assert captured["chat"][2] == {"temperature": 0.4}

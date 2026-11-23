@@ -13,10 +13,12 @@ Revises: d1f3a5c7e9b2
 """
 
 import uuid
+from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
+from alembic.util import load_python_file
 from sqlalchemy.dialects.postgresql import JSONB, insert
 
 revision: str = "f3b5d7e9a1c2"
@@ -37,14 +39,14 @@ def _timestamps() -> list[sa.Column[Any]]:
     ]
 
 
-def _tables() -> tuple[sa.Table, sa.Table]:
+def _tables(*, model_first: bool = False) -> tuple[sa.Table, sa.Table]:
     metadata = sa.MetaData(schema=SCHEMA)
     model_settings = sa.Table(
         "t_ai_gateway_model_settings",
         metadata,
         sa.Column("id", sa.String(32), primary_key=True),
         sa.Column("tenant_id", sa.String(32), nullable=False, index=True),
-        sa.Column("model_id", sa.BigInteger(), nullable=False),
+        sa.Column("model_id", sa.String(32) if model_first else sa.BigInteger(), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("alias", sa.String(128), nullable=True),
         sa.Column("preferred", sa.Boolean(), nullable=False, server_default=sa.false()),
@@ -192,7 +194,9 @@ def _carry_over(bind: sa.Connection, model_settings: sa.Table) -> None:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    model_settings, settings = _tables()
+    references = load_python_file(str(Path(__file__).parents[1]), "model_identity_references.py")
+    model_first = references.has_model_first_schema(bind, schema=SCHEMA)
+    model_settings, settings = _tables(model_first=model_first)
     for table in (model_settings, settings):
         if sa.inspect(bind).has_table(table.name, schema=SCHEMA):
             _validate(bind, table)
@@ -201,6 +205,8 @@ def upgrade() -> None:
     if "allowed_instance_ids" not in {column["name"] for column in sa.inspect(bind).get_columns(_KEYS, schema=SCHEMA)}:
         op.add_column(_KEYS, sa.Column("allowed_instance_ids", JSONB(), nullable=False, server_default="[]"), schema=SCHEMA)
     if sa.inspect(bind).has_table("t_ai_gateway_models", schema=SCHEMA):
+        if model_first:
+            raise RuntimeError("Legacy gateway publications coexist with independent model identities")
         _carry_over(bind, model_settings)
         _published().drop(bind)
 

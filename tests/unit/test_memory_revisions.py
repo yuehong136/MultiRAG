@@ -114,7 +114,7 @@ def test_idempotency_digest_binds_actor_scope_and_exact_request() -> None:
 @pytest.mark.parametrize("change", [{"tenant_model_id": True}, {"dimension": True}, {"dimension": 0}, {"dimension": 32769}, {"model_reference": ""}])
 def test_model_binding_rejects_invalid_identity_and_dimension(change: dict[str, Any]) -> None:
     with pytest.raises(RevisionValidationError):
-        ModelBinding(**{"tenant_model_id": 1, "model_reference": "embed", "dimension": 2, **change})
+        ModelBinding(**{"tenant_model_id": "00000000000000000000000000000001", "model_reference": "embed", "dimension": 2, **change})
 
 
 def test_adoption_keeps_real_raw_scope_and_baseline_dimension() -> None:
@@ -131,7 +131,7 @@ def test_adoption_refuses_unavailable_or_unrelated_parent(change: dict[str, Any]
 
 def test_projection_receipt_proves_binding_but_contains_no_body_or_vector() -> None:
     staged = message(3, status=False)
-    receipt = validate_projection(staged, staged, ModelBinding(1, "embed", 2), active=False)
+    receipt = validate_projection(staged, staged, ModelBinding("00000000000000000000000000000001", "embed", 2), active=False)
     assert receipt["content_sha256"] == content_hash(staged["content"])
     assert "content" not in receipt and "content_embed" not in receipt
 
@@ -153,7 +153,7 @@ def test_projection_receipt_proves_binding_but_contains_no_body_or_vector() -> N
 def test_projection_readback_mismatch_never_verifies(change: dict[str, Any]) -> None:
     staged = message(3, status=False)
     with pytest.raises(RevisionConflict):
-        validate_projection({**staged, **change}, staged, ModelBinding(1, "embed", 2), active=False)
+        validate_projection({**staged, **change}, staged, ModelBinding("00000000000000000000000000000001", "embed", 2), active=False)
 
 
 @pytest.fixture
@@ -230,7 +230,7 @@ async def test_unadopted_entry_get_never_registers_or_reads_external_messages(se
 
 
 async def test_dry_run_never_allocates_embeds_or_persists(service: RevisionService, monkeypatch: pytest.MonkeyPatch) -> None:
-    snapshot = {**message(), "model_binding": ModelBinding(1, "embed", 2).to_dict(), "embedding_dimension": 2}
+    snapshot = {**message(), "model_binding": ModelBinding("00000000000000000000000000000001", "embed", 2).to_dict(), "embedding_dimension": 2}
     snapshot.pop("content_embed")
     entry = MemoryEntry(entry_id="entry", memory_id="bank", tenant_id="tenant", current_revision=1, current_message_id=2, state="active")
     revision = MemoryEntryRevision(entry_id="entry", revision=1, content="fact one; fact two", message_snapshot=snapshot)
@@ -292,7 +292,7 @@ async def test_drained_old_attempt_does_not_clear_newer_lease_even_after_withdra
 @pytest.mark.parametrize("changed", [False, True])
 async def test_publication_uses_resolved_model_identity_for_legacy_alias(service: RevisionService, monkeypatch: pytest.MonkeyPatch, changed: bool) -> None:
     memory = Memory(id="bank", tenant_id="tenant", tenant_embd_id=None, embd_id="legacy-alias")
-    binding = ModelBinding(71, "actual-model@Provider", 2, "resolved-config")
+    binding = ModelBinding("00000000000000000000000000000047", "actual-model@Provider", 2, "resolved-config")
     row = MemoryPublicationOutbox(
         memory_id="bank",
         entry_id="entry",
@@ -309,7 +309,7 @@ async def test_publication_uses_resolved_model_identity_for_legacy_alias(service
     monkeypatch.setattr(service, "_bank", AsyncMock(return_value=(memory, bank)))
     monkeypatch.setattr(service, "_sources", AsyncMock())
     monkeypatch.setattr(service, "_entry", AsyncMock(return_value=entry))
-    service.model_binding.return_value = ModelBinding(72, "changed-model@Provider", 2, "new-config") if changed else binding
+    service.model_binding.return_value = ModelBinding("00000000000000000000000000000048", "changed-model@Provider", 2, "new-config") if changed else binding
     if changed:
         with pytest.raises(RevisionConflict, match="model_binding_changed"):
             await service._publication_fence(row)

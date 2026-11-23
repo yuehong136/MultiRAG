@@ -10,17 +10,15 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from api.db import UserTenantRole
-from api.db.db_models import LLM, Dialog, GuardDimension, Knowledgebase, LLMFactories, Memory, TenantLLM, db_connection
+from api.db.db_models import LLM, GuardDimension, LLMFactories, db_connection
 from api.db.joint_services.memory_message_service import fix_missing_tokenized_memory, init_memory_size_cache, init_message_id_sequence
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.schema_bootstrap import bootstrap_database_schema
 from api.db.services import UserService
 from api.db.services.canvas_service import CanvasTemplateService
-from api.db.services.dialog_service import DialogService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle, LLMService
-from api.db.services.memory_service import MemoryService
 from api.db.services.system_settings_service import SystemSettingsService
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.user_service import TenantService
@@ -117,11 +115,8 @@ def init_llm_factory(db: Session) -> None:
     LLMService.filter_delete(db, [LLM.fid == "Local"])
     LLMService.filter_delete(db, [LLM.llm_name == "qwen-vl-max"])
     LLMService.filter_delete(db, [LLM.fid == "Moonshot", LLM.llm_name == "flag-embedding"])
-    TenantLLMService.filter_delete(db, [TenantLLM.llm_factory == "Moonshot", TenantLLM.llm_name == "flag-embedding"])
     LLMFactoriesService.filter_delete(db, [LLMFactories.name == "QAnything"])
     LLMService.filter_delete(db, [LLM.fid == "QAnything"])
-    TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "QAnything"], {"llm_factory": "Youdao"})
-    TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "cohere"], {"llm_factory": "Cohere"})
     TenantService.filter_update(
         db,
         [1 == 1],
@@ -133,68 +128,6 @@ def init_llm_factory(db: Session) -> None:
     doc_count = DocumentService.get_all_kb_doc_count(db)
     for kb_id in KnowledgebaseService.get_all_ids(db):
         KnowledgebaseService.update_document_number_in_init(db, kb_id=kb_id, doc_num=doc_count.get(kb_id, 0))
-
-
-def _batch_fill_tenant_model_id(db: Session, rows, *, model_name_attr: str, target_field: str, service, model_class):
-    """按 (tenant_id, model_name) 分组，每组查一次 get_api_key，批量更新。"""
-    groups: dict[tuple[str, str], list] = {}
-    for row in rows:
-        key = (row.tenant_id, getattr(row, model_name_attr))
-        groups.setdefault(key, []).append(row.id)
-
-    for (tenant_id, model_name), ids in groups.items():
-        tenant_llm = TenantLLMService.get_api_key(db, tenant_id, model_name)
-        if tenant_llm:
-            service.filter_update(db, [model_class.id.in_(ids)], {target_field: tenant_llm.id})
-
-
-def fix_empty_tenant_model_id(db: Session) -> None:
-    from api.db.model_backfill import backfill_tenant_defaults
-
-    backfill_tenant_defaults(db)
-    db.commit()
-
-    _batch_fill_tenant_model_id(
-        db,
-        KnowledgebaseService.get_null_tenant_embd_id_row(db),
-        model_name_attr="embd_id",
-        target_field="tenant_embd_id",
-        service=KnowledgebaseService,
-        model_class=Knowledgebase,
-    )
-    _batch_fill_tenant_model_id(
-        db,
-        DialogService.get_null_tenant_llm_id_row(db),
-        model_name_attr="llm_id",
-        target_field="tenant_llm_id",
-        service=DialogService,
-        model_class=Dialog,
-    )
-    if hasattr(DialogService, "get_null_tenant_rerank_id_row"):
-        _batch_fill_tenant_model_id(
-            db,
-            DialogService.get_null_tenant_rerank_id_row(db),
-            model_name_attr="rerank_id",
-            target_field="tenant_rerank_id",
-            service=DialogService,
-            model_class=Dialog,
-        )
-    _batch_fill_tenant_model_id(
-        db,
-        MemoryService.get_null_tenant_embd_id_row(db),
-        model_name_attr="embd_id",
-        target_field="tenant_embd_id",
-        service=MemoryService,
-        model_class=Memory,
-    )
-    _batch_fill_tenant_model_id(
-        db,
-        MemoryService.get_null_tenant_llm_id_row(db),
-        model_name_attr="llm_id",
-        target_field="tenant_llm_id",
-        service=MemoryService,
-        model_class=Memory,
-    )
 
 
 def add_graph_templates(db: Session):
@@ -351,7 +284,6 @@ def _init_web_data_with_db(db: Session) -> None:
         # Initialize message ID sequence and memory size cache
         init_message_id_sequence(db)
         init_memory_size_cache(db)
-        fix_empty_tenant_model_id(db)
         fix_missing_tokenized_memory(db)
 
         logging.info(f"init web data success:{time.time() - start_time}")

@@ -18,12 +18,13 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from api.db.db_models import TenantLLM
+from api.db.db_models import TenantModel, TenantModelProvider
 from api.db.joint_services.tenant_model_service import get_model_config_by_id
 from api.db.services import tenant_llm_service
 from api.db.services.llm_service import LLMBundle
 from common.exceptions import ModelException
 from core.llm.embedding import OpenAIEmbed
+from tests.support.registered_model import model_owner, register_model
 from tests.support.resource_journal import ResourceJournal
 
 
@@ -36,7 +37,7 @@ class _Provider:
 
 
 @pytest.fixture
-def embedding_env(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Iterator[tuple[Engine, str, int, int, _Provider]]:
+def embedding_env(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Iterator[tuple[Engine, str, str, str, _Provider]]:
     provider = _Provider()
 
     class Handler(BaseHTTPRequestHandler):
@@ -96,16 +97,17 @@ def embedding_env(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, 
     monkeypatch.setattr(tenant_llm_service, "db_connection", scratch_connection)
     try:
         with Session(engine) as db:
-            model = TenantLLM(
+            model = register_model(
+                db,
                 tenant_id=owner,
-                llm_factory="OpenAI",
-                llm_name="line-d-embedding",
-                mdl_type="embedding",
-                api_key="owned-provider-key",
-                api_base=f"http://127.0.0.1:{server.server_port}/v1",
+                provider_name="OpenAI",
+                model_name="line-d-embedding",
+                model_types=("embedding",),
+                api_key="owned-provider-key" or "",
+                base_url=f"http://127.0.0.1:{server.server_port}/v1",
                 max_tokens=8192,
             )
-            sibling = TenantLLM(tenant_id=owner, llm_factory="OtherProvider", llm_name="line-d-embedding", mdl_type="embedding", api_key="", used_tokens=41)
+            sibling = register_model(db, tenant_id=owner, provider_name="OtherProvider", model_name="line-d-embedding", model_types=("embedding",), api_key="" or "", used_tokens=41)
             db.add_all([model, sibling])
             db.commit()
             model_id, sibling_id = model.id, sibling.id
@@ -115,10 +117,10 @@ def embedding_env(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, 
     finally:
         try:
             with Session(engine) as db:
-                db.execute(delete(TenantLLM).where(TenantLLM.tenant_id == owner))
+                db.execute(delete(TenantModel).where(model_owner() == owner))
                 db.commit()
             with Session(engine) as db:
-                remaining = db.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == owner))
+                remaining = db.scalar(select(func.count()).select_from(TenantModel).where(model_owner() == owner))
             report["cleanup"]["remaining_model_rows"] = remaining
             assert remaining == 0
         finally:
@@ -137,13 +139,13 @@ def embedding_env(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, 
             journal.event("cleanup-readback", remaining_model_rows=0, thread_alive=thread.is_alive(), socket_absent=True)
 
 
-def _read_usage(engine: Engine, model_id: int, sibling_id: int) -> int:
+def _read_usage(engine: Engine, model_id: str, sibling_id: str) -> int:
     with Session(engine) as db:
-        assert db.get(TenantLLM, sibling_id).used_tokens == 41
-        return db.get(TenantLLM, model_id).used_tokens
+        assert db.get(TenantModel, sibling_id).used_tokens == 41
+        return db.get(TenantModel, model_id).used_tokens
 
 
-def test_factory_normalizes_batches_and_queries_and_commits_only_the_model_usage(embedding_env: tuple[Engine, str, int, int, _Provider]) -> None:
+def test_factory_normalizes_batches_and_queries_and_commits_only_the_model_usage(embedding_env: tuple[Engine, str, str, str, _Provider]) -> None:
     engine, owner, model_id, sibling_id, provider = embedding_env
     texts = ["valid", "", " \n\t", None, "\u2003", "  keep spaces  "] + [f"chunk {index}" for index in range(14)]
     original = texts.copy()
@@ -180,7 +182,7 @@ def test_factory_normalizes_batches_and_queries_and_commits_only_the_model_usage
         assert generation.end.call_count == 5
 
 
-def test_empty_batch_and_zero_usage_preserve_results_and_pending_caller_writes(embedding_env: tuple[Engine, str, int, int, _Provider]) -> None:
+def test_empty_batch_and_zero_usage_preserve_results_and_pending_caller_writes(embedding_env: tuple[Engine, str, str, str, _Provider]) -> None:
     engine, owner, model_id, sibling_id, provider = embedding_env
     provider.tokens = 0
     with Session(engine) as db, ExitStack() as clients:
@@ -193,8 +195,8 @@ def test_empty_batch_and_zero_usage_preserve_results_and_pending_caller_writes(e
         assert provider.requests == []
         assert _read_usage(engine, model_id, sibling_id) == 0
 
-        row = db.get(TenantLLM, model_id)
-        row.status = "0"
+        row = db.get(TenantModel, model_id)
+        row.status = "inactive"
         vectors, tokens = bundle.encode([None])
         assert vectors.shape == (1, 2)
         assert tokens == 0
@@ -206,11 +208,11 @@ def test_empty_batch_and_zero_usage_preserve_results_and_pending_caller_writes(e
         assert row in db.dirty
         assert _read_usage(engine, model_id, sibling_id) == 0
         with Session(engine) as independent:
-            assert independent.get(TenantLLM, model_id).status == "1"
+            assert independent.get(TenantModel, model_id).status == "active"
         assert [call["input"] for call in provider.requests] == [["None"], ["None"]]
 
 
-def test_provider_rejection_propagates_without_billing_or_success_trace(embedding_env: tuple[Engine, str, int, int, _Provider]) -> None:
+def test_provider_rejection_propagates_without_billing_or_success_trace(embedding_env: tuple[Engine, str, str, str, _Provider]) -> None:
     engine, owner, model_id, sibling_id, provider = embedding_env
     provider.reject = True
     with Session(engine) as db, ExitStack() as clients:
@@ -231,13 +233,13 @@ def test_provider_rejection_propagates_without_billing_or_success_trace(embeddin
         assert bundle.langfuse.start_observation.return_value.end.call_count == 2
 
 
-def test_localai_partial_batch_failure_never_bills_partial_vectors(embedding_env: tuple[Engine, str, int, int, _Provider]) -> None:
+def test_localai_partial_batch_failure_never_bills_partial_vectors(embedding_env: tuple[Engine, str, str, str, _Provider]) -> None:
     from core.llm.embedding import LocalAIEmbed
 
     engine, owner, model_id, sibling_id, provider = embedding_env
     provider.reject_at = 2
     with Session(engine) as writer:
-        writer.get(TenantLLM, model_id).llm_factory = "LocalAI"
+        writer.get(TenantModelProvider, writer.get(TenantModel, model_id).provider_id).provider_name = "LocalAI"
         writer.commit()
     with Session(engine) as db, ExitStack() as clients:
         bundle = LLMBundle(db, owner, get_model_config_by_id(db, model_id, tenant_id=owner))

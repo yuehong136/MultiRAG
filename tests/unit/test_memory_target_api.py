@@ -93,7 +93,7 @@ def test_confirmed_target_preview_requires_the_same_exact_principal(client: Test
         "targets": [
             {"entry_id": "a" * 32, "revision": "1", "message_id": "101", "generation": "1", "content_sha256": "c" * 64, "projection_sha256": "d" * 64, "scope": scope, "source_versions": [source(10)]}
         ],
-        "model_binding": {"tenant_model_id": 1, "model_reference": "embedding", "dimension": 2, "config_reference": "e" * 64},
+        "model_binding": {"tenant_model_id": "00000000000000000000000000000001", "model_reference": "embedding", "dimension": 2, "config_reference": "e" * 64},
     }
 
     class Discoveries:

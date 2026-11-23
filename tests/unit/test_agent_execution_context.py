@@ -77,7 +77,7 @@ class ExecutionSession(AsyncSession):
             return SimpleNamespace(
                 dialog_id="agent",
                 source="agent",
-                dsl={"components": {}, "history": [["question", "answer"]]},
+                dsl={"components": {"agent": {"obj": {"params": {"llm_id": "retired@alias"}}}}, "history": [["question", "answer"]]},
                 version_title="ambiguous title",
                 to_dict=lambda: {"id": "session", "dialog_id": "agent", "source": "agent"},
             )
@@ -89,7 +89,7 @@ class ExecutionSession(AsyncSession):
 
 
 def origin(*, mode: str = "published", user_id: str = "owner") -> SimpleNamespace:
-    snapshot = {"components": {}, "history": []}
+    snapshot = {"components": {"agent": {"obj": {"params": {"llm_id": "ab" * 16}}}}, "history": []}
     return SimpleNamespace(
         agent_id="agent",
         tenant_id="owner",
@@ -101,10 +101,14 @@ def origin(*, mode: str = "published", user_id: str = "owner") -> SimpleNamespac
     )
 
 
-async def test_resume_uses_original_revision_and_rechecks_caller() -> None:
-    prepared = await prepare_agent_run(ExecutionSession(origin=origin()), "agent", "owner", session_id="session", release_mode=True, principal=principal())
-    assert prepared.run_context is not None and prepared.run_context.agent_revision_id == "release-original"
-    assert json.loads(prepared.dsl)["history"] == [["question", "answer"]]
+@pytest.mark.parametrize("mode", ["draft", "published"])
+async def test_resume_uses_original_revision_and_rechecks_caller(mode: str) -> None:
+    saved_origin = origin(mode=mode)
+    prepared = await prepare_agent_run(ExecutionSession(origin=saved_origin), "agent", "owner", session_id="session", release_mode=True, principal=principal())
+    assert prepared.run_context is not None and prepared.run_context.agent_revision_id == saved_origin.agent_revision_id
+    dsl = json.loads(prepared.dsl)
+    assert dsl["history"] == [["question", "answer"]]
+    assert dsl["components"]["agent"]["obj"]["params"]["llm_id"] == "ab" * 16
     with pytest.raises(PermissionError, match="caller"):
         await prepare_agent_run(ExecutionSession(origin=origin()), "agent", "other", session_id="session", principal=principal("other"))
 

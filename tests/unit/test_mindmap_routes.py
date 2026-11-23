@@ -59,7 +59,7 @@ def mindmap_service_stubs(monkeypatch: pytest.MonkeyPatch) -> type[_FakeBundle]:
         return {"chunks": [{"content_with_weight": "c1"}]}
 
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: [kb]))
-    monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs: None))
+    monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs, **kwargs: None))
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda s, tid, inst, t, name: {"llm_name": "emb-m"})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda s, tid, t, name: {"llm_name": name})
     monkeypatch.setattr(dialog_service, "get_tenant_default_model_by_type", lambda s, tid, t: {"llm_name": "chat-m"})

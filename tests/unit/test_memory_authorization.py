@@ -1,5 +1,6 @@
 """Memory API preflight and tenant model scoping, with explicit unit fakes."""
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -55,13 +56,13 @@ def test_raw_model_row_ids_rejected_before_cache(db: Session, memories: None, mo
 
 @pytest.mark.parametrize("path", ["embedding", "search"])
 def test_pipeline_model_id_binds_memory_owner(db: Session, monkeypatch: pytest.MonkeyPatch, path: str) -> None:
-    def scoped_lookup(db: Session, model_id: int, *, tenant_id: str, model_type: str) -> dict:
-        assert model_id == 123 and tenant_id == "owner"
+    def scoped_lookup(db: Session, model_id: str, *, tenant_id: str, model_type: str) -> dict:
+        assert model_id == "a" * 32 and tenant_id == "owner"
         assert model_type == "embedding"
         raise LookupError("scoped denial")
 
     monkeypatch.setattr(mms, "get_model_config_by_id", scoped_lookup)
-    memory = Memory(id="own", tenant_id="owner", tenant_embd_id=123)
+    memory = Memory(id="own", tenant_id="owner", tenant_embd_id="a" * 32)
     if path == "embedding":
         with pytest.raises(LookupError, match="scoped denial"):
             mms._embedding_bundle_for(db, memory)
@@ -72,25 +73,27 @@ def test_pipeline_model_id_binds_memory_owner(db: Session, monkeypatch: pytest.M
 
 
 async def test_extraction_model_id_binds_owner(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    def scoped_lookup(db: Session, model_id: int, *, tenant_id: str, model_type: str) -> dict:
-        assert (model_id, tenant_id) == (123, "owner")
+    def scoped_lookup(db: Session, model_id: str, *, tenant_id: str, model_type: str) -> dict:
+        assert (model_id, tenant_id) == ("a" * 32, "owner")
         assert model_type == "chat"
         raise LookupError("scoped denial")
 
-    monkeypatch.setattr(mms, "resolve_model_type", lambda *args: ["chat"])
     monkeypatch.setattr(mms, "get_model_config_by_id", scoped_lookup)
     with pytest.raises(LookupError, match="scoped denial"):
-        await mms.extract_by_llm(db, "owner", "model", 123, {}, ["raw"], "hello", "world", system_prompt="s", user_prompt="u")
+        await mms.extract_by_llm(db, "owner", "a" * 32, "a" * 32, {}, ["raw"], "hello", "world", system_prompt="s", user_prompt="u")
 
 
 def test_model_config_denial_uses_scoped_sql_lookup(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    def lookup(db: Session, **filters: Any) -> None:
-        assert filters == {"id": 123, "tenant_id": "owner"}
-        return None
+    def execute(statement: Any) -> Any:
+        compiled = statement.compile()
+        sql = str(compiled)
+        assert "t_ai_tenant_model_providers.tenant_id =" in sql
+        assert set(compiled.params.values()) == {"a" * 32, "owner"}
+        return SimpleNamespace(one_or_none=lambda: None)
 
-    monkeypatch.setattr(models.TenantLLMService, "get_or_none", lookup)
+    monkeypatch.setattr(db, "execute", execute)
     with pytest.raises(LookupError):
-        models.get_model_config_by_id(db, 123, tenant_id="owner")
+        models.get_model_config_by_id(db, "a" * 32, tenant_id="owner")
 
 
 @pytest.mark.parametrize("operation", ["update", "delete", "config", "list", "content", "forget", "status"])

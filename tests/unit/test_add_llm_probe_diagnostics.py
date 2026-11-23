@@ -1,203 +1,78 @@
-"""add_llm 探测失败时的可诊断性钉板测试。
-
-修复前的三个黑洞：
-1. 上游报错以 "**ERROR**: ..." 字符串 yield 出来，探测循环只判断有没有它、不记录内容，
-   最后统一抛 "No valid response received"，401/404/参数错误全部丢失；
-2. 探测超时用 str(TimeoutError()) 拼消息，得到空串，用户看到的是一句没有下文的失败；
-3. 保存失败走 HTTPException(400) → {"detail": ...} 不带 retcode，前端当成正常数据放过，
-   表现为「点保存没反应、也没报错、库里没记录」。
-"""
+"""The current provider probe classifies failures without leaking credentials."""
 
 import asyncio
-import json
-import time
-from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
-from sqlalchemy.orm import Session
 
 import core.llm as provider_models
-from api.apps import llm_app
-from api.apps.llm_app import AddLLMRequest, add_llm
-from api.db.services.tenant_llm_service import TenantLLMService
-
-
-@pytest.fixture(autouse=True)
-def unmanaged_legacy_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Probe tests isolate the legacy management boundary; SQL guards are tested separately."""
-    monkeypatch.setattr(llm_app, "require_legacy_write", lambda *_args: None)
-
+from api.db.model_contract import ModelRegistration
+from api.db.services.provider_verification import verify_model
 
 FACTORY = "OpenAI-API-Compatible"
-ZHIPU_V4 = "https://open.bigmodel.cn/api/paas/v4"
-
-
-class _FakeChat:
-    """记录构造参数的假 chat 模型；yield 的内容由 chunks 决定。"""
-
-    instances: list["_FakeChat"] = []
-
-    chunks: list[Any] = ["Hi", 2]
-    delay: float = 0.0
-
-    def __init__(self, key=None, model_name="", base_url="", **kwargs):
-        self.key = key
-        self.model_name = model_name
-        self.base_url = base_url
-        self.kwargs = kwargs
-        _FakeChat.instances.append(self)
-
-    async def async_chat_streamly(self, system, history, gen_conf, **kwargs):
-        if _FakeChat.delay:
-            await asyncio.sleep(_FakeChat.delay)
-        for chunk in _FakeChat.chunks:
-            yield chunk
+BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+DECLARATION = ModelRegistration(model_name="glm-4.6", model_types=["chat"], max_tokens=0)
 
 
 @pytest.fixture
-def probe_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """把工厂白名单、注册表与落库都换成可观测的假实现。"""
-    _FakeChat.instances = []
-    _FakeChat.chunks = ["Hi", 2]
-    _FakeChat.delay = 0.0
+def probe_chat(monkeypatch: pytest.MonkeyPatch) -> type:
+    class Chat:
+        answer = "OK"
+        error: Exception | None = None
+        delay = 0.0
+        seen: dict[str, Any] = {}
+        closed = False
 
-    monkeypatch.setattr(llm_app, "get_allowed_llm_factories", lambda db: [SimpleNamespace(name=FACTORY)])
-    monkeypatch.setattr(provider_models, "ChatModel", {FACTORY: _FakeChat})
-    monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, db, **filters: []))
+        def __init__(self, **kwargs: Any) -> None:
+            Chat.seen = kwargs
 
-    saved: list[dict[str, Any]] = []
-    monkeypatch.setattr(TenantLLMService, "filter_update", classmethod(lambda cls, db, conds, payload: False))
-    monkeypatch.setattr(TenantLLMService, "save", classmethod(lambda cls, db, **payload: saved.append(payload)))
-    return {"saved": saved}
+        async def _exceptions_async(self, error: BaseException, attempt: int) -> str:
+            raise AssertionError("The probe must replace the normal diagnostics handler")
 
+        async def async_chat(self, *_args: Any) -> tuple[str, int]:
+            if Chat.delay:
+                await asyncio.sleep(Chat.delay)
+            if Chat.error:
+                return await self._exceptions_async(Chat.error, 0), 0
+            return Chat.answer, 1
 
-def _request(*, drop: tuple[str, ...] = (), **overrides: Any) -> AddLLMRequest:
-    payload: dict[str, Any] = {
-        "llm_factory": FACTORY,
-        "llm_name": "glm-4.6",
-        "mdl_type": "chat",
-        "api_key": "sk-test",
-        "api_base": ZHIPU_V4,
-    }
-    payload.update(overrides)
-    for key in drop:
-        payload.pop(key, None)
-    return AddLLMRequest(**payload)
+        async def aclose(self) -> None:
+            Chat.closed = True
+
+    monkeypatch.setattr(provider_models, "ChatModel", {FACTORY: Chat})
+    return Chat
 
 
-def _body(response) -> dict[str, Any]:
-    return json.loads(response.body)
+@pytest.mark.parametrize("status", [401, 429, 529])
+async def test_provider_error_preserves_status_without_echoing_credentials(probe_chat: type, status: int) -> None:
+    request = httpx.Request("POST", BASE_URL + "?key=private-fixture")
+    probe_chat.error = httpx.HTTPStatusError("private-fixture", request=request, response=httpx.Response(status))
+    with pytest.raises(ValueError, match=f"HTTP {status}") as failure:
+        await verify_model(FACTORY, "private-fixture", BASE_URL, DECLARATION)
+    assert "private-fixture" not in str(failure.value)
+    assert probe_chat.closed
 
 
-async def _call(request: AddLLMRequest, db: Session) -> dict[str, Any]:
-    return _body(await add_llm(request, db, SimpleNamespace(id="tenant-1")))
+async def test_probe_timeout_is_bounded_and_cleans_up(probe_chat: type, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROBE_TIMEOUT_SECONDS", "0.05")
+    probe_chat.delay = 1
+    with pytest.raises(ValueError, match="timed out"):
+        await verify_model(FACTORY, "", BASE_URL, DECLARATION)
+    assert probe_chat.closed
 
 
-@pytest.mark.asyncio
-async def test_upstream_error_is_surfaced_verbatim(probe_env: dict[str, Any], db: Session) -> None:
-    _FakeChat.chunks = ["**ERROR**: AUTH_ERROR - Error code: 401 - {'error': {'message': 'invalid api key'}}", 0]
-
-    body = await _call(_request(), db)
-
-    assert body["retcode"] != 0
-    assert "401" in body["retmsg"]
-    assert "invalid api key" in body["retmsg"]
-    assert not probe_env["saved"]
+async def test_probe_rejects_empty_provider_content(probe_chat: type) -> None:
+    probe_chat.answer = ""
+    with pytest.raises(ValueError, match="empty or invalid"):
+        await verify_model(FACTORY, "", BASE_URL, DECLARATION)
+    assert probe_chat.closed
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("env_var", ["LLM_PROBE_TIMEOUT_SECONDS", "LLM_TIMEOUT_SECONDS"])
-async def test_timeout_message_is_not_empty(probe_env: dict[str, Any], db: Session, monkeypatch: pytest.MonkeyPatch, env_var: str) -> None:
-    monkeypatch.setenv(env_var, "1")
-    _FakeChat.delay = 5.0
-
-    body = await _call(_request(), db)
-
-    assert body["retcode"] != 0
-    assert "timed out after 1s" in body["retmsg"]
-    # 提示要指向探测专用变量：LLM_TIMEOUT_SECONDS 同时是生产客户端的 transport 超时
-    assert "LLM_PROBE_TIMEOUT_SECONDS" in body["retmsg"]
-    assert not probe_env["saved"]
-
-
-def test_probe_timeout_prefers_dedicated_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    from api.apps.llm_app import probe_timeout_seconds
-
-    monkeypatch.delenv("LLM_PROBE_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
-    # 默认值必须留在前端 30s abort 之内，否则诊断文案到不了界面
-    assert probe_timeout_seconds() < 30
-
-    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "600")
-    assert probe_timeout_seconds() == 600
-
-    monkeypatch.setenv("LLM_PROBE_TIMEOUT_SECONDS", "20")
-    assert probe_timeout_seconds() == 20
-
-
-@pytest.mark.asyncio
-async def test_no_content_at_all_still_reports_something(probe_env: dict[str, Any], db: Session) -> None:
-    _FakeChat.chunks = ["", 0]
-
-    body = await _call(_request(), db)
-
-    assert body["retcode"] != 0
-    assert "No valid response received" in body["retmsg"]
-
-
-@pytest.mark.asyncio
-async def test_probe_disables_retry_backoff(probe_env: dict[str, Any], db: Session) -> None:
-    await _call(_request(), db)
-
-    assert _FakeChat.instances[0].kwargs["max_retries"] == 0
-    assert _FakeChat.instances[0].kwargs["provider"] == FACTORY
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("request_kwargs", [{"drop": ("api_key",)}, {"api_key": ""}])
-async def test_blank_api_key_does_not_reach_sdk_as_none(probe_env: dict[str, Any], db: Session, request_kwargs: dict[str, Any]) -> None:
-    # 前端把 API Key 标为可选：字段缺失时 model_dump() 仍带 api_key=None，
-    # 旧写法 req.get("api_key", "x") 取到的是 None，OpenAI(api_key=None) 直接抛异常。
-    await _call(_request(**request_kwargs), db)
-
-    assert _FakeChat.instances[0].key == "x"
-
-
-@pytest.mark.asyncio
-async def test_unsupported_factory_is_a_message_not_a_crash(probe_env: dict[str, Any], db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(provider_models, "ChatModel", {})
-
-    body = await _call(_request(), db)
-
-    assert body["retcode"] != 0
-    assert "is not supported yet" in body["retmsg"]
-
-
-@pytest.mark.asyncio
-async def test_constructor_failure_is_a_message_not_a_500(probe_env: dict[str, Any], db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Exploding(_FakeChat):
-        def __init__(self, key=None, model_name="", base_url="", **kwargs):
-            raise ValueError("url cannot be None")
-
-    monkeypatch.setattr(provider_models, "ChatModel", {FACTORY: _Exploding})
-
-    body = await _call(_request(api_base=""), db)
-
-    assert body["retcode"] != 0
-    assert "url cannot be None" in body["retmsg"]
-
-
-@pytest.mark.asyncio
-async def test_probe_success_persists_with_suffixed_name(probe_env: dict[str, Any], db: Session) -> None:
-    body = await _call(_request(), db)
-
-    assert body["retcode"] == 0
-    assert probe_env["saved"][0]["llm_name"] == "glm-4.6___OpenAI-API"
-    assert probe_env["saved"][0]["api_base"] == ZHIPU_V4
-    # 探测请求打到的是用户填的 v4 根，不是被改写过的地址
-    assert _FakeChat.instances[0].base_url == ZHIPU_V4
-    assert _FakeChat.instances[0].model_name == "glm-4.6"
+async def test_probe_uses_exact_model_and_endpoint_without_sdk_retry(probe_chat: type) -> None:
+    assert await verify_model(FACTORY, "", BASE_URL, DECLARATION) == {"verified": True, "model_name": "glm-4.6", "model_type": "chat"}
+    assert probe_chat.seen == {"key": "", "model_name": "glm-4.6", "base_url": BASE_URL, "provider": FACTORY, "max_retries": 0}
+    assert probe_chat.closed
 
 
 @pytest.mark.asyncio
@@ -264,135 +139,3 @@ async def test_retry_still_happens_when_retries_are_configured(monkeypatch: pyte
     assert len(slept) == 3
     assert "MAX_RETRIES_EXCEEDED" in chunks[0]
     assert "Rate limit reached" in chunks[0]
-
-
-class TestSetApiKeyProbe:
-    """set_api_key 是「选 ZHIPU-AI / Tongyi-Qianwen 原生厂商 + 只填 key」的那条路径，
-    也是我们推荐用户走的路，同一套诊断能力必须在这里也成立。"""
-
-    @pytest.fixture
-    def factory_env(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-        _FakeChat.instances = []
-        _FakeChat.chunks = ["Hi", 2]
-        _FakeChat.delay = 0.0
-
-        monkeypatch.setattr(provider_models, "ChatModel", {"ZHIPU-AI": _FakeChat})
-        monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, db, **filters: []))
-        monkeypatch.setattr(
-            llm_app.LLMService,
-            "query",
-            classmethod(lambda cls, db, **kw: [SimpleNamespace(fid="ZHIPU-AI", llm_name="glm-4.6", mdl_type="chat", max_tokens=128000)]),
-        )
-        saved: list[dict[str, Any]] = []
-        monkeypatch.setattr(TenantLLMService, "filter_update", classmethod(lambda cls, db, conds, payload: False))
-        monkeypatch.setattr(TenantLLMService, "save", classmethod(lambda cls, db, **payload: saved.append(payload)))
-        return {"saved": saved}
-
-    async def _call(self, db: Session, **overrides: Any) -> dict[str, Any]:
-        payload = {"llm_factory": "ZHIPU-AI", "api_key": "sk-test"}
-        payload.update(overrides)
-        return _body(await llm_app.set_api_key(llm_app.SetAPIKeyRequest(**payload), db, SimpleNamespace(id="tenant-1")))
-
-    @pytest.mark.asyncio
-    async def test_upstream_error_is_surfaced(self, factory_env: dict[str, Any], db: Session) -> None:
-        _FakeChat.chunks = ["**ERROR**: AUTH_ERROR - Error code: 401 - {'error': {'message': 'invalid api key'}}", 0]
-
-        body = await self._call(db)
-
-        assert body["retcode"] != 0
-        assert "invalid api key" in body["retmsg"]
-        assert not factory_env["saved"]
-
-    @pytest.mark.asyncio
-    async def test_timeout_message_is_not_empty(self, factory_env: dict[str, Any], db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_PROBE_TIMEOUT_SECONDS", "1")
-        _FakeChat.delay = 5.0
-
-        body = await self._call(db)
-
-        assert body["retcode"] != 0
-        assert "timed out after 1s" in body["retmsg"]
-
-    @pytest.mark.asyncio
-    async def test_probe_disables_retry_backoff(self, factory_env: dict[str, Any], db: Session) -> None:
-        await self._call(db)
-
-        assert _FakeChat.instances[0].kwargs["max_retries"] == 0
-
-    @pytest.mark.asyncio
-    async def test_total_budget_is_not_multiplied_by_model_count(self, factory_env: dict[str, Any], db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-        """三种模型类型串行探测时总耗时不能是 3 倍超时，否则必然超过前端的请求 abort。"""
-        monkeypatch.setenv("LLM_PROBE_TIMEOUT_SECONDS", "1")
-        monkeypatch.setattr(
-            llm_app.LLMService,
-            "query",
-            classmethod(
-                lambda cls, db, **kw: [
-                    SimpleNamespace(fid="ZHIPU-AI", llm_name="embedding-3", mdl_type="embedding", max_tokens=3072),
-                    SimpleNamespace(fid="ZHIPU-AI", llm_name="glm-4.6", mdl_type="chat", max_tokens=128000),
-                    SimpleNamespace(fid="ZHIPU-AI", llm_name="rerank", mdl_type="rerank", max_tokens=8192),
-                ]
-            ),
-        )
-
-        class _Hanging:
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                pass
-
-            def encode(self, texts: list[str]) -> tuple[list[list[float]], int]:
-                time.sleep(5)
-                return [[0.1]], 1
-
-            def similarity(self, query: str, texts: list[str]) -> tuple[list[float], int]:
-                time.sleep(5)
-                return [0.1], 1
-
-        monkeypatch.setattr(provider_models, "EmbeddingModel", {"ZHIPU-AI": _Hanging})
-        monkeypatch.setattr(provider_models, "RerankModel", {"ZHIPU-AI": _Hanging})
-        _FakeChat.delay = 5.0
-
-        started = asyncio.get_running_loop().time()
-        body = await self._call(db)
-        elapsed = asyncio.get_running_loop().time() - started
-
-        assert body["retcode"] != 0
-        assert elapsed < 3.0, f"三个模型各 1s 预算，总耗时不应线性叠加，实测 {elapsed:.1f}s"
-        assert not factory_env["saved"]
-
-    @pytest.mark.asyncio
-    async def test_success_registers_the_whole_catalog(self, factory_env: dict[str, Any], db: Session) -> None:
-        body = await self._call(db, base_url="https://open.bigmodel.cn/api/paas/v4")
-
-        assert body["retcode"] == 0
-        assert factory_env["saved"][0]["llm_name"] == "glm-4.6"
-        assert factory_env["saved"][0]["api_base"] == "https://open.bigmodel.cn/api/paas/v4"
-
-
-@pytest.mark.asyncio
-async def test_verify_mode_reports_message_without_saving(probe_env: dict[str, Any], db: Session) -> None:
-    _FakeChat.chunks = ["**ERROR**: MODEL_ERROR - model not found", 0]
-
-    body = await _call(_request(verify=True), db)
-
-    assert body["data"]["success"] is False
-    assert "model not found" in body["data"]["message"]
-    assert not probe_env["saved"]
-
-
-@pytest.mark.parametrize("model_type", ["chat", "rerank"])
-@pytest.mark.parametrize("verify", [False, True])
-async def test_unsupported_model_keeps_business_error_and_never_persists(probe_env: dict[str, Any], db: Session, monkeypatch: pytest.MonkeyPatch, model_type: str, verify: bool) -> None:
-    monkeypatch.setattr(provider_models, "ChatModel", {})
-    monkeypatch.setattr(provider_models, "RerankModel", {})
-    body = await _call(_request(mdl_type=model_type, verify=verify), db)
-    if verify:
-        assert body["retcode"] == 0
-        assert body["data"]["success"] is False
-        message = body["data"]["message"]
-    else:
-        assert body["retcode"] == 102
-        message = body["retmsg"]
-    assert "is not supported yet" in message
-    assert "dose" not in message
-    assert not probe_env["saved"]
-    assert _FakeChat.instances == []

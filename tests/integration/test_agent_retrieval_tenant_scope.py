@@ -12,12 +12,13 @@ from sqlalchemy.orm import Session
 
 from agent.tools import retrieval as module
 from agent.tools.retrieval import Retrieval, RetrievalParam
-from api.db.db_models import Knowledgebase, TenantLLM
+from api.db.db_models import Knowledgebase, TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.joint_services import tenant_model_service as tms
 from api.db.services.llm_service import LLMBundle
 from api.identity.principal import AuthenticatedActor, AuthenticationContext, AuthenticationSource, IdentityAssurance, TenantMembershipEvidence, build_principal_from_authenticated_actor
 from api.identity.run_context import RunContext
 from tests.support.dataset_access_permissions import permission_rows as permission_rows
+from tests.support.registered_model import register_model
 
 
 @pytest.fixture
@@ -45,24 +46,26 @@ def retrieval_scope(bootstrapped_engine: sa.Engine, permission_rows: dict[str, s
     monkeypatch.setattr(tms, "LLMBundle", ProbeBundle)
     monkeypatch.setattr(tms.settings, "FACTORY_LLM_INFOS", [{"name": "ScopeFixture"}])
     monkeypatch.setitem(vars(module.settings), "retriever", SimpleNamespace(retrieval=fetch, retrieval_by_children=lambda chunks, _: chunks))
+    registered = None
     try:
         with Session(bootstrapped_engine) as db:
-            model = TenantLLM(tenant_id=ids["tenant"], llm_factory="ScopeFixture", llm_name="embedding", mdl_type="embedding", api_key="fixture", api_base="http://fixture.invalid")
-            db.add(model)
-            db.flush()
-            assert model.id is not None
+            model = register_model(db, tenant_id=ids["tenant"], provider_name="ScopeFixture", model_name="embedding", model_types=("embedding",), api_key="fixture", base_url="http://fixture.invalid")
             model_id = model.id
-            db.execute(sa.update(Knowledgebase).where(Knowledgebase.tenant_id == ids["tenant"]).values(embd_id="embedding@ScopeFixture", tenant_embd_id=model_id))
+            registered = (model.id, model.instance_id, model.provider_id)
+            db.execute(sa.update(Knowledgebase).where(Knowledgebase.tenant_id == ids["tenant"]).values(embd_id=model_id, tenant_embd_id=model_id))
             for name in ["private", "team"]:
                 db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == ids[name]).values(name=f"{name}-name"))
             db.commit()
         yield {"ids": ids, "engine": bootstrapped_engine, "model": model_id, "built": built, "fetched": fetched}
     finally:
-        with Session(bootstrapped_engine) as db:
-            db.execute(sa.delete(TenantLLM).where(TenantLLM.tenant_id == ids["tenant"]))
-            db.commit()
-        with Session(bootstrapped_engine) as db:
-            assert db.scalar(sa.select(sa.func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == ids["tenant"])) == 0
+        if registered is not None:
+            rows = tuple(zip((TenantModel, TenantModelInstance, TenantModelProvider), registered, strict=True))
+            with Session(bootstrapped_engine) as db:
+                for model, identifier in rows:
+                    db.execute(sa.delete(model).where(model.id == identifier))
+                db.commit()
+            with Session(bootstrapped_engine) as db:
+                assert all(db.get(model, identifier) is None for model, identifier in rows)
 
 
 def tool(env: dict[str, Any], actor: str, selected: list[str], *, legacy: bool = False, names: list[str] | None = None) -> Retrieval:
@@ -94,11 +97,11 @@ def tool(env: dict[str, Any], actor: str, selected: list[str], *, legacy: bool =
 
 
 @pytest.mark.parametrize(("actor", "dataset", "legacy"), [("owner", "private", False), ("admin", "private", False), ("normal", "team", False), ("owner", "private", True)])
-@pytest.mark.parametrize("binding", ["id", "name"])
+@pytest.mark.parametrize("binding", ["explicit_id", "id_field"])
 async def test_allowed_retrieval_binds_dataset_model_owner(retrieval_scope: dict[str, Any], monkeypatch: pytest.MonkeyPatch, actor: str, dataset: str, legacy: bool, binding: str) -> None:
     env = retrieval_scope
     ids = env["ids"]
-    if binding == "name":
+    if binding == "id_field":
         with Session(env["engine"]) as db:
             db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == ids[dataset]).values(tenant_embd_id=None))
             db.commit()
@@ -147,4 +150,4 @@ async def test_denied_or_missing_selection_has_zero_downstream_io(retrieval_scop
     assert env["built"] == [] and env["fetched"] == []
     with Session(env["engine"]) as db:
         assert list(db.execute(sa.select(Knowledgebase.__table__).where(Knowledgebase.tenant_id == ids["tenant"]))) == before
-        assert db.scalar(sa.select(TenantLLM.used_tokens).where(TenantLLM.id == env["model"])) == 0
+        assert db.scalar(sa.select(TenantModel.used_tokens).where(TenantModel.id == env["model"])) == 0

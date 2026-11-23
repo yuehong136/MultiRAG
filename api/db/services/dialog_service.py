@@ -94,7 +94,7 @@ def _should_use_web_search(prompt_config: Mapping[str, object], internet: object
 def _resolve_model_config(
     db: Session,
     tenant_id: str,
-    tenant_model_id: int | None,
+    tenant_model_id: str | None,
     model_type: str | LLMType,
     model_name: str,
 ) -> dict:
@@ -411,23 +411,6 @@ class DialogService(CommonService):
 
         return res
 
-    @classmethod
-    def get_null_tenant_llm_id_row(cls, db: Session):
-        from api.db.db_models import Dialog
-
-        stmt = select(Dialog.id, Dialog.tenant_id, Dialog.llm_id).where(Dialog.tenant_llm_id.is_(None))
-        return db.execute(stmt).all()
-
-    @classmethod
-    def get_null_tenant_rerank_id_row(cls, db: Session):
-        from api.db.db_models import Dialog
-
-        stmt = select(Dialog.id, Dialog.tenant_id, Dialog.rerank_id).where(
-            Dialog.rerank_id.is_not(None),
-            Dialog.tenant_rerank_id.is_(None),
-        )
-        return db.execute(stmt).all()
-
 
 def chat_solo(
     db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True, *, session_id: str | None = None, trace_user_id: str | None = None
@@ -532,7 +515,7 @@ async def async_chat_solo(
 def get_models(db, dialog):
     embd_mdl, chat_mdl, rerank_mdl, tts_mdl = None, None, None, None
     kbs = KnowledgebaseService.get_by_ids(db, dialog.kb_ids)
-    KnowledgebaseService.ensure_same_embedding_model(kbs)
+    KnowledgebaseService.ensure_same_embedding_model(kbs, db=db)
 
     if kbs:
         embd_owner_tenant_id = kbs[0].tenant_id
@@ -2268,7 +2251,7 @@ def ask(db: Session, question: str, kb_ids: list[str], tenant_id: str, chat_llm_
     meta_data_filter = search_config.get("meta_data_filter")
 
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
-    KnowledgebaseService.ensure_same_embedding_model(kbs)
+    KnowledgebaseService.ensure_same_embedding_model(kbs, db=db)
 
     # all(空)=True 会把空 KB 误判成 KG，必须先确认非空
     is_knowledge_graph = bool(kbs) and all(kb.parser_id == ParserType.KG for kb in kbs)
@@ -2384,7 +2367,7 @@ async def async_ask(
         error = "No KB selected" if not kb_ids else "The selected KB is not valid"
         yield {"answer": "**ERROR**: " + error, "reference": {}, "final": True}
         return
-    KnowledgebaseService.ensure_same_embedding_model(kbs)
+    await db.run_sync(lambda s: KnowledgebaseService.ensure_same_embedding_model(kbs, db=s))  # TODO(async-phase4)
 
     is_knowledge_graph = all(kb.parser_id == ParserType.KG for kb in kbs)
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
@@ -2511,7 +2494,7 @@ async def gen_mindmap(db: AsyncSession, question: str, kb_ids: list[str], tenant
     kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)
     if not kbs:
         return {"error": "No KB selected"}
-    KnowledgebaseService.ensure_same_embedding_model(kbs)
+    await db.run_sync(lambda s: KnowledgebaseService.ensure_same_embedding_model(kbs, db=s))  # TODO(async-phase4)
     tenant_ids = [kb.tenant_id for kb in kbs]
     kb_names = [kb.name for kb in kbs]
 

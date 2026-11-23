@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from api.db.db_models import Base, Memory, Task, TenantLLM
+from api.db.db_models import Base, Memory, Task, TenantModel
 from api.db.services.llm_service import LLMBundle, llm_bundle_scope
 from common.asyncio_utils import finish_owned_work
 from common.constants import LLMType
@@ -55,7 +55,7 @@ def fingerprint(env: dict[str, Any]) -> str:
             if table.schema == "usr_ai" and "memory_id" in table.c:
                 rows = db.execute(sa.select(table).where(table.c.memory_id == mid)).mappings()
                 contents[table.fullname] = sorted(json.dumps(dict(row), sort_keys=True, default=str) for row in rows)
-        for model, predicate in ((Memory, Memory.id == mid), (Task, Task.doc_id == mid), (TenantLLM, TenantLLM.id.in_(env["model_ids"].values()))):
+        for model, predicate in ((Memory, Memory.id == mid), (Task, Task.doc_id == mid), (TenantModel, TenantModel.id.in_(env["model_ids"].values()))):
             rows = db.execute(sa.select(model.__table__).where(predicate)).mappings()
             contents[model.__tablename__] = sorted(json.dumps(dict(row), sort_keys=True, default=str) for row in rows)
     return hashlib.sha256(canonical(contents).encode()).hexdigest()

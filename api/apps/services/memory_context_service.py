@@ -30,7 +30,7 @@ class MemoryReadBinding:
     memory_id: str
     tenant_id: str
     embd_id: str
-    tenant_embd_id: int | None
+    tenant_embd_id: str | None
 
 
 def _binding(memory: Any) -> MemoryReadBinding:

@@ -4,12 +4,12 @@ Revision ID: b8d0f2a4c6e8
 Revises: a7c9e1f3b5d7
 """
 
+from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
-
-from api.db.model_backfill import backfill
+from alembic.util import load_python_file
 
 revision: str = "b8d0f2a4c6e8"
 down_revision: str | None = "a7c9e1f3b5d7"
@@ -30,6 +30,11 @@ def _timestamps() -> list[sa.Column[Any]]:
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    if not inspector.has_table("t_ai_tenant_llms", schema=SCHEMA):
+        references = load_python_file(str(Path(__file__).parents[1]), "model_identity_references.py")
+        if references.has_model_first_schema(bind):
+            return
+        raise RuntimeError("Provider migration requires the legacy model table or the complete model-first schema")
     if not inspector.has_table("t_ai_tenant_model_providers", schema=SCHEMA):
         op.create_table(
             "t_ai_tenant_model_providers",
@@ -80,7 +85,8 @@ def upgrade() -> None:
     legacy_columns = {column["name"]: column for column in sa.inspect(bind).get_columns("t_ai_tenant_llms", schema=SCHEMA)}
     if legacy_columns["api_base"]["type"].length < 2048:
         op.alter_column("t_ai_tenant_llms", "api_base", type_=sa.String(2048), existing_type=legacy_columns["api_base"]["type"], schema=SCHEMA)
-    backfill(bind)
+    loader = load_python_file(str(Path(__file__).parents[1]), "legacy_model_backfill.py")
+    loader.backfill(bind)
 
 
 def downgrade() -> None:

@@ -13,15 +13,17 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from api.apps.services import memory_revision_service
-from api.db.db_models import Memory, Task, TenantLLM, UserTenant
+from api.db.db_models import Memory, Task, TenantModel, UserTenant
 from api.db.joint_services import memory_write_runtime
 from api.db.memory_revision_models import ManagedMemoryState, MemoryEntry, MemoryEntryRevision, MemoryMutationOperation, MemoryPublicationOutbox, MemoryRevisionSource, MemorySourceState
 from api.db.memory_writer_models import MemoryWriterAdmission, MemoryWriterFence
+from api.db.model_contract import parse_model_id
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import settings
 from core.utils.redis_conn import REDIS_CONN
 from memory.services.messages import MessageService, index_name
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.registered_model import register_model
 from tests.support.resource_journal import ResourceJournal
 
 _SIDE_TABLES = (
@@ -72,7 +74,7 @@ def memory_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
 
     def model(cls: type[TenantLLMService], config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> FixedEmbedding:
         assert config["mdl_type"] == "embedding" and config["tenant_id"] in tenants.values()
-        assert type(config["id"]) is int and config["id"] > 0
+        assert parse_model_id(config["id"]) is not None
         return FixedEmbedding(tenant_id=config["tenant_id"])
 
     monkeypatch.setattr(TenantLLMService, "model_instance_from_config", classmethod(model))
@@ -88,7 +90,7 @@ def memory_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(MessageService, "create_index", classmethod(register_index))
     created: list[str] = []
-    model_ids: dict[str, int] = {}
+    model_ids: dict[str, str] = {}
     with ExitStack() as cleanup:
         journal.event("reserve-runtime-async-engine", database=env["engine"].url.database, pool="NullPool")
         asynchronous = create_async_engine(env["engine"].url, poolclass=NullPool)
@@ -127,7 +129,7 @@ def memory_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
                     db.execute(sa.delete(table).where(table.memory_id.in_(mids)))
                 db.execute(sa.delete(Task).where(Task.doc_id.in_(mids)))
                 db.execute(sa.delete(Memory).where(Memory.id.in_(mids)))
-                db.execute(sa.delete(TenantLLM).where(TenantLLM.id.in_(list(model_ids.values()))))
+                db.execute(sa.delete(TenantModel).where(TenantModel.id.in_(list(model_ids.values()))))
                 db.commit()
             with Session(env["engine"]) as reader:
                 remaining = {table.__tablename__: reader.scalar(sa.select(sa.func.count()).select_from(table).where(table.memory_id.in_(mids))) for table in _SIDE_TABLES}
@@ -150,14 +152,26 @@ def memory_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
         cleanup.callback(remove)
         with Session(env["engine"]) as db:
             db.add(UserTenant(id=uuid4().hex, user_id=member, tenant_id=owner, role="normal", status="1", invited_by=owner))
-            for key, mid in memories.items():
-                db.add(Memory(id=mid, tenant_id=tenants[key], name=key, permissions="team" if key == "team" else "me", memory_type=1, embd_id="auth-embedding", llm_id="auth-chat"))
             for label, tenant in [("owner", owner), ("member", member), ("foreign", outsider)]:
                 for kind in ["chat", "embedding"]:
-                    model = TenantLLM(tenant_id=tenant, llm_factory="controlled", llm_name=f"auth-{kind}", mdl_type=kind, api_key="unused-test-value", max_tokens=8192)
-                    db.add(model)
-                    db.flush()
+                    model = register_model(db, tenant_id=tenant, provider_name="controlled", model_name=f"auth-{kind}", model_types=(kind,), api_key="unused-test-value")
                     model_ids[f"{label}-{kind}"] = model.id
+            for key, mid in memories.items():
+                label = "owner" if key in {"private", "team"} else "member" if key == "personal" else "foreign"
+                embd_id, llm_id = model_ids[f"{label}-embedding"], model_ids[f"{label}-chat"]
+                db.add(
+                    Memory(
+                        id=mid,
+                        tenant_id=tenants[key],
+                        name=key,
+                        permissions="team" if key == "team" else "me",
+                        memory_type=1,
+                        embd_id=embd_id,
+                        llm_id=llm_id,
+                        tenant_embd_id=embd_id,
+                        tenant_llm_id=llm_id,
+                    )
+                )
             db.commit()
         for key, mid in memories.items():
             assert MessageService.create_index(tenants[key], mid, 2)

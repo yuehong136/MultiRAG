@@ -13,10 +13,11 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import Session
 
-from api.db.db_models import API4Conversation, APIToken, Dialog, Knowledgebase, Search, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.db_models import API4Conversation, APIToken, Dialog, Knowledgebase, Search, Tenant, TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.services import conversation_service, tenant_llm_service
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.agent_update_release import sse_events
+from tests.support.registered_model import register_model
 from tests.support.resource_journal import ResourceJournal
 
 
@@ -24,32 +25,18 @@ from tests.support.resource_journal import ResourceJournal
 def chatbot_http(release_api: dict[str, Any], bootstrapped_async_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     env = release_api
     journal = ResourceJournal("chatbot-model-defaults")
-    provider, instance, dialog_id, search_id = [uuid4().hex for _ in range(4)]
-    model_id = 10**10 + uuid4().int % 10**10
+    dialog_id, search_id = uuid4().hex, uuid4().hex
     kb_ids = [uuid4().hex for _ in range(2)]
     beta = uuid4().hex
     wire: list[dict[str, Any]] = []
-    journal.event("reserve-owned-rows", database=env["engine"].url.database, provider=provider, instance=instance, model=model_id, dialog=dialog_id, datasets=kb_ids, search=search_id)
+    journal.event("reserve-owned-rows", database=env["engine"].url.database, dialog=dialog_id, datasets=kb_ids, search=search_id)
     journal.event("reserve-beta-value", token_sha256=hashlib.sha256(beta.encode()).hexdigest(), owner=env["owners"][0])
     with Session(env["engine"]) as writer:
-        writer.add(TenantModelProvider(id=provider, tenant_id=env["owners"][0], provider_name="MiniMax", status="active"))
-        writer.flush()
-        writer.add(TenantModelInstance(id=instance, provider_id=provider, instance_name="controlled", api_key="fixture-key", base_url="http://fixture.invalid/v1", region="", status="active"))
-        writer.add(
-            TenantLLM(
-                id=model_id,
-                tenant_id=env["owners"][0],
-                llm_factory="MiniMax",
-                llm_name="MiniMax-M2",
-                mdl_type="chat",
-                api_key="fixture-key",
-                api_base="http://fixture.invalid/v1",
-                status="1",
-                used_tokens=0,
-            )
+        model = register_model(
+            writer, tenant_id=env["owners"][0], provider_name="MiniMax", model_name="MiniMax-M2", instance_name="controlled", api_key="fixture-key", base_url="http://fixture.invalid/v1"
         )
-        writer.flush()
-        writer.add(TenantModel(id=model_id, instance_id=instance, model_name="MiniMax-M2", model_types=["chat"], is_tools=False))
+        model_id, instance, provider = model.id, model.instance_id, model.provider_id
+        journal.event("registered-model", provider=provider, instance=instance, model=model_id)
         writer.add(
             Dialog(
                 id=dialog_id,
@@ -131,7 +118,6 @@ def chatbot_http(release_api: dict[str, Any], bootstrapped_async_engine: AsyncEn
             writer.execute(sa.delete(Search).where(Search.id == search_id))
             writer.execute(sa.update(Tenant).where(Tenant.id == env["owners"][0]).values(llm_id="", tenant_llm_id=None))
             writer.execute(sa.delete(TenantModel).where(TenantModel.id == model_id))
-            writer.execute(sa.delete(TenantLLM).where(TenantLLM.id == model_id))
             writer.execute(sa.delete(TenantModelInstance).where(TenantModelInstance.id == instance))
             writer.execute(sa.delete(TenantModelProvider).where(TenantModelProvider.id == provider))
             writer.commit()
@@ -142,7 +128,6 @@ def chatbot_http(release_api: dict[str, Any], bootstrapped_async_engine: AsyncEn
                     (Dialog, dialog_id),
                     (Search, search_id),
                     (TenantModel, model_id),
-                    (TenantLLM, model_id),
                     (TenantModelInstance, instance),
                     (TenantModelProvider, provider),
                     *((Knowledgebase, identifier) for identifier in kb_ids),
@@ -166,7 +151,7 @@ def start_session(env: dict[str, Any]) -> str:
     return identifier
 
 
-@pytest.mark.parametrize("selection", ["default_id", "default_name", "binding", "binding_stale_name", "numeric_name", "qualified_name"])
+@pytest.mark.parametrize("selection", ["default_id", "binding", "binding_stale_name", "id_field"])
 @pytest.mark.parametrize("stream", [False, True])
 def test_chatbot_http_resolves_server_model_and_commits_answer(chatbot_http: dict[str, Any], selection: str, stream: bool) -> None:
     env = chatbot_http
@@ -176,13 +161,11 @@ def test_chatbot_http_resolves_server_model_and_commits_answer(chatbot_http: dic
         assert dialog is not None and tenant is not None
         if selection == "default_id":
             tenant.tenant_llm_id = env["model_id"]
-        elif selection == "default_name":
-            tenant.llm_id = "MiniMax-M2@MiniMax"
         elif selection.startswith("binding"):
             dialog.tenant_llm_id = env["model_id"]
             dialog.llm_id = "obsolete@provider" if selection == "binding_stale_name" else ""
         else:
-            dialog.llm_id = str(env["model_id"]) if selection == "numeric_name" else "MiniMax-M2@MiniMax"
+            dialog.llm_id = env["model_id"]
         writer.commit()
         binding = (dialog.llm_id, dialog.tenant_llm_id)
     identifier = start_session(env)
@@ -202,32 +185,32 @@ def test_chatbot_http_resolves_server_model_and_commits_answer(chatbot_http: dic
     with Session(env["engine"]) as reader:
         saved = reader.get(API4Conversation, identifier)
         dialog = reader.get(Dialog, env["dialog_id"])
-        model = reader.get(TenantLLM, env["model_id"])
+        model = reader.get(TenantModel, env["model_id"])
         assert saved is not None and [message["role"] for message in saved.message] == ["assistant", "user", "assistant"]
         assert saved.message[-1]["content"].endswith("answer") and saved.reference[-1]["chunks"] == []
         assert dialog is not None and (dialog.llm_id, dialog.tenant_llm_id) == binding
         assert model is not None and model.used_tokens > 0
 
 
-@pytest.mark.parametrize("failure", ["foreign", "disabled_provider", "disabled_instance", "disabled_model", "deleted", "no_default"])
+@pytest.mark.parametrize("failure", ["foreign", "disabled_provider", "disabled_instance", "disabled_model", "deleted", "no_default", "retired_name_alias"])
 def test_chatbot_unavailable_models_fail_without_provider_or_message_commit(chatbot_http: dict[str, Any], failure: str) -> None:
     env = chatbot_http
     identifier = start_session(env)
     with Session(env["engine"]) as writer:
-        if failure != "no_default":
+        if failure == "retired_name_alias":
+            writer.execute(sa.update(Dialog).where(Dialog.id == env["dialog_id"]).values(llm_id="MiniMax-M2@MiniMax"))
+        elif failure != "no_default":
             writer.execute(sa.update(Dialog).where(Dialog.id == env["dialog_id"]).values(tenant_llm_id=env["model_id"]))
         if failure == "foreign":
-            writer.execute(sa.update(TenantLLM).where(TenantLLM.id == env["model_id"]).values(tenant_id=env["owners"][1]))
             writer.execute(sa.update(TenantModelProvider).where(TenantModelProvider.id == env["provider_id"]).values(tenant_id=env["owners"][1]))
         elif failure == "disabled_provider":
             writer.execute(sa.update(TenantModelProvider).where(TenantModelProvider.id == env["provider_id"]).values(status="inactive"))
         elif failure == "disabled_instance":
             writer.execute(sa.update(TenantModelInstance).where(TenantModelInstance.id == env["instance_id"]).values(status="inactive"))
         elif failure == "disabled_model":
-            writer.execute(sa.update(TenantLLM).where(TenantLLM.id == env["model_id"]).values(status="0"))
+            writer.execute(sa.update(TenantModel).where(TenantModel.id == env["model_id"]).values(status="inactive"))
         elif failure == "deleted":
             writer.execute(sa.delete(TenantModel).where(TenantModel.id == env["model_id"]))
-            writer.execute(sa.delete(TenantLLM).where(TenantLLM.id == env["model_id"]))
         writer.commit()
     response = env["client"].post(
         f"{env['base']}/api/v1/chatbots/{env['dialog_id']}/completions", headers=env["headers"], json={"session_id": identifier, "question": "Question", "stream": True}, timeout=30
@@ -268,7 +251,7 @@ def test_searchbot_empty_or_denied_kbs_never_reach_a_model(chatbot_http: dict[st
         assert response.json()["code"] == 109, response.text
     assert not env["wire"]
     with Session(env["engine"]) as reader:
-        assert reader.get(TenantLLM, env["model_id"]).used_tokens == 0
+        assert reader.get(TenantModel, env["model_id"]).used_tokens == 0
         assert reader.scalar(sa.select(sa.func.count()).select_from(API4Conversation).where(API4Conversation.dialog_id == env["dialog_id"])) == 0
 
 

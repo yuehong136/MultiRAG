@@ -152,6 +152,7 @@ def test_fresh_install_bootstrap_creates_all_model_tables(bootstrapped_engine):
     assert expected, "db_models 未声明任何 usr_ai 表？"
     missing = expected - actual
     assert not missing, f"fresh-install 引导后缺表: {sorted(missing)}"
+    assert "t_ai_tenant_llms" not in actual
 
 
 def test_fresh_install_is_stamped_to_head(bootstrapped_engine, alembic_cfg):
@@ -174,20 +175,41 @@ def test_futurmix_catalog_initialization_is_complete_and_repeatable(llm_catalog_
     """Exercise startup commits and chat/vision lookup against real composite keys."""
     import json
 
-    from api.db.db_models import LLM, TenantLLM
+    from api.db.db_models import LLM, TenantModel, TenantModelInstance, TenantModelProvider
     from api.db.init_data import init_llm_factory
-    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+    from api.db.joint_services.tenant_model_service import get_model_config_by_id
+    from api.db.model_contract import MODEL_TYPE_BITS
     from common import settings
 
     catalog = json.loads((Path(__file__).parents[2] / "configs/llm_factories.json").read_text())
     factory = next(f for f in catalog["factory_llm_infos"] if f["name"] == "FuturMix")
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [factory])
     tenant_id = uuid.uuid4().hex
+
+    def register(db: Session, owner: str, *kinds: str, used_tokens: int = 0) -> str:
+        provider_id, instance_id, identifier = (uuid.uuid4().hex for _ in range(3))
+        db.add(TenantModelProvider(id=provider_id, tenant_id=owner, provider_name="FuturMix", status="active"))
+        db.flush()
+        db.add(TenantModelInstance(id=instance_id, provider_id=provider_id, instance_name="fixture", api_key="fixture-key", base_url="", region="", status="active"))
+        db.flush()
+        db.add(
+            TenantModel(
+                id=identifier,
+                provider_id=provider_id,
+                instance_id=instance_id,
+                model_name="gpt-4o",
+                model_type=sum(MODEL_TYPE_BITS[kind] for kind in kinds),
+                extra={"max_tokens": 8192, "is_tools": True},
+                used_tokens=used_tokens,
+            )
+        )
+        return identifier
+
     # Reproduce a partially initialized environment whose first chat row survived.
     with Session(llm_catalog_engine) as db:
         if existing_chat:
             db.add(LLM(fid="FuturMix", llm_name="gpt-4o", mdl_type="chat", tags="CHAT"))
-        db.add(TenantLLM(tenant_id=tenant_id, llm_factory="FuturMix", llm_name="gpt-4o", mdl_type="chat", api_key="fixture-key", used_tokens=37))
+        chat_id = register(db, tenant_id, "chat", used_tokens=37)
         db.commit()
 
     for _ in range(2):
@@ -201,18 +223,20 @@ def test_futurmix_catalog_initialization_is_complete_and_repeatable(llm_catalog_
             assert len(rows) == 14
             assert {r.mdl_type for r in rows} == {"chat", "image2text", "embedding", "rerank", "speech2text", "tts"}
             assert next(r for r in rows if r.llm_name == "gpt-4o").mdl_type == "image2text"
-            existing = db.scalars(sa.select(TenantLLM).where(TenantLLM.tenant_id == tenant_id)).one()
-            assert (existing.mdl_type, existing.api_key, existing.used_tokens) == ("chat", "fixture-key", 37)
+            existing = db.get(TenantModel, chat_id)
+            assert existing is not None
+            assert (existing.model_types, db.get(TenantModelInstance, existing.instance_id).api_key, existing.used_tokens) == (["chat"], "fixture-key", 37)
 
     # New registrations use one multimodal row; existing chat tenants stay intact.
     multimodal_tenant = uuid.uuid4().hex
     with Session(llm_catalog_engine) as db:
-        db.add(TenantLLM(tenant_id=multimodal_tenant, llm_factory="FuturMix", llm_name="gpt-4o", mdl_type="image2text", api_key="fixture-key"))
+        multimodal_id = register(db, multimodal_tenant, "chat", "image2text")
         db.commit()
     with Session(llm_catalog_engine) as db:
-        configs = [get_model_config_by_type_and_name(db, multimodal_tenant, kind, "gpt-4o@FuturMix") for kind in ("chat", "image2text")]
-        assert configs[0]["id"] == configs[1]["id"]
-        assert all(c["mdl_type"] == "image2text" and c["llm_factory"] == "FuturMix" and c["is_tools"] for c in configs)
+        configs = [get_model_config_by_id(db, multimodal_id, tenant_id=multimodal_tenant, model_type=kind) for kind in ("chat", "image2text")]
+        assert configs[0]["id"] == configs[1]["id"] == multimodal_id
+        assert [c["mdl_type"] for c in configs] == ["chat", "image2text"]
+        assert all(c["llm_factory"] == "FuturMix" and c["is_tools"] for c in configs)
 
 
 def test_model_first_existing_database_can_upgrade_candidate_revision(

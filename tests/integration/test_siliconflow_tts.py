@@ -18,8 +18,9 @@ from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from api.db.db_models import TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.db_models import TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_tenant_default_model_by_type
+from api.db.model_contract import parse_model_id
 from api.db.services import provider_verification
 from api.db.services.llm_service import LLMBundle
 from common import settings
@@ -99,7 +100,7 @@ def speech_provider() -> Iterator[tuple[str, dict[str, Any]]]:
 
 def model_counts(engine: Engine) -> list[int]:
     with Session(engine) as reader:
-        return [reader.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM)]
+        return [reader.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel)]
 
 
 @pytest.mark.parametrize("model_name", MODELS)
@@ -112,24 +113,24 @@ def test_siliconflow_catalog_verify_create_default_and_speech(http: tuple[TestCl
     declaration = next(item for item in declarations if item["model_name"] == model_name)
     assert declaration["model_types"] == ["tts"] and declaration["is_tools"] is False
     assert declaration["max_tokens"] == 26214400
-    assert model_counts(engine) == [0, 0, 0, 0]
+    assert model_counts(engine) == [0, 0, 0]
 
     with speech_provider() as (provider_base, state):
         candidate = {"api_key": "synthetic-speech-key", "base_url": provider_base, "region": "cn", "model_ids": [model_name]}
         verified = client.post("/api/v1/providers/SILICONFLOW/connection", json=candidate)
         assert verified.status_code == 200, verified.text
         assert verified.json()["data"] == {"verified": True, "model_name": model_name, "model_type": "tts"}
-        assert model_counts(engine) == [0, 0, 0, 0]
+        assert model_counts(engine) == [0, 0, 0]
         created = client.post("/api/v1/providers/SILICONFLOW/instances", json={"instance_name": "speech", **candidate})
         assert created.status_code == 200, created.text
         assert len(state["requests"]) == 2
         assert state["requests"][0]["payload"] == state["requests"][1]["payload"]
-        assert model_counts(engine) == [1, 1, 1, 1]
+        assert model_counts(engine) == [1, 1, 1]
         listed = client.get("/api/v1/models").json()["data"]["items"]
         assert len(listed) == 1
         model = listed[0]
         identifier = model["id"]
-        assert isinstance(identifier, int) and identifier > 0
+        assert parse_model_id(identifier) == identifier
         assert model["name"] == model_name and model["reference"] == str(identifier)
         assert model["model_types"] == ["tts"] and model["is_tools"] is False
         assert client.patch("/api/v1/models/default", json={"model_type": "tts", "model_id": identifier}).status_code == 200
@@ -154,9 +155,9 @@ def test_siliconflow_catalog_verify_create_default_and_speech(http: tuple[TestCl
         state["status"] = 401
         rejected = client.post("/api/v1/providers/SILICONFLOW/instances", json={"instance_name": "rejected", **candidate})
         assert rejected.status_code == 400 and "upstream-private-detail" not in rejected.text
-        assert model_counts(engine) == [1, 1, 1, 1]
+        assert model_counts(engine) == [1, 1, 1]
         state.update(status=200, empty=True)
         empty = client.post("/api/v1/providers/SILICONFLOW/connection", json=candidate)
         assert empty.status_code == 400
-        assert model_counts(engine) == [1, 1, 1, 1]
+        assert model_counts(engine) == [1, 1, 1]
         assert all(item["contractValid"] for item in state["requests"])

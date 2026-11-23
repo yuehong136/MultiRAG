@@ -17,7 +17,7 @@ import pytest
 from PIL import Image
 from sqlalchemy.orm import Session
 
-from api.db.db_models import TenantLLM
+from api.db.db_models import TenantModel
 from api.db.joint_services import tenant_model_service
 from api.db.services.tenant_llm_service import TenantLangfuseService, TenantLLMService
 from common.constants import LLMType
@@ -196,6 +196,10 @@ def mineru_http() -> Iterator[Any]:
         assert not thread.is_alive()
 
 
+OCR_MODEL_ID = "1" * 32
+VISION_MODEL_ID = "2" * 32
+
+
 @pytest.fixture
 def tenant_models(monkeypatch: pytest.MonkeyPatch, db: Session, mineru_http: Any) -> Iterator[Any]:
     state = SimpleNamespace(open=False, defaults=[], bundles=[], usages=[], ocr_references=[], missing=False)
@@ -212,29 +216,30 @@ def tenant_models(monkeypatch: pytest.MonkeyPatch, db: Session, mineru_http: Any
 
     def ocr_config(session: Session, tenant_id: str, model_type: str, name: str) -> dict[str, Any]:
         assert session is db and tenant_id == "tenant-f" and model_type == LLMType.OCR.value
-        assert name in {"mineru@MinerU", "mineru@MinerU@MinerU"}
+        assert name == OCR_MODEL_ID
         state.ocr_references.append(name)
-        return {"id": 10, "tenant_id": tenant_id, "llm_name": "mineru@MinerU", "mdl_type": model_type, "llm_factory": "MinerU"}
+        return {"id": OCR_MODEL_ID, "tenant_id": tenant_id, "llm_name": name, "mdl_type": model_type, "llm_factory": "MinerU"}
 
     def default_config(session: Session, tenant_id: str, model_type: Any) -> dict[str, Any]:
         assert session is db and tenant_id == "tenant-f" and model_type == LLMType.IMAGE2TEXT
         state.defaults.append(tenant_id)
         if state.missing:
             raise LookupError("No tenant IMAGE2TEXT model")
-        return {"id": 20, "tenant_id": tenant_id, "llm_name": "tenant-vision", "mdl_type": LLMType.IMAGE2TEXT.value, "llm_factory": "OpenAI-API-Compatible"}
+        return {"id": VISION_MODEL_ID, "tenant_id": tenant_id, "llm_name": "tenant-vision", "mdl_type": LLMType.IMAGE2TEXT.value, "llm_factory": "OpenAI-API-Compatible"}
 
     def model_instance(session: Session, tenant_id: str, config: dict[str, Any], lang: str, **kwargs: Any) -> Any:
         assert state.open and session is db and tenant_id == config["tenant_id"] == "tenant-f"
         state.bundles.append((config["id"], lang))
-        return parser if config["id"] == 10 else vision
+        return parser if config["id"] == OCR_MODEL_ID else vision
 
-    def usage(model_id: int, tokens: int) -> bool:
+    def usage(model_id: str, tokens: int) -> bool:
         assert not state.open
         state.usages.append((model_id, tokens))
         return True
 
     monkeypatch.setattr(naive, "db_connection", connection)
     monkeypatch.setattr(naive, "get_model_config_by_type_and_name", ocr_config)
+    monkeypatch.setattr(tenant_model_service, "resolve_parser_reference", lambda _db, _tenant, ref: ("MinerU", ref))
     monkeypatch.setattr(naive, "get_tenant_default_model_by_type", default_config)
     monkeypatch.setattr(TenantLLMService, "model_instance", staticmethod(model_instance))
     monkeypatch.setattr(TenantLLMService, "increase_usage_by_id", staticmethod(usage))
@@ -258,7 +263,7 @@ def test_naive_chunk_real_pdf_zip_vlm_http_and_searchable_positions(tenant_model
         callback=lambda prog, msg: progress.append((prog, msg)),
         tenant_id="tenant-f",
         backend="vlm-http-client",
-        parser_config={"layout_recognize": "mineru@MinerU@MinerU", "chunk_token_num": 0},
+        parser_config={"layout_recognize": OCR_MODEL_ID, "chunk_token_num": 0},
     )
     assert chunks
     figure = next(chunk for chunk in chunks if "Figure caption" in chunk["content_with_weight"])
@@ -268,9 +273,9 @@ def test_naive_chunk_real_pdf_zip_vlm_http_and_searchable_positions(tenant_model
     assert figure["page_num_int"] == [1] and figure["position_int"]
     assert "@@" not in figure["content_with_weight"]
     assert tenant_models.defaults == ["tenant-f"]
-    assert tenant_models.ocr_references == ["mineru@MinerU@MinerU"]
-    assert tenant_models.bundles == [(10, language), (20, language)]
-    assert tenant_models.usages == [(20, 7)]
+    assert tenant_models.ocr_references == [OCR_MODEL_ID]
+    assert tenant_models.bundles == [(OCR_MODEL_ID, language), (VISION_MODEL_ID, language)]
+    assert tenant_models.usages == [(VISION_MODEL_ID, 7)]
     assert [path for path, _ in mineru_http.requests] == ["/file_parse", "/v1/chat/completions"]
     pdf_request = mineru_http.requests[0][1]
     assert b"%PDF-" in pdf_request and b'filename="report.pdf"' in pdf_request
@@ -290,14 +295,14 @@ def test_optional_vision_failures_preserve_actual_parser_results(tenant_models: 
     mineru_http.status = 400 if scenario == "provider-failure" else 200
     mineru_http.description = "  " if scenario == "empty" else mineru_http.description
     options = {"vision_model": None} if scenario == "disabled" else {}
-    sections, tables, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name="mineru@MinerU", lang="Chinese", **options)
+    sections, tables, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name=OCR_MODEL_ID, lang="Chinese", **options)
     assert parser is tenant_models.parser
     assert tables == []
     assert sections[0][0] == "Figure caption\nFigure footnote"
     assert sections[1][0] == "Visible paragraph."
     assert tenant_models.defaults == ([] if scenario == "disabled" else ["tenant-f"])
     assert len(mineru_http.requests) == (1 if scenario in {"missing", "disabled"} else 2)
-    assert tenant_models.usages == ([(20, 7)] if scenario == "empty" else [])
+    assert tenant_models.usages == ([(VISION_MODEL_ID, 7)] if scenario == "empty" else [])
 
 
 @pytest.mark.parametrize("language", [None, ""])
@@ -316,7 +321,7 @@ def test_caller_vision_model_is_used_without_default_lookup(tenant_models: Any, 
         def describe_with_prompt(self, binary: bytes, prompt: str) -> str:
             return "Explicit figure description."
 
-    sections, _, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name="mineru@MinerU", vision_model=Vision())
+    sections, _, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name=OCR_MODEL_ID, vision_model=Vision())
     assert parser is tenant_models.parser
     assert "Explicit figure description." in sections[0][0]
     assert tenant_models.defaults == [] and len(mineru_http.requests) == 1
@@ -327,13 +332,13 @@ def test_enrichment_setup_failure_preserves_parser_results(tenant_models: Any, m
         raise RuntimeError("controlled enhancement setup failure")
 
     monkeypatch.setattr(tenant_models.parser, "_enhance_images_with_vlm", fail)
-    sections, tables, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name="mineru@MinerU")
+    sections, tables, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name=OCR_MODEL_ID)
     assert parser is tenant_models.parser and tables == []
     assert sections[0][0] == "Figure caption\nFigure footnote"
 
 
 def test_mineru_language_override_reaches_figure_prompt(tenant_models: Any, mineru_http: Any) -> None:
-    naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name="mineru@MinerU", lang="English", parser_config={"mineru_lang": "French"})
+    naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name=OCR_MODEL_ID, lang="English", parser_config={"mineru_lang": "French"})
     request = json.loads(mineru_http.requests[-1][1])
     assert any("French" in part.get("text", "") for part in request["messages"][0]["content"])
 
@@ -348,22 +353,19 @@ def test_foreign_tenant_default_is_denied_before_vision_construction(tenant_mode
 
     def tenant(session: Session, **filters: Any) -> Any:
         assert filters == {"id": "tenant-f"}
-        return SimpleNamespace(img2txt_id="foreign@Other", tenant_img2txt_id=20)
+        return SimpleNamespace(img2txt_id="foreign@Other", tenant_img2txt_id=VISION_MODEL_ID)
 
-    def model(session: Session, **filters: Any) -> Any:
-        queries.append(filters)
-        # This ID belongs to another tenant. The active tenant predicate must
-        # prevent even loading its credentials, and there is no global fallback.
-        assert filters == {"id": 20, "tenant_id": "tenant-f"}
-        return None
+    def deny(session: Session, identifier: str, tenant_id: str, **_: Any) -> Any:
+        queries.append({"id": identifier, "tenant_id": tenant_id})
+        raise LookupError("Model not found or not authorized")
 
     monkeypatch.setattr(naive, "get_tenant_default_model_by_type", tenant_model_service.get_tenant_default_model_by_type)
     monkeypatch.setattr(tenant_model_service.TenantService, "get_or_none", staticmethod(tenant))
-    monkeypatch.setattr(TenantLLMService, "get_or_none", staticmethod(model))
-    sections, _, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name="mineru@MinerU")
+    monkeypatch.setattr(tenant_model_service, "model_for_id", deny)
+    sections, _, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name=OCR_MODEL_ID)
     assert parser is tenant_models.parser and sections[0][0] == "Figure caption\nFigure footnote"
-    assert queries == [{"id": 20, "tenant_id": "tenant-f"}]
-    assert tenant_models.bundles == [(10, "Chinese")]
+    assert queries == [{"id": VISION_MODEL_ID, "tenant_id": "tenant-f"}]
+    assert tenant_models.bundles == [(OCR_MODEL_ID, "Chinese")]
     assert [path for path, _ in mineru_http.requests] == ["/file_parse"]
 
 
@@ -384,7 +386,7 @@ def test_mineru_output_cannot_upload_images_from_other_directories(tenant_models
     with zipfile.ZipFile(archive, "w") as zipped:
         zipped.writestr("report/auto/report_content_list.json", json.dumps([image_block(str(outside))]))
     mineru_http.archive = archive.getvalue()
-    sections, _, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name="mineru@MinerU")
+    sections, _, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name=OCR_MODEL_ID)
     assert parser is tenant_models.parser and sections[0][0] == "Figure caption\nFigure footnote"
     assert [path for path, _ in mineru_http.requests] == ["/file_parse"]
     assert tenant_models.usages == []
@@ -419,17 +421,17 @@ def test_explicit_session_bundle_isolated_without_changing_caller_transaction(te
             return super().__getattribute__(name)
 
     with SessionProbe() as caller_session:
-        pending = TenantLLM(tenant_id="tenant-f", llm_factory="OpenAI-API-Compatible", llm_name="pending", mdl_type=LLMType.IMAGE2TEXT.value)
+        pending = TenantModel(model_name="pending", model_type=8)
         caller_session.add(pending)
         transaction = caller_session.get_transaction()
         assert transaction is not None and pending in caller_session.new
         with tenant_models.connection():
-            bundle = naive.LLMBundle(db, "tenant-f", {"id": 20, "tenant_id": "tenant-f", "llm_name": "tenant-vision", "mdl_type": LLMType.IMAGE2TEXT.value}, lang="English")
+            bundle = naive.LLMBundle(db, "tenant-f", {"id": VISION_MODEL_ID, "tenant_id": "tenant-f", "llm_name": "tenant-vision", "mdl_type": LLMType.IMAGE2TEXT.value}, lang="English")
         bundle.db = caller_session
         caller_state = vars(bundle).copy()
 
         if entrypoint == "by_mineru":
-            sections, _, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name="mineru@MinerU", vision_model=bundle)
+            sections, _, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name=OCR_MODEL_ID, vision_model=bundle)
             assert parser is tenant_models.parser and tenant_models.defaults == []
         else:
             sections, _ = tenant_models.parser.parse_pdf("report.pdf", binary=make_pdf(1), vision_model=bundle)
@@ -441,4 +443,4 @@ def test_explicit_session_bundle_isolated_without_changing_caller_transaction(te
         assert caller_session.in_transaction() and pending in caller_session.new
         assert pending not in caller_session.dirty and pending not in caller_session.deleted
         assert [path for path, _ in mineru_http.requests] == ["/file_parse", "/v1/chat/completions"]
-        assert tenant_models.usages == [(20, 7)]
+        assert tenant_models.usages == [(VISION_MODEL_ID, 7)]

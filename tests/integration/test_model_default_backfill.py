@@ -1,192 +1,102 @@
-"""Transactional numeric default repair, including late legacy OCR imports."""
+"""Stored default conversion, historical linking, and cutover concurrency in PostgreSQL."""
 
-from collections.abc import Iterator
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from typing import Any
-from uuid import uuid4
 
 import pytest
 from alembic import command
-from sqlalchemy import event, func, select, text
+from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 
-from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
-from api.db.model_backfill import backfill, backfill_tenant_defaults
-from api.db.model_contract import DEFAULT_MODEL_FIELDS
-from tests.support.database import _alembic_config, scratch_database
-from tests.support.resource_journal import ResourceJournal
+from tests.support.database import _alembic_config
+from tests.support.model_identity_migration import legacy_database as legacy_database
+from tests.support.model_identity_migration import migrated_model_id, upgrade_model_identity
 
 pytestmark = pytest.mark.integration
+_CAPABILITIES = {"chat": "llm_id", "embedding": "embd_id", "speech2text": "asr_id", "image2text": "img2txt_id", "rerank": "rerank_id", "tts": "tts_id", "ocr": "ocr_id"}
 
 
-@pytest.fixture
-def defaults_engine(tmp_path: Path) -> Iterator[Engine]:
-    # A session scratch engine also hosts unrelated tables with foreign keys to
-    # the model catalog. Each backfill scenario needs its own complete schema.
-    with scratch_database(tmp_path) as engine:
-        journal = ResourceJournal("model-defaults-sql")
+def test_all_defaults_are_linked_with_explicit_id_taking_precedence(legacy_database: Engine) -> None:
+    registrations = {}
+    with legacy_database.begin() as db:
+        for identifier, (capability, field) in enumerate(_CAPABILITIES.items(), 70):
+            registrations[field] = identifier
+            db.execute(
+                text("INSERT INTO usr_ai.t_ai_tenant_llms VALUES (:id, 'all-defaults', 'OpenAI', :name, :kind, 'fixture-key', '', 0, 37, '1')"),
+                {"id": identifier, "name": capability, "kind": capability},
+            )
+        db.execute(
+            text(
+                "INSERT INTO usr_ai.t_ai_tenants (id, llm_id, tenant_llm_id, embd_id, asr_id, img2txt_id, rerank_id, tts_id, ocr_id) "
+                "VALUES ('all-defaults', 'old-stale-display', 70, 'embedding@OpenAI', 'speech2text@OpenAI', "
+                "'image2text@OpenAI', 'rerank@OpenAI', 'tts@OpenAI', 'ocr@OpenAI')"
+            )
+        )
+        db.execute(text("INSERT INTO usr_ai.t_ai_tenants (id, ocr_id) VALUES ('other-owner', 'ocr@OpenAI')"))
+    upgrade_model_identity(legacy_database)
 
-        def reserve(_connection: Any, _cursor: Any, statement: str, _parameters: Any, _context: Any, _many: bool) -> None:
-            journal.event("reserve-sql", database=engine.url.database, statement_kind=statement.lstrip().split(maxsplit=1)[0])
-
-        event.listen(engine, "before_cursor_execute", reserve)
-        try:
-            yield engine
-        finally:
-            event.remove(engine, "before_cursor_execute", reserve)
-
-
-def add_tenant(db: Session, **values: Any) -> Tenant:
-    row = Tenant(id=uuid4().hex, name="Default fixture", llm_id="", embd_id="", asr_id="", img2txt_id="", parser_ids="", **values)
-    db.add(row)
-    db.flush()
-    return row
-
-
-def add_model(db: Session, owner: str, capability: str, name: str = "fixture", factory: str = "OpenAI") -> int:
-    row = TenantLLM(tenant_id=owner, llm_factory=factory, llm_name=name, mdl_type=capability, api_key="fixture-only", api_base="", max_tokens=0, status="1")
-    db.add(row)
-    db.flush()
-    return row.id
+    with legacy_database.connect() as db:
+        stored = db.execute(text("SELECT * FROM usr_ai.t_ai_tenants WHERE id = 'all-defaults'")).mappings().one()
+        for field, identifier in registrations.items():
+            assert stored[f"tenant_{field}"] == stored[field] == migrated_model_id(identifier)
+        assert db.execute(text("SELECT ocr_id, tenant_ocr_id FROM usr_ai.t_ai_tenants WHERE id = 'other-owner'")).one() == ("ocr@OpenAI", None)
 
 
-def test_all_capabilities_and_late_ocr_are_repaired_without_rewriting_aliases(defaults_engine: Engine) -> None:
-    with Session(defaults_engine) as db:
-        owner = add_tenant(db)
-        identifiers = {}
-        for capability, field in DEFAULT_MODEL_FIELDS.items():
-            identifiers[field] = add_model(db, owner.id, capability, capability)
-            setattr(owner, field, f"{capability}@OpenAI")
-        owner_id = owner.id
-        db.commit()
-        with defaults_engine.begin() as connection:
-            backfill(connection)
-        assert backfill_tenant_defaults(db) == 7
-        db.commit()
-    with Session(defaults_engine) as reader:
-        stored = reader.get(Tenant, owner_id)
-        assert stored is not None
-        for field, identifier in identifiers.items():
-            assert getattr(stored, f"tenant_{field}") == identifier
-            assert getattr(stored, field) == f"{next(key for key, value in DEFAULT_MODEL_FIELDS.items() if value == field)}@OpenAI"
-        assert backfill_tenant_defaults(reader) == 0
-        late = add_tenant(reader, ocr_id="ocr@OpenAI")
-        late_id = late.id
-        late_model = add_model(reader, late_id, "ocr", "ocr")
-        reader.commit()
-        assert backfill_tenant_defaults(reader) == 1
-        reader.commit()
-    with Session(defaults_engine) as reader:
-        assert reader.get(Tenant, late_id).tenant_ocr_id == late_model
+def test_cutover_locks_writers_until_defaults_and_models_commit(legacy_database: Engine) -> None:
+    acquired = Event()
+    release = Event()
+
+    def pause_after_lock(_connection: Any, _cursor: Any, statement: str, _parameters: Any, _context: Any, _many: bool) -> None:
+        if statement.startswith("LOCK TABLE "):
+            acquired.set()
+            assert release.wait(timeout=8), "Timed out while waiting for competing write probe"
+
+    event.listen(legacy_database, "after_cursor_execute", pause_after_lock)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            migration = pool.submit(upgrade_model_identity, legacy_database)
+            try:
+                assert acquired.wait(timeout=8), "Migration did not lock model reference tables"
+                with pytest.raises(OperationalError, match="lock timeout"):
+                    with legacy_database.begin() as competitor:
+                        competitor.exec_driver_sql("SET LOCAL lock_timeout = '250ms'")
+                        competitor.execute(text("UPDATE usr_ai.t_ai_tenants SET tenant_llm_id = 21 WHERE id = 'owner'"))
+            finally:
+                release.set()
+            migration.result(timeout=8)
+    finally:
+        event.remove(legacy_database, "after_cursor_execute", pause_after_lock)
+
+    with legacy_database.connect() as db:
+        assert db.scalar(text("SELECT tenant_llm_id FROM usr_ai.t_ai_tenants WHERE id = 'owner'")) == migrated_model_id(17)
+        assert db.scalar(text("SELECT count(*) FROM usr_ai.t_ai_tenant_models WHERE id = :id"), {"id": migrated_model_id(17)}) == 1
 
 
-def test_existing_numeric_choice_and_foreign_or_missing_names_are_preserved(defaults_engine: Engine) -> None:
-    with Session(defaults_engine) as db:
-        owner = add_tenant(db, ocr_id="foreign@OpenAI", tenant_ocr_id=None)
-        foreign = add_tenant(db)
-        add_model(db, foreign.id, "ocr", "foreign")
-        chosen = add_model(db, owner.id, "chat", "chosen")
-        owner.llm_id = "unresolved@OpenAI"
-        owner.tenant_llm_id = chosen
-        owner_id = owner.id
-        db.commit()
-        assert backfill_tenant_defaults(db) == 0
-        db.commit()
-    with Session(defaults_engine) as reader:
-        stored = reader.get(Tenant, owner_id)
-        assert stored.tenant_llm_id == chosen and stored.tenant_ocr_id is None
-        assert stored.llm_id == "unresolved@OpenAI"
+def test_historical_linking_revision_and_version_roll_back_together(legacy_database: Engine) -> None:
+    previous, historical = "a7c9e1f3b5d7", "b8d0f2a4c6e8"
+    with legacy_database.begin() as db:
+        db.exec_driver_sql("DROP TABLE usr_ai.t_ai_tenant_models, usr_ai.t_ai_tenant_model_instances, usr_ai.t_ai_tenant_model_providers")
+        db.execute(text("UPDATE usr_ai.alembic_version SET version_num = :version"), {"version": previous})
+        # Two distinct credentials originally held the same public model name.
+        db.execute(text("UPDATE usr_ai.t_ai_tenant_llms SET llm_name = 'chat-one' WHERE id = 17"))
+        db.execute(text("UPDATE usr_ai.t_ai_tenant_llms SET llm_name = '' WHERE id = 21"))
 
+    def historical_upgrade() -> None:
+        with legacy_database.begin() as db:
+            cfg = _alembic_config()
+            cfg.attributes["connection"] = db
+            command.upgrade(cfg, historical)
 
-def test_ambiguous_default_rolls_back_earlier_repairs(defaults_engine: Engine) -> None:
-    with Session(defaults_engine) as db:
-        owner = add_tenant(db, ocr_id="ambiguous")
-        owner.llm_id = "chat@OpenAI"
-        add_model(db, owner.id, "chat", "chat")
-        add_model(db, owner.id, "ocr", "ambiguous", "OpenAI")
-        add_model(db, owner.id, "ocr", "ambiguous", "Other")
-        owner_id = owner.id
-        db.commit()
-        with pytest.raises(LookupError, match="ambiguous"):
-            backfill_tenant_defaults(db)
-        db.rollback()
-    with Session(defaults_engine) as reader:
-        stored = reader.get(Tenant, owner_id)
-        assert stored.tenant_llm_id is None and stored.tenant_ocr_id is None
-        assert len(list(reader.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner_id)))) == 3
-
-
-def test_concurrent_numeric_selection_is_not_counted_or_overwritten(defaults_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
-    from api.db.services import provider_model_resolution
-
-    with Session(defaults_engine) as db:
-        owner = add_tenant(db)
-        owner.llm_id = "chat@OpenAI"
-        owner_id = owner.id
-        add_model(db, owner_id, "chat", "chat")
-        selected = add_model(db, owner_id, "chat", "selected")
-        db.commit()
-
-        find_model = provider_model_resolution.find_model_row
-
-        def resolve_then_select(session: Session, tenant_id: str, reference: str, model_type: str | None = None) -> TenantLLM | None:
-            model = find_model(session, tenant_id, reference, model_type)
-            with Session(defaults_engine) as concurrent:
-                stored = concurrent.get(Tenant, tenant_id)
-                assert stored is not None
-                stored.tenant_llm_id = selected
-                concurrent.commit()
-            return model
-
-        monkeypatch.setattr(provider_model_resolution, "find_model_row", resolve_then_select)
-        assert backfill_tenant_defaults(db) == 0
-        db.commit()
-
-    with Session(defaults_engine) as reader:
-        stored = reader.get(Tenant, owner_id)
-        assert stored is not None
-        assert stored.tenant_llm_id == selected
-        assert stored.llm_id == "chat@OpenAI"
-
-
-def test_alembic_version_and_backfill_commit_or_rollback_together(defaults_engine: Engine) -> None:
-    config = _alembic_config()
-    with Session(defaults_engine) as db:
-        owner = add_tenant(db)
-        owner_id = owner.id
-        invalid = add_model(db, owner_id, "chat", "")
-        db.commit()
-    with defaults_engine.begin() as connection:
-        config.attributes["connection"] = connection
-        command.stamp(config, "a7c9e1f3b5d7")
     with pytest.raises(RuntimeError, match="invalid name or capability"):
-        with defaults_engine.begin() as connection:
-            config.attributes["connection"] = connection
-            command.upgrade(config, "b8d0f2a4c6e8")
-    with Session(defaults_engine) as reader:
-        assert reader.scalar(text("SELECT version_num FROM usr_ai.alembic_version")) == "a7c9e1f3b5d7"
-        assert reader.scalar(select(func.count()).select_from(TenantModelProvider).where(TenantModelProvider.tenant_id == owner_id)) == 0
-        assert reader.scalar(select(func.count()).select_from(TenantModelInstance).join(TenantModelProvider).where(TenantModelProvider.tenant_id == owner_id)) == 0
-        assert reader.get(TenantModel, invalid) is None
-        reader.get(TenantLLM, invalid).llm_name = "repaired"
-        reader.commit()
-    with defaults_engine.begin() as connection:
-        config.attributes["connection"] = connection
-        command.upgrade(config, "b8d0f2a4c6e8")
-    with Session(defaults_engine) as reader:
-        assert reader.scalar(text("SELECT version_num FROM usr_ai.alembic_version")) == "b8d0f2a4c6e8"
-        assert reader.get(TenantModel, invalid).model_name == "repaired"
-        # A repeated startup does not replay an already committed revision.
-        late = add_model(reader, owner_id, "ocr", "late-ocr")
-        reader.commit()
-    with defaults_engine.begin() as connection:
-        config.attributes["connection"] = connection
-        command.upgrade(config, "b8d0f2a4c6e8")
-    with Session(defaults_engine) as reader:
-        assert reader.get(TenantModel, late) is None
-    # New user/import rows are handled by the explicit idempotent data path.
-    with defaults_engine.begin() as connection:
-        backfill(connection, owner_id)
-    with Session(defaults_engine) as reader:
-        assert reader.get(TenantModel, late).model_name == "late-ocr"
+        historical_upgrade()
+    with legacy_database.begin() as db:
+        assert db.scalar(text("SELECT version_num FROM usr_ai.alembic_version")) == previous
+        assert db.scalar(text("SELECT to_regclass('usr_ai.t_ai_tenant_models')")) is None
+        db.execute(text("UPDATE usr_ai.t_ai_tenant_llms SET llm_name = 'repaired' WHERE id = 21"))
+    historical_upgrade()
+    historical_upgrade()
+    with legacy_database.connect() as db:
+        assert db.scalar(text("SELECT version_num FROM usr_ai.alembic_version")) == historical
+        assert db.execute(text("SELECT id, model_name FROM usr_ai.t_ai_tenant_models ORDER BY id")).all() == [(17, "chat-one"), (21, "repaired"), (65, "old-embedding")]

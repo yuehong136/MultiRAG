@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from api.db.model_contract import ModelID
+
 
 class SkillError(Exception):
     def __init__(self, status: int, code: str, message: str) -> None:
@@ -86,19 +88,12 @@ def default_fields() -> dict[str, dict[str, Any]]:
 
 class UpdateConfig(StrictModel):
     revision: int = Field(gt=0)
-    embedding_model_id: str | None = None
-    rerank_model_id: str | None = None
+    embedding_model_id: ModelID | None = None
+    rerank_model_id: ModelID | None = None
     top_k: int | None = Field(default=None, ge=1, le=100)
     vector_weight: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     similarity_threshold: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     fields: dict[Literal["name", "tags", "description", "content"], FieldWeight] | None = None
-
-    @field_validator("embedding_model_id", "rerank_model_id")
-    @classmethod
-    def model_id(cls, value: str | None) -> str | None:
-        if value is not None and (re.fullmatch(r"[1-9][0-9]*", value) is None or int(value) > 2**63 - 1):
-            raise ValueError("Model ID must be a positive BIGINT decimal string")
-        return value
 
     @model_validator(mode="after")
     def validate_fields(self) -> "UpdateConfig":

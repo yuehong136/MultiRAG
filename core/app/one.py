@@ -20,9 +20,8 @@ from io import BytesIO
 from typing import Any
 
 from common.constants import MAXIMUM_PAGE_NUMBER, MAXIMUM_TASK_PAGE_NUMBER
-from common.parser_config_utils import normalize_layout_recognizer
 from core.app import naive
-from core.app.naive import PARSERS, by_plaintext
+from core.app.naive import PARSERS, by_plaintext, resolve_pdf_parser
 from core.nlp import rag_tokenizer, tokenize
 from deepdoc.parser import ExcelParser, HtmlParser, PdfParser
 from deepdoc.parser.figure_parser import vision_figure_parser_docx_wrapper_naive
@@ -88,7 +87,7 @@ def chunk(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = 
         callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
+        layout_recognizer, parser_model_name = resolve_pdf_parser(kwargs.get("tenant_id", ""), parser_config.get("layout_recognize", "DeepDOC"))
 
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"

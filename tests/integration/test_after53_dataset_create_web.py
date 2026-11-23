@@ -13,7 +13,8 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Knowledgebase, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.db_models import Knowledgebase, Tenant, TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.model_contract import MODEL_TYPE_BITS
 from common.constants import RetCode
 from tests.support.rest_document_contract import call
 from tests.support.rest_document_contract import rest_documents as rest_documents
@@ -21,12 +22,12 @@ from tests.support.rest_document_contract import rest_documents as rest_document
 pytestmark = pytest.mark.external_consumer
 
 
-def test_actual_web_defaults_create_numeric_embedding_dataset(rest_documents: dict[str, Any], record_property: Callable[[str, object], None]) -> None:
+def test_actual_web_defaults_create_embedding_dataset_by_model_id(rest_documents: dict[str, Any], record_property: Callable[[str, object], None]) -> None:
     env = rest_documents
     journal = env["journal"]
     owner = env["owners"][0]
     provider, instance = uuid4().hex, uuid4().hex
-    model_id = 10**15 + int(uuid4().hex[:13], 16)
+    model_id, missing_model_id = uuid4().hex, uuid4().hex
     name = "after53_default_" + uuid4().hex
     checkout = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
     script = checkout / "scripts/verify-dataset-create-routes.ts"
@@ -38,10 +39,9 @@ def test_actual_web_defaults_create_numeric_embedding_dataset(rest_documents: di
             db.add(TenantModelProvider(id=provider, tenant_id=owner, provider_name="Ollama", status="active"))
             db.flush()
             db.add(TenantModelInstance(id=instance, provider_id=provider, instance_name="after53", api_key="controlled-no-vendor", base_url="http://controlled.invalid", status="active"))
-            db.add(TenantLLM(id=model_id, tenant_id=owner, llm_factory="Ollama", llm_name="model:" + uuid4().hex, mdl_type="embedding", api_key="controlled-no-vendor", status="1"))
             db.flush()
-            db.add(TenantModel(id=model_id, instance_id=instance, model_name="after53-embedding", model_types=["embedding"], is_tools=False))
-            db.execute(sa.update(Tenant).where(Tenant.id == owner).values(embd_id=str(model_id), tenant_embd_id=model_id))
+            db.add(TenantModel(id=model_id, provider_id=provider, instance_id=instance, model_name="after53-embedding", model_type=MODEL_TYPE_BITS["embedding"]))
+            db.execute(sa.update(Tenant).where(Tenant.id == owner).values(embd_id=model_id, tenant_embd_id=model_id))
             db.commit()
         completed = subprocess.run(
             [node, "--import", str(checkout / "node_modules/tsx/dist/loader.mjs"), str(script)],
@@ -50,7 +50,7 @@ def test_actual_web_defaults_create_numeric_embedding_dataset(rest_documents: di
                 **os.environ,
                 "DOMAIN_ACCEPTANCE_BASE": env["base"],
                 "DOMAIN_ACCEPTANCE_TOKEN": env["jwt"][0],
-                "DOMAIN_ACCEPTANCE_MODEL_REFERENCE": str(model_id),
+                "DOMAIN_ACCEPTANCE_MODEL_REFERENCE": model_id,
                 "DOMAIN_ACCEPTANCE_DATASET_NAME": name,
                 "DOMAIN_ACCEPTANCE_MODE": "create",
                 "MULTIRAG_RUN_JOURNAL": str(journal.path),
@@ -65,23 +65,27 @@ def test_actual_web_defaults_create_numeric_embedding_dataset(rest_documents: di
         with Session(env["engine"]) as reader:
             dataset = reader.get(Knowledgebase, result["id"])
             assert dataset is not None and dataset.name == name and dataset.tenant_id == owner
-            assert dataset.embd_id == str(model_id) and dataset.tenant_embd_id == model_id
+            assert dataset.embd_id == dataset.tenant_embd_id == model_id
             assert dataset.parser_id == "naive"
             row = reader.get(Tenant, owner)
             assert row is not None and row.tenant_embd_id == model_id
         receipts = result["receipts"]
         assert len(receipts) == 3 and all(row["httpStatus"] == 200 and row["code"] == 0 for row in receipts)
         assert receipts[0]["path"] == "/api/v1/models/default"
-        assert receipts[1]["path"] == "/api/v1/datasets" and receipts[1]["requestBody"]["embedding_model"] == str(model_id)
-        journal.event("reserve-denied-dataset-request", names=[name + "_denied"], model_ids=[model_id, model_id + 1])
+        assert receipts[1]["path"] == "/api/v1/datasets" and receipts[1]["requestBody"]["embedding_model"] == model_id
+        legacy_id = "17001"
+        journal.event("reserve-denied-dataset-request", names=[name + "_denied"], model_ids=[model_id, missing_model_id, legacy_id])
         with env["engine"].connect() as reader:
             before = list(reader.execute(sa.select(Knowledgebase.__table__).order_by(Knowledgebase.id)))
-        for reference in [str(model_id), str(model_id + 1)]:
-            response = call(env, "POST", "/datasets", credential=env["keys"][1], json={"name": name + "_denied", "embedding_model": reference})
+        for actor, reference in [(1, model_id), (0, missing_model_id)]:
+            response = call(env, "POST", "/datasets", credential=env["keys"][actor], json={"name": name + "_denied", "embedding_model": reference})
             assert response.status_code == 200 and response.json()["code"] == RetCode.DATA_ERROR, response.text
+        legacy = call(env, "POST", "/datasets", credential=env["keys"][0], json={"name": name + "_denied", "embedding_model": legacy_id})
+        assert legacy.status_code == 422
+        assert any(issue["type"] == "format_invalid" and issue["loc"] == ["body", "embedding_model"] for issue in legacy.json()["detail"])
         with env["engine"].begin() as db:
             db.execute(sa.update(TenantModelInstance).where(TenantModelInstance.id == instance).values(status="inactive"))
-        response = call(env, "POST", "/datasets", credential=env["keys"][0], json={"name": name + "_denied", "embedding_model": str(model_id)})
+        response = call(env, "POST", "/datasets", credential=env["keys"][0], json={"name": name + "_denied", "embedding_model": model_id})
         assert response.status_code == 200 and response.json()["code"] == RetCode.DATA_ERROR, response.text
         with env["engine"].connect() as reader:
             assert list(reader.execute(sa.select(Knowledgebase.__table__).order_by(Knowledgebase.id))) == before
@@ -92,14 +96,12 @@ def test_actual_web_defaults_create_numeric_embedding_dataset(rest_documents: di
             db.execute(sa.delete(Knowledgebase).where(Knowledgebase.name.in_([name, name + "_denied"])))
             db.execute(sa.update(Tenant).where(Tenant.id == owner).values(embd_id="", tenant_embd_id=None))
             db.execute(sa.delete(TenantModel).where(TenantModel.id == model_id))
-            db.execute(sa.delete(TenantLLM).where(TenantLLM.id == model_id))
             db.execute(sa.delete(TenantModelInstance).where(TenantModelInstance.id == instance))
             db.execute(sa.delete(TenantModelProvider).where(TenantModelProvider.id == provider))
         with env["engine"].connect() as reader:
             remaining = {
                 "dataset": reader.scalar(sa.select(sa.func.count()).select_from(Knowledgebase).where(Knowledgebase.name.in_([name, name + "_denied"]))),
                 "model": reader.scalar(sa.select(sa.func.count()).select_from(TenantModel).where(TenantModel.id == model_id)),
-                "llm": reader.scalar(sa.select(sa.func.count()).select_from(TenantLLM).where(TenantLLM.id == model_id)),
                 "instance": reader.scalar(sa.select(sa.func.count()).select_from(TenantModelInstance).where(TenantModelInstance.id == instance)),
                 "provider": reader.scalar(sa.select(sa.func.count()).select_from(TenantModelProvider).where(TenantModelProvider.id == provider)),
             }

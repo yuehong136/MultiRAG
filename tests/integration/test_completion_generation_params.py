@@ -17,7 +17,7 @@ def test_rest_generation_modes_and_persisted_dialog(rest_chat_contract: RestChat
     persisted = ctx.read_chat(chat["id"])
     session_id = ctx.request("POST", f"/chats/{chat['id']}/sessions", json={}).json()["data"]["id"]
     for mode in ("existing", "new", "direct"):
-        for model in (None, f"chat@{ctx.factory}"):
+        for model in (None, ctx.model_id("chat")):
             for extra in (
                 {},
                 {"temperature": None, "max_tokens": None},
@@ -53,7 +53,7 @@ def test_openai_sdk_generation_reaches_provider_and_keeps_sql(rest_chat_contract
     chat = ctx.create_chat(credential="api_key", llm_setting=saved, prompt_config={"system": "Answer directly", "parameters": [], "refine_multiturn": False})
     before = ctx.snapshot()
     with OpenAI(api_key=ctx.runtime["api_key"], base_url=f"{ctx.runtime['base']}/api/v1/openai/{chat['id']}", max_retries=0) as sdk:
-        for model in ("model", f"chat@{ctx.factory}"):
+        for model in ("model", ctx.model_id("chat", credential="api_key")):
             for extra in (
                 {},
                 {"temperature": None, "max_tokens": None},

@@ -25,7 +25,7 @@ async def test_search_stream_selects_explicit_model_or_tenant_default(monkeypatc
     kb = SimpleNamespace(id="selected", tenant_id="dataset-owner", name="Selected", parser_id="naive", tenant_embd_id=9, embd_id="")
     monkeypatch.setattr(dialog_service.KnowledgebaseService, "accessible", lambda *_: True)
     monkeypatch.setattr(dialog_service.KnowledgebaseService, "get_by_ids", lambda _db, ids: [kb] if ids == ["selected"] else [])
-    monkeypatch.setattr(dialog_service.KnowledgebaseService, "ensure_same_embedding_model", lambda _: None)
+    monkeypatch.setattr(dialog_service.KnowledgebaseService, "ensure_same_embedding_model", lambda _, **kwargs: None)
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda *_: {"mdl_type": "embedding"})
     default = Mock(return_value={"mdl_type": "chat", "id": 11})
     explicit = Mock(return_value={"mdl_type": "chat", "id": 23})

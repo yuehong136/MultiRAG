@@ -9,7 +9,7 @@ from api.db.db_models import Knowledgebase
 from api.db.services import dialog_service
 
 
-def test_get_models_uses_kb_owner_for_shared_embedding(monkeypatch):
+def test_get_models_uses_kb_owner_for_shared_embedding(monkeypatch, db):
     # 真实模型实例（不落库）：get_models 内部会走 ensure_same_embedding_model，
     # 其 Sequence[Knowledgebase] 注解受 beartype 运行时校验，SimpleNamespace 过不了。
     kb = Knowledgebase(
@@ -48,7 +48,7 @@ def test_get_models_uses_kb_owner_for_shared_embedding(monkeypatch):
     monkeypatch.setattr(dialog_service, "_resolve_model_config", resolve_model_config)
     monkeypatch.setattr(dialog_service, "LLMBundle", build_bundle)
 
-    dialog_service.get_models(object(), dialog)
+    dialog_service.get_models(db, dialog)
 
     assert resolved_models[0][0] == "owner-tenant"
     assert bundles[0][0] == "owner-tenant"

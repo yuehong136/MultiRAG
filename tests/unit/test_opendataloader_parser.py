@@ -10,9 +10,7 @@ from PIL import Image
 from sqlalchemy.orm import Session
 
 import deepdoc.parser.opendataloader_parser as opendataloader_module
-from api.db import model_backfill
-from api.db.db_models import TenantLLM
-from api.db.services import provider_model_resolution
+from api.db.db_models import TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.services.tenant_llm_service import TenantLLMService
 from core.llm import OcrModel
 from deepdoc.parser.opendataloader_parser import OpenDataLoaderParser
@@ -98,42 +96,35 @@ def test_crop_rejects_out_of_range_page_tag() -> None:
 
 def test_opendataloader_env_config_creates_ocr_model(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
     monkeypatch.setenv("OPENDATALOADER_APISERVER", "http://opendataloader.local")
-    saved: list[TenantLLM] = []
+    saved: list[TenantModel | TenantModelInstance | TenantModelProvider] = []
     monkeypatch.setattr(db, "scalar", Mock(side_effect=["tenant-1", None]))
     monkeypatch.setattr(db, "scalars", Mock(return_value=[]))
+    monkeypatch.setattr(db, "execute", Mock(return_value=SimpleNamespace(all=lambda: [])))
     monkeypatch.setattr(db, "add", saved.append)
 
     def flush() -> None:
-        assert len(saved) == 1
-        saved[0].id = 101
+        if saved and isinstance(saved[-1], TenantModel):
+            saved[-1].id = "a" * 32
 
     monkeypatch.setattr(db, "flush", flush)
-    connection = object()
-    monkeypatch.setattr(db, "connection", Mock(return_value=connection))
-    backfill = Mock()
-    monkeypatch.setattr(model_backfill, "backfill", backfill)
-
-    name = TenantLLMService.ensure_opendataloader_from_env(db, "tenant-1")
-
-    assert name == "101"
-    assert saved[0].tenant_id == "tenant-1"
-    assert saved[0].llm_name == "opendataloader-from-env-1"
-    assert saved[0].llm_factory == "OpenDataLoader"
-    assert saved[0].mdl_type == "ocr"
-    assert "http://opendataloader.local" in saved[0].api_key
-    backfill.assert_called_once_with(connection, "tenant-1")
+    assert TenantLLMService.ensure_opendataloader_from_env(db, "tenant-1") == "a" * 32
+    provider, instance, model = saved
+    assert isinstance(provider, TenantModelProvider) and isinstance(instance, TenantModelInstance) and isinstance(model, TenantModel)
+    assert (provider.tenant_id, provider.provider_name) == ("tenant-1", "OpenDataLoader")
+    assert (model.model_name, model.model_types, model.max_tokens) == ("opendataloader-from-env-1", ["ocr"], 0)
+    assert model.instance_id == instance.id and model.provider_id == provider.id
+    assert "http://opendataloader.local" in instance.api_key
 
 
 def test_opendataloader_env_config_reuses_matching_model(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
     monkeypatch.setenv("OPENDATALOADER_APISERVER", "http://opendataloader.local")
-    existing = TenantLLM(id=102, tenant_id="tenant-1", llm_name="configured-odl", llm_factory="OpenDataLoader", mdl_type="ocr", status="1")
-    monkeypatch.setattr(db, "scalar", Mock(side_effect=["tenant-1", SimpleNamespace(status="active")]))
-    monkeypatch.setattr(db, "scalars", Mock(return_value=[existing]))
-    linked = Mock(return_value=(SimpleNamespace(model_types=["ocr"]), SimpleNamespace(api_key='{"OPENDATALOADER_APISERVER": "http://opendataloader.local"}', status="active")))
-    monkeypatch.setattr(provider_model_resolution, "linked_model", linked)
+    identifier = "a" * 32
+    model = TenantModel(id=identifier, model_name="configured-odl", model_type=64, status="active")
+    instance = TenantModelInstance(api_key='{"OPENDATALOADER_APISERVER": "http://opendataloader.local"}', status="active")
+    provider = TenantModelProvider(status="active")
+    monkeypatch.setattr(db, "scalar", Mock(side_effect=["tenant-1", provider]))
+    monkeypatch.setattr(db, "execute", Mock(return_value=SimpleNamespace(all=lambda: [(model, instance, provider)])))
     add = Mock(side_effect=AssertionError("must reuse existing model"))
     monkeypatch.setattr(db, "add", add)
-
-    assert TenantLLMService.ensure_opendataloader_from_env(db, "tenant-1") == "102"
-    linked.assert_called_once_with(db, 102, "tenant-1")
+    assert TenantLLMService.ensure_opendataloader_from_env(db, "tenant-1") == identifier
     add.assert_not_called()

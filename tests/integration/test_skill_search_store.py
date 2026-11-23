@@ -35,8 +35,8 @@ async def test_skill_generation_real_search_and_scoped_delete() -> None:
         SkillIndexDocument(uuid4().hex, uuid4().hex, name, name + " description", ["fruit"], "1.0.0", name * 10000, hashlib.sha256(name.encode()).hexdigest()) for name in ("orange", "banana")
     ]
     config = {
-        "embedding_model_id": "9007199254740993",
-        "rerank_model_id": "9007199254740994",
+        "embedding_model_id": "a" * 32,
+        "rerank_model_id": "b" * 32,
         "vector_weight": 0.5,
         "similarity_threshold": 0.0,
         "fields": {field: {"enabled": True, "weight": weight} for field, weight in (("name", 3), ("description", 1), ("content", 0.5))},

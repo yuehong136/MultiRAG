@@ -1,16 +1,16 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from api.constants import DATASET_NAME_LIMIT
 from api.db import TenantPermission, UserTenantRole
-from api.db.db_models import Document, Knowledgebase, User, UserCanvas, UserTenant
+from api.db.db_models import Document, Knowledgebase, TenantModel, TenantModelInstance, TenantModelProvider, User, UserCanvas, UserTenant
+from api.db.model_contract import MODEL_TYPE_BITS, parse_model_id
 from api.db.services.common_service import CommonService
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService
 from api.utils.api_utils import get_data_error_result
 from common.constants import StatusEnum
@@ -20,6 +20,32 @@ from common.time_utils import current_timestamp, datetime_format
 
 class EmbeddingModelMismatchError(ValueError):
     """同一批知识库引用了不止一种 embedding 模型（向量空间不兼容，无法联合检索）。"""
+
+
+def embedding_space_keys(db: Session, bindings: Sequence[tuple[str, str | None, str]]) -> set[tuple[str, ...]]:
+    """Compare resolved base names across instances without loading credentials."""
+    registrations = [(owner, model_id or parse_model_id(reference)) for owner, model_id, reference in bindings]
+    selected = {(owner, model_id) for owner, model_id in registrations if model_id}
+    names: dict[tuple[str, str], str] = {}
+    if selected:
+        rows = db.execute(
+            select(TenantModelProvider.tenant_id, TenantModel.id, TenantModel.model_name)
+            .select_from(TenantModelProvider)
+            .join(TenantModel, TenantModel.provider_id == TenantModelProvider.id)
+            .join(TenantModelInstance, and_(TenantModelInstance.id == TenantModel.instance_id, TenantModelInstance.provider_id == TenantModel.provider_id))
+            .where(tuple_(TenantModelProvider.tenant_id, TenantModel.id).in_(selected), TenantModel.model_type.bitwise_and(MODEL_TYPE_BITS["embedding"]) != 0)
+        )
+        names = {(owner, identifier): name for owner, identifier, name in rows}
+    keys: set[tuple[str, ...]] = set()
+    for (owner, identifier), (_, _, reference) in zip(registrations, bindings, strict=True):
+        if identifier:
+            name = names.get((owner, identifier))
+            keys.add(("embedding", name) if name else ("unavailable", owner, identifier))
+        elif reference:
+            keys.add(("embedding", reference.split("@", 1)[0]))
+        else:
+            keys.add(("default", owner))
+    return keys
 
 
 class KnowledgebaseService(CommonService):
@@ -60,15 +86,9 @@ class KnowledgebaseService(CommonService):
         return set((await db.scalars(stmt)).all())
 
     @classmethod
-    def ensure_same_embedding_model(cls, kbs: Sequence[Knowledgebase]) -> None:
-        """校验一批知识库使用同一 embedding 模型，否则抛 EmbeddingModelMismatchError。
-
-        判定键：tenant_embd_id（provider 实例级）；缺失时回退到 embd_id 并剥掉
-        @factory 后缀——同名模型挂不同 factory 视为同一向量空间（与上游语义一致）。
-        所有多知识库联合检索/对话入口都必须走这里，不要在调用点内联复制此校验。
-        """
-        keys = {kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs}
-        if len(keys) > 1:
+    def ensure_same_embedding_model(cls, kbs: Sequence[Knowledgebase], *, db: Session) -> None:
+        """Check vector-space equality for authorized datasets."""
+        if len(kbs) > 1 and len(embedding_space_keys(db, [(kb.tenant_id, kb.tenant_embd_id, kb.embd_id) for kb in kbs])) > 1:
             detail = sorted(str(kb.tenant_embd_id or kb.embd_id) for kb in kbs)
             raise EmbeddingModelMismatchError(f"Datasets use different embedding models: {detail}")
 
@@ -653,8 +673,3 @@ class KnowledgebaseService(CommonService):
         except Exception as e:
             db.rollback()
             raise e
-
-    @classmethod
-    def get_null_tenant_embd_id_row(cls, db: Session):
-        stmt = select(cls.model.id, cls.model.tenant_id, cls.model.embd_id).where(cls.model.tenant_embd_id.is_(None))
-        return db.execute(stmt).all()

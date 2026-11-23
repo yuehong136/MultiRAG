@@ -17,11 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps.restful_apis import chat_api
-from api.db.db_models import Conversation, Dialog, Tenant, TenantLLM
+from api.db.db_models import Conversation, Dialog, Tenant, TenantModel
 from api.db.joint_services import tenant_model_service as tms
 from api.db.services.llm_service import LLMBundle
 from common.constants import RetCode
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.registered_model import model_owner, register_model
 
 
 def messages() -> list[dict[str, Any]]:
@@ -162,7 +163,7 @@ _MODEL_DEFAULTS = [
 @pytest.fixture
 def model_factory_scope(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     owners = [uuid4().hex, uuid4().hex]
-    ids: dict[tuple[str, str], int] = {}
+    ids: dict[tuple[str, str], str] = {}
     constructed: list[dict[str, Any]] = []
     closed: list[int] = []
 
@@ -192,7 +193,9 @@ def model_factory_scope(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monk
                 tenant = Tenant(id=owner, llm_id="", embd_id="", asr_id="", img2txt_id="", parser_ids="naive")
                 db.add(tenant)
                 for model_type, name_field, id_field in _MODEL_DEFAULTS:
-                    model = TenantLLM(tenant_id=owner, llm_factory="ScopeFixture", llm_name=f"model-{model_type}", mdl_type=model_type, api_key="fixture", api_base="http://fixture.invalid")
+                    model = register_model(
+                        db, tenant_id=owner, provider_name="ScopeFixture", model_name=f"model-{model_type}", model_types=(model_type,), api_key="fixture" or "", base_url="http://fixture.invalid"
+                    )
                     db.add(model)
                     db.flush()
                     assert model.id is not None
@@ -203,11 +206,11 @@ def model_factory_scope(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monk
         yield {"engine": bootstrapped_engine, "owners": owners, "ids": ids, "constructed": constructed, "closed": closed}
     finally:
         with Session(bootstrapped_engine) as db:
-            db.execute(sa.delete(TenantLLM).where(TenantLLM.tenant_id.in_(owners)))
+            db.execute(sa.delete(TenantModel).where(model_owner().in_(owners)))
             db.execute(sa.delete(Tenant).where(Tenant.id.in_(owners)))
             db.commit()
         with Session(bootstrapped_engine) as db:
-            assert db.scalar(sa.select(sa.func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id.in_(owners))) == 0
+            assert db.scalar(sa.select(sa.func.count()).select_from(TenantModel).where(model_owner().in_(owners))) == 0
             assert db.scalar(sa.select(sa.func.count()).select_from(Tenant).where(Tenant.id.in_(owners))) == 0
 
 
@@ -235,7 +238,7 @@ async def test_foreign_model_ids_fail_before_provider_or_name_fallback(model_fac
         tenant = db.get(Tenant, owner)
         assert tenant is not None and getattr(tenant, id_field) == foreign_id
         assert getattr(tenant, name_field) == f"model-{model_type}@ScopeFixture"
-        assert not any(db.scalars(sa.select(TenantLLM.used_tokens).where(TenantLLM.tenant_id.in_(env["owners"]))))
+        assert not any(db.scalars(sa.select(TenantModel.used_tokens).where(model_owner().in_(env["owners"]))))
 
 
 async def test_owned_model_factories_keep_offload_detachment_and_no_id_name_resolution(model_factory_scope: dict[str, Any]) -> None:
@@ -255,9 +258,11 @@ async def test_owned_model_factories_keep_offload_detachment_and_no_id_name_reso
     with Session(env["engine"]) as db:
         db.execute(sa.update(Tenant).where(Tenant.id == owner).values(tenant_llm_id=None))
         db.commit()
-    by_name = await tms.build_default_bundle_async(owner, "chat")
-    assert by_name.db is None and by_name.model_config["id"] == model_id
+    with pytest.raises(LookupError, match="No default chat"):
+        await tms.build_default_bundle_async(owner, "chat")
+    by_reference = await tms.build_named_bundle_async(owner, "chat", model_id)
+    assert by_reference.db is None and by_reference.model_config["id"] == model_id
     assert len(env["constructed"]) == 3
     assert all(item["thread"] != loop_thread and item["tenant"] == owner and item["model"] == model_id for item in env["constructed"])
-    assert len(env["closed"]) == 3
+    assert len(env["closed"]) == 4
     assert all(item["session"] in env["closed"] for item in env["constructed"])

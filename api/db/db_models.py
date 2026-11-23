@@ -31,6 +31,7 @@ from api.db import (
 )
 
 # from common.time_utils import current_timestamp, timestamp_to_date, date_string_to_timestamp
+from api.db.model_contract import MODEL_TYPE_BITS
 from common.config_utils import decrypt_database_config
 from common.constants import MAXIMUM_TASK_PAGE_NUMBER, ParserType
 
@@ -751,19 +752,19 @@ class Tenant(BaseModel):
     name: Mapped[str | None] = mapped_column(String(100), index=True, nullable=True, doc="Tenant name")
     public_key: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     llm_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default llm ID")
-    tenant_llm_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant llm row id")
+    tenant_llm_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="registered model ID")
     embd_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default embedding model ID")
-    tenant_embd_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant embedding row id")
+    tenant_embd_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="registered embedding model ID")
     asr_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default ASR model ID")
-    tenant_asr_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant ASR row id")
+    tenant_asr_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="default tenant ASR row id")
     img2txt_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default image to text model ID")
-    tenant_img2txt_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant image-to-text row id")
+    tenant_img2txt_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="default tenant image-to-text row id")
     rerank_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True, doc="default rerank model ID")
-    tenant_rerank_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant rerank row id")
+    tenant_rerank_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="default tenant rerank row id")
     tts_id: Mapped[str | None] = mapped_column(String(256), index=True, nullable=True, doc="default tts model ID")
-    tenant_tts_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant tts row id")
+    tenant_tts_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="default tenant tts row id")
     ocr_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    tenant_ocr_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    tenant_ocr_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     parser_ids: Mapped[str] = mapped_column(String(256), index=True, nullable=False, doc="document processors")
     credit: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=512)
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
@@ -2660,27 +2661,6 @@ class LLM(BaseModel):
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
-class TenantLLM(BaseModel):
-    __tablename__ = "t_ai_tenant_llms"
-    __table_args__ = (
-        sa.UniqueConstraint("tenant_id", "llm_factory", "llm_name", name="idx_tenant_llm_unique"),
-        {"schema": "usr_ai"},
-    )
-
-    # The database migrates this table to an integer identity primary key.
-    # Keep the ORM aligned so inserts don't send UUID strings into BIGINT columns.
-    id: Mapped[int | None] = mapped_column(BigInteger, primary_key=True, autoincrement=True, nullable=False)
-    tenant_id: Mapped[str] = mapped_column(String(32), primary_key=False, index=True, nullable=False)
-    llm_factory: Mapped[str] = mapped_column(String(128), primary_key=False, index=True, nullable=False, doc="LLM factory name")
-    mdl_type: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True, doc="LLM, Text Embedding, Image2Text, ASR")
-    llm_name: Mapped[str | None] = mapped_column(String(128), primary_key=False, index=True, nullable=True)
-    api_key: Mapped[str | None] = mapped_column(Text, nullable=True, doc="API KEY")
-    api_base: Mapped[str | None] = mapped_column(String(2048), index=False, nullable=True)
-    max_tokens: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=8192)
-    used_tokens: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
-    status: Mapped[str] = mapped_column(String(1), index=True, nullable=False, default="1", doc="is it validate(0: wasted, 1: validate)")
-
-
 class TenantModelProvider(BaseModel):
     __tablename__ = "t_ai_tenant_model_providers"
     __table_args__ = (
@@ -2713,19 +2693,36 @@ class TenantModelInstance(BaseModel):
 
 
 class TenantModel(BaseModel):
-    """Instance metadata for an existing numeric TenantLLM identity."""
+    """A registered model under a provider instance."""
 
     __tablename__ = "t_ai_tenant_models"
     __table_args__ = (
         sa.UniqueConstraint("instance_id", "model_name", name="uq_instance_model_name"),
+        sa.CheckConstraint("status IN ('active', 'inactive')", name="ck_tenant_model_status"),
         {"schema": "usr_ai"},
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, sa.ForeignKey("usr_ai.t_ai_tenant_llms.id", ondelete="RESTRICT"), primary_key=True, autoincrement=False)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
+    registration_order: Mapped[int] = mapped_column(BigInteger, sa.Identity(always=True), nullable=False)
+    provider_id: Mapped[str] = mapped_column(sa.ForeignKey("usr_ai.t_ai_tenant_model_providers.id", ondelete="RESTRICT", name="fk_tenant_model_provider"), nullable=False, index=True)
     instance_id: Mapped[str] = mapped_column(sa.ForeignKey("usr_ai.t_ai_tenant_model_instances.id", ondelete="RESTRICT"), nullable=False, index=True)
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    model_types: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    is_tools: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
+    model_type: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(8), nullable=False, default="active", server_default="active")
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    used_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    @property
+    def model_types(self) -> list[str]:
+        return [name for name, bit in MODEL_TYPE_BITS.items() if self.model_type & bit]
+
+    @property
+    def max_tokens(self) -> int:
+        return self.extra.get("max_tokens", 8192)
+
+    @property
+    def is_tools(self) -> bool:
+        return self.extra.get("is_tools") is True
 
 
 class TenantLangfuse(BaseModel):
@@ -2950,7 +2947,7 @@ class Knowledgebase(BaseModel):
     language: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="English", doc="English|Chinese")
     description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="KB description")
     embd_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default embedding model ID")
-    tenant_embd_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant embedding row id")
+    tenant_embd_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="registered embedding model ID")
     permission: Mapped[str] = mapped_column(String(16), index=True, nullable=False, default="me", doc="me|team")
     created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     doc_num: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
@@ -3130,7 +3127,7 @@ class Dialog(BaseModel):
     icon: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="icon base64 string")
     language: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="English", doc="English|Chinese")
     llm_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="default llm ID")
-    tenant_llm_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant llm row id")
+    tenant_llm_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="registered model ID")
     llm_setting: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default={"temperature": 0.1, "top_p": 0.3, "frequency_penalty": 0.7, "presence_penalty": 0.4, "max_tokens": 512})
     prompt_type: Mapped[str] = mapped_column(String(16), index=True, nullable=False, default="simple", doc="simple|advanced")
     prompt_config: Mapped[dict] = mapped_column(
@@ -3146,7 +3143,7 @@ class Dialog(BaseModel):
     top_k: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=1024)
     do_refer: Mapped[str] = mapped_column(String(1), index=False, nullable=False, default="1", doc="it needs to insert reference index into answer or not")
     rerank_id: Mapped[str | None] = mapped_column(String(128), index=False, nullable=True, doc="default rerank model ID")
-    tenant_rerank_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant rerank row id")
+    tenant_rerank_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="default tenant rerank row id")
     kb_ids: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=[])
     search_mode: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, doc="search mode configuration: hybrid, sparse, dense, or fusion")
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
@@ -4009,9 +4006,9 @@ class Memory(BaseModel):
     memory_type: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=1, doc="Bit flags (LSB->MSB): 1=raw, 2=semantic, 4=episodic, 8=procedural. E.g., 5 enables raw + episodic.")
     storage_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="table", doc="Storage type: table|graph")
     embd_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="Embedding model ID")
-    tenant_embd_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="tenant embedding row id")
+    tenant_embd_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="registered embedding model ID")
     llm_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="Chat model ID")
-    tenant_llm_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="tenant llm row id")
+    tenant_llm_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="tenant llm row id")
     permissions: Mapped[str] = mapped_column(String(16), index=True, nullable=False, default="me", doc="Permission scope: me|team")
     description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Memory description")
     memory_size: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=5242880, doc="Maximum memory size in bytes (default 5MB)")
@@ -4310,8 +4307,8 @@ class SkillSearchConfig(BaseModel):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
     space_id: Mapped[str] = mapped_column(String(32), nullable=False)
-    embedding_model_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    rerank_model_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    embedding_model_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    rerank_model_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     top_k: Mapped[int] = mapped_column(Integer, nullable=False)
     vector_weight: Mapped[float] = mapped_column(Float, nullable=False)
     similarity_threshold: Mapped[float] = mapped_column(Float, nullable=False)
@@ -4380,7 +4377,7 @@ class GatewayModelSetting(BaseModel):
     Every registered model of a connected provider is in the gateway catalog;
     a row exists only once its switch, alias, preference or limits were set.
     Without a row the model follows ``GatewaySetting.new_models_enabled``.
-    ``model_id`` is the numeric TenantLLM identity and deliberately not a
+    ``model_id`` is the registered model identity and deliberately not a
     foreign key: a deleted model leaves an inert row behind.
     """
 
@@ -4397,7 +4394,7 @@ class GatewayModelSetting(BaseModel):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
     tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
-    model_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    model_id: Mapped[str] = mapped_column(String(32), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sa.true())
     # An extra name callers may use; NULL means the generated names only.
     alias: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -4437,8 +4434,8 @@ class GatewayKey(BaseModel):
 
     Scope: ``allow_all_models`` covers every open model; otherwise the key may
     call the open models of ``allowed_instance_ids`` (whole connections,
-    including models opened later) and ``allowed_model_ids`` (numeric
-    registered model ids, a snapshot). Ids are kept after their target is
+    including models opened later) and ``allowed_model_ids`` (a snapshot of
+    registered model ids). Ids are kept after their target is
     deleted so the management page can show them as stale.
     """
 
@@ -4465,7 +4462,7 @@ class GatewayKey(BaseModel):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     allow_all_models: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
-    allowed_model_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    allowed_model_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     allowed_instance_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     # NULL means unlimited. The quota is a token budget per UTC day or month.
     rpm_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -4509,7 +4506,7 @@ class GatewayRequestLog(BaseModel):
     model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # Published-model id of calls made before the catalog replaced publishing; NULL since.
     gateway_model_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    upstream_model_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    upstream_model_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     upstream_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     endpoint: Mapped[str] = mapped_column(String(32), nullable=False)
     stream: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())

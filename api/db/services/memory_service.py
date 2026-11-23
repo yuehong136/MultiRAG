@@ -227,8 +227,8 @@ class MemoryService(CommonService):
         memory_type: list[str],
         embd_id: str,
         llm_id: str,
-        tenant_embd_id: int | None = None,
-        tenant_llm_id: int | None = None,
+        tenant_embd_id: str | None = None,
+        tenant_llm_id: str | None = None,
     ) -> tuple[bool, Memory | str]:
         """
         创建新的Memory
@@ -340,13 +340,3 @@ class MemoryService(CommonService):
             删除的记录数
         """
         return cls.delete_by_id(db, memory_id)
-
-    @classmethod
-    def get_null_tenant_embd_id_row(cls, db: Session):
-        stmt = select(cls.model.id, cls.model.tenant_id, cls.model.embd_id).where(cls.model.tenant_embd_id.is_(None))
-        return db.execute(stmt).all()
-
-    @classmethod
-    def get_null_tenant_llm_id_row(cls, db: Session):
-        stmt = select(cls.model.id, cls.model.tenant_id, cls.model.llm_id).where(cls.model.tenant_llm_id.is_(None))
-        return db.execute(stmt).all()

@@ -165,7 +165,7 @@ def provider_probe_http() -> Iterator[tuple[list[str], list[dict[str, str]]]]:
 def test_actual_web_provider_instances_and_foreign_denials(
     rest_documents: dict[str, Any], provider_probe_http: tuple[list[str], list[dict[str, str]]], tmp_path: Path, record_property: Callable[[str, object], None]
 ) -> None:
-    from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
+    from api.db.db_models import Tenant, TenantModel, TenantModelInstance, TenantModelProvider
     from api.db.joint_services.tenant_model_service import get_model_config_by_id
 
     env = rest_documents
@@ -191,7 +191,7 @@ def test_actual_web_provider_instances_and_foreign_denials(
         "owners": {"ownerId": env["owners"][0], "foreignId": env["owners"][1]},
         "providerName": "OpenAI-API-Compatible",
         "instanceNames": ["web-first-" + journal.run_id[:12], "web-second-" + journal.run_id[:12]],
-        "modelName": "web-model-" + journal.run_id[:12],
+        "modelName": "web/model-" + journal.run_id[:12],
         "scratchDatabase": env["engine"].url.database,
         "readbackFile": str(files[3]),
     }
@@ -226,13 +226,12 @@ def test_actual_web_provider_instances_and_foreign_denials(
             assert instance.instance_name == descriptor["instanceNames"][0]
             assert instance.api_key == keys[0] and instance.base_url == "https://w-edited.invalid" and instance.region == ""
             assert instance.status == "active"
-            row = db.get(TenantLLM, identifier)
             model = db.get(TenantModel, identifier)
-            assert row is not None and model is not None
-            assert row.tenant_id == owner_id and row.max_tokens == 0 and row.status == "1"
+            assert model is not None and model.provider_id == provider.id
+            assert model.max_tokens == 0 and model.status == "active"
             assert model.instance_id == instance.id and model.model_name == descriptor["modelName"]
             assert set(model.model_types) == {"chat", "image2text"} and model.is_tools is False
-            assert db.get(TenantModel, deleted_id) is None and db.get(TenantLLM, deleted_id) is None
+            assert db.get(TenantModel, deleted_id) is None
             tenant = db.get(Tenant, owner_id)
             assert tenant is not None and tenant.tenant_llm_id == identifier and tenant.llm_id == str(identifier)
             assert tenant.tenant_ocr_id is None and not tenant.ocr_id
@@ -250,7 +249,7 @@ def test_actual_web_provider_instances_and_foreign_denials(
         assert cleanup["providerAbsent"] and cleanup["modelsAbsent"] and cleanup["defaultsCleared"]
         with Session(env["engine"]) as db:
             assert db.scalar(select(func.count()).select_from(TenantModelProvider).where(TenantModelProvider.tenant_id == owner_id)) == 0
-            assert db.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == owner_id)) == 0
+            assert db.scalar(select(func.count()).select_from(TenantModel).where(TenantModel.provider_id == provider.id)) == 0
             assert db.get(TenantModel, identifier) is None
             tenant = db.get(Tenant, owner_id)
             assert tenant is not None and tenant.tenant_llm_id is None and not tenant.llm_id and tenant.tenant_ocr_id is None and not tenant.ocr_id
@@ -413,7 +412,7 @@ def test_actual_web_forms_ocr_volc_multi_capabilities_and_sql(
 ) -> None:
     import asyncio
 
-    from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
+    from api.db.db_models import Tenant, TenantModel, TenantModelInstance, TenantModelProvider
     from api.db.joint_services.tenant_model_service import get_model_config_by_id
     from api.db.services.llm_service import LLMBundle
 
@@ -505,10 +504,12 @@ def test_actual_web_forms_ocr_volc_multi_capabilities_and_sql(
         with Session(env["engine"]) as reader:
             for form in result["forms"]:
                 identifier = form["modelIds"][0]
-                row = reader.get(TenantLLM, identifier)
                 model = reader.get(TenantModel, identifier)
+                assert model is not None
                 instance = reader.get(TenantModelInstance, model.instance_id)
-                assert row.tenant_id == env["owners"][0] and row.max_tokens == 0 and model.is_tools is False
+                provider = reader.get(TenantModelProvider, model.provider_id)
+                assert provider is not None and provider.tenant_id == env["owners"][0]
+                assert model.max_tokens == 0 and model.is_tools is False
                 assert model.model_types == form["candidate"]["custom_model"]["model_types"]
                 assert hashlib.sha256(instance.api_key.encode()).hexdigest() == form["credentialSHA256"]
                 if form["provider"] == "VolcEngine":
@@ -540,7 +541,6 @@ def test_actual_web_forms_ocr_volc_multi_capabilities_and_sql(
         assert cleanup["providersAbsent"] and cleanup["modelsAbsent"]
         with Session(env["engine"]) as reader:
             assert reader.scalar(select(func.count()).select_from(TenantModelProvider).where(TenantModelProvider.tenant_id == env["owners"][0])) == 0
-            assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.id.in_(identifiers))) == 0
             assert reader.scalar(select(func.count()).select_from(TenantModel).where(TenantModel.id.in_(identifiers))) == 0
         journal.event("web-form-independent-readback", web_sha=web_sha, model_ids=sorted(identifiers), no_foreign_side_effects=True, models_instances_providers_absent=True)
         record_property("actual_web_forms_sdk_sql", json.dumps({"web_sha": web_sha, "forms": result, "foreign": foreign, "cleanup": cleanup}))

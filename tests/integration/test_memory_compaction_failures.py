@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Memory, TenantLLM
+from api.db.db_models import Memory, TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.memory_compaction_models import MemoryCompactionArtifact
 from api.db.memory_writer_models import MemoryWriterAdmission
 from api.db.services.tenant_llm_service import TenantLLMService
@@ -98,10 +98,14 @@ def test_official_openai_sdk_does_not_retry_without_provider_observer(compaction
     with Session(env["engine"]) as writer:
         bank = writer.get(Memory, mid)
         assert bank is not None
-        model = writer.get(TenantLLM, bank.tenant_llm_id)
+        model = writer.get(TenantModel, bank.tenant_llm_id)
         assert model is not None
-        model.llm_factory, model.llm_name, model.api_base, model.api_key = "OpenAI", "gpt-6.1-terra", "https://owned-compaction.invalid/v1", "owned-test-value"
-        bank.llm_id = "gpt-6.1-terra"
+        model.model_name = "gpt-6.1-terra"
+        provider = writer.get(TenantModelProvider, model.provider_id)
+        instance = writer.get(TenantModelInstance, model.instance_id)
+        assert provider is not None and instance is not None
+        provider.provider_name = "OpenAI"
+        instance.base_url, instance.api_key = "https://owned-compaction.invalid/v1", "owned-test-value"
         writer.commit()
     controlled = cast(Any, TenantLLMService.model_instance_from_config).__func__
     instances: list[Any] = []

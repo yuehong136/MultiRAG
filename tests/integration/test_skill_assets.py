@@ -340,7 +340,7 @@ async def test_publish_metadata_and_cleanup_retry_do_not_republish(bootstrapped_
         service = SkillService(db, storage, index)
         space = await service.create_space(tenant, CreateSpace(name="Publish " + tenant))
         config = await db.scalar(sa.select(SkillSearchConfig).where(SkillSearchConfig.space_id == space["id"]))
-        config.embedding_model_id = 1  # The index fake replaces the external model boundary.
+        config.embedding_model_id = "a" * 32  # The index fake replaces the external model boundary.
         await db.commit()
     results = []
     for number in (1, 2):
@@ -608,7 +608,7 @@ async def test_uninstall_skips_deleted_versions_and_retries_then_deletes_parent(
         service = SkillService(db, storage, index)
         space = await service.create_space(tenant, CreateSpace(name="Uninstall " + tenant))
         config = await db.scalar(sa.select(SkillSearchConfig).where(SkillSearchConfig.space_id == space["id"]))
-        config.embedding_model_id = 1
+        config.embedding_model_id = "a" * 32
         await db.commit()
     versions = []
     for number in (1, 2):

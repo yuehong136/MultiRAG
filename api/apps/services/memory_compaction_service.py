@@ -74,7 +74,7 @@ async def compactions(db: AsyncSession, memory_id: str, *, actor_id: str) -> Com
         return {
             "model_reference": f"{prepared.model_config['llm_name']}@{prepared.model_config['llm_factory']}",
             "config_reference": provider._chat_fingerprint(settings, prepared),
-            "tenant_model_id": str(identifier) if identifier is not None else None,
+            "tenant_model_id": identifier,
         }
 
     async def summarize(mid: str, body: str, output_budget_tokens: int, expected: dict[str, Any]) -> str:

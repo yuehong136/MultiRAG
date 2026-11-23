@@ -26,7 +26,7 @@ from api.db.db_models import Knowledgebase, db_connection
 from api.db.joint_services import memory_message_service
 from api.db.joint_services.tenant_model_service import build_bundle_by_id_async, build_default_bundle_async, build_named_bundle_async
 from api.db.services.doc_metadata_service import DocMetadataService
-from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.knowledgebase_service import KnowledgebaseService, embedding_space_keys
 from api.db.services.memory_service import MemoryService
 from common import settings
 from common.connection_utils import timeout
@@ -116,8 +116,8 @@ class Retrieval(ToolBase, ABC):
             if not memory_list:
                 raise Exception("No memory is selected.")
 
-            embd_names = list({memory.embd_id for memory in memory_list})
-            assert len(embd_names) == 1, "Memory use different embedding models."
+            if len(memory_list) > 1 and len(embedding_space_keys(db, [(memory.tenant_id, memory.tenant_embd_id, memory.embd_id) for memory in memory_list])) > 1:
+                raise ValueError("Memories use different embedding models.")
 
             vars = self.get_input_elements_from_text(query_text)
             vars = {k: o["value"] for k, o in vars.items()}
@@ -209,6 +209,7 @@ class Retrieval(ToolBase, ABC):
             kbs = KnowledgebaseService.get_by_ids(db, filtered_kb_ids)
             if len(kbs) != len(filtered_kb_ids):
                 raise PermissionError("Dataset is missing or inaccessible.")
+            KnowledgebaseService.ensure_same_embedding_model(kbs, db=db)
             return kb_ids, filtered_kb_ids, kbs
 
     @staticmethod
@@ -232,17 +233,10 @@ class Retrieval(ToolBase, ABC):
         """
         kb_ids, filtered_kb_ids, kbs = await asyncio.to_thread(self._resolve_kbs)
 
-        # Keep the embedding-equivalence check aligned with RAGFlow: tenant_embd_id
-        # selects the concrete tenant model row, while embd_id defines model equivalence.
-        embd_keys = list({kb.embd_id for kb in kbs})
-        assert len(embd_keys) == 1, "Knowledge bases use different embedding models."
-
-        embd_mdl = None
-        if embd_keys:
-            if kbs[0].tenant_embd_id:
-                embd_mdl = await build_bundle_by_id_async(kbs[0].tenant_id, kbs[0].tenant_embd_id, model_type="embedding")
-            else:
-                embd_mdl = await build_named_bundle_async(kbs[0].tenant_id, LLMType.EMBEDDING.value, kbs[0].embd_id)
+        if kbs[0].tenant_embd_id:
+            embd_mdl = await build_bundle_by_id_async(kbs[0].tenant_id, kbs[0].tenant_embd_id, model_type="embedding")
+        else:
+            embd_mdl = await build_named_bundle_async(kbs[0].tenant_id, LLMType.EMBEDDING.value, kbs[0].embd_id)
 
         rerank_mdl = None
         if self._param.rerank_id:

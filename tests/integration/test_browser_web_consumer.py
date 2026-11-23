@@ -21,11 +21,13 @@ from sqlalchemy.pool import NullPool
 
 from agent.component import browser as browser_module
 from agent.component.browser import Browser
-from api.db.db_models import API4Conversation, File, TenantLLM, UserCanvas
+from api.db.db_models import API4Conversation, File, TenantModel, UserCanvas
 from common import resources
 from common.config_utils import CONFIGS
 from core.utils.minio_conn import MultiRAGMinio
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.registered_model import register_model
+from tests.support.web_consumer import tsx_runner
 
 
 @pytest.mark.external_consumer
@@ -73,18 +75,17 @@ def test_browser_actual_web_save_upload_debug_run(release_api: dict[str, Any], t
     try:
         client.make_bucket(bucket)
         with Session(env["engine"]) as db:
-            model = TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="browser-consumer", mdl_type="chat", api_key="test-only", api_base="http://127.0.0.1:1/v1", status="1")
-            db.add(model)
+            model = register_model(db, tenant_id=owner, provider_name="OpenAI", model_name="browser-consumer", model_types=("chat",), api_key="test-only", base_url="http://127.0.0.1:1/v1")
             db.commit()
             record["modelId"] = model.id
         save()
         root = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
-        runner = root / "node_modules/.bin/tsx"
+        runner = tsx_runner(root)
         assert runner.is_file(), "Installed fixed Web checkout is required"
         result = subprocess.run(
             [str(runner), "--tsconfig", str(root / "tsconfig.app.json"), str(Path(__file__).resolve().parents[1] / "support/browser_web_consumer.mts")],
             cwd=root,
-            env={**os.environ, "BROWSER_CONSUMER_BASE": env["base"], "BROWSER_CONSUMER_TOKEN": env["jwts"][0]},
+            env={**os.environ, "BROWSER_CONSUMER_BASE": env["base"], "BROWSER_CONSUMER_TOKEN": env["jwts"][0], "BROWSER_CONSUMER_MODEL_ID": record["modelId"]},
             capture_output=True,
             text=True,
             timeout=90,
@@ -95,7 +96,9 @@ def test_browser_actual_web_save_upload_debug_run(release_api: dict[str, Any], t
         assert all(not Path(action["profile"]).exists() for action in record["actions"])
         with Session(env["engine"]) as db:
             canvas = db.get(UserCanvas, consumer["id"])
-            assert canvas is not None and canvas.dsl["components"]["Browser:consumer"]["obj"]["params"]["temperature"] == 0
+            assert canvas is not None
+            browser_settings = canvas.dsl["components"]["Browser:consumer"]["obj"]["params"]
+            assert browser_settings["temperature"] == 0 and browser_settings["llm_id"] == record["modelId"]
             conversation = db.get(API4Conversation, consumer["sessionId"])
             assert conversation is not None and conversation.dialog_id == canvas.id
             assert [message["role"] for message in conversation.message] == ["user", "assistant"]
@@ -110,7 +113,7 @@ def test_browser_actual_web_save_upload_debug_run(release_api: dict[str, Any], t
         with Session(env["engine"]) as db:
             db.execute(delete(File).where(File.tenant_id == owner, File.created_by == owner))
             if "modelId" in record:
-                db.execute(delete(TenantLLM).where(TenantLLM.id == record["modelId"]))
+                db.execute(delete(TenantModel).where(TenantModel.id == record["modelId"]))
             db.commit()
             assert db.scalar(select(File.id).where(File.tenant_id == owner, File.created_by == owner).limit(1)) is None
         if client.bucket_exists(bucket):

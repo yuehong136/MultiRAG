@@ -74,14 +74,14 @@ def test_existing_begin_at_normalization(value: Any, valid: bool) -> None:
 
 @pytest.fixture
 def configured_memory(db: Session, monkeypatch: pytest.MonkeyPatch) -> Memory:
-    memory = Memory(id="memory", tenant_id="owner", memory_type=3, embd_id="legacy@provider", tenant_embd_id=7, llm_id="chat", tenant_llm_id=8)
+    memory = Memory(id="memory", tenant_id="owner", memory_type=3, embd_id="a" * 32, tenant_embd_id="a" * 32, llm_id="b" * 32, tenant_llm_id="b" * 32)
     monkeypatch.setattr(api, "_require_memory_access", lambda db, user_id, mid: memory)
 
     def resolve(db: Session, tenant_id: str, values: dict[str, Any], *, strict: bool = False) -> dict[str, Any]:
         assert tenant_id == "owner"
         for key in ("embd_id", "llm_id"):
             if key in values:
-                values[f"tenant_{key}"] = {"legacy@provider": 7, "7": 7, "other": 9, "chat": 8}[values[key]]
+                values[f"tenant_{key}"] = values[key]
         return values
 
     monkeypatch.setattr(api, "ensure_tenant_model_id_for_params", resolve)
@@ -98,14 +98,14 @@ def configured_memory(db: Session, monkeypatch: pytest.MonkeyPatch) -> Memory:
     return memory
 
 
-@pytest.mark.parametrize("settings", [{"embd_id": " 7 "}, {"memory_type": ["semantic", "raw"]}, {"memory_type": [" RAW ", "semantic", "raw"], "embd_id": "7"}])
+@pytest.mark.parametrize("settings", [{"embd_id": "a" * 32}, {"memory_type": ["semantic", "raw"]}, {"memory_type": [" RAW ", "semantic", "raw"], "embd_id": "a" * 32}])
 def test_semantically_equal_update_is_noop(db: Session, configured_memory: Memory, monkeypatch: pytest.MonkeyPatch, settings: dict[str, Any]) -> None:
     monkeypatch.setattr(api, "get_memory_size_cache", lambda *args: pytest.fail("no-op touched memory store"))
     monkeypatch.setattr(api.MemoryService, "update_memory", lambda *args: pytest.fail("no-op wrote configuration"))
     assert api.update_memory(db, "memory", settings, user_id="owner")[0] is True
 
 
-@pytest.mark.parametrize("settings", [{"embd_id": "other"}, {"memory_type": ["raw"]}])
+@pytest.mark.parametrize("settings", [{"embd_id": "c" * 32}, {"memory_type": ["raw"]}])
 def test_occupied_memory_still_rejects_real_change(db: Session, configured_memory: Memory, monkeypatch: pytest.MonkeyPatch, settings: dict[str, Any]) -> None:
     monkeypatch.setattr(api, "get_memory_size_cache", lambda *args: 100)
     with pytest.raises(ArgumentException, match="isn't empty"):
@@ -128,7 +128,7 @@ def test_configuration_change_requires_actual_writer_quiescence(db: Session, con
     monkeypatch.setattr(api, "get_memory_size_cache", lambda *args: pytest.fail("blocked change reached message storage"))
     monkeypatch.setattr(api.MemoryService, "update_memory", lambda *args: pytest.fail("blocked change wrote configuration"))
     with pytest.raises(RevisionConflict, match="memory_change_requires_writer_quiescence"):
-        api.update_memory(db, "memory", {"embd_id": "other"}, user_id="owner")
+        api.update_memory(db, "memory", {"embd_id": "c" * 32}, user_id="owner")
 
 
 @pytest.mark.parametrize("value", [3, "raw,semantic", [1], ["unsupported"]])
@@ -137,29 +137,18 @@ def test_memory_type_normalization_preserves_wire_boundary(db: Session, configur
         api.update_memory(db, "memory", {"memory_type": value}, user_id="owner")
 
 
-def test_unusable_legacy_reference_can_be_replaced(db: Session, configured_memory: Memory, monkeypatch: pytest.MonkeyPatch) -> None:
-    configured_memory.tenant_embd_id = None
-    configured_memory.embd_id = "disabled"
-
-    def resolve(db: Session, tenant_id: str, values: dict[str, Any], *, strict: bool = False) -> dict[str, Any]:
-        if values.get("embd_id") == "disabled":
-            raise LookupError("Model is disabled")
-        return values | {"tenant_embd_id": 9}
-
+def test_empty_memory_can_replace_its_model_binding(db: Session, configured_memory: Memory, monkeypatch: pytest.MonkeyPatch) -> None:
     changed: list[dict[str, Any]] = []
-    monkeypatch.setattr(api, "ensure_tenant_model_id_for_params", resolve)
     monkeypatch.setattr(api, "get_memory_size_cache", lambda *args: 0)
     monkeypatch.setattr(api.MemoryService, "update_memory", lambda db, tenant, mid, values: changed.append(values))
     monkeypatch.setattr(api.MemoryService, "get_by_memory_id", lambda db, mid: configured_memory)
-    assert api.update_memory(db, "memory", {"embd_id": "other"}, user_id="owner")[0]
-    assert changed == [{"embd_id": "other", "tenant_embd_id": 9}]
+    assert api.update_memory(db, "memory", {"embd_id": "c" * 32}, user_id="owner")[0]
+    assert changed == [{"embd_id": "c" * 32, "tenant_embd_id": "c" * 32}]
 
 
-def test_occupied_legacy_name_backfills_the_same_owner_binding(db: Session, configured_memory: Memory, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_occupied_unbound_memory_requires_migration(db: Session, configured_memory: Memory, monkeypatch: pytest.MonkeyPatch) -> None:
     configured_memory.tenant_embd_id = None
-    changed: list[dict[str, Any]] = []
     monkeypatch.setattr(api, "get_memory_size_cache", lambda *args: 100)
-    monkeypatch.setattr(api.MemoryService, "update_memory", lambda db, tenant, mid, values: changed.append(values))
-    monkeypatch.setattr(api.MemoryService, "get_by_memory_id", lambda db, mid: configured_memory)
-    assert api.update_memory(db, "memory", {"embd_id": "7"}, user_id="owner")[0] is True
-    assert changed == [{"tenant_embd_id": 7}]
+    monkeypatch.setattr(api.MemoryService, "update_memory", lambda *args: pytest.fail("unverified binding wrote configuration"))
+    with pytest.raises(ArgumentException, match="isn't empty"):
+        api.update_memory(db, "memory", {"embd_id": "a" * 32}, user_id="owner")

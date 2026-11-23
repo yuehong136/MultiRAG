@@ -2,8 +2,7 @@
 
 import json
 import uuid
-from collections.abc import AsyncIterator, Iterator
-from types import SimpleNamespace
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -12,11 +11,13 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 import core.llm as provider_models
-from api.db.db_models import LLM, LLMFactories, TenantLLM, get_db
+from api.db.db_models import LLM, LLMFactories, TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from api.db.services.tenant_llm_service import TenantLLMService
-from common import resources, settings
-from core.llm.openrouter_auth import decode_openrouter_key
+from common import settings
+from tests.support.provider_instances import http as http
+from tests.support.provider_instances import owned_engine as owned_engine
+from tests.support.registered_model import model_owner, register_model
 from tests.support.resource_journal import ResourceJournal
 
 pytestmark = pytest.mark.integration
@@ -26,19 +27,19 @@ pytestmark = pytest.mark.integration
 def credential_owner(bootstrapped_engine: Engine) -> Iterator[str]:
     owner = uuid.uuid4().hex
     journal = ResourceJournal("provider-credential-roundtrip")
-    journal.event("reserve-sql-rows", database=bootstrapped_engine.url.database, owner=owner, table=TenantLLM.__tablename__)
+    journal.event("reserve-sql-rows", database=bootstrapped_engine.url.database, owner=owner, table=TenantModel.__tablename__)
     try:
         yield owner
     finally:
         with Session(bootstrapped_engine) as writer:
-            writer.execute(delete(TenantLLM).where(TenantLLM.tenant_id == owner))
+            writer.execute(delete(TenantModel).where(model_owner() == owner))
             writer.commit()
         with Session(bootstrapped_engine) as reader:
-            assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == owner)) == 0
+            assert reader.scalar(select(func.count()).select_from(TenantModel).where(model_owner() == owner)) == 0
         journal.event("cleanup-readback", owner=owner, remaining=0)
 
 
-def test_image_fallback_reloads_chat_registration_as_cv(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_multicapability_registration_uses_requested_cv_adapter(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
     owner = uuid.uuid4().hex
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "VisionFixture"}, {"name": "TextFixture"}])
 
@@ -50,28 +51,32 @@ def test_image_fallback_reloads_chat_registration_as_cv(bootstrapped_engine: Eng
             return f"{self.model_name}: {prompt}", 1
 
     monkeypatch.setattr(provider_models, "CvModel", {"VisionFixture": VisionModel})
+    identifiers = {}
     with Session(bootstrapped_engine) as db:
         for factory, tags in [("VisionFixture", "LLM, IMAGE2TEXT "), ("TextFixture", "LLM")]:
             db.add(LLMFactories(name=factory, tags="LLM", status="1"))
             db.add(LLM(fid=factory, llm_name="same-name", mdl_type="chat", tags=tags, is_tools=False, max_tokens=1024))
-            db.add(TenantLLM(tenant_id=owner, llm_factory=factory, llm_name="same-name", mdl_type="chat", api_key="fixture", api_base="https://fixture.invalid"))
+            capabilities = ("chat", "image2text") if factory == "VisionFixture" else ("chat",)
+            identifiers[factory] = register_model(
+                db, tenant_id=owner, provider_name=factory, model_name="same-name", model_types=capabilities, api_key="fixture", base_url="https://fixture.invalid"
+            ).id
         db.commit()
 
     with Session(bootstrapped_engine) as db:
-        config = get_model_config_by_type_and_name(db, owner, "image2text", "same-name@VisionFixture")
+        config = get_model_config_by_type_and_name(db, owner, "image2text", identifiers["VisionFixture"])
         model = TenantLLMService.model_instance(db, owner, config)
         assert model.describe_with_prompt(b"image", "describe") == ("same-name: describe", 1)
         assert config["mdl_type"] == "image2text"
-        assert get_model_config_by_type_and_name(db, owner, "chat", "same-name@VisionFixture")["mdl_type"] == "chat"
-        with pytest.raises(LookupError, match="type image2text not found"):
-            get_model_config_by_type_and_name(db, owner, "image2text", "same-name@TextFixture")
+        assert get_model_config_by_type_and_name(db, owner, "chat", identifiers["VisionFixture"])["mdl_type"] == "chat"
+        with pytest.raises(LookupError, match="requested capability"):
+            get_model_config_by_type_and_name(db, owner, "image2text", identifiers["TextFixture"])
         with pytest.raises(LookupError):
-            get_model_config_by_type_and_name(db, uuid.uuid4().hex, "image2text", "same-name@VisionFixture")
+            get_model_config_by_type_and_name(db, uuid.uuid4().hex, "image2text", identifiers["VisionFixture"])
 
     with Session(bootstrapped_engine) as db:
-        rows = db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner)).all()
+        rows = db.scalars(select(TenantModel).where(model_owner() == owner)).all()
         assert len(rows) == 2
-        assert {row.mdl_type for row in rows} == {"chat"}
+        assert {row.model_type for row in rows} == {1, 9}
 
 
 @pytest.mark.parametrize(
@@ -88,64 +93,35 @@ def test_image_fallback_reloads_chat_registration_as_cv(bootstrapped_engine: Eng
         ("VolcEngine", {"ark_api_key": "fixture-key", "endpoint_id": "fixture-endpoint"}, {"endpoint_id": "new-endpoint"}),
     ],
 )
-def test_provider_credentials_survive_probe_save_and_reload(
-    bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, credential_owner: str, factory: str, credentials: dict[str, Any], edit: dict[str, Any]
-) -> None:
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    monkeypatch.setitem(resources._state, "secret_key", "model-config-test-signing-key")
-    from api.apps import llm_app
-
-    owner = credential_owner
-    probed: list[dict[str, Any]] = []
-    # OpenRouter has a known-field envelope shared by discovery and runtime.
-    # Other legacy providers retain additional stored fields during an edit.
+def test_provider_credentials_survive_probe_save_and_reload(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, factory: str, credentials: dict[str, Any], edit: dict[str, Any]) -> None:
+    client, owner, engine, _ = http
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": factory, "llm": []}])
     retained = {} if factory == "OpenRouter" else {"opaque": {"retain": True}}
-
-    class ProbeModel:
-        def __init__(self, key: str, model_name: str, **kwargs: Any) -> None:
-            probed.append(decode_openrouter_key(key) if factory == "OpenRouter" else json.loads(key))
-
-        async def async_chat_streamly(self, *args: Any, **kwargs: Any) -> AsyncIterator[str | int]:
-            yield "fixture answer"
-            yield 1
-
-    monkeypatch.setattr(provider_models, "ChatModel", {factory: ProbeModel})
-    monkeypatch.setattr(llm_app, "get_allowed_llm_factories", lambda db: [SimpleNamespace(name=factory)])
-    app = FastAPI()
-    app.include_router(llm_app.router, prefix="/v1/llm")
-
-    def session() -> Iterator[Session]:
-        with Session(bootstrapped_engine) as db:
-            yield db
-
-    app.dependency_overrides[get_db] = session
-    app.dependency_overrides[llm_app.manager] = lambda: SimpleNamespace(id=owner)
-    request = {"llm_factory": factory, "llm_name": "fixture-model", "mdl_type": "chat"}
-    with TestClient(app) as client:
-        response = client.post("/v1/llm/add_llm", json={**request, **credentials, "is_tools": True})
-        assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
-        assert probed == [credentials]
-        with Session(bootstrapped_engine) as db:
-            row = db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner)).one()
-            assert json.loads(row.api_key) == {**credentials, "is_tools": True}
-            # Edit without api_key and preserve fields allowed by this provider.
-            row.api_key = json.dumps({**credentials, **retained, "is_tools": True})
-            db.commit()
-            row_id = row.id
-        response = client.post("/v1/llm/add_llm", json={**request, **edit})
-        assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
-
-    expected = {**credentials, **retained, **edit}
-    assert probed[-1] == expected
-    with Session(bootstrapped_engine) as db:
-        row = db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner)).one()
-        assert row.id == row_id
-        assert json.loads(row.api_key) == {**expected, "is_tools": True}
-        config = get_model_config_by_id(db, row_id, tenant_id=owner)
-        assert config["is_tools"] is True
-        assert json.loads(config["api_key_payload"]) == expected
+    original = {**credentials, **retained}
+    edited = {**original, **edit}
+    prefix = f"/api/v1/providers/{factory}/instances"
+    base = "https://fixture.invalid/v1"
+    candidate = {
+        "api_key": json.dumps(original),
+        "base_url": base,
+        "model_ids": [],
+        "custom_model": {"model_name": "fixture-model", "model_types": ["chat"], "max_tokens": 0, "is_tools": True},
+    }
+    assert client.post(f"/api/v1/providers/{factory}/connection", json=candidate).status_code == 200
+    response = client.post(prefix, json={**candidate, "instance_name": "fixture"})
+    assert response.status_code == 200, response.text
+    identifier = client.get(prefix + "/fixture/models").json()["data"]["items"][0]["id"]
+    for key in (original, edited):
+        if key is edited:
+            changed = client.put(prefix + "/fixture", json={"api_key": json.dumps(edited)})
+            assert changed.status_code == 200, changed.text
+        with Session(engine) as reader:
+            row = reader.get(TenantModel, identifier)
+            assert row.is_tools is True and row.max_tokens == 0
+            assert json.loads(reader.get(TenantModelInstance, row.instance_id).api_key) == key
+            runtime = get_model_config_by_id(reader, identifier, tenant_id=owner, model_type="chat")
+            assert runtime["is_tools"] is True
+            assert runtime["api_base"] == base
 
 
 @pytest.mark.parametrize(
@@ -167,7 +143,9 @@ def test_invalid_openrouter_credentials_fail_before_runtime_without_rewriting_st
 
     monkeypatch.setattr(provider_models, "ChatModel", {"OpenRouter": ForbiddenModel})
     with Session(bootstrapped_engine) as writer:
-        row = TenantLLM(tenant_id=credential_owner, llm_factory="OpenRouter", llm_name="fixture-model", mdl_type="chat", api_key=credential, used_tokens=0, status="1")
+        row = register_model(
+            writer, tenant_id=credential_owner, provider_name="OpenRouter", model_name="fixture-model", model_types=("chat",), api_key=credential or "", used_tokens=0, status="active"
+        )
         writer.add(row)
         writer.commit()
         identifier = row.id
@@ -176,17 +154,17 @@ def test_invalid_openrouter_credentials_fail_before_runtime_without_rewriting_st
         with pytest.raises(ValueError, match=r"^Invalid OpenRouter credential$"):
             get_model_config_by_id(db, identifier, tenant_id=credential_owner)
         with pytest.raises(ValueError, match=r"^Invalid OpenRouter credential$"):
-            get_model_config_by_type_and_name(db, credential_owner, "chat", "fixture-model@OpenRouter")
+            get_model_config_by_type_and_name(db, credential_owner, "chat", identifier)
         with pytest.raises(ValueError, match=r"^Invalid OpenRouter credential$"):
-            TenantLLMService.model_instance(db, credential_owner, db.get(TenantLLM, identifier).to_dict())
+            TenantLLMService.model_instance(db, credential_owner, {"id": identifier, "tenant_id": credential_owner, "mdl_type": "chat"})
         db.commit()
 
     assert constructed == []
     with Session(bootstrapped_engine) as reader:
-        persisted = reader.get(TenantLLM, identifier)
-        assert persisted.api_key == credential and persisted.used_tokens == 0
-        assert persisted.tenant_id == credential_owner and persisted.status == "1"
-        assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == credential_owner)) == 1
+        persisted = reader.get(TenantModel, identifier)
+        assert reader.get(TenantModelInstance, persisted.instance_id).api_key == credential and persisted.used_tokens == 0
+        assert reader.get(TenantModelProvider, persisted.provider_id).tenant_id == credential_owner and persisted.status == "active"
+        assert reader.scalar(select(func.count()).select_from(TenantModel).where(model_owner() == credential_owner)) == 1
 
 
 @pytest.mark.parametrize("limit,tools", [(0, False), (32768, True)])
@@ -206,11 +184,11 @@ def test_model_record_metadata_survives_commit_all_resolvers_and_bundle(bootstra
             db.add(TenantModelProvider(id=pid, tenant_id=owner, provider_name="OpenAI", status="active"))
             db.flush()
             db.add(TenantModelInstance(id=iid, provider_id=pid, instance_name="fixture", api_key=json.dumps({"api_key": "fixture", "is_tools": not tools}), base_url="", status="active"))
-            row = TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="opaque-record", mdl_type="chat", max_tokens=limit, api_key="old-key", status="1")
-            db.add(row)
             db.flush()
-            identifier = row.id
-            db.add(TenantModel(id=identifier, instance_id=iid, model_name="callable-model", model_types=["chat", "image2text"], is_tools=tools))
+            model = TenantModel(provider_id=pid, instance_id=iid, model_name="callable-model", model_type=9, extra={"max_tokens": limit, "is_tools": tools})
+            db.add(model)
+            db.flush()
+            identifier = model.id
             db.get(Tenant, owner).tenant_llm_id = identifier
             db.commit()
         monkeypatch.setattr(TenantLLMService, "model_instance", lambda *_args, **_kwargs: object())
@@ -219,7 +197,6 @@ def test_model_record_metadata_survives_commit_all_resolvers_and_bundle(bootstra
             configs = [
                 get_model_config_by_id(db, identifier, tenant_id=owner, model_type="chat"),
                 get_model_config_by_type_and_name(db, owner, "image2text", str(identifier)),
-                get_model_config_by_type_and_name(db, owner, "chat", "callable-model@fixture@OpenAI"),
                 get_tenant_default_model_by_type(db, owner, "chat"),
             ]
             for config in configs:
@@ -234,18 +211,18 @@ def test_model_record_metadata_survives_commit_all_resolvers_and_bundle(bootstra
             with pytest.raises(LookupError, match="capability is required"):
                 get_model_config_by_id(db, identifier, tenant_id=owner)
         with Session(bootstrapped_engine) as reader:
-            assert reader.get(TenantLLM, identifier).max_tokens == limit
+            assert reader.get(TenantModel, identifier).max_tokens == limit
             assert reader.get(TenantModel, identifier).is_tools is tools
         journal.event("independent-metadata-readback", model_id=identifier, max_tokens=limit, is_tools=tools, resolver_count=len(configs))
     finally:
         with Session(bootstrapped_engine) as writer:
             writer.execute(delete(TenantModel).where(TenantModel.instance_id == iid))
-            writer.execute(delete(TenantLLM).where(TenantLLM.tenant_id == owner))
+            writer.execute(delete(TenantModel).where(model_owner() == owner))
             writer.execute(delete(TenantModelInstance).where(TenantModelInstance.id == iid))
             writer.execute(delete(TenantModelProvider).where(TenantModelProvider.id == pid))
             writer.execute(delete(Tenant).where(Tenant.id == owner))
             writer.commit()
         with Session(bootstrapped_engine) as reader:
-            assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == owner)) == 0
+            assert reader.scalar(select(func.count()).select_from(TenantModel).where(model_owner() == owner)) == 0
             assert reader.get(TenantModelInstance, iid) is None and reader.get(TenantModelProvider, pid) is None
         journal.event("cleanup-readback", remaining=0)

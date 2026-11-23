@@ -4,7 +4,7 @@ import base64
 import json
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,14 +17,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
-from api.db.db_models import LLM, LLMFactories, Tenant, TenantLLM, get_db
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
+from api.db.db_models import LLM, LLMFactories, Tenant, TenantModel, TenantModelInstance, get_async_db
+from api.db.joint_services.tenant_model_service import get_model_config_by_id
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import resources, settings
 from tests.support import event_loop
+from tests.support.registered_model import model_owner, register_model
 
 pytestmark = pytest.mark.integration
 
@@ -42,14 +44,15 @@ def test_saved_bedrock_and_huggingface_models_use_registered_consumers(bootstrap
         scratch_version = connection.exec_driver_sql("select version()").scalar_one()
     credentials = {"auth_mode": "assume_role", "bedrock_region": "", "is_tools": False}
     with Session(engine) as db:
-        vision = TenantLLM(tenant_id=owner, llm_factory="Bedrock", llm_name="amazon.nova-pro-v1:0", mdl_type="image2text", api_key=json.dumps(credentials), api_base="")
-        rerank = TenantLLM(
+        vision = register_model(db, tenant_id=owner, provider_name="Bedrock", model_name="amazon.nova-pro-v1:0", model_types=("image2text",), api_key=json.dumps(credentials) or "", base_url="")
+        rerank = register_model(
+            db,
             tenant_id=owner,
-            llm_factory="HuggingFace",
-            llm_name="rerank___HuggingFace",
-            mdl_type="rerank",
-            api_key=json.dumps({"api_key": "x", "is_tools": False}),
-            api_base="http://provider.invalid/prefix/rerank/",
+            provider_name="HuggingFace",
+            model_name="rerank",
+            model_types=("rerank",),
+            api_key=json.dumps({"api_key": "x", "is_tools": False}) or "",
+            base_url="http://provider.invalid/prefix/rerank/",
         )
         db.add_all([vision, rerank])
         db.commit()
@@ -91,8 +94,8 @@ def test_saved_bedrock_and_huggingface_models_use_registered_consumers(bootstrap
             assert type(bundle.mdl) is BedrockCV
             assert bundle.describe_with_prompt(b"image", "describe") == "caption"
         with Session(engine) as db:
-            assert db.get(TenantLLM, vision_id).used_tokens == 12
-            assert json.loads(db.get(TenantLLM, vision_id).api_key) == credentials
+            assert db.get(TenantModel, vision_id).used_tokens == 12
+            assert json.loads(db.get(TenantModelInstance, db.get(TenantModel, vision_id).instance_id).api_key) == credentials
             with pytest.raises(LookupError):
                 get_model_config_by_id(db, vision_id, tenant_id=uuid.uuid4().hex)
 
@@ -102,7 +105,7 @@ def test_saved_bedrock_and_huggingface_models_use_registered_consumers(bootstrap
             assert scores.tolist() == [0.0, 0.9]
             assert tokens > 0
         with Session(engine) as db:
-            used_tokens = db.get(TenantLLM, rerank_id).used_tokens
+            used_tokens = db.get(TenantModel, rerank_id).used_tokens
             assert used_tokens > 0
         malformed[0] = True
         with Session(engine) as db:
@@ -110,15 +113,15 @@ def test_saved_bedrock_and_huggingface_models_use_registered_consumers(bootstrap
             with pytest.raises(ValueError, match="one result per input"):
                 bundle.similarity("query", ["zero", "high"])
         with Session(engine) as db:
-            assert db.get(TenantLLM, rerank_id).used_tokens == used_tokens
-            assert db.get(TenantLLM, vision_id).used_tokens == 12
+            assert db.get(TenantModel, rerank_id).used_tokens == used_tokens
+            assert db.get(TenantModel, vision_id).used_tokens == 12
         assert len(calls) == 3
     finally:
         with Session(engine) as db:
-            db.execute(delete(TenantLLM).where(TenantLLM.tenant_id == owner))
+            db.execute(delete(TenantModel).where(model_owner() == owner))
             db.commit()
         with Session(engine) as db:
-            assert db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner)).first() is None
+            assert db.scalars(select(TenantModel).where(model_owner() == owner)).first() is None
         if path := os.getenv("A_MODEL_EVIDENCE_DIR"):
             Path(path).mkdir(parents=True, exist_ok=True)
             (Path(path) / "scratch-cleanup.json").write_text(json.dumps({"database": engine.url.database, "version": scratch_version, "owner": owner, "remaining_tenant_models": 0}) + "\n")
@@ -129,7 +132,8 @@ def model_contract(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch)
     # This DB contract overrides authentication and never uses global storage/search.
     # Preseed only its signer before importing the application; no Redis writes.
     monkeypatch.setitem(resources._state, "secret_key", "model-contract-signing-key")
-    from api.apps import llm_app
+    from api.apps.restful_apis import provider_api
+    from api.utils.api_utils import async_current_user
 
     engine = bootstrapped_engine
     owners = [uuid.uuid4().hex, uuid.uuid4().hex]
@@ -146,14 +150,16 @@ def model_contract(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(TenantLLMService, "ensure_opendataloader_from_env", classmethod(lambda cls, db, tenant_id: None))
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "Ollama"}, {"name": "MiniMax"}])
     app = FastAPI()
-    app.include_router(llm_app.router, prefix="/v1/llm")
+    app.include_router(provider_api.router, prefix="/api/v1")
+    async_engine = create_async_engine(engine.url)
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
 
-    def session() -> Iterator[Session]:
-        with Session(engine) as db:
+    async def session() -> AsyncIterator[AsyncSession]:
+        async with factory() as db:
             yield db
 
-    app.dependency_overrides[get_db] = session
-    app.dependency_overrides[llm_app.manager] = lambda: SimpleNamespace(id=current_owner[0])
+    app.dependency_overrides[get_async_db] = session
+    app.dependency_overrides[async_current_user] = lambda: SimpleNamespace(id=current_owner[0])
     wire: list[dict[str, Any]] = []
 
     async def respond(request: httpx.Request) -> httpx.Response:
@@ -210,14 +216,18 @@ def model_contract(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch)
         (path / "scratch-database.json").write_text(json.dumps({"database": engine.url.database}) + "\n")
     try:
         with TestClient(app) as client:
-            yield {"engine": engine, "client": client, "owners": owners, "current_owner": current_owner, "wire": wire}
+            try:
+                yield {"engine": engine, "client": client, "owners": owners, "current_owner": current_owner, "wire": wire}
+            finally:
+                client.portal.call(async_engine.dispose)
     finally:
         with Session(engine) as db:
-            db.execute(delete(TenantLLM).where(TenantLLM.tenant_id.in_(owners)))
+            for owner in owners:
+                TenantLLMService.delete_by_tenant_id(db, owner)
             db.execute(delete(Tenant).where(Tenant.id.in_(owners)))
             db.commit()
         with Session(engine) as db:
-            assert db.scalars(select(TenantLLM).where(TenantLLM.tenant_id.in_(owners))).first() is None
+            assert db.scalars(select(TenantModel).where(model_owner().in_(owners))).first() is None
             assert db.scalars(select(Tenant).where(Tenant.id.in_(owners))).first() is None
         if evidence_dir:
             (Path(evidence_dir) / f"rows-cleaned-{owners[0]}.json").write_text(json.dumps({"tenant_rows": 0, "model_rows": 0}) + "\n")
@@ -230,42 +240,28 @@ def test_save_reload_tool_switch_and_credential_preservation(model_contract: dic
     owner = model_contract["owners"][0]
     base_url = "http://fixture.invalid" if factory == "Ollama" else "http://fixture.invalid/v1"
     provider_key = {"api_key": "fixture-key", "group_id": "fixture-group &中文", "opaque": {"retain": True}} if factory == "MiniMax" else "fixture-key"
-    common = {"llm_factory": factory, "llm_name": "fixture-model", "mdl_type": "chat", "api_base": base_url, "max_tokens": 4096}
-
-    def save(**fields: Any) -> None:
-        response = client.post("/v1/llm/add_llm", json={**common, **fields})
-        assert response.status_code == 200
-        assert response.json()["retcode"] == 0, response.json()
-
-    def read_row() -> dict[str, Any]:
-        with Session(engine) as db:
-            row = db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner, TenantLLM.llm_factory == factory, TenantLLM.llm_name == "fixture-model")).one()
-            return row.to_dict()
-
-    save(api_key=provider_key)
-    row = read_row()
-    assert "is_tools" not in (json.loads(row["api_key"]) if row["api_key"].startswith("{") else {})
-    with Session(engine) as db:
-        assert get_model_config_by_id(db, row["id"], tenant_id=owner)["is_tools"] is True
+    path = f"/api/v1/providers/{factory}/instances"
+    key = json.dumps(provider_key) if isinstance(provider_key, dict) else provider_key
+    candidate = {"api_key": key, "base_url": base_url, "model_ids": [], "custom_model": {"model_name": "fixture-model", "model_types": ["chat"], "max_tokens": 4096, "is_tools": True}}
+    assert client.post(path, json={**candidate, "instance_name": "fixture"}).status_code == 200
+    models = path + "/fixture/models"
+    row = client.get(models).json()["data"]["items"][0]
+    model_path = models + "/fixture-model"
+    identifier = row["id"]
     runtime_evidence: list[dict[str, Any]] = []
     for enabled in [False, True, False]:
-        save(is_tools=enabled)
-        row = read_row()
-        saved_key, flag, payload = TenantLLMService._decode_api_key_config(row["api_key"])
-        assert saved_key == "fixture-key" and flag is enabled
-        if factory == "MiniMax":
-            assert json.loads(payload or "{}") == provider_key
-        for details in [False, True]:
-            listed = client.get("/v1/llm/my_llms", params={"include_details": details}).json()
-            assert listed["retcode"] == 0
-            model = next(model for model in listed["data"][factory]["llm"] if model["name"] == "fixture-model")
-            assert model["is_tools"] is enabled
-            assert "fixture-key" not in json.dumps(listed) and "fixture-group" not in json.dumps(listed)
+        response = client.patch(model_path, json={"model_id": identifier, "extra": {"is_tools": enabled}})
+        assert response.status_code == 200, response.text
+        listed = client.get(models)
+        model = listed.json()["data"]["items"][0]
+        assert model["is_tools"] is enabled and model["id"] == identifier
+        assert "fixture-key" not in listed.text and "fixture-group" not in listed.text
         with Session(engine) as db:
-            by_id = get_model_config_by_id(db, row["id"], tenant_id=owner)
-            by_name = get_model_config_by_type_and_name(db, owner, "chat", f"fixture-model@{factory}")
-            legacy = TenantLLMService.get_model_config(db, owner, "chat", f"fixture-model@{factory}")
-            assert all(config["is_tools"] is enabled for config in [by_id, by_name, legacy])
+            stored = db.get(TenantModel, identifier)
+            assert db.get(TenantModelInstance, stored.instance_id).api_key == key
+            by_id = get_model_config_by_id(db, identifier, tenant_id=owner)
+            by_reference = TenantLLMService.get_model_config(db, owner, "chat", identifier)
+            assert by_id["is_tools"] is enabled and by_reference["is_tools"] is enabled
         calls: list[dict[str, Any]] = []
 
         class Tools:
@@ -276,7 +272,7 @@ def test_save_reload_tool_switch_and_credential_preservation(model_contract: dic
 
         async def run() -> str:
             with Session(engine) as db:
-                bundle = LLMBundle(db, owner, get_model_config_by_id(db, row["id"], tenant_id=owner), max_retries=0)
+                bundle = LLMBundle(db, owner, get_model_config_by_id(db, identifier, tenant_id=owner), max_retries=0)
                 bundle.bind_tools(Tools(), [{"type": "function", "function": {"name": "first", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}}}])
                 return await bundle.async_chat("", [{"role": "user", "content": "hello"}], {})
 
@@ -296,32 +292,18 @@ def test_save_reload_tool_switch_and_credential_preservation(model_contract: dic
                 "executed_tools": len(calls),
             }
         )
-    response = client.post("/v1/llm/add_llm", json={"llm_factory": factory, "llm_name": "fixture-model", "mdl_type": "chat", "is_tools": False})
-    assert response.status_code == 200 and response.json()["retcode"] == 0
-    assert read_row()["api_base"] == base_url and read_row()["max_tokens"] == 4096
-    save(api_key="replacement-key")
-    row = read_row()
-    key, flag, payload = TenantLLMService._decode_api_key_config(row["api_key"])
-    assert key == "replacement-key" and flag is False
-    if factory == "MiniMax":
-        assert json.loads(payload or "{}") == {**provider_key, "api_key": "replacement-key"}
-        rotated = client.post("/v1/llm/set_api_key", json={"llm_factory": factory, "api_key": "rotated-key", "base_url": base_url})
-        assert rotated.status_code == 200 and rotated.json()["retcode"] == 0
-        row = read_row()
-        rotated_key, flag, payload = TenantLLMService._decode_api_key_config(row["api_key"])
-        assert rotated_key == "rotated-key" and flag is False
-        assert json.loads(payload or "{}") == {**provider_key, "api_key": "rotated-key"}
-    before_verify = row["api_key"]
-    save(api_key="verify-only", is_tools=True, verify=True)
-    assert read_row()["api_key"] == before_verify
-    invalid = client.post("/v1/llm/add_llm", json={**common, "is_tools": "false"})
-    assert invalid.status_code == 422 and read_row()["api_key"] == before_verify
+    replacement = json.dumps({**provider_key, "api_key": "replacement-key"}) if isinstance(provider_key, dict) else "replacement-key"
+    assert client.put(path + "/fixture", json={"api_key": replacement}).status_code == 200
+    verified = client.post(f"/api/v1/providers/{factory}/connection", json={**candidate, "api_key": key})
+    assert verified.status_code == 200
+    assert client.patch(model_path, json={"model_id": identifier, "extra": {"is_tools": "false"}}).status_code == 422
     model_contract["current_owner"][0] = model_contract["owners"][1]
-    save(is_tools=True)
+    assert client.patch(model_path, json={"model_id": identifier, "extra": {"is_tools": True}}).status_code == 404
     with Session(engine) as db:
-        other = db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == model_contract["owners"][1], TenantLLM.llm_factory == factory)).one()
-        assert TenantLLMService._decode_api_key_config(other.api_key)[0] == "x"
-    assert read_row()["api_key"] == before_verify
+        stored = db.get(TenantModel, identifier)
+        instance = db.get(TenantModelInstance, stored.instance_id)
+        assert instance.api_key == replacement and instance.base_url == base_url
+        assert stored.max_tokens == 4096 and stored.is_tools is False
     evidence_dir = os.getenv("LLM_TOOL_EVIDENCE_DIR")
     if evidence_dir:
         (Path(evidence_dir) / f"{factory.lower()}-contract.json").write_text(
@@ -349,12 +331,22 @@ def test_ollama_vision_native_tools_keep_image_payload(model_contract: dict[str,
     owner = model_contract["owners"][0]
     png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII="
     images = [f"data:image/png;base64,{png}"]
+    path = "/api/v1/providers/Ollama/instances"
+    response = client.post(
+        path,
+        json={
+            "instance_name": "vision",
+            "api_key": "fixture-key",
+            "base_url": "http://fixture.invalid",
+            "model_ids": [],
+            "custom_model": {"model_name": "fixture-model", "model_types": ["image2text"], "max_tokens": 4096, "is_tools": True},
+        },
+    )
+    assert response.status_code == 200, response.text
+    identifier = client.get(path + "/vision/models").json()["data"]["items"][0]["id"]
     for enabled in [True, False]:
-        response = client.post(
-            "/v1/llm/add_llm",
-            json={"llm_factory": "Ollama", "llm_name": "fixture-model", "mdl_type": "image2text", "api_key": "fixture-key", "api_base": "http://fixture.invalid", "is_tools": enabled},
-        )
-        assert response.status_code == 200 and response.json()["retcode"] == 0, response.json()
+        response = client.patch(path + "/vision/models/fixture-model", json={"model_id": identifier, "extra": {"is_tools": enabled}})
+        assert response.status_code == 200, response.text
         calls: list[str] = []
 
         class Tools:
@@ -364,7 +356,7 @@ def test_ollama_vision_native_tools_keep_image_payload(model_contract: dict[str,
 
         async def run() -> str:
             with Session(engine) as db:
-                config = get_model_config_by_type_and_name(db, owner, "chat", "fixture-model@Ollama")
+                config = get_model_config_by_id(db, identifier, tenant_id=owner, model_type="image2text")
                 assert config["mdl_type"] == "image2text" and config["is_tools"] is enabled
                 bundle = LLMBundle(db, owner, config, max_retries=0)
                 bundle.bind_tools(Tools(), [{"type": "function", "function": {"name": "first", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}}}])
@@ -380,134 +372,16 @@ def test_ollama_vision_native_tools_keep_image_payload(model_contract: dict[str,
         assert calls == (["first"] if enabled else [])
 
 
-def test_partial_provider_credentials_commit_and_fail_without_overwriting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Registered save endpoint, real SDK probe and independent committed SQL reads."""
-    from tests.support.database import scratch_database
-
-    evidence = Path(os.environ.get("LLM_CREDENTIAL_EVIDENCE_DIR", str(tmp_path)))
-    monkeypatch.setitem(resources._state, "secret_key", "owned-credential-contract-signer")
-    from api.apps import llm_app
-
-    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "VolcEngine"}, {"name": "VLLM"}])
-    wire: list[dict[str, Any]] = []
-
-    async def respond(request: httpx.Request) -> httpx.Response:
-        assert request.url.host == "fixture.invalid"
-        body = json.loads(request.content)
-        key = request.headers.get("authorization")
-        wire.append({"model": body["model"], "authorization": key})
-        if key in {"Bearer x", "Bearer bad-key"} or not body["model"]:
-            return httpx.Response(401, json={"error": {"message": "Controlled credential rejection", "type": "authentication_error"}}, request=request)
-        result = {
-            "id": "controlled-probe",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": body["model"],
-            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
-        }
-        return httpx.Response(200, content=f"data: {json.dumps(result)}\n\ndata: [DONE]\n\n", headers={"content-type": "text/event-stream"}, request=request)
-
-    transport = httpx.MockTransport(respond)
-    monkeypatch.setattr(httpx.AsyncClient, "_transport_for_url", lambda self, url: transport)
-    with scratch_database(evidence) as engine:
-        owners = [uuid.uuid4().hex, uuid.uuid4().hex]
-        current_owner = [owners[0]]
-        for factory in ["VolcEngine", "VLLM"]:
-            with Session(engine) as db:
-                db.merge(LLMFactories(name=factory, tags="LLM", status="1"))
-                db.commit()
-        app = FastAPI()
-        app.include_router(llm_app.router, prefix="/v1/llm")
-
-        def session() -> Iterator[Session]:
-            with Session(engine) as db:
-                yield db
-
-        app.dependency_overrides[get_db] = session
-        app.dependency_overrides[llm_app.manager] = lambda: SimpleNamespace(id=current_owner[0])
-
-        def read(factory: str) -> str:
-            with Session(engine) as db:
-                return db.scalars(select(TenantLLM.api_key).where(TenantLLM.tenant_id == owners[0], TenantLLM.llm_factory == factory)).one()
-
-        with TestClient(app) as client:
-            for factory in ["VolcEngine", "VLLM"]:
-                common = {"llm_factory": factory, "llm_name": "owned-model", "mdl_type": "chat", "api_base": "http://fixture.invalid/v1"}
-                initial: dict[str, Any] = {"ark_api_key": "saved-ark", "endpoint_id": "saved-model", "opaque": {"retain": True}} if factory == "VolcEngine" else {"api_key": "saved-key"}
-                response = client.post("/v1/llm/add_llm", json={**common, "api_key": initial if factory == "VolcEngine" else "saved-key", "is_tools": False})
-                assert response.status_code == 200 and response.json()["retcode"] == 0, response.json()
-                for fields in [
-                    {},
-                    {"api_key": None},
-                    {"ark_api_key": "new-ark"},
-                    {"endpoint_id": "new-model"},
-                    {"api_key": {"ark_api_key": "explicit-ark"} if factory == "VolcEngine" else "explicit-key"},
-                ]:
-                    response = client.post("/v1/llm/add_llm", json={**common, **fields})
-                    assert response.status_code == 200 and response.json()["retcode"] == 0, response.json()
-                    saved = json.loads(read(factory))
-                    if factory == "VolcEngine":
-                        initial.update({k: v for k, v in fields.items() if k in {"ark_api_key", "endpoint_id"}})
-                        if isinstance(fields.get("api_key"), dict):
-                            initial.update(fields["api_key"])
-                        assert saved == {**initial, "is_tools": False}
-                        assert wire[-1] == {"model": initial["endpoint_id"], "authorization": f"Bearer {initial['ark_api_key']}"}
-                    else:
-                        if isinstance(fields.get("api_key"), str):
-                            initial["api_key"] = fields["api_key"]
-                        assert saved == {**initial, "is_tools": False}
-                        assert wire[-1]["authorization"] == f"Bearer {initial['api_key']}"
-                before = read(factory)
-                if factory == "VolcEngine":
-                    response = client.post("/v1/llm/add_llm", json={**common, "api_key": ""})
-                    assert response.json()["retcode"] == 0 and read(factory) == before
-                    bad = {"ark_api_key": "bad-key"}
-                else:
-                    bad = {"api_key": ""}
-                response = client.post("/v1/llm/add_llm", json={**common, **bad})
-                assert response.status_code == 200 and response.json()["retcode"] != 0
-                assert read(factory) == before
-                response = client.post("/v1/llm/add_llm", json={**common, "is_tools": "false"})
-                assert response.status_code == 422 and read(factory) == before
-                current_owner[0] = owners[1]
-                response = client.post("/v1/llm/add_llm", json=common)
-                assert response.status_code == 200 and response.json()["retcode"] != 0
-                assert read(factory) == before
-                with Session(engine) as db:
-                    assert db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owners[1])).first() is None
-                current_owner[0] = owners[0]
-                calls = len(wire)
-                app.dependency_overrides.pop(llm_app.manager)
-                response = client.post("/v1/llm/add_llm", json={**common, "api_key": "forbidden-key"})
-                assert response.status_code == 401 and len(wire) == calls and read(factory) == before
-                app.dependency_overrides[llm_app.manager] = lambda: SimpleNamespace(id=current_owner[0])
-            response = client.post(
-                "/v1/llm/add_llm",
-                json={
-                    "llm_factory": "VolcEngine",
-                    "llm_name": "fields-only",
-                    "mdl_type": "chat",
-                    "api_base": "http://fixture.invalid/v1",
-                    "ark_api_key": "fields-only-key",
-                    "endpoint_id": "fields-only-model",
-                },
-            )
-            assert response.status_code == 200 and response.json()["retcode"] == 0
-            with Session(engine) as db:
-                created = db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owners[0], TenantLLM.llm_name == "fields-only")).one()
-                assert json.loads(created.api_key) == {"ark_api_key": "fields-only-key", "endpoint_id": "fields-only-model"}
-            assert wire[-1] == {"model": "fields-only-model", "authorization": "Bearer fields-only-key"}
-        (evidence / "credential-contract.json").write_text(
-            json.dumps(
-                {
-                    "factories": ["VolcEngine", "VLLM"],
-                    "independent_sql_readback": True,
-                    "sdk_wire_checked": True,
-                    "failed_probe_zero_write": True,
-                    "auth_denial_zero_probe_zero_write": True,
-                    "boundary": "real SDK, controlled HTTP transport; no real provider credential",
-                },
-                indent=2,
-            )
-            + "\n"
-        )
+def test_instance_credential_patch_rejects_legacy_edit_fields_and_preserves_saved_key(model_contract: dict[str, Any]) -> None:
+    client = model_contract["client"]
+    engine = model_contract["engine"]
+    path = "/api/v1/providers/MiniMax/instances"
+    saved_key = json.dumps({"api_key": "fixture-key", "group_id": "fixture-group"})
+    candidate = {"api_key": saved_key, "base_url": "http://fixture.invalid/v1", "model_ids": [], "custom_model": {"model_name": "fixture-model", "model_types": ["chat"], "max_tokens": 0}}
+    created = client.post(path, json={**candidate, "instance_name": "fixture"})
+    assert created.status_code == 200
+    instance_id = created.json()["data"]["id"]
+    assert client.put(path + "/fixture", json={"group_id": "retired-field"}).status_code == 422
+    assert client.put(path + "/fixture", json={"api_key": "", "base_url": "http://fixture.invalid/v1"}).status_code == 200
+    with Session(engine) as db:
+        assert db.get(TenantModelInstance, instance_id).api_key == saved_key

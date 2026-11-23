@@ -182,27 +182,14 @@ def update_memory(db: Session, memory_id: str, new_settings: dict, *, user_id: s
     memory_dict["memory_type"] = get_memory_type_human(current_memory.memory_type)
 
     update_dict = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, update_dict, strict=True)
-    binding_backfills: set[str] = set()
     for model_key in ("llm_id", "embd_id"):
         if model_key not in update_dict:
             continue
         tenant_key = f"tenant_{model_key}"
         stored_id = memory_dict.get(tenant_key)
-        current_id = stored_id
-        if current_id is None and memory_dict.get(model_key):
-            try:
-                current_id = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, {model_key: memory_dict[model_key]}).get(tenant_key)
-            except (LookupError, ValueError):
-                # An unusable legacy reference is a change, never a no-op.
-                current_id = None
-        if current_id is not None and current_id == update_dict[tenant_key]:
+        if stored_id is not None and stored_id == update_dict[tenant_key]:
             update_dict.pop(model_key)
-            if stored_id is not None:
-                update_dict.pop(tenant_key)
-            else:
-                # Persist the freshly authorized owner binding for a legacy
-                # name-only row without treating it as a new embedding model.
-                binding_backfills.add(tenant_key)
+            update_dict.pop(tenant_key)
 
     to_update = {}
     for k, v in update_dict.items():
@@ -229,7 +216,7 @@ def update_memory(db: Session, memory_id: str, new_settings: dict, *, user_id: s
         raise RevisionConflict("memory_change_requires_writer_quiescence")
 
     memory_size = get_memory_size_cache(current_memory.tenant_id, memory_id)
-    not_allowed_update = [f for f in ["tenant_embd_id", "embd_id", "memory_type"] if f in to_update and f not in binding_backfills and memory_size > 0]
+    not_allowed_update = [f for f in ["tenant_embd_id", "embd_id", "memory_type"] if f in to_update and memory_size > 0]
     if not_allowed_update:
         raise ArgumentException(f"Can't update {not_allowed_update} when memory isn't empty.")
 

@@ -764,39 +764,7 @@ def check_duplicate_ids(ids, id_type="item"):
 
 
 def verify_embedding_availability(db: Session, embd_id: str, tenant_id: str) -> tuple[bool, str | None]:
-    """
-    Verifies availability of an embedding model for a specific tenant.
-
-    Performs comprehensive verification through:
-    1. Identifier Parsing: Decomposes embd_id into name and factory components
-    2. System Verification: Checks model registration in LLMService
-    3. Tenant Authorization: Validates tenant-specific model assignments
-    4. Built-in Model Check: Confirms inclusion in predefined system models
-
-    Args:
-        embd_id (str): Unique identifier for the embedding model in format "model_name@factory"
-        tenant_id (str): Tenant identifier for access control
-
-    Returns:
-        tuple[bool, str | None]:
-        - First element (bool):
-            - True: Model is available and authorized
-            - False: Validation failed
-        - Second element contains:
-            - None on success
-            - Error message string on failure (service 层友好，不耦合 HTTP 响应)
-
-    Raises:
-        ValueError: When model identifier format is invalid
-        OperationalError: When database connection fails (auto-handled)
-
-    Examples:
-        >>> verify_embedding_availability(db, "text-embedding@openai", "tenant_123")
-        (True, None)
-
-        >>> verify_embedding_availability(db, "invalid_model", "tenant_123")
-        (False, "Unsupported model: <invalid_model>")
-    """
+    """Verify ownership, capability and availability of an embedding model reference."""
     from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 
     try:

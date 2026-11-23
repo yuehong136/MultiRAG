@@ -12,10 +12,23 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import TenantModelInstance, TenantModelProvider, get_async_db
-from api.db.model_contract import ConnectionCandidate, DefaultModelInput, DiscoveryInput, InstanceInput, InstancePatch, ModelRegistration, ProviderInput, StatusPatch, parse_model_id
+from api.db.db_models import TenantModel, TenantModelInstance, TenantModelProvider, get_async_db
+from api.db.model_contract import (
+    MODEL_TYPE_BITS,
+    ConnectionCandidate,
+    DefaultModelInput,
+    DiscoveryInput,
+    DropInstancesInput,
+    DropModelsInput,
+    InstanceInput,
+    InstanceModelInput,
+    InstancePatch,
+    ModelPatch,
+    ProviderInput,
+)
 from api.db.provider_catalog import provider_order, provider_urls, public_factories
 from api.db.services import model_provider_service as service
+from api.db.services.provider_model_resolution import model_records
 from api.utils.api_utils import Principal, async_current_user
 
 
@@ -203,14 +216,14 @@ async def create_instance(provider_name: str, body: InstanceInput, db: AsyncSess
     return await write(db, lambda: service.create_instance(db, user.id, provider_name, body))
 
 
-@router.patch("/providers/{provider_name}/instances/{instance_name}")
+@router.put("/providers/{provider_name}/instances/{instance_name}")
 async def patch_instance(provider_name: str, instance_name: str, body: InstancePatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> dict[str, Any]:
     return await write(db, lambda: service.patch_instance(db, user.id, provider_name, instance_name, body))
 
 
-@router.delete("/providers/{provider_name}/instances/{instance_name}")
-async def delete_instance(provider_name: str, instance_name: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> dict[str, Any]:
-    return await write(db, lambda: service.delete_instance(db, user.id, provider_name, instance_name))
+@router.delete("/providers/{provider_name}/instances")
+async def delete_instances(provider_name: str, body: DropInstancesInput, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> dict[str, Any]:
+    return await write(db, lambda: service.delete_instances(db, user.id, provider_name, body.instances))
 
 
 @router.get("/providers/{provider_name}/instances/{instance_name}/models")
@@ -220,45 +233,51 @@ async def instance_models(provider_name: str, instance_name: str, request: Reque
     except LookupError:
         raise failure(404, "Instance not found") from None
     if flag(request, "supported"):
-        return page([model.model_dump() for model in service.catalog(provider_name, service.instance_projection(instance, _provider)["region"])], request)
-    return page([service.model_projection(*row) for row in await service.models_for_owner(db, user.id) if row[2].id == instance.id], request)
+        return page([model.model_dump() for model in service.catalog(_provider.provider_name, service.instance_projection(instance, _provider)["region"])], request)
+    return page([service.model_projection(*row) for row in await service.models_for_owner(db, user.id) if row[1].id == instance.id], request)
 
 
 @router.post("/providers/{provider_name}/instances/{instance_name}/models")
-async def add_model(provider_name: str, instance_name: str, body: ModelRegistration, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> dict[str, Any]:
-    return await write(db, lambda: service.add_model(db, user.id, provider_name, instance_name, body))
+async def add_model(provider_name: str, instance_name: str, body: InstanceModelInput, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> dict[str, Any]:
+    return await write(db, lambda: service.add_model(db, user.id, provider_name, instance_name, body.registration(), extra=body.extra))
 
 
-async def target_model(db: AsyncSession, user_id: str, provider_name: str, instance_name: str, model_id: str) -> tuple[Any, ...]:
-    identifier = parse_model_id(model_id)
-    if identifier is None:
-        raise ValueError("Invalid model ID")
-    await service.lock_owner(db, user_id)
-    _provider, instance = await service.instance_for_owner(db, user_id, provider_name, instance_name)
-    for row in await service.models_for_owner(db, user_id):
-        if row[0].id == identifier and row[2].id == instance.id:
-            return row
-    raise LookupError("Model not found")
-
-
-@router.patch("/providers/{provider_name}/instances/{instance_name}/models/{model_id}")
+@router.patch("/providers/{provider_name}/instances/{instance_name}/models/{model_name:path}")
 async def patch_model(
-    provider_name: str, instance_name: str, model_id: str, body: StatusPatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)
+    provider_name: str, instance_name: str, model_name: str, body: ModelPatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)
 ) -> dict[str, Any]:
     async def operation() -> dict[str, Any]:
-        row = await target_model(db, user.id, provider_name, instance_name, model_id)
-        row[0].status = "1" if body.status == "active" else "0"
+        await service.lock_owner(db, user.id)
+        _, instance = await service.instance_for_owner(db, user.id, provider_name, instance_name)
+        query = model_records().where(TenantModel.instance_id == instance.id, TenantModel.model_name == model_name)
+        if body.model_id:
+            query = query.where(TenantModel.id == body.model_id)
+        row = (await db.execute(query)).one_or_none()
+        if row is None:
+            raise LookupError("Model not found")
+        model, _, _ = row
+        if body.status is not None:
+            model.status = body.status
+        if body.model_type is not None:
+            model.model_type = sum(MODEL_TYPE_BITS[name] for name in body.model_type)
+        if body.max_tokens is not None or body.extra:
+            model.extra = {**model.extra, **(body.extra or {}), **({"max_tokens": body.max_tokens} if body.max_tokens is not None else {})}
         await db.flush()
         return service.model_projection(*row)
 
     return await write(db, operation)
 
 
-@router.delete("/providers/{provider_name}/instances/{instance_name}/models/{model_id}")
-async def delete_model(provider_name: str, instance_name: str, model_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> dict[str, Any]:
+@router.delete("/providers/{provider_name}/instances/{instance_name}/models")
+async def delete_models(provider_name: str, instance_name: str, body: DropModelsInput, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> dict[str, Any]:
     async def operation() -> None:
-        row = await target_model(db, user.id, provider_name, instance_name, model_id)
-        await service.delete_models(db, [row])
+        await service.lock_owner(db, user.id)
+        _, instance = await service.instance_for_owner(db, user.id, provider_name, instance_name)
+        query = model_records().where(TenantModel.instance_id == instance.id, TenantModel.model_name.in_(body.model_name))
+        rows = [(row[0], row[1], row[2]) for row in (await db.execute(query)).all()]
+        if {model.model_name for model, _, _ in rows} != set(body.model_name):
+            raise LookupError("Model not found")
+        await service.delete_models(db, rows)
 
     return await write(db, operation)
 

@@ -20,12 +20,13 @@ from sqlalchemy.orm import Session
 
 from api.apps.services import dataset_search_service
 from api.apps.services.dataset_search_service import _bundle as build_search_bundle
-from api.db.db_models import APIToken, Document, DocumentMetadata, Knowledgebase, Search, TenantLLM, UserTenant
+from api.db.db_models import APIToken, Document, DocumentMetadata, Knowledgebase, Search, TenantModel, UserTenant
 from common import settings
 from common.constants import RetCode
 from core.nlp import search
 from tests.support.dataset_search_http import request
 from tests.support.dataset_search_http import search_api as search_api
+from tests.support.registered_model import model_owner, register_model
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 from tests.support.web_consumer import tsx_runner
 
@@ -940,7 +941,7 @@ def test_collection_search_filters_readback_and_model_scope(search_api: dict[str
     # SQL rows and model configuration are real; only provider execution is controlled.
     model_owners = [env["owners"][0], env["owners"][1]]
     with Session(env["engine"]) as db:
-        models = [TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="controlled-rerank", mdl_type="rerank", api_key="controlled") for owner in model_owners]
+        models = [register_model(db, tenant_id=owner, provider_name="OpenAI", model_name="controlled-rerank", model_types=("rerank",), api_key="controlled" or "") for owner in model_owners]
         db.add_all(models)
         db.commit()
         model_ids = [model.id for model in models]
@@ -959,7 +960,7 @@ def test_collection_search_filters_readback_and_model_scope(search_api: dict[str
     bundle = AsyncMock(side_effect=controlled_bundle)
     monkeypatch.setattr(dataset_search_service, "_bundle", bundle)
     try:
-        for model_id in [model_ids[1], max(model_ids) + 10000]:
+        for model_id in [model_ids[1], uuid4().hex]:
             denied = request(env, "POST", "/search", collection=True, json={**payload, "tenant_rerank_id": model_id})
             assert denied.status_code == 200 and denied.json()["code"] == 109, denied.text
         bundle.assert_not_called()
@@ -971,7 +972,7 @@ def test_collection_search_filters_readback_and_model_scope(search_api: dict[str
         assert {row["kb_id"] for row in allowed["data"]["chunks"]} == set(payload["dataset_ids"])
         # Independent SQL and Milvus reads prove failed search did not mutate sources.
         with Session(env["engine"]) as db:
-            assert set(db.scalars(sa.select(TenantLLM.id).where(TenantLLM.id.in_(model_ids)))) == set(model_ids)
+            assert set(db.scalars(sa.select(TenantModel.id).where(TenantModel.id.in_(model_ids)))) == set(model_ids)
             assert set(db.scalars(sa.select(Document.id).where(Document.kb_id.in_(payload["dataset_ids"])))) == {env["doc"], env["second_doc"]}
         for key in ["dataset", "second"]:
             raw = env["reader"].query(env["collections"][key], filter="knowledge_graph_kwd == ''", output_fields=["pk", "available_int"], consistency_level="Strong")
@@ -979,10 +980,10 @@ def test_collection_search_filters_readback_and_model_scope(search_api: dict[str
             assert {row["available_int"] for row in raw} == {0, 1}
     finally:
         with Session(env["engine"]) as db:
-            db.execute(sa.delete(TenantLLM).where(TenantLLM.id.in_(model_ids)))
+            db.execute(sa.delete(TenantModel).where(TenantModel.id.in_(model_ids)))
             db.commit()
         with Session(env["engine"]) as db:
-            assert not db.scalars(sa.select(TenantLLM.id).where(TenantLLM.id.in_(model_ids))).all()
+            assert not db.scalars(sa.select(TenantModel.id).where(TenantModel.id.in_(model_ids))).all()
 
 
 def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1210,7 +1211,7 @@ def test_http_embedding_provider_errors_cross_real_bundle_without_writes(search_
     def sql_snapshot() -> dict[str, list[Any]]:
         with Session(env["engine"]) as db:
             return {
-                model.__tablename__: list(db.execute(sa.select(model.__table__).order_by(model.id))) for model in (TenantLLM, Knowledgebase, Document, DocumentMetadata, Search, APIToken, UserTenant)
+                model.__tablename__: list(db.execute(sa.select(model.__table__).order_by(model.id))) for model in (TenantModel, Knowledgebase, Document, DocumentMetadata, Search, APIToken, UserTenant)
             }
 
     def index_snapshot() -> dict[str, list[dict[str, Any]]]:
@@ -1277,22 +1278,23 @@ def test_http_embedding_provider_errors_cross_real_bundle_without_writes(search_
         def remove_model() -> None:
             with Session(env["engine"]) as db:
                 db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == env["dataset"]).values(tenant_embd_id=previous_model_id))
-                db.execute(sa.delete(TenantLLM).where(TenantLLM.tenant_id == env["owners"][0], TenantLLM.llm_name == model_name))
+                db.execute(sa.delete(TenantModel).where(model_owner() == env["owners"][0], TenantModel.model_name == model_name))
                 db.commit()
             with Session(env["engine"]) as db:
-                assert db.scalar(sa.select(sa.func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == env["owners"][0], TenantLLM.llm_name == model_name)) == 0
+                assert db.scalar(sa.select(sa.func.count()).select_from(TenantModel).where(model_owner() == env["owners"][0], TenantModel.model_name == model_name)) == 0
                 assert db.get(Knowledgebase, env["dataset"]).tenant_embd_id == previous_model_id
             journal.event("embedding-error-model-cleanup", model_id=model_id, absent=True, dataset_restored=True)
 
         cleanup.callback(remove_model)
         with Session(env["engine"]) as db:
-            model = TenantLLM(
+            model = register_model(
+                db,
                 tenant_id=env["owners"][0],
-                llm_factory="SILICONFLOW",
-                llm_name=model_name,
-                mdl_type="embedding",
-                api_key="fixture-key",
-                api_base=f"http://127.0.0.1:{port}/v1/embeddings",
+                provider_name="SILICONFLOW",
+                model_name=model_name,
+                model_types=("embedding",),
+                api_key="fixture-key" or "",
+                base_url=f"http://127.0.0.1:{port}/v1/embeddings",
                 max_tokens=8192,
                 used_tokens=17,
             )

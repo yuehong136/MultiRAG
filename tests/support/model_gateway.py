@@ -7,7 +7,6 @@ SDK; only the upstream transport differs between controlled and live runs.
 
 import asyncio
 import sys
-import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -22,12 +21,13 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
-from api.db.db_models import GatewayRequestLog, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, get_async_db
+from api.db.db_models import GatewayRequestLog, TenantModelInstance, TenantModelProvider, get_async_db
 from api.identity.principal import AuthenticatedActor, AuthenticationContext, AuthenticationSource, IdentityAssurance, TenantMembershipEvidence, build_principal_from_authenticated_actor
 from api.model_gateway.app import create_app
 from api.model_gateway.limits import MemoryLimiter
 from api.model_gateway.store import SqlGatewayStore
 from common.app_config import ModelGatewayConfig
+from tests.support.registered_model import register_model as register_tenant_model
 
 MANAGEMENT_PREFIX = "/api/v1/model-gateway"
 # psycopg's async driver needs the selector loop on Windows.
@@ -43,25 +43,8 @@ def manager(owner: str) -> Any:
     )
 
 
-def register_model(db: Session, owner: str, factory: str, model_name: str, model_type: str, base_url: str, api_key: str, *, instance_name: str = "default") -> int:
-    """Insert a model the way model management stores it, reusing the owner's provider and instance."""
-    provider = db.scalar(sa.select(TenantModelProvider).where(TenantModelProvider.tenant_id == owner, TenantModelProvider.provider_name == factory))
-    if provider is None:
-        provider = TenantModelProvider(id=uuid.uuid4().hex, tenant_id=owner, provider_name=factory)
-        db.add(provider)
-        db.flush()
-    instance = db.scalar(sa.select(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id, TenantModelInstance.instance_name == instance_name))
-    if instance is None:
-        instance = TenantModelInstance(id=uuid.uuid4().hex, provider_id=provider.id, instance_name=instance_name, api_key=api_key, base_url=base_url)
-        db.add(instance)
-        db.flush()
-    row = TenantLLM(tenant_id=owner, llm_factory=factory, mdl_type=model_type, llm_name=model_name, api_key=api_key, api_base=base_url, status="1")
-    db.add(row)
-    db.flush()
-    assert row.id is not None
-    db.add(TenantModel(id=row.id, instance_id=instance.id, model_name=model_name, model_types=[model_type]))
-    db.flush()
-    return row.id
+def register_model(db: Session, owner: str, factory: str, model_name: str, model_type: str, base_url: str, api_key: str, *, instance_name: str = "default") -> str:
+    return register_tenant_model(db, tenant_id=owner, provider_name=factory, model_name=model_name, model_types=(model_type,), base_url=base_url, api_key=api_key, instance_name=instance_name).id
 
 
 @contextmanager

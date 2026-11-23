@@ -39,6 +39,9 @@ def test_missing_replica_bootstraps_authorized_sql_draft(release_api: dict[str, 
     runtime_user = uuid4().hex
     key = CanvasReplicaService._replica_key(agent_id, owner, runtime_user)
     assert REDIS_CONN.get(key) is None
+    stale_replica = CanvasReplicaService._build_payload(agent_id, owner, runtime_user, message_dsl("stale pre-migration reply"))
+    stale_replica.pop("schema_version")
+    assert REDIS_CONN.set_obj(key, stale_replica, CanvasReplicaService.TTL_SECS)
     keys_before = sorted(REDIS_CONN.REDIS.keys(f"canvas:replica:{agent_id}:*"))
     denied = env["client"].post(
         f"{env['base']}/api/v1/agents/chat/completions", headers={"Authorization": f"Bearer {env['keys'][1]}"}, json={"agent_id": agent_id, "user_id": owner, "tenant_id": owner}, timeout=30
@@ -50,6 +53,7 @@ def test_missing_replica_bootstraps_authorized_sql_draft(release_api: dict[str, 
     events = sse_events(result.text)
     assert any(event["event"] == "message" and event["data"]["content"] == "draft reply" for event in events)
     payload = json.loads(REDIS_CONN.get(key))
+    assert payload["schema_version"] == CanvasReplicaService.SCHEMA_VERSION
     assert (payload["canvas_id"], payload["tenant_id"], payload["runtime_user_id"]) == (agent_id, owner, runtime_user)
     assert payload["dsl"]["globals"]["sys.query"] == "runtime query"
     assert 0 < REDIS_CONN.REDIS.ttl(key) <= CanvasReplicaService.TTL_SECS

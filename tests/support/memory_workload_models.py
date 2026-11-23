@@ -21,17 +21,18 @@ import sqlalchemy as sa
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
-from api.db.db_models import TenantLLM
+from api.db.db_models import TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.joint_services.tenant_model_service import get_model_config_by_id
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import PreparedTenantLLM, TenantLLMService
 from common.config_utils import CONFIGS
 from tests.support.database import _pg_url
 from tests.support.memory_workload_cost import STAGES
+from tests.support.registered_model import register_model
 from tests.support.resource_journal import ResourceJournal
 
 
-def configured_models(identifiers: dict[str, int]) -> dict[str, dict[str, Any]]:
+def configured_models(identifiers: dict[str, str]) -> dict[str, dict[str, Any]]:
     """Read server-owned configuration without constructing or calling a model."""
     engine = sa.create_engine(_pg_url(CONFIGS["postgresql"]["dbname"]))
     try:
@@ -39,16 +40,16 @@ def configured_models(identifiers: dict[str, int]) -> dict[str, dict[str, Any]]:
             db.execute(sa.text("SET TRANSACTION READ ONLY"))
             configs = {}
             for kind, identifier in identifiers.items():
-                record = db.get(TenantLLM, identifier)
-                if record is None:
+                row = db.execute(sa.select(TenantModelProvider.tenant_id).join(TenantModel, TenantModel.provider_id == TenantModelProvider.id).where(TenantModel.id == identifier)).one_or_none()
+                if row is None:
                     raise LookupError("configured_workload_model_missing")
-                configs[kind] = dict(get_model_config_by_id(db, identifier, tenant_id=record.tenant_id, model_type=kind))
+                configs[kind] = dict(get_model_config_by_id(db, identifier, tenant_id=row.tenant_id, model_type=kind))
             return configs
     finally:
         engine.dispose()
 
 
-def copy_models(engine: sa.Engine, tenant_id: str, configs: dict[str, dict[str, Any]], journal: ResourceJournal) -> dict[str, int]:
+def copy_models(engine: sa.Engine, tenant_id: str, configs: dict[str, dict[str, Any]], journal: ResourceJournal) -> dict[str, str]:
     """Copy only resolved provider configuration into the caller's scratch tenant."""
     if not re.fullmatch(r"multirag_test_[0-9a-f]{12}", str(engine.url.database)):
         raise ValueError("workload_requires_owned_scratch_database")
@@ -56,18 +57,19 @@ def copy_models(engine: sa.Engine, tenant_id: str, configs: dict[str, dict[str, 
     with Session(engine) as db:
         for kind, config in configs.items():
             journal.event("reserve-workload-model", tenant_id=tenant_id, model_type=kind, model_reference=f"{config['llm_name']}@{config['llm_factory']}")
-            row = TenantLLM(
+            row = register_model(
+                db,
                 tenant_id=tenant_id,
-                llm_factory=config["llm_factory"],
-                llm_name=config["llm_name"],
-                mdl_type=kind,
-                api_key=config.get("api_key"),
-                api_base=config.get("api_base"),
+                provider_name=config["llm_factory"],
+                model_name=config["llm_name"],
+                model_types=(kind,),
+                instance_name=f"workload-{kind}",
+                api_key=config.get("api_key_payload") or config.get("api_key") or "",
+                base_url=config.get("api_base") or "",
                 max_tokens=config.get("max_tokens", 8192),
+                is_tools=config.get("is_tools", False),
             )
-            db.add(row)
-            db.flush()
-            assert row.id is not None
+            db.get(TenantModelInstance, row.instance_id).region = config.get("region") or ""
             identities[kind] = row.id
         db.commit()
     return identities
@@ -192,7 +194,7 @@ class ProviderObserver:
         client.embeddings.create = observed
 
     @contextmanager
-    def install(self, patch: pytest.MonkeyPatch, scratch: sa.Engine, allowed_model_ids: set[int]) -> Iterator[None]:
+    def install(self, patch: pytest.MonkeyPatch, scratch: sa.Engine, allowed_model_ids: set[str]) -> Iterator[None]:
         import dashscope
 
         if not re.fullmatch(r"multirag_test_[0-9a-f]{12}", str(scratch.url.database)):
@@ -201,17 +203,17 @@ class ProviderObserver:
         original_init = LLMBundle.__init__
         original_embedding = dashscope.TextEmbedding.call
 
-        def account(cls: type[TenantLLMService], identifier: int | None, tokens: int) -> int:
+        def account(cls: type[TenantLLMService], identifier: str | None, tokens: int) -> int:
             if identifier is None or tokens <= 0:
                 return 0
             if identifier not in allowed_model_ids:
                 raise RuntimeError("workload_usage_model_outside_scratch_scope")
             with Session(scratch) as db:
-                result = cast(CursorResult[Any], db.execute(sa.update(TenantLLM).where(TenantLLM.id == identifier).values(used_tokens=TenantLLM.used_tokens + tokens)))
+                result = cast(CursorResult[Any], db.execute(sa.update(TenantModel).where(TenantModel.id == identifier).values(used_tokens=TenantModel.used_tokens + tokens)))
                 db.commit()
                 return int(result.rowcount)
 
-        async def account_async(cls: type[TenantLLMService], identifier: int | None, tokens: int) -> int:
+        async def account_async(cls: type[TenantLLMService], identifier: str | None, tokens: int) -> int:
             import asyncio
 
             return await asyncio.to_thread(account, cls, identifier, tokens)

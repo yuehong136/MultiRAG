@@ -55,16 +55,15 @@ class RevisionStorageUnknown(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ModelBinding:
-    tenant_model_id: int | None
+    tenant_model_id: str | None
     model_reference: str
     dimension: int
     config_reference: str = ""
 
     def __post_init__(self) -> None:
-        if self.tenant_model_id is not None:
-            positive_int(self.tenant_model_id, "invalid_model_binding")
         if (
-            type(self.dimension) is not int
+            (self.tenant_model_id is not None and (not isinstance(self.tenant_model_id, str) or re.fullmatch(r"[0-9a-f]{32}", self.tenant_model_id) is None))
+            or type(self.dimension) is not int
             or not 1 <= self.dimension <= 32768
             or not isinstance(self.model_reference, str)
             or not self.model_reference

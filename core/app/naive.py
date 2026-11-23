@@ -33,10 +33,10 @@ from PIL import Image
 
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.model_contract import parse_model_id
 from api.db.services.llm_service import LLMBundle
 from common.constants import MAXIMUM_PAGE_NUMBER, LLMType
 from common.float_utils import normalize_overlapped_percent
-from common.parser_config_utils import normalize_layout_recognizer
 from common.text_utils import normalize_arabic_presentation_forms
 from common.token_utils import num_tokens_from_string
 from core.nlp import (
@@ -106,6 +106,16 @@ def by_deepdoc(filename: Any, binary: Any = None, from_page: int = 0, to_page: i
         **kwargs,
     )
     return sections, tables, pdf_parser
+
+
+def resolve_pdf_parser(tenant_id: str, reference: Any) -> tuple[Any, str | None]:
+    if not isinstance(reference, str) or parse_model_id(reference) is None:
+        return reference, None
+
+    from api.db.joint_services.tenant_model_service import resolve_parser_reference
+
+    with db_connection() as db:
+        return resolve_parser_reference(db, tenant_id, reference)
 
 
 def by_mineru(
@@ -895,13 +905,7 @@ def chunk(
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
         raw_layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
-        if isinstance(raw_layout_recognizer, str) and raw_layout_recognizer.isdecimal():
-            from api.db.joint_services.tenant_model_service import resolve_parser_reference
-
-            with db_connection() as db:
-                layout_recognizer, parser_model_name = resolve_parser_reference(db, kwargs.get("tenant_id", ""), raw_layout_recognizer)
-        else:
-            layout_recognizer, parser_model_name = normalize_layout_recognizer(raw_layout_recognizer)
+        layout_recognizer, parser_model_name = resolve_pdf_parser(kwargs.get("tenant_id", ""), raw_layout_recognizer)
         opendataloader_llm_name = kwargs.pop("opendataloader_llm_name", None)
         if layout_recognizer == "OpenDataLoader" and parser_model_name:
             opendataloader_llm_name = parser_model_name

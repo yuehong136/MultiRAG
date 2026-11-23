@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, Knowledgebase, Search, TenantLLM, User
+from api.db.db_models import Document, Knowledgebase, Search, TenantModel, TenantModelProvider, User
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
@@ -31,7 +31,7 @@ from core.nlp import search
 from core.prompts.generator import cross_languages, keyword_extraction
 
 
-async def _bundle(db: AsyncSession, tenant_id: str, model_type: LLMType, *, model_id: int | None = None, name: str | None = None, allowed_tenant_ids: set[str] | None = None) -> LLMBundle:
+async def _bundle(db: AsyncSession, tenant_id: str, model_type: LLMType, *, model_id: str | None = None, name: str | None = None, allowed_tenant_ids: set[str] | None = None) -> LLMBundle:
     def build(s: Session) -> LLMBundle:
         if model_id:
             config = get_model_config_by_id(s, model_id, tenant_id=tenant_id if allowed_tenant_ids is None else None, allowed_tenant_ids=allowed_tenant_ids, model_type=model_type.value)
@@ -66,7 +66,7 @@ async def search_datasets(db: AsyncSession, tenant_id: str, request: SearchDatas
         return False, "Knowledgebase not found!", RetCode.DATA_ERROR
     kbs = [by_id[selected_id] for selected_id in dataset_ids]
     try:
-        KnowledgebaseService.ensure_same_embedding_model(kbs)
+        await db.run_sync(lambda s: KnowledgebaseService.ensure_same_embedding_model(kbs, db=s))  # TODO(async-phase4)
     except EmbeddingModelMismatchError as exc:
         return False, str(exc), RetCode.DATA_ERROR
     kb = kbs[0]
@@ -92,7 +92,11 @@ async def search_datasets(db: AsyncSession, tenant_id: str, request: SearchDatas
             return False, "Invalid saved search configuration.", RetCode.ARGUMENT_ERROR
         metadata_filter = search_config.get("meta_data_filter", {})
     if request.tenant_rerank_id is not None:
-        allowed_model = await db.scalar(select(TenantLLM.id).where(TenantLLM.id == request.tenant_rerank_id, TenantLLM.tenant_id.in_({tenant_id, *tenant_ids})))
+        allowed_model = await db.scalar(
+            select(TenantModel.id)
+            .join(TenantModelProvider, TenantModel.provider_id == TenantModelProvider.id)
+            .where(TenantModel.id == request.tenant_rerank_id, TenantModelProvider.tenant_id.in_({tenant_id, *tenant_ids}))
+        )
         if allowed_model is None:
             return False, "No authorization for rerank model.", RetCode.AUTHENTICATION_ERROR
     if request.use_kg and (request.doc_ids is not None or metadata_filter or request.search_id):

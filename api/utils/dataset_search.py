@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Discriminator, Field, field_validator, model_validator
 
+from api.db.model_contract import ModelID
 from api.utils.reference_metadata import ReferenceMetadata
 
 
@@ -110,7 +111,7 @@ class SearchDatasetRequest(BaseModel):
     vector_similarity_weight: float = Field(default=0.3, ge=0, le=1)
     use_kg: bool = False
     rerank_id: str | None = None
-    tenant_rerank_id: int | None = None
+    tenant_rerank_id: ModelID | None = None
     highlight: bool = False
     keyword: bool = False
     search_mode: SearchMode | None = Field(

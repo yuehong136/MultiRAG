@@ -1,14 +1,13 @@
-"""Idempotent legacy model linking; no application initialization or credentials in logs."""
+"""Frozen legacy model linking for the model-provider and model-identity revisions."""
 
 import hashlib
 import json
 from collections import defaultdict
-from typing import Any, cast
+from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 import sqlalchemy as sa
-from sqlalchemy.engine import Connection, CursorResult
-from sqlalchemy.orm import Session
+from sqlalchemy.engine import Connection
 
 SCHEMA = "usr_ai"
 
@@ -96,37 +95,3 @@ def backfill(bind: Connection, tenant_id_filter: str | None = None) -> None:
                 if isinstance(envelope, dict) and isinstance(envelope.get("is_tools"), bool):
                     tools = envelope["is_tools"]
                 bind.execute(models.insert().values(id=row["id"], instance_id=instance_id, model_name=raw_name, model_types=capabilities, is_tools=tools))
-
-
-def backfill_tenant_defaults(db: Session) -> int:
-    """Fill only missing default identities in the caller's transaction.
-
-    Keep stored aliases and existing numeric choices unchanged. No completion
-    marker is used: newly imported legacy defaults must remain eligible later.
-    """
-    from api.db.db_models import Tenant
-    from api.db.model_contract import DEFAULT_MODEL_FIELDS
-    from api.db.services.provider_model_resolution import find_model_row
-
-    missing = sa.or_(*(sa.and_(getattr(Tenant, f"tenant_{field}").is_(None), getattr(Tenant, field).is_not(None), getattr(Tenant, field) != "") for field in DEFAULT_MODEL_FIELDS.values()))
-    last_id = ""
-    updated = 0
-    while True:
-        rows = list(db.scalars(sa.select(Tenant).where(missing, Tenant.id > last_id).order_by(Tenant.id).limit(500)))
-        if not rows:
-            return updated
-        for tenant in rows:
-            for capability, field in DEFAULT_MODEL_FIELDS.items():
-                target = f"tenant_{field}"
-                reference = getattr(tenant, field)
-                if getattr(tenant, target) is not None or not reference:
-                    continue
-                model = find_model_row(db, tenant.id, reference, capability)
-                if model is not None:
-                    result = cast(
-                        CursorResult[Any],
-                        db.execute(sa.update(Tenant).where(Tenant.id == tenant.id, getattr(Tenant, target).is_(None), getattr(Tenant, field) == reference).values({target: model.id})),
-                    )
-                    updated += result.rowcount
-            last_id = tenant.id
-        db.flush()

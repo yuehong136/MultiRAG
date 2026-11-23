@@ -6,7 +6,6 @@ from fastapi import HTTPException
 
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.llm_service import LLMBundle
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService
 from api.service.aiforbi_service.echarts_temp import load_chart_template
 from api.service.aiforbi_service.llm_prompts import PromptTemplateLoader
@@ -60,14 +59,6 @@ class AIForBIService:
 
         loader = PromptTemplateLoader()
         tenants = TenantService.get_info_by(db, user_id)
-        llm_list = TenantLLMService.get_all(db)
-        is_local_llm = False
-        for llm in llm_list:
-            if llm.llm_name == llm_name and llm.llm_factory in ["OpenAI-API-Compatible", "Ollama", "Xinference"]:
-                is_local_llm = True
-                break
-        logging.info(f"is_local_llm: {is_local_llm}")
-
         # 本地模型和在线模型都使用dynamic_chart_option_function_temp_for_local_llm.txt
         chart_data = {"columns": dynamic_chart_option_function_req_body.sql_result["metadata"]["columns"], "data": dynamic_chart_option_function_req_body.sql_result["data"]}
         prompt = loader.fill_template(

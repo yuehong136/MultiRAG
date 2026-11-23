@@ -18,11 +18,12 @@ from sqlalchemy.orm import Session
 import core.llm as provider_models
 from agent.canvas import Canvas
 from agent.component import agent_with_tools, html_report, llm
-from api.db.db_models import TenantLLM
+from api.db.db_models import TenantModel
 from api.db.joint_services import memory_message_service
 from api.db.services import dialog_service
 from common import settings
 from core.prompts import generator
+from tests.support.registered_model import model_owner, register_model
 
 CONSUMERS = ["llm", "agent", "html", "dialog", "memory", "full_question", "cross_languages"]
 
@@ -44,21 +45,33 @@ def scoped_models(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch) 
             return "{}", 0
 
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": name} for name in factories])
-    monkeypatch.setattr(provider_models, "ChatModel", {factories[0]: Provider})
+    monkeypatch.setattr(provider_models, "ChatModel", dict.fromkeys(factories, Provider))
     monkeypatch.setattr(provider_models, "CvModel", {factories[1]: Provider})
+    identifiers = {}
     with Session(bootstrapped_engine) as db:
         for tenant, factory, name, kind, status in [
             (owner, factories[0], "same", "chat", "1"),
-            (owner, factories[1], "same", "image2text", "1"),
+            (owner, factories[1], "same", "chat", "1"),
             (other, factories[0], "same", "embedding", "1"),
             (owner, factories[0], "unique", "chat", "1"),
             (owner, factories[0], "disabled", "chat", "0"),
-            (owner, factories[0], "untyped", None, "1"),
+            (owner, factories[0], "embedding-only", "embedding", "1"),
         ]:
-            db.add(TenantLLM(tenant_id=tenant, llm_factory=factory, llm_name=name, mdl_type=kind, status=status, api_key=tenant + factory, api_base="https://unused.invalid", max_tokens=1024))
+            model = register_model(
+                db,
+                tenant_id=tenant,
+                provider_name=factory,
+                model_name=name,
+                model_types=(kind,),
+                status="active" if status == "1" else "inactive",
+                api_key=tenant + factory,
+                base_url="https://unused.invalid",
+                max_tokens=1024,
+            )
+            identifiers[tenant, factory, name] = model.id
         db.commit()
     with Session(bootstrapped_engine) as reader:
-        before = [row.to_dict() for row in reader.scalars(select(TenantLLM).where(TenantLLM.tenant_id.in_([owner, other])).order_by(TenantLLM.id))]
+        before = [row.to_dict() for row in reader.scalars(select(TenantModel).where(model_owner().in_([owner, other])).order_by(TenantModel.id))]
 
     @contextmanager
     def scratch_db() -> Iterator[Session]:
@@ -73,14 +86,14 @@ def scoped_models(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr("api.db.db_models.SessionLocal", forbid_global_session)
     try:
-        yield {"engine": bootstrapped_engine, "owner": owner, "missing": missing, "calls": calls, "constructed": constructed}
+        yield {"engine": bootstrapped_engine, "owner": owner, "missing": missing, "calls": calls, "constructed": constructed, "identifiers": identifiers}
     finally:
         with Session(bootstrapped_engine) as reader:
-            assert [row.to_dict() for row in reader.scalars(select(TenantLLM).where(TenantLLM.tenant_id.in_([owner, other])).order_by(TenantLLM.id))] == before
-            reader.execute(delete(TenantLLM).where(TenantLLM.tenant_id.in_([owner, other])))
+            assert [row.to_dict() for row in reader.scalars(select(TenantModel).where(model_owner().in_([owner, other])).order_by(TenantModel.id))] == before
+            reader.execute(delete(TenantModel).where(model_owner().in_([owner, other])))
             reader.commit()
         with Session(bootstrapped_engine) as reader:
-            assert reader.scalar(select(TenantLLM.id).where(TenantLLM.tenant_id.in_([owner, other]))) is None
+            assert reader.scalar(select(TenantModel.id).where(model_owner().in_([owner, other]))) is None
 
 
 async def call_consumer(env: dict[str, Any], consumer: str, tenant: str, reference: str) -> bool:
@@ -120,21 +133,22 @@ async def call_consumer(env: dict[str, Any], consumer: str, tenant: str, referen
 
 
 @pytest.mark.parametrize("consumer", CONSUMERS)
-@pytest.mark.parametrize("reference,factory", [("same@DeltaTextFixture", "DeltaTextFixture"), ("same@DeltaVisionFixture", "DeltaVisionFixture"), ("unique", "DeltaTextFixture")])
+@pytest.mark.parametrize("reference,factory", [("same", "DeltaTextFixture"), ("same", "DeltaVisionFixture"), ("unique", "DeltaTextFixture")])
 async def test_tenant_model_selection_reaches_consumer(scoped_models: dict[str, Any], consumer: str, reference: str, factory: str) -> None:
     env = scoped_models
-    assert await call_consumer(env, consumer, env["owner"], reference)
+    assert await call_consumer(env, consumer, env["owner"], env["identifiers"][env["owner"], factory, reference])
     assert len(env["calls"]) == 1
     assert env["calls"][0][0] == env["owner"] + factory
     assert set(env["constructed"]) == {env["owner"] + factory}
 
 
 @pytest.mark.parametrize("consumer", CONSUMERS)
-@pytest.mark.parametrize("failure", ["ambiguous", "disabled", "untyped", "foreign"])
+@pytest.mark.parametrize("failure", ["old-alias", "disabled", "embedding-only", "foreign"])
 async def test_rejected_model_never_reaches_provider(scoped_models: dict[str, Any], consumer: str, failure: str) -> None:
     env = scoped_models
     tenant = env["missing"] if failure == "foreign" else env["owner"]
-    reference = "same@DeltaTextFixture" if failure == "foreign" else "same" if failure == "ambiguous" else failure
+    name = "same" if failure == "foreign" else failure
+    reference = "same@DeltaTextFixture" if failure == "old-alias" else env["identifiers"][env["owner"], "DeltaTextFixture", name]
     if consumer in {"llm", "agent", "html"}:
         assert not await call_consumer(env, consumer, tenant, reference)
     else:

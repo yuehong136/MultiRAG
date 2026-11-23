@@ -23,27 +23,33 @@ use request-local endpoints and credentials. Official compatible endpoints map
 to the corresponding native `/api/v1` host; custom native endpoints must end in
 `/api/v1`. A failed request never retries in another region.
 
-A model has an integer ID, raw provider model name, explicit capability list,
-nonnegative token limit and per-model tool capability. Model references exposed
-to selectors are decimal strings of that ID. Callers resolving a model with
-multiple capabilities must supply the capability they need. Configuration
-resolution checks tenant ownership and effective provider/instance/model status
-before exposing credentials, and supplies the raw model name to the driver.
-Worker rebinding must retain the authorized numeric ID and capability.
+The model table owns its 32-character lowercase hexadecimal ID. The registered
+model name stays in `model_name`, and the instance owns the credentials and
+endpoint. The Python tables under `usr_ai` use the RAGFlow capability bits for
+chat, embedding, speech-to-text, image-to-text, rerank, TTS and OCR. Model metadata
+keeps the token limit and tool flag in `extra`, with `used_tokens` alongside it
+for MultiRAG accounting. Scoped resolution checks ownership, model/instance/provider
+status and the requested capability before passing credentials to a driver.
 
-`GET /api/v1/models/default` and `PATCH /api/v1/models/default` manage defaults.
-The PATCH body is `{ "model_type": "chat", "model_id": 123 }`; a null ID clears
-only that capability. OCR is included. Lists return `items`, `total`, `page` and
-`page_size`; pages start at one and page size is limited to 100. Query keys cannot
-be duplicated, and boolean query values are exactly `true` or `false`.
+`GET /api/v1/models/default` lists configured defaults. PATCH accepts
+`{"model_type":"chat","model_id":"a42aeb7fc0064670b7bfdd2d0e13d6d8"}`.
+An empty model ID clears that capability. Instance settings use PUT. DELETE
+on the `/instances` or instance `/models` collection takes `instances` or
+`model_name` respectively, each a nonempty name array. Model status PATCH
+uses the model name path within the instance and can confirm the expected
+`model_id` in the body. The direct model-create POST uses `model_type` as its
+capability array and `extra.is_tools` for the tool flag.
+
+Scoped inventories keep the MultiRAG paginated response and controlled
+candidate/discovery workflow. The Go permission/membership subsystem, model
+groups, scoring and decision adapters are outside this Python model contract.
 An explicit empty `model_ids` list excludes catalog models. Supply at least one
 custom model in that case; an entirely empty selection is rejected. Omitting
 `model_ids` selects that provider's catalog. Distinct custom and discovered
 models can share the same typed candidate, verification and atomic creation.
 Verification itself writes no registrations; creation verifies again before its
 transactional write. MinerU verification performs a real generated-PDF parse,
-with the probe timeout forwarded to its HTTP request. Model route IDs require canonical
-positive decimal integers; malformed, overflowing and noncanonical forms fail.
+with the probe timeout forwarded to its HTTP request.
 
 Deletion checks persisted defaults and model-reference fields in datasets,
 documents, dialogs, memory, canvases and versions, saved searches, skills and
@@ -53,43 +59,30 @@ deleted. A conflict leaves the whole request unchanged.
 
 ## Existing installations
 
-Alembic revision `b8d0f2a4c6e8` adds three tables and OCR default fields and widens
-the legacy endpoint column. It keeps `TenantLLM` IDs, accounting, stored names,
-status and default references. Each legacy credential/endpoint group becomes a deterministic instance.
-Only a boolean model-level `is_tools` wrapper is excluded from credential
-identity. Different endpoints and other credential options remain distinct,
-and each model retains its own tools flag and numeric ID. New imports can reuse
-an equivalent unchanged instance; existing registrations and edited instances
-are never rebound or merged.
-Backfill is idempotent and also links models created during user initialization.
-It selects unlinked legacy rows in SQL, including the tenant filter when supplied,
-rather than loading all existing model IDs. Alembic records a successful revision
-in the same transaction as its data changes; an applied revision is not replayed.
-New legacy rows use the explicit idempotent linkage path, not a global applied flag.
-Startup default repair fills only missing numeric references with nonempty stored
-aliases, including OCR, in batches of 500 tenants. It preserves existing numeric
-choices and original aliases, resolves ownership and capability, and leaves
-unresolved defaults eligible for a later run. Ambiguity aborts the tenant repair
-transaction. Other initialization stages retain their existing commit boundaries.
-Deploy through the repository's normal Alembic process before serving the new API.
-This document does not authorize a production migration.
+Alembic revision `f7a9c2e4b6d8` performs an atomic PostgreSQL cutover. It
+links any remaining legacy registrations, maps old integer IDs deterministically
+to hexadecimal IDs, moves model status, context limits and usage, and remaps
+SQL model references by their stored field or owning tenant. It handles current
+memory embedding bindings whose original fingerprints match, and retains
+historical evidence of model drift. It also migrates gateway settings, key
+allow-lists and request logs, including references to removed registrations.
+Registration order stays independent of the new IDs so shared gateway names
+keep resolving to the same model. An ambiguous selector, orphaned bound field,
+unverified in-flight state, or failed integrity check aborts the transaction.
+Once complete, the revision drops `t_ai_tenant_llms`; new model registrations
+write only to `t_ai_tenant_models`. The old model management paths are retired.
 
-New models use opaque legacy storage keys; public projections and driver calls
-resolve them to the raw model name. Existing exact legacy names remain valid,
-including numeric-looking aliases. A numeric reference colliding with a distinct
-persisted legacy alias fails rather than selecting a different model.
+For a deployment, take and verify a restorable backup, stop writers and drain
+model-bound work, including queued and claimed memory maintenance executions,
+before the cutover. Unsubmitted incremental analysis plans retain their audit
+hashes and need a new discovery before submission. Deploy the matching API,
+workers and Web together. Existing clients carrying numeric IDs or the old route shapes
+require coordinated upgrades. First reads refresh stale Redis Agent replicas
+from the migrated SQL snapshot. Restore the pre-upgrade database together with
+the previous binaries if recovery is needed. The migration provides no automatic
+downgrade. See [database migration](../../../docs/database-migration.md).
 
-Legacy model management routes remain deprecated for the active admin client.
-Their mutations reject providers already linked to the instance model with HTTP
-409, before probing credentials or writing. Use the provider-instance API for
-those providers. Legacy read projections retain disabled entries and numeric
-references without exposing opaque keys or credentials.
-
-Downgrade deliberately refuses to delete model registrations or restore the
-shorter endpoint column. Take a database backup before migration. A rollback
-requires an explicit export/conversion of any newly created instances and model
-references, followed by reviewed schema changes; an automatic destructive
-rollback cannot preserve those identities.
+The source baseline is [RAGFlow model and instance routes at 91c702e](https://github.com/infiniflow/ragflow/blob/91c702e86be3dcb3cabc9f6d81e485d02241bef8/internal/router/router.go#L524-L575).
 
 ## Verification boundaries
 
@@ -112,16 +105,15 @@ in its scalar SQL columns. Catalog replacement validates every declaration and
 rolls back the replacement on failure. New-user defaults read the typed catalog
 and seed only configured model references, rather than every model of each
 configured factory. User, tenant, membership, root folder, model linkage and
-numeric default identities commit together.
+default model identities commit together.
 
 MinerU, PaddleOCR and OpenDataLoader environment configuration is imported at
 startup and registration, and when a parser explicitly needs an env fallback.
 The importer uses the caller's transaction, creates linked provider/instance/model
 identities, preserves edited instances and disabled registrations, and is
 idempotent for unchanged credentials. GET model listings perform no imports.
-PDF parsers preserve complete `model@instance@provider` references; implicit
-selection prefers an active numeric OCR registration and honors an applicable
-numeric OCR default. Resolution still checks tenant ownership and capability.
+PDF parsers accept the registered model ID; implicit selection prefers an
+active OCR registration and honors an applicable OCR default. Resolution still checks tenant ownership and capability.
 PaddleOCR uses an OCR candidate with zero tokens and keeps its typed algorithms,
 PDF job lifecycle and independent parser initialization.
 
@@ -129,7 +121,7 @@ VolcEngine new structured credentials use a JSON string with `api_key` and optio
 `endpoint_id`. The raw key form and persisted `ark_api_key` envelopes remain
 accepted by discovery, verification and runtime. Conflicting key or endpoint aliases
 are rejected without echoing their values. Chat and vision use an explicit endpoint
-for the provider request while retaining the registered model name and numeric ID;
+for the provider request while retaining the registered model name and ID;
 embeddings use the registered model name. A blank PATCH key preserves stored
 credentials and endpoint options.
 

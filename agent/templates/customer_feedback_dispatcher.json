@@ -41,7 +41,7 @@
                                 ]
                             }
                         },
-                        "llm_id": "deepseek-chat@DeepSeek",
+                        "llm_id": "",
                         "message_history_window_size": 1,
                         "outputs": {
                             "category_name": {
@@ -49,8 +49,7 @@
                             }
                         },
                         "query": "begin@customer_review",
-                        "temperature": 0,
-                        "tenant_llm_id": 90
+                        "temperature": 0
                     }
                 },
                 "upstream": [
@@ -86,15 +85,14 @@
                             }
                         },
                         "llm_filter": "all",
-                        "llm_id": "deepseek-chat@DeepSeek",
+                        "llm_id": "",
                         "message_history_window_size": 1,
                         "outputs": {
                             "category_name": {
                                 "type": "string"
                             }
                         },
-                        "query": "begin@customer_review",
-                        "tenant_llm_id": 90
+                        "query": "begin@customer_review"
                     }
                 },
                 "upstream": [
@@ -324,7 +322,7 @@
                                 }
                             ],
                             "llm_filter": "all",
-                            "llm_id": "deepseek-chat@DeepSeek",
+                            "llm_id": "",
                             "maxTokensEnabled": false,
                             "max_tokens": 4096,
                             "message_history_window_size": 1,
@@ -339,7 +337,6 @@
                             "query": "begin@customer_review",
                             "temperature": 0.2,
                             "temperatureEnabled": false,
-                            "tenant_llm_id": 90,
                             "topPEnabled": false,
                             "top_p": 0.75
                         },
@@ -388,7 +385,7 @@
                                     "uuid": "2fda442d-8580-440c-a947-0df607ca56fe"
                                 }
                             ],
-                            "llm_id": "deepseek-chat@DeepSeek",
+                            "llm_id": "",
                             "maxTokensEnabled": false,
                             "max_tokens": 256,
                             "message_history_window_size": 1,
@@ -403,7 +400,6 @@
                             "query": "begin@customer_review",
                             "temperature": 0,
                             "temperatureEnabled": true,
-                            "tenant_llm_id": 90,
                             "topPEnabled": false,
                             "top_p": 0.3
                         },

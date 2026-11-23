@@ -43,11 +43,7 @@ def public(model: Any) -> dict[str, Any]:
         SkillOperation: ("id", "kind", "state", "phase", "attempts", "resource_id", "progress", "result", "error", "create_time", "update_time"),
         SkillSearchConfig: ("revision", "embedding_model_id", "rerank_model_id", "top_k", "vector_weight", "similarity_threshold", "fields"),
     }
-    result = {key: getattr(model, key) for key in fields[type(model)]}
-    if isinstance(model, SkillSearchConfig):
-        for key in ("embedding_model_id", "rerank_model_id"):
-            result[key] = str(result[key]) if result[key] is not None else None
-    return result
+    return {key: getattr(model, key) for key in fields[type(model)]}
 
 
 def accepted(operation: SkillOperation) -> dict[str, Any]:
@@ -440,7 +436,7 @@ class SkillService:
         await self.search.validate_models(tenant, values)
         for key, value in request.model_dump(exclude_unset=True).items():
             if key != "revision":
-                setattr(config, key, int(value) if key.endswith("model_id") and value is not None else value)
+                setattr(config, key, value)
         config.revision += 1
         space.revision += 1
         await self.db.commit()

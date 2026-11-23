@@ -87,7 +87,7 @@ def test_method_defaults_language_and_reranker_schema() -> None:
     with pytest.raises(ValueError, match="supports English and Chinese"):
         ner.GraphExtractor(NoChat(), "French")
     assert ner.model_for_language("zh-CN") == "zh_core_web_sm"
-    for value in [42, None]:
+    for value in ["a" * 32, None]:
         assert SearchDatasetsRequest(question="q", dataset_ids=["a"], tenant_rerank_id=value).tenant_rerank_id == value
     with pytest.raises(ValidationError):
         SearchDatasetsRequest(question="q", dataset_ids=["a"], tenant_rerank_id="model-name")

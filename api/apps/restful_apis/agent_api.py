@@ -271,8 +271,7 @@ def templates(db: Session = Depends(get_db), user: User = Depends(manager)) -> J
     - 快速复制常用配置
     - 学习Canvas的DSL结构
     """
-    templates_list = CanvasTemplateService.list_templates(db)
-    return get_json_result(data=[c.to_dict() for c in templates_list])
+    return get_json_result(data=CanvasTemplateService.list_for_tenant(db, user.id))
 
 
 @router.delete("/agents/{agent_id}", summary="删除Canvas", response_description="成功删除Canvas")

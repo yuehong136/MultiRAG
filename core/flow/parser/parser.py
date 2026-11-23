@@ -34,7 +34,7 @@ from api.db.services.llm_service import LLMBundle
 from common import settings
 from common.constants import MAXIMUM_PAGE_NUMBER, MAXIMUM_TASK_PAGE_NUMBER, LLMType
 from common.misc_utils import get_uuid, thread_pool_exec
-from core.app.naive import Docx
+from core.app.naive import Docx, resolve_pdf_parser
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.parser.header_footer import (
     is_header_footer_layout,
@@ -389,26 +389,7 @@ class Parser(ProcessBase):
         abstract_enabled = "abstract" in conf.get("preprocess", [])
         author_enabled = "author" in conf.get("preprocess", [])
 
-        raw_parse_method = conf.get("parse_method", "")
-        parser_model_name = None
-        parse_method = raw_parse_method or ""
-        if isinstance(raw_parse_method, str):
-            lowered = raw_parse_method.lower()
-            if lowered.endswith("@mineru"):
-                parser_model_name = raw_parse_method
-                parse_method = "MinerU"
-            elif lowered.endswith("@paddleocr"):
-                parser_model_name = raw_parse_method
-                parse_method = "PaddleOCR"
-            elif lowered.endswith("@opendataloader"):
-                parser_model_name = raw_parse_method
-                parse_method = "OpenDataLoader"
-
-        if isinstance(raw_parse_method, str) and raw_parse_method.isdecimal():
-            from api.db.joint_services.tenant_model_service import resolve_parser_reference
-
-            with db_connection() as db:
-                parse_method, parser_model_name = resolve_parser_reference(db, self._canvas._tenant_id, raw_parse_method)
+        parse_method, parser_model_name = resolve_pdf_parser(self._canvas._tenant_id, conf.get("parse_method") or "")
 
         if parse_method.lower() == "deepdoc":
             pdf_parser = RAGFlowPdfParser()

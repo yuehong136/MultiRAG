@@ -15,13 +15,14 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 import core.llm as provider_models
-from api.db.db_models import Document, Knowledgebase, TenantLLM
+from api.db.db_models import Document, Knowledgebase, TenantModel
 from common import settings
 from common.config_utils import CONFIGS
 from common.doc_store.document_history import document_history
 from core.nlp.search import index_name_one
 from tests.support.dataset_management_http import management_api as management_api
 from tests.support.dataset_management_http import request_api
+from tests.support.registered_model import model_owner, register_model
 
 
 def test_manual_insert_nullable_readback_and_search(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,8 +58,8 @@ def test_manual_insert_nullable_readback_and_search(management_api: dict[str, An
         with Session(env["engine"]) as db:
             kb = db.get(Knowledgebase, dataset)
             assert kb is not None
-            kb.name, kb.embd_id = name, "delta-embedding@" + factory
-            db.add(TenantLLM(tenant_id=tenant, llm_factory=factory, llm_name="delta-embedding", mdl_type="embedding", api_key="fixture", api_base="https://unused.invalid"))
+            model = register_model(db, tenant_id=tenant, provider_name=factory, model_name="delta-embedding", model_types=("embedding",), api_key="fixture", base_url="https://unused.invalid")
+            kb.name, kb.embd_id, kb.tenant_embd_id = name, model.id, model.id
             db.commit()
         assert not reader.has_collection(collection)
         response = request_api(env, "POST", route, credential=env["jwt"][0], payload={"content": "quasar telescope observation"})
@@ -116,7 +117,7 @@ def test_manual_insert_nullable_readback_and_search(management_api: dict[str, An
         record["collection_absent"] = not reader.has_collection(collection)
         reader.close()
         with Session(env["engine"]) as db:
-            db.execute(delete(TenantLLM).where(TenantLLM.tenant_id == tenant))
+            db.execute(delete(TenantModel).where(model_owner() == tenant))
             db.commit()
         evidence.write_text(json.dumps(record, indent=2))
         assert record["collection_absent"]

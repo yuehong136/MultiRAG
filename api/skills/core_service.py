@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import File, File2Document, PythonSkillCoreConfig, PythonSkillCoreSpace
+from api.db.model_contract import parse_model_id
 from api.skills.core_schemas import CoreConfigRequest, CoreCreate, CoreIndexRequest, CoreSearchRequest, CoreUpdate, field_defaults
 from api.skills.file_guard import SKILL_SOURCES
 from api.skills.package import MAX_FILE_SIZE, MAX_FILES, MAX_TOTAL_SIZE, PackageFile, normalize_path
@@ -60,13 +61,16 @@ class SkillCoreService:
     async def model_reference(self, tenant: str, reference: str, kind: str) -> str:
         if not reference:
             return ""
-        from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+        from api.db.services.model_provider_service import resolve_config
 
+        identifier = parse_model_id(reference)
+        if identifier is None:
+            raise SkillError(422, "MODEL_NOT_FOUND", "Model reference must identify one enabled tenant model")
         try:
-            config = await self.db.run_sync(lambda session: get_model_config_by_type_and_name(session, tenant, kind, reference))  # TODO(async-phase4): existing model resolver
+            await resolve_config(self.db, tenant, identifier, kind)
         except (LookupError, ValueError):
             raise SkillError(422, "MODEL_NOT_FOUND", "Model reference must identify one enabled tenant model") from None
-        return str(config["id"])
+        return identifier
 
     async def space_dto(self, row: PythonSkillCoreSpace) -> dict[str, Any]:
         config = await self.config_row(row.tenant_id, row.id)

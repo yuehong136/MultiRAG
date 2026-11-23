@@ -39,15 +39,17 @@ const stringField = (descriptor: JsonObject, name: string): string => {
   check(typeof value === 'string' && value.length > 0, `descriptor.${name}`)
   return value as string
 }
-const numericIds = (values: unknown, name: string): number[] => {
+const modelId = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-f]{32}$/.test(value)
+const modelIds = (values: unknown, name: string): string[] => {
   check(
     Array.isArray(values) &&
       values.length > 0 &&
-      values.every((id) => Number.isSafeInteger(id) && id > 0) &&
+      values.every(modelId) &&
       new Set(values).size === values.length,
-    `descriptor.${name}.numeric-ids`,
+    `descriptor.${name}.model-ids`,
   )
-  return values as number[]
+  return values as string[]
 }
 const safe = (event: string, data: JsonObject = {}): void => {
   process.stdout.write(`${JSON.stringify({ event, ...data })}\n`)
@@ -79,8 +81,8 @@ async function main(): Promise<void> {
   const token = stringField(descriptor, 'token')
   const searchId = stringField(descriptor, 'searchId')
   const teiModel = stringField(descriptor, 'teiModel')
-  const expectedModelIds = numericIds(descriptor.modelIds, 'modelIds')
-  const forbiddenModelIds = numericIds(descriptor.forbiddenModelIds, 'forbiddenModelIds')
+  const expectedModelIds = modelIds(descriptor.modelIds, 'modelIds')
+  const forbiddenModelIds = modelIds(descriptor.forbiddenModelIds, 'forbiddenModelIds')
   check(
     forbiddenModelIds.every((id) => !expectedModelIds.includes(id)),
     'fixture.model-identity-sets-disjoint',
@@ -192,32 +194,26 @@ async function main(): Promise<void> {
     const inventory = await modelProvidersAPI.models()
     const embedding = defaults.find((row: JsonObject) => row.model_type === 'embedding')
     check(
-      embedding?.model_id === null &&
+      embedding?.model_id === '' &&
         embedding?.model_provider === 'Builtin' &&
         embedding?.model_instance === 'default' &&
         embedding?.model_name === teiModel &&
-        typeof embedding?.reference === 'string' &&
-        embedding.reference.length > 0,
+        embedding?.enable === true,
       'models.builtin-readonly-default-metadata',
     )
     check(
-      inventory.every(
-        (row: JsonObject) =>
-          Number.isSafeInteger(row.id) &&
-          Number(row.id) > 0 &&
-          row.reference === String(row.id),
-      ),
-      'models.real-numeric-identities',
+      inventory.every((row: JsonObject) => modelId(row.id)),
+      'models.real-opaque-identities',
     )
-    const actualModelIds = inventory.map((row: JsonObject) => Number(row.id)).sort((a: number, b: number) => a - b)
+    const actualModelIds = inventory.map((row: JsonObject) => row.id).sort()
     check(
       JSON.stringify(actualModelIds) ===
-        JSON.stringify([...expectedModelIds].sort((a, b) => a - b)),
+        JSON.stringify([...expectedModelIds].sort()),
       'models.exact-owner-inventory',
     )
     check(
       forbiddenModelIds.every((id) => !actualModelIds.includes(id)),
-      'models.foreign-numeric-ids-excluded',
+      'models.foreign-model-ids-excluded',
     )
     check(
       !inventory.some(

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
 
 from api.db import db_models
-from api.db.db_models import Memory, Task, TenantLLM
+from api.db.db_models import Memory, Task
 from api.db.joint_services import memory_message_service as mms
 from api.db.joint_services import memory_write_runtime
 from api.db.memory_revision_models import MEMORY_REVISION_MODELS, MemoryPublicationOutbox
@@ -26,11 +27,12 @@ from core.svr import task_executor as worker
 from core.utils.redis_conn import REDIS_CONN
 from memory.revisions.domain import RevisionConflict
 from memory.services.messages import MessageService, index_name
+from tests.support.registered_model import register_model
 from tests.support.resource_journal import ResourceJournal
 
 
 @pytest.fixture
-def memory_resources(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
+def memory_resources(bootstrapped_engine: sa.Engine, bootstrapped_async_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     ensure_initialized()
     journal = ResourceJournal("memory-task-tenant")
     tenant, foreign_tenant, mid, foreign_mid = (uuid4().hex for _ in range(4))
@@ -100,31 +102,27 @@ def memory_resources(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyP
             pass
 
     def construct(cls: type[TenantLLMService], config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> Any:
-        assert config["tenant_id"] in {tenant, foreign_tenant} and type(config["id"]) is int
+        assert config["tenant_id"] in {tenant, foreign_tenant} and re.fullmatch(r"[0-9a-f]{32}", config["id"])
         assert config["mdl_type"] in {"embedding", "chat"}
         return Embedding(config["tenant_id"]) if config["mdl_type"] == "embedding" else Chat(config["tenant_id"])
 
     monkeypatch.setattr(TenantLLMService, "model_instance_from_config", classmethod(construct))
-    model_ids: list[int] = []
     try:
         with Session(bootstrapped_engine) as db:
             for owner, memory_id in [(tenant, mid), (foreign_tenant, foreign_mid)]:
                 identifiers = {}
-                for kind in ["embedding", "chat"]:
+                for kind in ("embedding", "chat"):
                     journal.event("reserve-model-row", tenant_id=owner, model_name="controlled-" + kind, model_type=kind)
-                    model = TenantLLM(tenant_id=owner, llm_factory="controlled", llm_name="controlled-" + kind, mdl_type=kind, api_key="", max_tokens=8192)
-                    db.add(model)
-                    db.flush()
+                    model = register_model(db, tenant_id=owner, provider_name="controlled", model_name="controlled-" + kind, model_types=(kind,))
                     identifiers[kind] = model.id
-                    model_ids.append(model.id)
                 db.add(
                     Memory(
                         id=memory_id,
                         tenant_id=owner,
                         name="scratch",
                         memory_type=3,
-                        llm_id="controlled-chat",
-                        embd_id="controlled-embedding",
+                        llm_id=identifiers["chat"],
+                        embd_id=identifiers["embedding"],
                         tenant_llm_id=identifiers["chat"],
                         tenant_embd_id=identifiers["embedding"],
                     )
@@ -142,7 +140,8 @@ def memory_resources(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyP
                 db.execute(sa.delete(model).where(model.memory_id.in_([mid, foreign_mid])))
             db.execute(sa.delete(Task).where(Task.doc_id.in_([mid, foreign_mid])))
             db.execute(sa.delete(Memory).where(Memory.id.in_([mid, foreign_mid])))
-            db.execute(sa.delete(TenantLLM).where(TenantLLM.id.in_(model_ids)))
+            for owner in (tenant, foreign_tenant):
+                TenantLLMService.delete_by_tenant_id(db, owner)
             db.commit()
         with Session(bootstrapped_engine) as reader:
             remaining = {
@@ -187,9 +186,9 @@ async def test_enqueue_collect_execute_and_reject_forgery(
     with Session(bootstrapped_engine) as reader:
         assert reader.get(Task, queued["id"]).progress == 1
         assert reader.get(Task, queued["id"]).process_duration >= 0
-    stored = MessageService.get_recent_messages([env["tenant"]], [env["mid"]], "agent", "session", 10)
-    assert len(stored) == 2 and {row["user_id"] for row in stored} == {"subject"}
     assert extracts == [env["tenant"]] and env["calls"] == [env["tenant"], env["tenant"]]
+    stored = MessageService.get_recent_page(env["tenant"], env["mid"], "agent", "session", 10)["messages"]
+    assert len(stored) == 2 and {row["user_id"] for row in stored} == {"subject"}
     before_calls = list(env["calls"])
     before_counter = REDIS_CONN.REDIS.get(env["counter"])
     before_size = REDIS_CONN.REDIS.get(f"memory_{env['mid']}")
@@ -204,7 +203,7 @@ async def test_enqueue_collect_execute_and_reject_forgery(
         assert env["calls"] == before_calls and extracts == [env["tenant"]]
         assert REDIS_CONN.REDIS.get(env["counter"]) == before_counter
         assert REDIS_CONN.REDIS.get(f"memory_{env['mid']}") == before_size
-        assert len(MessageService.get_recent_messages([env["tenant"]], [env["mid"]], "agent", "session", 10)) == 2
+        assert len(MessageService.get_recent_page(env["tenant"], env["mid"], "agent", "session", 10)["messages"]) == 2
         assert not MessageService.has_index(env["foreign_tenant"], env["foreign_mid"])
     with Session(bootstrapped_engine) as reader:
         persisted = reader.get(Task, queued["id"])
@@ -312,7 +311,7 @@ async def test_memory_redelivery_preserves_committed_and_uncertain_storage_resul
         task = reader.get(Task, queued["id"])
         assert task.progress == -1
         assert "reconciliation" in task.progress_msg
-    assert len(MessageService.get_recent_messages([env["tenant"]], [env["mid"]], "agent", "session", 10)) == 2
+    assert len(MessageService.get_recent_page(env["tenant"], env["mid"], "agent", "session", 10)["messages"]) == 2
     assert env["calls"] == before_calls and extracts == [env["tenant"]]
     assert REDIS_CONN.REDIS.get(env["counter"]) == before_counter
     assert REDIS_CONN.REDIS.xpending(env["queue"], worker.SVR_CONSUMER_GROUP_NAME)["pending"] == 0
@@ -321,23 +320,19 @@ async def test_memory_redelivery_preserves_committed_and_uncertain_storage_resul
 
 def test_configuration_equivalence_and_occupied_change_sql(bootstrapped_engine: sa.Engine, memory_resources: dict[str, Any]) -> None:
     from api.apps.services import memory_api_service as api
-    from api.db.db_models import TenantLLM
+    from api.db.db_models import TenantModel
     from common.exceptions import ArgumentException
 
     env = memory_resources
-    model_ids = [7001, 7002, 7003]
-    env["journal"].event("reserve-model-rows", ids=model_ids, database=str(bootstrapped_engine.url.database))
+    model_ids: list[str] = []
     try:
         with Session(bootstrapped_engine) as db:
-            db.add_all(
-                [
-                    TenantLLM(id=model_ids[0], tenant_id=env["tenant"], llm_name="canonical", llm_factory="controlled", mdl_type="embedding", api_key=""),
-                    TenantLLM(id=model_ids[1], tenant_id=env["tenant"], llm_name="changed", llm_factory="controlled", mdl_type="embedding", api_key=""),
-                    TenantLLM(id=model_ids[2], tenant_id=env["foreign_tenant"], llm_name="foreign", llm_factory="controlled", mdl_type="embedding", api_key=""),
-                ]
-            )
+            for owner, name in ((env["tenant"], "canonical"), (env["tenant"], "changed"), (env["foreign_tenant"], "foreign")):
+                record = register_model(db, tenant_id=owner, provider_name="controlled", model_name=name, model_types=("embedding",))
+                model_ids.append(record.id)
+            env["journal"].event("reserve-model-rows", ids=model_ids, database=str(bootstrapped_engine.url.database))
             memory = db.get(Memory, env["mid"])
-            memory.embd_id = "canonical"
+            memory.embd_id = model_ids[0]
             memory.tenant_embd_id = model_ids[0]
             db.commit()
         env["journal"].event("reserve-physical-occupancy", memory_id=env["mid"], message_id=1000)
@@ -369,13 +364,13 @@ def test_configuration_equivalence_and_occupied_change_sql(bootstrapped_engine: 
         assert mms.get_memory_size_cache(env["tenant"], env["mid"]) > 0
         with Session(bootstrapped_engine) as reader:
             before = reader.get(Memory, env["mid"]).to_dict()
-        for update in [{"embd_id": " 7001 "}, {"memory_type": ["semantic", " RAW ", "raw"]}, {"embd_id": "canonical@controlled", "memory_type": ["raw", "semantic"]}]:
+        for update in [{"embd_id": model_ids[0]}, {"memory_type": ["semantic", " RAW ", "raw"]}, {"embd_id": model_ids[0], "memory_type": ["raw", "semantic"]}]:
             with Session(bootstrapped_engine) as db:
                 assert api.update_memory(db, env["mid"], update, user_id=env["tenant"])[0]
                 db.commit()
             with Session(bootstrapped_engine) as reader:
                 assert reader.get(Memory, env["mid"]).to_dict() == before
-        for update in [{"embd_id": "7002"}, {"memory_type": ["raw"]}, {"embd_id": "7003"}]:
+        for update in [{"embd_id": model_ids[1]}, {"memory_type": ["raw"]}, {"embd_id": model_ids[2]}]:
             with Session(bootstrapped_engine) as db, pytest.raises(ArgumentException):
                 api.update_memory(db, env["mid"], update, user_id=env["tenant"])
             with Session(bootstrapped_engine) as reader:
@@ -384,18 +379,18 @@ def test_configuration_equivalence_and_occupied_change_sql(bootstrapped_engine: 
         assert not settings.msgStoreConn.index_exists_strict(index_name(env["tenant"]), env["mid"])
         assert mms.get_memory_size_cache(env["tenant"], env["mid"]) == 0
         with Session(bootstrapped_engine) as db:
-            assert api.update_memory(db, env["mid"], {"embd_id": "7002", "description": "changed"}, user_id=env["tenant"])[0]
+            assert api.update_memory(db, env["mid"], {"embd_id": model_ids[1], "description": "changed"}, user_id=env["tenant"])[0]
             db.commit()
         with Session(bootstrapped_engine) as reader:
             memory = reader.get(Memory, env["mid"])
-            assert memory.tenant_embd_id == 7002 and memory.description == "changed"
+            assert memory.tenant_embd_id == model_ids[1] and memory.description == "changed"
         env["journal"].event("memory-config-readback", no_op_cases=3, occupied_or_foreign_rejections=3, empty_memory_change_persisted=True)
     finally:
         with Session(bootstrapped_engine) as db:
-            db.execute(sa.delete(TenantLLM).where(TenantLLM.id.in_(model_ids)))
+            db.execute(sa.delete(TenantModel).where(TenantModel.id.in_(model_ids)))
             db.commit()
         with Session(bootstrapped_engine) as reader:
-            assert reader.scalar(sa.select(sa.func.count()).select_from(TenantLLM).where(TenantLLM.id.in_(model_ids))) == 0
+            assert reader.scalar(sa.select(sa.func.count()).select_from(TenantModel).where(TenantModel.id.in_(model_ids))) == 0
         env["journal"].event("model-rows-cleanup-readback", ids=model_ids, absent=True)
 
 

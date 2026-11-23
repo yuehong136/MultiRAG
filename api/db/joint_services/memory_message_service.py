@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Memory, Task
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, resolve_model_type
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from api.db.services.llm_service import LLMBundle, llm_bundle_scope
 from api.db.services.memory_service import MemoryService
 from api.db.services.task_service import TaskService
@@ -267,7 +267,7 @@ async def extract_by_llm(
     db: Session,
     tenant_id: str,
     llm_id: str,
-    tenant_llm_id: int | None,
+    tenant_llm_id: str | None,
     extract_conf: dict[str, Any],
     memory_type: list[str],
     user_input: str,
@@ -281,10 +281,6 @@ async def extract_by_llm(
 ) -> list[dict[str, Any]]:
     if conversation_time is not None:
         conversation_time = _conversation_reference_time(conversation_time)
-    model_types = resolve_model_type(db, tenant_id, llm_id)
-    llm_type = "chat" if "chat" in model_types else model_types[0]
-    if not llm_type:
-        raise RuntimeError(f"Unknown type of LLM '{llm_id}'")
     if not system_prompt:
         system_prompt = PromptAssembler.assemble_system_prompt({"memory_type": memory_type})
     if conversation_content is None:
@@ -298,7 +294,7 @@ async def extract_by_llm(
     if tenant_llm_id:
         llm_config = get_model_config_by_id(db, tenant_llm_id, tenant_id=tenant_id, model_type="chat")
     else:
-        llm_config = get_model_config_by_type_and_name(db, tenant_id, llm_type, llm_id)
+        llm_config = get_model_config_by_type_and_name(db, tenant_id, "chat", llm_id)
     llm = LLMBundle(db, tenant_id, llm_config)
     if task_id:
         TaskService.update_progress(db, task_id, {"progress": 0.15, "progress_msg": timestamp_to_date(current_timestamp()) + " " + "Prepared prompts and LLM."})

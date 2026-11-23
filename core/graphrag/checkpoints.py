@@ -29,7 +29,7 @@ def fingerprint(value: Any) -> str:
 
 def model_identity(model: Any) -> dict[str, Any]:
     # Project effective model/transport inputs, excluding dates, status and usage
-    # counters from TenantLLM.to_dict(). Accounting must not invalidate resume.
+    # counters from the model record. Accounting must not invalidate resume.
     # Credentials/options are included in the digest but never persisted raw.
     config = getattr(model, "model_config", None)
     fields = (

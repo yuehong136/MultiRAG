@@ -31,6 +31,8 @@ def test_empty_keys_keep_provider_instance_and_tenant_uniqueness(tmp_path: Path,
             with engine.begin() as connection:
                 for model in [TenantModel, TenantModelInstance, TenantModelProvider]:
                     model.__table__.drop(connection)
+                # The historical revision bridges an empty legacy registry.
+                connection.exec_driver_sql("CREATE TABLE usr_ai.t_ai_tenant_llms (id bigint PRIMARY KEY, api_base varchar(255))")
                 with Operations.context(MigrationContext.configure(connection)):
                     migration.upgrade()
                     migration.upgrade()

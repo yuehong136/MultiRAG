@@ -46,7 +46,7 @@ from api.db.db_models import (
     Task,
     Tenant,
     TenantLangfuse,
-    TenantLLM,
+    TenantModel,
     ToolsData,
     # 用户和租户
     User,
@@ -163,7 +163,7 @@ class LLMAdmin(ModelView, model=LLM):
     column_default_sort = [(LLM.create_date, True)]
 
 
-class TenantLLMAdmin(ModelView, model=TenantLLM):
+class TenantModelAdmin(ModelView, model=TenantModel):
     """租户LLM配置"""
 
     name = "租户LLM"
@@ -171,19 +171,20 @@ class TenantLLMAdmin(ModelView, model=TenantLLM):
     icon = "fa-solid fa-cog"
 
     column_list = [
-        TenantLLM.tenant_id,
-        TenantLLM.llm_factory,
-        TenantLLM.mdl_type,
-        TenantLLM.llm_name,
-        TenantLLM.api_base,
-        TenantLLM.max_tokens,
-        TenantLLM.used_tokens,
-        TenantLLM.id,
-        TenantLLM.create_date,
-        TenantLLM.update_date,
+        TenantModel.id,
+        TenantModel.provider_id,
+        TenantModel.instance_id,
+        TenantModel.model_name,
+        TenantModel.model_type,
+        TenantModel.status,
+        TenantModel.used_tokens,
+        TenantModel.create_date,
+        TenantModel.update_date,
     ]
-    column_default_sort = [(TenantLLM.create_date, True)]
-    form_excluded_columns = [TenantLLM.api_key]
+    column_default_sort = [(TenantModel.create_date, True)]
+    can_create = False
+    can_edit = False
+    can_delete = False
 
 
 class TenantLangfuseAdmin(ModelView, model=TenantLangfuse):

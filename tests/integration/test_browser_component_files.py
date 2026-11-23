@@ -23,12 +23,13 @@ from sqlalchemy.orm import Session
 
 from agent.component import browser as module
 from agent.component.browser import Browser, BrowserParam
-from api.db.db_models import File, TenantLLM
+from api.db.db_models import File
 from api.db.services.file_service import FileService, RuntimeAttachmentError
 from common import resources
 from common.config_utils import CONFIGS
 from core.utils.minio_conn import MultiRAGMinio
 from tests.support.database import scratch_database
+from tests.support.registered_model import register_model
 
 
 def test_browser_file_scope_and_compensation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,9 +61,9 @@ def test_browser_file_scope_and_compensation(tmp_path: Path, monkeypatch: pytest
                     [
                         File(id="own", tenant_id=tenant, created_by=owner, parent_id="folder", name="own.txt", location="own", type="doc", size=3),
                         File(id="foreign", tenant_id=tenant, created_by=foreign, parent_id="folder", name="secret.txt", location="foreign", type="doc", size=6),
-                        TenantLLM(tenant_id=tenant, llm_factory="OpenAI", llm_name="controlled-browser", mdl_type="chat", api_key="test-only", api_base="http://127.0.0.1:1/v1", status="1"),
                     ]
                 )
+                model_id = register_model(db, tenant_id=tenant, provider_name="OpenAI", model_name="controlled-browser", api_key="test-only", base_url="http://127.0.0.1:1/v1").id
                 db.commit()
             storage.put("folder", "own", b"own")
             storage.put("folder", "foreign", b"secret")
@@ -79,7 +80,7 @@ def test_browser_file_scope_and_compensation(tmp_path: Path, monkeypatch: pytest
                 monkeypatch.setattr(module, "async_db_connection", connect)
                 obj = object.__new__(Browser)
                 obj._param = BrowserParam()
-                obj._param.llm_id = "controlled-browser@OpenAI"
+                obj._param.llm_id = model_id
                 obj._id = "Browser:integration"
                 obj._canvas = SimpleNamespace(artifact_owner_id=owner, get_tenant_id=lambda: tenant)
                 try:
