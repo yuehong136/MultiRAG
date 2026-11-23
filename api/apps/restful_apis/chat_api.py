@@ -29,6 +29,7 @@ from api.apps.restful_apis._generation_params import GenerationParameters, Gener
 from api.apps.services.app_list_scope import resolve_list_owner_ids
 from api.db.db_models import Dialog, get_async_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
+from api.db.model_contract import parse_model_id
 from api.db.services.chunk_feedback_service import ChunkFeedbackService
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_chat, gen_mindmap
@@ -80,7 +81,6 @@ _DEFAULT_DIRECT_CHAT_PROMPT_CONFIG = {
     "tts": False,
     "refine_multiturn": True,
 }
-_DEFAULT_RERANK_MODELS = {"BAAI/bge-reranker-v2-m3", "maidalun1020/bce-reranker-base_v1"}
 _READONLY_FIELDS = {"id", "tenant_id", "created_by", "create_time", "create_date", "update_time", "update_date"}
 _PERSISTED_FIELDS = {column.name for column in DialogService.model.__table__.columns}
 _LEGACY_PAYLOAD_FIELDS = {"avatar", "llm", "prompt", "show_quotation", "model_type"}
@@ -345,9 +345,6 @@ def _validate_llm_id(db: Session, tenant_id: str, llm_id: str | None, llm_settin
 def _validate_rerank_id(db: Session, tenant_id: str, rerank_id: str | None) -> str | None:
     if not rerank_id:
         return None
-    llm_name, _ = TenantLLMService.split_model_name_and_factory(rerank_id)
-    if llm_name in _DEFAULT_RERANK_MODELS:
-        return None
     if TenantLLMService.get_api_key(db, tenant_id, rerank_id, "rerank"):
         return None
     return f"`rerank_id` {rerank_id} doesn't exist"
@@ -373,7 +370,7 @@ def _validate_dataset_ids(db: Session, tenant_id: str, dataset_ids: list[str] | 
         kbs.append(kb)
 
     try:
-        KnowledgebaseService.ensure_same_embedding_model(kbs)
+        KnowledgebaseService.ensure_same_embedding_model(kbs, db=db)
     except EmbeddingModelMismatchError as e:
         return str(e)
     return normalized_ids
@@ -561,8 +558,7 @@ def _build_default_completion_dialog(db: Session, tenant_id: str, llm_id: str) -
     tenant_llm_id = None
     if not llm_id:
         default_model = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT.value)
-        llm_id = f"{default_model['llm_name']}@{default_model['llm_factory']}"
-        tenant_llm_id = default_model.get("id")
+        llm_id = tenant_llm_id = default_model["id"]
     return Dialog(
         tenant_id=tenant_id,
         llm_id=llm_id,
@@ -961,9 +957,7 @@ async def recommendation(
             model_tenant_id, search_config = await db.run_sync(search_configuration)  # TODO(async-phase4)
 
         chat_id = search_config.get("chat_id", "")
-        if isinstance(chat_id, int) and not isinstance(chat_id, bool) and chat_id > 0:
-            chat_id = str(chat_id)
-        if not isinstance(chat_id, str) or chat_id != chat_id.strip():
+        if chat_id != "" and parse_model_id(chat_id) is None:
             return _error("Invalid search model reference.")
         gen_conf = deepcopy(search_config.get("llm_setting", {"temperature": 0.9}))
         if not isinstance(gen_conf, dict):
@@ -1386,8 +1380,7 @@ async def session_completion(
             dialog.tenant_llm_id = override_model_config.get("id")
         elif not dialog.llm_id:
             default_model = await db.run_sync(lambda s: get_tenant_default_model_by_type(s, dialog.tenant_id, LLMType.CHAT.value))  # TODO(async-phase4)
-            dialog.llm_id = f"{default_model['llm_name']}@{default_model['llm_factory']}"
-            dialog.tenant_llm_id = default_model.get("id")
+            dialog.llm_id = dialog.tenant_llm_id = default_model["id"]
         merge_generation_config(dialog, chat_model_config)
         req["session_id"] = session_id or None
         req["trace_user_id"] = tenant_id

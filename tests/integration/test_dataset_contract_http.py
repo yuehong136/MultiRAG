@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from api.apps.services import dataset_api_service
 from api.db import FileType
-from api.db.db_models import LLM, Document, DocumentMetadata, File, File2Document, Knowledgebase, LLMFactories, Tenant, TenantLLM
+from api.db.db_models import LLM, Document, DocumentMetadata, File, File2Document, Knowledgebase, LLMFactories, Tenant, TenantModel
 from api.db.services import document_ingest_service, knowledgebase_service
 from common import settings
 from common.constants import FileSource
@@ -24,6 +24,7 @@ from tests.support.database import scratch_database
 from tests.support.dataset_contract_cases import CREATE_INVALID_PARSER_CASES, CREATE_VALID_PARSER_CASES, UPDATE_INVALID_PARSER_CASES, UPDATE_VALID_PARSER_CASES
 from tests.support.dataset_management_http import management_api as management_api
 from tests.support.dataset_management_http import request_api, sql_state
+from tests.support.registered_model import register_model
 
 
 @pytest.fixture(scope="session")
@@ -64,12 +65,12 @@ def contracts(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -
         yield env
     finally:
         with env["engine"].begin() as db:
-            for model, ids in [(DocumentMetadata, env["documents"]), (File2Document, record["links"]), (File, record["files"]), (TenantLLM, record["models"])]:
+            for model, ids in [(DocumentMetadata, env["documents"]), (File2Document, record["links"]), (File, record["files"]), (TenantModel, record["models"])]:
                 db.execute(sa.delete(model).where(model.id.in_(ids)))
         with env["engine"].connect() as db:
             remaining = {
                 model.__tablename__: db.scalar(sa.select(sa.func.count()).select_from(model).where(model.id.in_(ids)))
-                for model, ids in [(DocumentMetadata, env["documents"]), (File2Document, record["links"]), (File, record["files"]), (TenantLLM, record["models"])]
+                for model, ids in [(DocumentMetadata, env["documents"]), (File2Document, record["links"]), (File, record["files"]), (TenantModel, record["models"])]
             }
         assert not any(remaining.values()), remaining
         record["remaining"] = remaining
@@ -339,20 +340,21 @@ def test_embedding_authorization_and_indexed_switch_real_sql(contracts: dict[str
         db.merge(LLMFactories(name=factory, tags="EMBEDDING", status="1"))
         for i, model in enumerate(model_names):
             db.add(LLM(fid=factory, llm_name=model, mdl_type="embedding", tags="EMBEDDING"))
-            row = TenantLLM(tenant_id=env["users"][1 if i == 2 else 0], llm_factory=factory, llm_name=model, mdl_type="embedding", api_key="controlled-local-only")
+            row = register_model(db, tenant_id=env["users"][1 if i == 2 else 0], provider_name=factory, model_name=model, model_types=("embedding",), api_key="controlled-local-only" or "")
             db.add(row)
             db.flush()
             env["contract_record"]["models"].append(row.id)
-        db.execute(sa.update(Tenant).where(Tenant.id == env["users"][0]).values(embd_id=model_names[0] + "@" + factory))
+        model_ids = env["contract_record"]["models"]
+        db.execute(sa.update(Tenant).where(Tenant.id == env["users"][0]).values(embd_id=model_ids[0], tenant_embd_id=model_ids[0]))
         db.commit()
-    data = create(env, embedding_model=model_names[0] + "@" + factory)
+    data = create(env, embedding_model=model_ids[0])
     dataset = data["id"]
     with env["engine"].begin() as db:
         db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(chunk_num=5))
-    result = api(env, "PUT", "/datasets/" + dataset, {"embedding_model": model_names[1] + "@" + factory})["data"]
-    assert result["embedding_model"] == stored(env, dataset)["embd_id"] == model_names[1] + "@" + factory
+    result = api(env, "PUT", "/datasets/" + dataset, {"embedding_model": model_ids[1]})["data"]
+    assert result["embedding_model"] == stored(env, dataset)["embd_id"] == model_ids[1]
     assert stored(env, dataset)["chunk_num"] == 5
-    for model in [model_names[2] + "@" + factory, "missing@UnknownContractProvider"]:
+    for model in [model_ids[2], uuid4().hex]:
         for method, path, payload in [("POST", "/datasets", {"name": "model-denied", "embedding_model": model}), ("PUT", "/datasets/" + dataset, {"embedding_model": model})]:
             before = sql_state(env)
             response = request_api(env, method, path, credential=env["keys"][0], payload=payload)
@@ -557,7 +559,7 @@ def test_failed_embedding_update_does_not_rename_folder(contracts: dict[str, Any
         db.add(File(id=identifier, parent_id=env["users"][0], tenant_id=env["users"][0], created_by=env["users"][0], name=data["name"], type="folder", source_type=FileSource.KNOWLEDGEBASE))
         db.commit()
     before = sql_state(env)
-    denied = request_api(env, "PUT", "/datasets/" + data["id"], credential=env["keys"][0], payload={"name": "must-not-rename", "embedding_model": "missing@UnknownContractProvider"})
+    denied = request_api(env, "PUT", "/datasets/" + data["id"], credential=env["keys"][0], payload={"name": "must-not-rename", "embedding_model": uuid4().hex})
     assert denied.status_code == 200 and denied.json()["code"] == 102
     assert sql_state(env) == before
     with env["engine"].connect() as db:

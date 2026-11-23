@@ -30,13 +30,11 @@ api/apps/document_app.py::preview_chunks
 api/apps/document_app.py::run_analyze_v2
 api/apps/document_app.py::upload
 api/apps/docx2zjform_app.py::convert
-api/apps/llm_app.py::add_llm
 api/apps/llm_app.py::embeddings_api
 api/apps/llm_app.py::fill_fields
 api/apps/llm_app.py::fine_prompt
 api/apps/llm_app.py::generate_suggestions
 api/apps/llm_app.py::recognize_intent
-api/apps/llm_app.py::set_api_key
 api/apps/nl2sql_app.py::convert_nl_to_sql
 api/apps/nl2sql_app.py::execute_whole_process
 api/apps/nl2sql_app.py::fill_sql_template

@@ -11,17 +11,17 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any
+from uuid import uuid4
 
 from langfuse import Langfuse, propagate_attributes
 from opentelemetry import context as otel_context
-from sqlalchemy import select, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from api.db.db_models import LLMFactories, TenantLLM, async_session_factory, db_connection
+from api.db.db_models import LLMFactories, Tenant, TenantModel, TenantModelInstance, TenantModelProvider, async_session_factory, db_connection
+from api.db.model_contract import MODEL_TYPE_BITS, parse_model_id
 from api.db.services.common_service import CommonService
 from api.db.services.langfuse_service import TenantLangfuseService
-from api.db.services.user_service import TenantService
 from common import settings
 from common.asyncio_utils import finish_owned_work
 from common.constants import (
@@ -61,7 +61,7 @@ class LLMFactoriesService(CommonService):
     model = LLMFactories
 
     def __init__(self):
-        super().__init__(TenantLLM)
+        super().__init__(TenantModel)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +78,7 @@ class PreparedTenantLLM:
 
 
 class TenantLLMService(CommonService):
-    model = TenantLLM
+    model = TenantModel
 
     @staticmethod
     def _decode_api_key_config(raw_api_key: str | dict[str, Any] | None) -> tuple[str, bool | None, str | None]:
@@ -101,23 +101,6 @@ class TenantLLMService(CommonService):
         provider_payload = json.dumps(payload, ensure_ascii=False)
         return raw_key if "api_key" in payload and isinstance(raw_key, str) else provider_payload, is_tools, provider_payload
 
-    @staticmethod
-    def _encode_api_key_config(raw_api_key: str | dict[str, Any], is_tools: bool | None) -> str:
-        if isinstance(raw_api_key, dict):
-            payload: Any = dict(raw_api_key)
-        else:
-            if is_tools is None:
-                return raw_api_key
-            try:
-                payload = json.loads(raw_api_key)
-            except json.JSONDecodeError:
-                payload = None
-        if not isinstance(payload, dict):
-            payload = {"api_key": raw_api_key}
-        if is_tools is not None:
-            payload["is_tools"] = is_tools
-        return json.dumps(payload, ensure_ascii=False)
-
     @classmethod
     def decode_model_config(cls, model_config: dict[str, Any]) -> dict[str, Any]:
         from api.db.provider_catalog import normalize_model_transport
@@ -134,79 +117,34 @@ class TenantLLMService(CommonService):
     @classmethod
     def resolve_model_config(cls, db: Session, model_config: dict[str, Any]) -> dict[str, Any]:
         from api.db.services.llm_service import LLMService
-        from api.db.services.provider_model_resolution import resolve_linked_config
+        from api.db.services.provider_model_resolution import resolve_model_config
 
-        config = cls.decode_model_config(resolve_linked_config(db, model_config))
+        config = cls.decode_model_config(resolve_model_config(db, model_config))
         if "is_tools" not in config:
             model_name, factory = cls.split_model_name_and_factory(config["llm_name"])
             factory = factory or config.get("llm_factory")
-            suffix = cls._FACTORY_SUFFIX.get(factory, "")
-            if suffix and model_name.endswith(suffix):
-                model_name = model_name[: -len(suffix)]
             models = LLMService.query(db, llm_name=model_name, fid=factory) if factory else LLMService.query(db, llm_name=model_name)
             if not models and factory:
                 models = LLMService.query(db, llm_name=model_name)
             config["is_tools"] = bool(models[0].is_tools) if models else False
         return config
 
-    @dataclass(slots=True, frozen=True)
-    class UsageIdentity:
-        tenant_id: str
-        llm_type: str
-        model_name: str
-        llm_factory: str | None
-        llm_name_raw: str | None
-
     def __init__(self):
-        super().__init__(TenantLLM)
-
-    _FACTORY_SUFFIX: dict[str, str] = {
-        "LocalAI": "___LocalAI",
-        "HuggingFace": "___HuggingFace",
-        "OpenAI-API-Compatible": "___OpenAI-API",
-        "VLLM": "___VLLM",
-    }
+        super().__init__(TenantModel)
 
     @classmethod
-    def get_api_key(
-        cls,
-        db: Session,
-        tenant_id: str,
-        model_name: str,
-        model_type: str | LLMType | None = None,
-    ):
-        from api.db.services.provider_model_resolution import find_model_row
+    def get_api_key(cls, db: Session, tenant_id: str, model_name: str, model_type: str | LLMType | None = None) -> TenantModel | None:
+        from api.db.services.provider_model_resolution import model_for_id
 
-        model_type_value = model_type.value if hasattr(model_type, "value") else model_type
-        row = find_model_row(db, tenant_id, model_name, model_type_value)
-        if row is None:
-            name, factory = cls.split_model_name_and_factory(model_name)
-            suffix = cls._FACTORY_SUFFIX.get(factory or "", "")
-            if suffix and not name.endswith(suffix):
-                row = find_model_row(db, tenant_id, f"{name}{suffix}@{factory}", model_type_value)
-        return row
-
-    @classmethod
-    def get_my_llms(cls, db: Session, tenant_id: str) -> list[Any]:
-        stmt = (
-            select(
-                TenantLLM.id,
-                TenantLLM.llm_factory,
-                LLMFactories.logo,
-                LLMFactories.tags,
-                TenantLLM.mdl_type,
-                TenantLLM.llm_name,
-                TenantLLM.used_tokens,
-                TenantLLM.status,
-                TenantLLM.api_key,
-            )
-            .join(LLMFactories, TenantLLM.llm_factory == LLMFactories.name)
-            .where(
-                TenantLLM.tenant_id == tenant_id,
-                TenantLLM.api_key.isnot(None),
-            )
-        )
-        return list(db.execute(stmt).all())
+        try:
+            model, instance, provider = model_for_id(db, model_name, tenant_id)
+        except LookupError:
+            return None
+        if (model.status, instance.status, provider.status) != ("active", "active", "active"):
+            return None
+        if model_type is not None and model_type not in model.model_types:
+            return None
+        return model
 
     @staticmethod
     def split_model_name_and_factory(model_name):
@@ -229,56 +167,20 @@ class TenantLLMService(CommonService):
 
     @classmethod
     def get_model_config(cls, db: Session, tenant_id: str, llm_type: str | LLMType, llm_name: str | None = None) -> dict[str, Any]:
-        llm_type = llm_type.value if isinstance(llm_type, LLMType) else llm_type
-        tenant = TenantService.get_by_id(db, tenant_id)
-        if not tenant:
-            raise LookupError("Tenant not found")
+        from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 
-        if llm_type == LLMType.EMBEDDING.value:
-            mdlnm = tenant.embd_id if not llm_name else llm_name
-        elif llm_type == LLMType.SPEECH2TEXT.value:
-            mdlnm = tenant.asr_id if not llm_name else llm_name
-        elif llm_type == LLMType.IMAGE2TEXT.value:
-            mdlnm = tenant.img2txt_id if not llm_name else llm_name
-        elif llm_type == LLMType.CHAT.value:
-            mdlnm = tenant.llm_id if not llm_name else llm_name
-        elif llm_type == LLMType.RERANK.value:
-            mdlnm = tenant.rerank_id if not llm_name else llm_name
-        elif llm_type == LLMType.TTS.value:
-            mdlnm = tenant.tts_id if not llm_name else llm_name
-        elif llm_type == LLMType.OCR.value:
-            if not llm_name:
-                raise LookupError("OCR model name is required")
-            mdlnm = llm_name
-        else:
-            raise ValueError("LLM type error")
-
-        model_config = cls.get_api_key(db, tenant_id, mdlnm, llm_type)
-        mdlnm, fid = TenantLLMService.split_model_name_and_factory(mdlnm)
-        if not model_config:  # for some cases seems fid mismatch
-            model_config = cls.get_api_key(db, tenant_id, mdlnm, llm_type)
-        if model_config:
-            model_config = model_config.to_dict()
-        elif llm_type == LLMType.EMBEDDING.value and fid == "Builtin" and "tei-" in os.getenv("COMPOSE_PROFILES", "") and mdlnm == os.getenv("TEI_MODEL", ""):
-            embedding_cfg = settings.EMBEDDING_CFG
-            model_config = {"llm_factory": "Builtin", "api_key": embedding_cfg["api_key"], "llm_name": mdlnm, "api_base": embedding_cfg["base_url"]}
-        else:
-            raise LookupError(f"Model({mdlnm}@{fid}) not authorized")
-
-        config = cls.resolve_model_config(db, model_config)
-        if "model_types" in config:
-            if llm_type not in config["model_types"]:
-                raise LookupError("Model does not support the requested capability")
-            config["mdl_type"] = llm_type
-        return config
+        capability = llm_type.value if isinstance(llm_type, LLMType) else llm_type
+        if llm_name:
+            return get_model_config_by_type_and_name(db, tenant_id, capability, llm_name)
+        return get_tenant_default_model_by_type(db, tenant_id, capability)
 
     @classmethod
     def resolve_model_instance_config(cls, db: Session, model_config: dict[str, Any]) -> dict[str, Any]:
         if not model_config:
             raise LookupError("Model config is required")
-        from api.db.services.provider_model_resolution import resolve_linked_config
+        from api.db.services.provider_model_resolution import resolve_model_config
 
-        model_config = cls.decode_model_config(resolve_linked_config(db, model_config))
+        model_config = cls.decode_model_config(resolve_model_config(db, model_config))
         model_config["api_key"] = model_config.get("api_key_payload", model_config["api_key"])
         model_type = model_config.get("mdl_type") or model_config.get("model_type")
         if not model_type:
@@ -303,7 +205,7 @@ class TenantLLMService(CommonService):
             raise LookupError("Tenant is required")
         if raw_tenant is not None and raw_tenant != tenant_id:
             raise LookupError("Model does not belong to the requested tenant")
-        if not builtin and (raw_tenant != tenant_id or type(identifier) is not int or identifier <= 0):
+        if not builtin and (raw_tenant != tenant_id or parse_model_id(identifier) is None):
             raise LookupError("A tenant-scoped registered model is required")
         config = cls.resolve_model_instance_config(db, model_config)
         if config.get("tenant_id", tenant_id if builtin else None) != tenant_id:
@@ -394,104 +296,9 @@ class TenantLLMService(CommonService):
         return None
 
     @classmethod
-    def resolve_usage_identity(
-        cls,
-        db: Session,
-        tenant_id: str,
-        llm_type: str,
-        llm_name: str | None = None,
-    ) -> "TenantLLMService.UsageIdentity | None":
-        """解析用量统计所需的稳定模型身份。"""
-        mdlnm: str | None
-        if llm_name:
-            mdlnm = llm_name
-        else:
-            tenant = TenantService.get_by_id(db, tenant_id)
-            if not tenant:
-                logging.error(f"Tenant not found: {tenant_id}")
-                return None
-
-            llm_map = {
-                LLMType.EMBEDDING.value: tenant.embd_id,
-                LLMType.SPEECH2TEXT.value: tenant.asr_id,
-                LLMType.IMAGE2TEXT.value: tenant.img2txt_id,
-                LLMType.CHAT.value: tenant.llm_id,
-                LLMType.RERANK.value: tenant.rerank_id,
-                LLMType.TTS.value: tenant.tts_id,
-                LLMType.OCR.value: llm_name,
-            }
-            mdlnm = llm_map.get(llm_type)
-
-        if not mdlnm:
-            logging.error(f"LLM type error or empty model: llm_type={llm_type}, tenant_id={tenant_id}, llm_name={llm_name}")
-            return None
-
-        model_name, llm_factory = TenantLLMService.split_model_name_and_factory(mdlnm)
-        if not model_name:
-            logging.error(f"Resolved empty model name: llm_type={llm_type}, tenant_id={tenant_id}, llm_name={mdlnm}")
-            return None
-
-        return cls.UsageIdentity(
-            tenant_id=tenant_id,
-            llm_type=llm_type,
-            model_name=model_name,
-            llm_factory=llm_factory,
-            llm_name_raw=mdlnm,
-        )
-
-    @classmethod
-    def increase_usage(cls, db: Session | None, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str | None = None):
-        """增加LLM使用量
-
-        逻辑: 仅执行UPDATE操作,不创建新记录
-        重试: 处理索引损坏等临时错误,最多重试3次
-
-        注意: 调用方传入的 db 仅保留兼容性，不再复用其事务状态
-        """
-        # 这里是"业务旁路指标"，必须 best-effort：任何 DB 波动都不应导致主链路 500
+    def increase_usage_by_id(cls, tenant_model_id: str | None, used_tokens: int) -> int:
         try:
-            if not isinstance(used_tokens, int) or used_tokens <= 0:
-                return 0
-
-            # 独立短连接执行旁路记账，避免污染调用方 session
-            with db_connection() as usage_db:
-                identity = cls.resolve_usage_identity(usage_db, tenant_id, llm_type, llm_name)
-                if identity is None:
-                    return 0
-                return cls._do_increase_usage(usage_db, identity, used_tokens)
-
-        except Exception as e:
-            # 任何异常都不应向上抛出
-            logging.error(f"TenantLLMService.increase_usage unexpected error (ignored), tenant_id={tenant_id}, llm_type={llm_type}, llm_name={llm_name}, used_tokens={used_tokens}: {e}")
-            return 0
-
-    @classmethod
-    def increase_usage_by_identity(
-        cls,
-        identity: "TenantLLMService.UsageIdentity | None",
-        used_tokens: int,
-    ) -> int:
-        """按已解析身份执行独立 session 记账。"""
-        try:
-            if identity is None or not isinstance(used_tokens, int) or used_tokens <= 0:
-                return 0
-
-            with db_connection() as usage_db:
-                return cls._do_increase_usage(usage_db, identity, used_tokens)
-        except Exception as e:
-            logging.error(
-                "TenantLLMService.increase_usage_by_identity unexpected error (ignored), "
-                f"tenant_id={getattr(identity, 'tenant_id', None)}, "
-                f"llm_type={getattr(identity, 'llm_type', None)}, "
-                f"llm_name={getattr(identity, 'llm_name_raw', None)}, "
-                f"used_tokens={used_tokens}: {e}"
-            )
-            return 0
-
-    @classmethod
-    def increase_usage_by_id(cls, tenant_model_id: int | None, used_tokens: int) -> int:
-        try:
-            if tenant_model_id is None or not isinstance(used_tokens, int) or used_tokens <= 0:
+            if parse_model_id(tenant_model_id) is None or not isinstance(used_tokens, int) or used_tokens <= 0:
                 return 0
 
             with db_connection() as usage_db:
@@ -504,14 +311,14 @@ class TenantLLMService(CommonService):
             return 0
 
     @classmethod
-    async def increase_usage_by_id_async(cls, tenant_model_id: int | None, used_tokens: int) -> int:
+    async def increase_usage_by_id_async(cls, tenant_model_id: str | None, used_tokens: int) -> int:
         """increase_usage_by_id 的异步版:async 调用链(SSE 流式等)内记账不阻塞事件循环。
 
         与同步版同语义:独立短会话、best-effort 吞异常;非 PG 后端无异步引擎时
         退回线程池跑同步版。
         """
         try:
-            if tenant_model_id is None or not isinstance(used_tokens, int) or used_tokens <= 0:
+            if parse_model_id(tenant_model_id) is None or not isinstance(used_tokens, int) or used_tokens <= 0:
                 return 0
 
             if async_session_factory is None:
@@ -527,85 +334,12 @@ class TenantLLMService(CommonService):
             return 0
 
     @classmethod
-    def _do_increase_usage(
-        cls,
-        db: Session,
-        identity: "TenantLLMService.UsageIdentity",
-        used_tokens: int,
-    ):
-        """实际执行 token 用量更新的内部方法。"""
-        # 重试机制: 处理索引损坏等临时错误
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # 执行 UPDATE（不创建新记录）
-                stmt = (
-                    update(cls.model)
-                    .where(
-                        cls.model.tenant_id == identity.tenant_id,
-                        cls.model.llm_name == identity.model_name,
-                        cls.model.llm_factory == identity.llm_factory if identity.llm_factory else True,
-                    )
-                    .values(used_tokens=cls.model.used_tokens + used_tokens)
-                )
-                result = db.execute(stmt)
-                db.commit()
-                return result.rowcount
-
-            except SQLAlchemyError as e:
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
-
-                error_msg = str(e)
-                if "IndexCorrupted" in error_msg or "invalid duplicate tuple" in error_msg:
-                    if attempt < max_retries - 1:
-                        logging.warning(f"索引损坏错误,正在重试 ({attempt + 1}/{max_retries}): tenant_id={identity.tenant_id}, llm_name={identity.model_name}")
-                        import time
-
-                        time.sleep(0.1 * (2**attempt))
-                        continue
-
-                    logging.error(
-                        f"索引损坏持续存在,需要数据库维护: "
-                        f"tenant_id={identity.tenant_id}, llm_name={identity.model_name}\n"
-                        "PostgreSQL: REINDEX INDEX usr_ai.ix_usr_ai_t_ai_tenant_llms_api_key;\n"
-                        "MySQL: REPAIR TABLE usr_ai.t_ai_tenant_llms;"
-                    )
-                    return 0
-
-                # 其他错误：best-effort，不影响主链路
-                logging.exception(f"TenantLLMService.increase_usage 记录用量失败（已忽略），tenant_id={identity.tenant_id}, llm_name={identity.model_name}")
-                return 0
-
-        return 0
-
-    @classmethod
-    def get_openai_models(cls, db: Session):
-        objs = db.query(cls.model).filter(cls.model.llm_factory == "OpenAI", cls.model.llm_name.notin_(["text-embedding-3-small", "text-embedding-3-large"])).all()
-        return objs
-
-    @classmethod
     def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
-        """根据tenant_id删除所有相关的LLM配置记录"""
-        from sqlalchemy import delete
-
-        from api.db.db_models import TenantModel, TenantModelInstance, TenantModelProvider
-
-        try:
-            providers = select(TenantModelProvider.id).where(TenantModelProvider.tenant_id == tenant_id)
-            instances = select(TenantModelInstance.id).where(TenantModelInstance.provider_id.in_(providers))
-            db.execute(delete(TenantModel).where(TenantModel.instance_id.in_(instances)))
-            db.execute(delete(TenantModelInstance).where(TenantModelInstance.provider_id.in_(providers)))
-            db.execute(delete(TenantModelProvider).where(TenantModelProvider.tenant_id == tenant_id))
-            result = db.query(cls.model).filter(cls.model.tenant_id == tenant_id).delete(synchronize_session=False)
-            db.commit()
-            return result
-        except Exception as e:
-            db.rollback()
-            logging.exception(f"Failed to delete tenant LLM records for tenant_id={tenant_id}")
-            raise e
+        providers = select(TenantModelProvider.id).where(TenantModelProvider.tenant_id == tenant_id)
+        result = db.execute(delete(TenantModel).where(TenantModel.provider_id.in_(providers)))
+        db.execute(delete(TenantModelInstance).where(TenantModelInstance.provider_id.in_(providers)))
+        db.execute(delete(TenantModelProvider).where(TenantModelProvider.tenant_id == tenant_id))
+        return result.rowcount
 
     @staticmethod
     def _collect_ocr_env_config(keys: list[str], defaults: dict[str, Any]) -> dict[str, Any] | None:
@@ -620,45 +354,43 @@ class TenantLLMService(CommonService):
 
     @classmethod
     def _ensure_ocr_from_env(cls, db: Session, tenant_id: str, provider: str, config: dict[str, Any] | None) -> str | None:
-        """Link env OCR in the caller's transaction; never edit a saved instance."""
+        """Register env OCR in the caller's transaction."""
         if not config:
             return None
-        from api.db.db_models import Tenant, TenantModelProvider
-        from api.db.model_backfill import backfill
-        from api.db.services.provider_model_resolution import linked_model
+        from api.db.services.provider_model_resolution import model_records
 
         if db.scalar(select(Tenant.id).where(Tenant.id == tenant_id).with_for_update()) is None:
             raise LookupError("Tenant not found")
         stored_provider = db.scalar(select(TenantModelProvider).where(TenantModelProvider.tenant_id == tenant_id, TenantModelProvider.provider_name == provider))
         if stored_provider is not None and stored_provider.status != "active":
             return None
-        rows = list(db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == tenant_id, TenantLLM.llm_factory == provider).order_by(TenantLLM.id)))
-        for row in rows:
-            link = linked_model(db, row.id, tenant_id)
-            if not link and row.mdl_type != "ocr":
+        rows = db.execute(model_records().where(TenantModelProvider.tenant_id == tenant_id, TenantModelProvider.provider_name == provider).order_by(TenantModel.id)).all()
+        for model, instance, _ in rows:
+            if "ocr" not in model.model_types:
                 continue
-            credential = link[1].api_key if link else row.api_key
             try:
-                payload = json.loads(credential or "{}")
+                payload = json.loads(instance.api_key or "{}")
             except (TypeError, ValueError):
                 continue
-            if not isinstance(payload, dict) or any(payload.get(key, value) != value for key, value in config.items()):
-                continue
-            if row.status != "1" or (link and ("ocr" not in link[0].model_types or link[1].status != "active")):
-                return None
-            if not link:
-                db.flush()
-                backfill(db.connection(), tenant_id)
-            return str(row.id)
-        used = {row.llm_name for row in rows}
+            if isinstance(payload, dict) and all(payload.get(key, value) == value for key, value in config.items()):
+                return model.id if model.status == instance.status == "active" else None
+        if stored_provider is None:
+            stored_provider = TenantModelProvider(id=uuid4().hex, tenant_id=tenant_id, provider_name=provider, status="active")
+            db.add(stored_provider)
+            db.flush()
+        used_names = set(db.scalars(select(TenantModelInstance.instance_name).where(TenantModelInstance.provider_id == stored_provider.id)))
         index = 1
-        while f"{provider.lower()}-from-env-{index}" in used:
+        name = f"{provider.lower()}-from-env-{index}"
+        while name in used_names:
             index += 1
-        row = TenantLLM(tenant_id=tenant_id, llm_factory=provider, llm_name=f"{provider.lower()}-from-env-{index}", mdl_type="ocr", api_key=json.dumps(config), api_base="", max_tokens=0)
-        db.add(row)
+            name = f"{provider.lower()}-from-env-{index}"
+        instance = TenantModelInstance(id=uuid4().hex, provider_id=stored_provider.id, instance_name=name, api_key=json.dumps(config), base_url="", region="", status="active")
+        db.add(instance)
         db.flush()
-        backfill(db.connection(), tenant_id)
-        return str(row.id)
+        model = TenantModel(provider_id=stored_provider.id, instance_id=instance.id, model_name=name, model_type=MODEL_TYPE_BITS["ocr"], status="active", extra={"max_tokens": 0})
+        db.add(model)
+        db.flush()
+        return model.id
 
     @classmethod
     def ensure_mineru_from_env(cls, db: Session, tenant_id: str) -> str | None:

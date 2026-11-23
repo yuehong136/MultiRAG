@@ -121,38 +121,42 @@ def _assert_schema_matches_models(connection: sa.Connection, schema: str) -> Non
 
 
 def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Both revisions build the model schema, and accept tables created model-first."""
+    """Fresh metadata and sequential gateway upgrades agree on constraints and types."""
     tables_revision, catalog_revision = _revisions()
+    identity_revision = ScriptDirectory.from_config(_alembic_config()).get_revision("f7a9c2e4b6d8").module
     journal = ResourceJournal("model_gateway_schema")
     for model_first in (False, True):
         schema = "model_gateway_" + uuid.uuid4().hex[:12]
         journal.event("reserve-schema", schema=schema, database=owned_engine.url.database, model_first=model_first)
         with owned_engine.begin() as connection:
             connection.execute(sa.schema.CreateSchema(schema))
-            _point_at(monkeypatch, connection, schema, tables_revision, catalog_revision)
+            _point_at(monkeypatch, connection, schema, tables_revision, catalog_revision, identity_revision)
             if model_first:
                 metadata = sa.MetaData()
                 for model in _GATEWAY_MODELS:
                     model.__table__.to_metadata(metadata, schema=schema)
                 metadata.create_all(connection)
-            tables_revision.upgrade()
-            catalog_revision.upgrade()
-            catalog_revision.upgrade()
+            else:
+                tables_revision.upgrade()
+                catalog_revision.upgrade()
+                catalog_revision.upgrade()
+                identity_revision._migrate_gateway_references(connection, identity_revision._gateway_reference_tables(connection))
             _assert_schema_matches_models(connection, schema)
 
-            settings_table, tenant_table = catalog_revision._tables()
+            settings_table = sa.Table("t_ai_gateway_model_settings", sa.MetaData(), autoload_with=connection, schema=schema)
+            tenant_table = sa.Table("t_ai_gateway_settings", sa.MetaData(), autoload_with=connection, schema=schema)
             keys = sa.Table("t_ai_gateway_keys", sa.MetaData(), autoload_with=connection, schema=schema)
             connection.execute(keys.insert().values(id="key-1", tenant_id="t", name="runner", secret_hash="a" * 64, created_by="u"))
             assert connection.scalar(sa.select(keys.c.allowed_instance_ids)) == []
-            connection.execute(settings_table.insert().values(id="s-1", tenant_id="t", model_id=1, created_by="u"))
-            connection.execute(settings_table.insert().values(id="s-2", tenant_id="t", model_id=2, created_by="u"))
+            connection.execute(settings_table.insert().values(id="s-1", tenant_id="t", model_id="a" * 32, created_by="u"))
+            connection.execute(settings_table.insert().values(id="s-2", tenant_id="t", model_id="b" * 32, created_by="u"))
             with pytest.raises(IntegrityError), connection.begin_nested():
-                connection.execute(settings_table.insert().values(id="s-3", tenant_id="t", model_id=1, created_by="u"))
+                connection.execute(settings_table.insert().values(id="s-3", tenant_id="t", model_id="a" * 32, created_by="u"))
             # Aliases are unique per tenant; models without one do not collide.
             connection.execute(settings_table.update().where(settings_table.c.id == "s-1").values(alias="chat-default"))
             with pytest.raises(IntegrityError), connection.begin_nested():
                 connection.execute(settings_table.update().where(settings_table.c.id == "s-2").values(alias="chat-default"))
-            connection.execute(settings_table.insert().values(id="s-4", tenant_id="other", model_id=1, alias="chat-default", created_by="u"))
+            connection.execute(settings_table.insert().values(id="s-4", tenant_id="other", model_id="a" * 32, alias="chat-default", created_by="u"))
             with pytest.raises(IntegrityError), connection.begin_nested():
                 connection.execute(settings_table.update().where(settings_table.c.id == "s-2").values(rpm_limit=0))
             assert connection.scalar(sa.select(settings_table.c.enabled).where(settings_table.c.id == "s-2")) is True

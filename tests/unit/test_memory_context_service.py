@@ -24,7 +24,7 @@ from memory.services.context import ContextScope
 @pytest.fixture
 def model_config(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     config = {
-        "id": 71,
+        "id": "a" * 32,
         "tenant_id": "tenant",
         "llm_factory": "OpenAI",
         "llm_name": "controlled",
@@ -33,7 +33,7 @@ def model_config(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "api_base": "http://model.invalid",
         "max_tokens": 0,
     }
-    monkeypatch.setattr("api.db.services.provider_model_resolution.resolve_linked_config", lambda db, value: deepcopy(value))
+    monkeypatch.setattr("api.db.services.provider_model_resolution.resolve_model_config", lambda db, value: deepcopy(value))
     monkeypatch.setattr(TenantLangfuseService, "filter_by_tenant", classmethod(lambda cls, *args, **kwargs: None))
     monkeypatch.setattr(service, "get_model_config_by_id", lambda *args, **kwargs: deepcopy(config))
     monkeypatch.setattr(service, "MsgTextQuery", lambda: SimpleNamespace(question=lambda text, **kwargs: (MatchTextExpr(["content"], text, 10), [])))
@@ -60,7 +60,7 @@ async def search(db: AsyncSession) -> list[dict[str, Any]]:
     async with llm_bundle_scope():
         return await service._search(
             db,
-            [service.MemoryReadBinding("memory", "tenant", "controlled", 71)],
+            [service.MemoryReadBinding("memory", "tenant", "a" * 32, "a" * 32)],
             "query",
             scope=ContextScope(frozenset({"memory"}), user_id="", session_id="session"),
             top_n=2,
@@ -199,7 +199,7 @@ async def test_prepared_trace_payload_zero_limit_and_usage_identity(db: Session,
     model_config.update(api_key=json.dumps({"api_key": "synthetic-secret", "region": "local", "is_tools": False}))
     prepared = TenantLLMService.prepare_model_instance(db, "tenant", model_config, expected_type="embedding")
     calls: list[dict[str, Any]] = []
-    usage: list[tuple[int, int]] = []
+    usage: list[tuple[str, int]] = []
     closed: list[bool] = []
 
     class Provider:
@@ -223,7 +223,7 @@ async def test_prepared_trace_payload_zero_limit_and_usage_identity(db: Session,
             assert bundle.langfuse_user_id == "server-user"
             bundle.encode_queries("query")
     assert calls == [{"key": {"api_key": "synthetic-secret", "region": "local"}, "name": "controlled", "base_url": "http://model.invalid"}]
-    assert usage == [(71, 7)] and closed == [True]
+    assert usage == [("a" * 32, 7)] and closed == [True]
 
 
 async def test_failed_tracer_keeps_provider_owned(db: Session, model_config: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -249,7 +249,7 @@ async def test_failed_tracer_keeps_provider_owned(db: Session, model_config: dic
 async def test_context_counts_literal_special_tokens_or_propagates_encoder_failure(async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch, break_encoder: bool) -> None:
     content = "<|endoftext|>" * 1000
     assert service._estimate_context_tokens(content) > 0
-    binding = service.MemoryReadBinding("memory", "tenant", "controlled", 71)
+    binding = service.MemoryReadBinding("memory", "tenant", "a" * 32, "a" * 32)
 
     async def authorize(*args: Any, **kwargs: Any) -> service.MemoryReadBinding:
         return binding

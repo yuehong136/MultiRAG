@@ -16,6 +16,7 @@ from api.apps.services import memory_context_service
 from api.db.db_models import Memory, Task, UserTenant
 from api.db.memory_revision_models import MemorySourceState
 from api.db.memory_writer_models import MemoryWriterAdmission
+from api.db.model_contract import parse_model_id
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import settings
@@ -58,7 +59,7 @@ def snapshot(env: dict[str, Any]) -> Any:
 def fixed_context_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
     def model(cls: type[TenantLLMService], config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> FixedContextEmbedding:
         assert config["mdl_type"] == "embedding" and config["tenant_id"]
-        assert type(config["id"]) is int and config["id"] > 0
+        assert parse_model_id(config["id"]) is not None
         return FixedContextEmbedding()
 
     monkeypatch.setattr(TenantLLMService, "model_instance_from_config", classmethod(model))
@@ -312,7 +313,12 @@ def test_membership_state_readback(memory_api: dict[str, Any]) -> None:
 
 def test_create_binds_actor_and_config_models_bind_owner(memory_api: dict[str, Any]) -> None:
     env = memory_api
-    result = request(env, "POST", "/memories", json={"name": "created", "memory_type": ["raw"], "embd_id": "auth-embedding", "llm_id": "auth-chat", "tenant_id": env["owners"][2]})
+    result = request(
+        env,
+        "POST",
+        "/memories",
+        json={"name": "created", "memory_type": ["raw"], "embd_id": env["model_ids"]["member-embedding"], "llm_id": env["model_ids"]["member-chat"], "tenant_id": env["owners"][2]},
+    )
     assert result["retcode"] == 0
     mid = result["data"]["id"]
     env["created"].append(mid)
@@ -322,10 +328,10 @@ def test_create_binds_actor_and_config_models_bind_owner(memory_api: dict[str, A
         assert row.tenant_llm_id == env["model_ids"]["member-chat"]
     team = env["memories"]["team"]
     before = snapshot(env)
-    for new_config in [{"tenant_llm_id": env["model_ids"]["foreign-chat"]}, {"tenant_embd_id": env["model_ids"]["foreign-embedding"]}, {"llm_id": "nonexistent-model"}]:
+    for new_config in [{"tenant_llm_id": env["model_ids"]["foreign-chat"]}, {"tenant_embd_id": env["model_ids"]["foreign-embedding"]}, {"llm_id": "f" * 32}]:
         assert request(env, "PUT", f"/memories/{team}", json=new_config)["retcode"] != 0
         assert snapshot(env) == before
-    assert request(env, "PUT", f"/memories/{team}", json={"llm_id": "auth-chat", "tenant_llm_id": env["model_ids"]["foreign-chat"]})["retcode"] == 0
+    assert request(env, "PUT", f"/memories/{team}", json={"llm_id": env["model_ids"]["owner-chat"], "tenant_llm_id": env["model_ids"]["foreign-chat"]})["retcode"] == 0
     with Session(env["engine"]) as db:
         assert db.get(Memory, team).tenant_llm_id == env["model_ids"]["owner-chat"]
 

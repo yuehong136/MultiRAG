@@ -28,6 +28,7 @@ from sqlalchemy.pool import NullPool
 from agent.canvas import Canvas
 from api.db import UserTenantRole
 from api.db.db_models import API4Conversation, APIToken, Tenant, User, UserCanvas, UserCanvasVersion, UserTenant, get_async_db, get_db
+from api.db.services.tenant_llm_service import TenantLLMService
 from common.constants import StatusEnum
 from core.utils.redis_conn import REDIS_CONN
 from tests.support.event_loop import UVICORN_LOOP
@@ -121,6 +122,8 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
                 db.execute(sa.delete(UserCanvas).where(UserCanvas.id.in_(canvas_ids)))
                 db.execute(sa.delete(APIToken).where(APIToken.token.in_(api_keys)))
                 db.execute(sa.delete(UserTenant).where(UserTenant.user_id.in_(owners)))
+                for owner in owners:
+                    TenantLLMService.delete_by_tenant_id(db, owner)
                 db.execute(sa.delete(Tenant).where(Tenant.id.in_(owners)))
                 db.execute(sa.delete(User).where(User.id.in_(owners)))
                 db.commit()

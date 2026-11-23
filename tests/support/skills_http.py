@@ -17,7 +17,7 @@ from pymilvus import MilvusClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
-from api.db.db_models import APIToken, File, Skill, SkillIndexGeneration, SkillOperation, SkillSearchConfig, SkillSpace, SkillVersion, SkillVersionFile, TenantLLM
+from api.db.db_models import APIToken, File, Skill, SkillIndexGeneration, SkillOperation, SkillSearchConfig, SkillSpace, SkillVersion, SkillVersionFile, TenantModel
 from api.skills.milvus_store import MilvusSkillStore
 from api.skills.model_runtime import ModelRuntime
 from api.skills.runtime import cleanup_files, get_search_runtime
@@ -30,6 +30,7 @@ from tests.support.document_image_http import bootstrapped_engine as bootstrappe
 from tests.support.document_image_http import image_http_api as image_http_api
 from tests.support.document_image_http import image_http_database as image_http_database
 from tests.support.document_image_read_service import image_resources as image_resources
+from tests.support.registered_model import register_model
 
 
 @pytest.fixture
@@ -92,27 +93,24 @@ def skill_http(image_http_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(model_runtime, "async_db_connection", scratch_models)
     monkeypatch.setitem(app.dependency_overrides, get_search_runtime, lambda: runtime)
-    model_ids = [9007199254740993 + i for i in range(3)]
+    model_ids: list[str] = []
     api_token = "skill-api-" + uuid4().hex
     with Session(env["engine"]) as db:
-        for identifier, name, kind in zip(model_ids, ["two", "three", "rank"], ["embedding", "embedding", "rerank"], strict=True):
-            db.add(
-                TenantLLM(
-                    id=identifier,
-                    tenant_id=tenant,
-                    llm_factory="OpenAI-API-Compatible",
-                    llm_name=name,
-                    mdl_type=kind,
-                    api_base=f"http://127.0.0.1:{provider.server_port}",
-                    api_key="skills-fixture-key",
-                    max_tokens=8192,
-                    status="1",
-                )
+        for name, kind in (("two", "embedding"), ("three", "embedding"), ("rank", "rerank")):
+            row = register_model(
+                db,
+                tenant_id=tenant,
+                provider_name="OpenAI-API-Compatible",
+                model_name=name,
+                model_types=(kind,),
+                base_url=f"http://127.0.0.1:{provider.server_port}",
+                api_key="skills-fixture-key",
             )
+            model_ids.append(row.id)
         db.add(APIToken(tenant_id=tenant, token=api_token, name="image-http"))
         db.commit()
     worker = SkillWorker(sessions, SkillStorage(env["storage"]), runtime, cleanup_files)
-    env.update(skill_worker=worker, skill_models=[str(value) for value in model_ids], skill_runtime=runtime, skill_reader=reader, skill_calls=calls, skill_faults=faults, skill_api_token=api_token)
+    env.update(skill_worker=worker, skill_models=model_ids, skill_runtime=runtime, skill_reader=reader, skill_calls=calls, skill_faults=faults, skill_api_token=api_token)
     try:
         yield env
     finally:
@@ -131,7 +129,7 @@ def skill_http(image_http_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) 
             for model in (SkillOperation, SkillVersionFile, SkillIndexGeneration, SkillSearchConfig, SkillVersion, Skill, SkillSpace):
                 db.execute(sa.delete(model).where(model.tenant_id == tenant))
             db.execute(sa.delete(File).where(File.tenant_id == tenant))
-            db.execute(sa.delete(TenantLLM).where(TenantLLM.id.in_(model_ids)))
+            db.execute(sa.delete(TenantModel).where(TenantModel.id.in_(model_ids)))
             db.commit()
             for model in (SkillOperation, SkillVersionFile, SkillIndexGeneration, SkillSearchConfig, SkillVersion, Skill, SkillSpace):
                 assert db.scalar(sa.select(sa.func.count()).select_from(model).where(model.tenant_id == tenant)) == 0

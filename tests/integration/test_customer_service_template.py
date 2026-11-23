@@ -17,8 +17,9 @@ from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-from api.db.db_models import Knowledgebase, Tenant, TenantLLM, User, UserCanvas, UserCanvasVersion, UserTenant, get_db
+from api.db.db_models import Knowledgebase, Tenant, TenantModel, User, UserCanvas, UserCanvasVersion, UserTenant, get_db
 from common import resources
+from tests.support.registered_model import register_model
 from tests.support.resource_journal import ResourceJournal
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -92,7 +93,7 @@ def template_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch
                 (UserCanvasVersion, UserCanvasVersion.user_canvas_id, [ids["agent"]]),
                 (UserCanvas, UserCanvas.id, [ids["agent"]]),
                 (Knowledgebase, Knowledgebase.id, [ids["feature"], ids["usage"], ids["foreign_kb"]]),
-                (TenantLLM, TenantLLM.id, [314, 315]),
+                (TenantModel, TenantModel.id, [f"{value:032x}" for value in (314, 315)]),
                 (UserTenant, UserTenant.id, [ids["membership"], ids["foreign_membership"]]),
                 (Tenant, Tenant.id, [ids["owner"], ids["foreign"]]),
                 (User, User.id, [ids["owner"], ids["foreign"]]),
@@ -114,7 +115,7 @@ def template_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch
                 db.add(User(id=owner, email=f"{owner}@template.example.com", nickname="Template witness", password="unused", access_token="active"))
                 db.add(Tenant(id=owner, name="Template witness", llm_id="", embd_id="", asr_id="", img2txt_id="", parser_ids="naive"))
                 db.add(UserTenant(id=ids[membership], tenant_id=owner, user_id=owner, role="owner", invited_by=owner))
-                db.add(TenantLLM(id=model_id, tenant_id=owner, llm_factory="OpenAI", llm_name="gpt-4o", mdl_type="chat", api_key="controlled-provider-boundary", max_tokens=16000))
+                register_model(db, identifier=f"{model_id:032x}", tenant_id=owner, provider_name="OpenAI", model_name="gpt-4o", api_key="controlled-provider-boundary", max_tokens=16000)
             for name, owner in (("feature", ids["owner"]), ("usage", ids["owner"]), ("foreign_kb", ids["foreign"])):
                 db.add(Knowledgebase(id=ids[name], tenant_id=owner, name="Template " + name, created_by=owner, embd_id="controlled-embedding", permission="me"))
             db.commit()
@@ -189,7 +190,7 @@ def test_shipped_template_create_edit_readback_and_tenant_bound_canvas(template_
     forms = [(name, component["obj"]["params"]) for name, component in edited["components"].items()] + [(node["id"], node["data"].get("form", {})) for node in edited["graph"]["nodes"]]
     for name, form in forms:
         if "llm_id" in form:
-            form["llm_id"] = "314"
+            form["llm_id"] = f"{314:032x}"
         if name in bindings:
             # Current Web editor serializes the selected IDs to both fields.
             form["dataset_ids"] = form["kb_ids"] = [bindings[name]]
@@ -209,7 +210,7 @@ def test_shipped_template_create_edit_readback_and_tenant_bound_canvas(template_
         assert response.status_code == 200 and response.json()["retcode"] != 0, response.text
         assert read_dsl(env) == edited
     assert not env["redis"].exists(f"canvas:replica:{ids['agent']}:{ids['foreign']}:{ids['foreign']}")
-    env["journal"].event("api-sql-redis-readback", canvas=ids["agent"], numeric_model=314, dataset_bindings=bindings, external_refs_empty_on_create=True, graph_equal=True, foreign_denied=True)
+    env["journal"].event("api-sql-redis-readback", canvas=ids["agent"], model_id=f"{314:032x}", dataset_bindings=bindings, external_refs_empty_on_create=True, graph_equal=True, foreign_denied=True)
 
     from agent import canvas as canvas_module
     from agent.component import agent_with_tools, llm
@@ -223,7 +224,7 @@ def test_shipped_template_create_edit_readback_and_tenant_bound_canvas(template_
         max_length = 16000
 
         def __init__(self, db: Session, tenant_id: str, config: dict[str, Any], **kwargs: Any) -> None:
-            assert tenant_id == ids["owner"] and config["tenant_id"] == tenant_id and config["id"] == 314
+            assert tenant_id == ids["owner"] and config["tenant_id"] == tenant_id and config["id"] == f"{314:032x}"
             assert config["mdl_type"] == "chat"
             calls.append({"model": config["id"], "tenant": tenant_id})
 
@@ -246,7 +247,7 @@ def test_shipped_template_create_edit_readback_and_tenant_bound_canvas(template_
     monkeypatch.setattr(canvas_module, "get_uuid", lambda: next(message_ids))
     with Session(env["engine"]) as db:
         with pytest.raises(LookupError):
-            tenant_model_service.get_model_config_by_type_and_name(db, ids["owner"], "chat", "315")
+            tenant_model_service.get_model_config_by_type_and_name(db, ids["owner"], "chat", f"{315:032x}")
     canvas = canvas_module.Canvas(json.dumps(detail.json()["data"]["dsl"]), tenant_id=ids["owner"], task_id=ids["task"])
     try:
         retrieval = canvas.get_component_obj("Retrieval:EightyDaysHappen")
@@ -267,7 +268,7 @@ def test_shipped_template_create_edit_readback_and_tenant_bound_canvas(template_
             answer = "".join(event["data"]["content"] for event in events if event["event"] == "message")
             assert answer == "answer:" + category
             assert canvas.get_variable_value(AGGREGATOR + "@answer") == answer
-        assert {call["model"] for call in calls if "model" in call} == {314}
+        assert {call["model"] for call in calls if "model" in call} == {f"{314:032x}"}
         assert {call["dataset"] for call in calls if "dataset" in call} == set(bindings.values())
         assert read_dsl(env) == edited
         env["journal"].event("canvas-sql-binding-readback", model=314, tenant=ids["owner"], datasets=list(bindings.values()), branches=list(CATEGORIES), source_dsl_unchanged=True)

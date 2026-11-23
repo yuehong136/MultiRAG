@@ -14,12 +14,14 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
-from api.db.db_models import TenantLLM
+from api.db.db_models import TenantModel
+from api.db.joint_services.tenant_model_service import get_model_config_by_id
 from api.db.services import tenant_llm_service as tenant_models
 from api.db.services.dialog_service import tts
 from api.db.services.llm_service import LLMBundle
 from core.utils import tts_cache as module
 from tests.support.database import scratch_database
+from tests.support.registered_model import register_model
 
 
 class ControlledSpeech:
@@ -72,19 +74,21 @@ def speech_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[di
         monkeypatch.setattr(tenant_models.TenantLLMService, "model_instance", model_instance)
         tenant_id = uuid4().hex
         with Session(engine) as db:
-            row = TenantLLM(tenant_id=tenant_id, llm_factory="Controlled", llm_name="speech", mdl_type="tts", api_key="fixture-only", api_base="http://fixture.invalid", used_tokens=0)
+            row = register_model(
+                db, tenant_id=tenant_id, provider_name="Controlled", model_name="speech", model_types=("tts",), api_key="fixture-only" or "", base_url="http://fixture.invalid", used_tokens=0
+            )
             db.add(row)
             db.commit()
             model_id = row.id
 
         def bundle() -> LLMBundle:
             with Session(engine) as db:
-                config = db.get(TenantLLM, model_id).to_dict()
+                config = get_model_config_by_id(db, model_id, tenant_id=tenant_id, model_type="tts")
             return LLMBundle(None, tenant_id, config)
 
         def usage() -> int:
             with Session(engine) as db:
-                return int(db.scalar(sa.select(TenantLLM.used_tokens).where(TenantLLM.id == model_id)))
+                return int(db.scalar(sa.select(TenantModel.used_tokens).where(TenantModel.id == model_id)))
 
         try:
             yield {"engine": engine, "bundle": bundle, "usage": usage, "providers": providers, "reader": reader, "register": register}

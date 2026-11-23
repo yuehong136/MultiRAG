@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
-from api.db.db_models import APIToken, Document, Knowledgebase, Tenant, TenantLLM, User, UserTenant, get_async_db, get_db
+from api.db.db_models import APIToken, Document, Knowledgebase, Tenant, User, UserTenant, get_async_db, get_db
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common import settings
 from common.bootstrap import ensure_initialized
@@ -33,6 +33,7 @@ from common.config_utils import CONFIGS
 from core.nlp.search import index_name_one
 from tests.support.database import scratch_database
 from tests.support.event_loop import UVICORN_LOOP
+from tests.support.registered_model import register_model
 from tests.support.web_consumer import tsx_runner
 
 
@@ -87,10 +88,12 @@ def shared_api(shared_database: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_
                 db.add(UserTenant(id=uuid4().hex, user_id=ids[role], tenant_id=ids[role], role="owner", invited_by=ids[role]))
                 db.add(APIToken(tenant_id=ids[role], token=tokens[role], name="shared-owner"))
             db.add(UserTenant(id=uuid4().hex, user_id=ids["member"], tenant_id=ids["owner"], role="normal", invited_by=ids["owner"]))
-            model = TenantLLM(tenant_id=ids["owner"], llm_factory="Controlled", llm_name="shared-embedding", mdl_type="embedding", api_key="controlled", api_base="https://controlled.invalid")
-            foreign = TenantLLM(tenant_id=ids["outsider"], llm_factory="Controlled", llm_name="shared-embedding", mdl_type="embedding", api_key="controlled", api_base="https://controlled.invalid")
-            db.add_all([model, foreign])
-            db.flush()
+            model = register_model(
+                db, tenant_id=ids["owner"], provider_name="Controlled", model_name="shared-embedding", model_types=("embedding",), api_key="controlled", base_url="https://controlled.invalid"
+            )
+            foreign = register_model(
+                db, tenant_id=ids["outsider"], provider_name="Controlled", model_name="shared-embedding", model_types=("embedding",), api_key="controlled", base_url="https://controlled.invalid"
+            )
             model_id, foreign_id = model.id, foreign.id
             manifest["model_ids"] = [model_id, foreign_id]
             _save(path, manifest)
@@ -101,7 +104,7 @@ def shared_api(shared_database: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_
                         tenant_id=ids["owner"],
                         created_by=ids["owner"],
                         name="shared_" + ids[key],
-                        embd_id="shared-embedding@Controlled",
+                        embd_id=model_id,
                         tenant_embd_id=model_id,
                         permission="me" if key == "private" else "team",
                         status="0" if key == "invalid" else "1",
@@ -228,6 +231,30 @@ def _request(env: dict[str, Any], method: str, path: str, role: str = "member", 
     return response
 
 
+def test_shared_chunk_model_uuid_stays_scoped_to_dataset_owner(shared_api: dict[str, Any]) -> None:
+    env, ids = shared_api, shared_api["ids"]
+    collection = f"/api/v1/datasets/{ids['team']}/documents/{ids['doc']}/chunks"
+    result = _request(env, "POST", collection, json={"content": "owned embedding"})
+    assert result.status_code == 200 and result.json()["code"] == 0, result.text
+    assert env["calls"] == [{"tenant_id": ids["owner"], "model_id": env["model_id"]}]
+    assert len(_snapshot(env)["index"]["team"]) == 1
+
+    with env["engine"].begin() as db:
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == ids["team"]).values(tenant_embd_id=env["foreign_id"]))
+    before = _snapshot(env)
+    denied = _request(env, "POST", collection, json={"content": "unauthorized registration"})
+    body = denied.json()
+    assert body.get("code", body.get("retcode")) not in (None, 0), denied.text
+    assert _snapshot(env) == before
+
+    with env["engine"].begin() as db:
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == ids["team"]).values(tenant_embd_id=None))
+    result = _request(env, "POST", collection, mode="tokens", json={"content": "identifier in the dataset field"})
+    assert result.status_code == 200 and result.json()["code"] == 0, result.text
+    assert env["calls"][-1] == {"tenant_id": ids["owner"], "model_id": env["model_id"]}
+    assert len(_snapshot(env)["index"]["team"]) == 2
+
+
 def test_shared_chunk_routes_and_dify_use_owner_with_denial_readback(shared_api: dict[str, Any]) -> None:
     env, ids = shared_api, shared_api["ids"]
     before = _snapshot(env)
@@ -318,10 +345,10 @@ def test_shared_chunk_routes_and_dify_use_owner_with_denial_readback(shared_api:
     with env["engine"].begin() as db:
         db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == ids["team"]).values(tenant_embd_id=env["model_id"]))
     assert _snapshot(env) == before
-    # Name fallback must resolve the same dataset-owner model as its numeric ID.
+    # The model ID in the resource field still binds to the dataset owner.
     with env["engine"].begin() as db:
         db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == ids["team"]).values(tenant_embd_id=None))
-    response = _request(env, "POST", collection, mode="tokens", json={"content": "owner name fallback"})
+    response = _request(env, "POST", collection, mode="tokens", json={"content": "owner model reference"})
     assert response.json().get("code") == 0, response.text
     assert env["calls"][-1]["model_id"] == env["model_id"]
     extra = response.json()["data"]["chunk"]["id"]

@@ -2,6 +2,7 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -11,6 +12,8 @@ from agent.canvas import Canvas
 from agent.component.variable_assigner import VariableAssigner
 from agent.dsl_migration import normalize_chunker_dsl
 from api.apps.services.canvas_replica_service import CanvasReplicaService
+from api.db.joint_services import tenant_model_service
+from api.db.services.canvas_service import CanvasTemplateService
 from core.utils.redis_conn import REDIS_CONN
 
 _TEMPLATE_DIRECTORY = Path(__file__).resolve().parents[2] / "agent" / "templates"
@@ -96,7 +99,7 @@ def test_real_templates_with_legacy_empty_variables_reset(monkeypatch: pytest.Mo
         yield db
 
     def model_types(session: Session, tenant_id: str, model_ref: str) -> list[str]:
-        assert session is db and tenant_id == "template-unit" and model_ref
+        assert session is db and tenant_id == "template-unit" and model_ref == "a" * 32
         return ["chat"]
 
     # Keep actual Graph/Canvas and every component constructor/check/reset.
@@ -109,7 +112,10 @@ def test_real_templates_with_legacy_empty_variables_reset(monkeypatch: pytest.Mo
     monkeypatch.setattr(REDIS_CONN, "delete", lambda *args: None)
     source = json.loads(template_path.read_text(encoding="utf-8"))["dsl"]
     assert source["variables"] == []
-    normalized = CanvasReplicaService.normalize_dsl(normalize_chunker_dsl(source))
+    monkeypatch.setattr(CanvasTemplateService, "list_templates", lambda _: [SimpleNamespace(to_dict=lambda: {"dsl": source})])
+    monkeypatch.setattr(tenant_model_service, "get_tenant_default_model_by_type", lambda *_: {"id": "a" * 32})
+    bound = CanvasTemplateService.list_for_tenant(db, "template-unit")[0]["dsl"]
+    normalized = CanvasReplicaService.normalize_dsl(normalize_chunker_dsl(bound))
     assert normalized["variables"] == []
     canvas = Canvas(json.dumps(normalized), tenant_id="template-unit")
     assert set(canvas.components) == set(normalized["components"])

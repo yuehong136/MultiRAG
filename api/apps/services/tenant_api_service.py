@@ -24,7 +24,7 @@ from email_validator import EmailNotValidError, validate_email
 from sqlalchemy.orm import Session
 
 from api.db import UserTenantRole
-from api.db.db_models import File, Tenant, TenantLLM, User, UserTenant
+from api.db.db_models import File, Tenant, User, UserTenant
 from api.db.services.file_service import FileService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserService, UserTenantService
@@ -203,7 +203,7 @@ def remove_tenant_member(db: Session, tenant_id: str, user_id: str, actor_id: st
     UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id, UserTenant.user_id == user_id])
     if target_role == UserTenantRole.OWNER:
         UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id])
-        TenantLLMService.filter_delete(db, [TenantLLM.tenant_id == tenant_id])
+        TenantLLMService.delete_by_tenant_id(db, tenant_id)
         TenantService.filter_delete(db, [Tenant.id == tenant_id])
         UserService.filter_delete(db, [User.id == user_id])
         FileService.filter_delete(db, [File.tenant_id == tenant_id])

@@ -79,7 +79,7 @@ try {
       );
       assert.ok(model);
       const reference = getLLMModelValue(model, "Ollama");
-      assert.match(reference, /^[1-9]\d*$/);
+      assert.match(reference, /^[0-9a-f]{32}$/);
       references.push(reference);
       const config = createInitialConfig({
         name: `model-type-consumer-${name}`,
@@ -96,6 +96,7 @@ try {
       );
       ids.push(created.id);
       const detail = await dialogAPI.getDetail(created.id);
+      assert.equal(detail.llm_id, reference);
       assert.deepEqual(detail.llm_setting, {
         temperature: 0,
         model_type: type,
@@ -108,6 +109,7 @@ try {
         settingsToDialogUpdate(settings, "", models),
       );
       const reloaded = await dialogAPI.getDetail(created.id);
+      assert.equal(reloaded.llm_id, reference);
       assert.deepEqual(reloaded.llm_setting, {
         temperature: 0,
         model_type: type,

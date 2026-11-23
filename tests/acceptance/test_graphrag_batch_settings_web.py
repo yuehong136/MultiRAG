@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from playwright.sync_api import expect, sync_playwright
 from sqlalchemy.orm import Session, sessionmaker
 
-from api.db.db_models import LLM, Knowledgebase, LLMFactories, TenantLLM
+from api.db.db_models import LLM, Knowledgebase, LLMFactories, TenantModel
 from common import settings
 from core.graphrag.general import index
 from scripts.acceptance.api import ProductAPI, response_data
@@ -21,6 +21,7 @@ from tests.support.dataset_management_http import management_api as management_a
 from tests.support.graphrag_acceptance import DocumentExtractor, Model, api, worker
 from tests.support.graphrag_acceptance import graphrag_api as graphrag_api
 from tests.support.product_acceptance import product_web_server
+from tests.support.registered_model import register_model
 
 
 async def test_web_batch_budget_save_reload_and_real_worker(graphrag_api: dict[str, Any], monkeypatch: Any) -> None:
@@ -39,7 +40,7 @@ async def test_web_batch_budget_save_reload_and_real_worker(graphrag_api: dict[s
         if created_factory:
             db.add(LLMFactories(name="Builtin", tags="Text Embedding", status="1"))
         db.add(LLM(fid="Builtin", llm_name=model_name, mdl_type="embedding", max_tokens=8192, tags="Text Embedding", status="1"))
-        registered = TenantLLM(tenant_id=env["tenant"], llm_factory="Builtin", llm_name=model_name, mdl_type="embedding", api_key="", max_tokens=8192)
+        registered = register_model(db, tenant_id=env["tenant"], provider_name="Builtin", model_name=model_name, model_types=("embedding",), api_key="" or "", max_tokens=8192)
         db.add(registered)
         db.flush()
         registered_id = registered.id
@@ -160,11 +161,11 @@ async def test_web_batch_budget_save_reload_and_real_worker(graphrag_api: dict[s
         client.session.close()
         report.save()
         with env["engine"].begin() as db:
-            db.execute(sa.delete(TenantLLM).where(TenantLLM.id == registered_id))
+            db.execute(sa.delete(TenantModel).where(TenantModel.id == registered_id))
             db.execute(sa.delete(LLM).where(LLM.fid == "Builtin", LLM.llm_name == model_name))
             if created_factory:
                 db.execute(sa.delete(LLMFactories).where(LLMFactories.name == "Builtin"))
         with env["engine"].connect() as db:
-            assert db.scalar(sa.select(sa.func.count()).select_from(TenantLLM).where(TenantLLM.id == registered_id)) == 0
+            assert db.scalar(sa.select(sa.func.count()).select_from(TenantModel).where(TenantModel.id == registered_id)) == 0
             assert db.scalar(sa.select(sa.func.count()).select_from(LLM).where(LLM.fid == "Builtin", LLM.llm_name == model_name)) == 0
         env["record"]["web_model"]["cleanup_absent"] = True

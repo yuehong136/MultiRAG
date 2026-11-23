@@ -6,9 +6,9 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-from sqlalchemy import select
 
-from api.db.db_models import TenantLLM, async_db_connection
+from api.db.db_models import async_db_connection
+from api.db.model_contract import parse_model_id
 from api.skills.search_types import SkillSearchError
 
 STRICT_RERANK_PROVIDERS = frozenset({"OpenAI-API-Compatible", "VLLM"})
@@ -39,15 +39,7 @@ class ModelRuntime:
         async with async_db_connection() as db:
             from api.db.services.model_provider_service import model_projection, models_for_owner
 
-            linked = await models_for_owner(db, tenant_id)
-            linked_ids = {row[0].id for row in linked}
-            inventory = [model_projection(*row) for row in linked]
-            legacy = (await db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == tenant_id, TenantLLM.status == "1").order_by(TenantLLM.id))).all()
-            inventory.extend(
-                {"id": row.id, "name": row.llm_name, "provider_name": row.llm_factory, "model_types": [row.mdl_type], "max_tokens": row.max_tokens, "effective_status": "active"}
-                for row in legacy
-                if row.id not in linked_ids
-            )
+            inventory = [model_projection(*row) for row in await models_for_owner(db, tenant_id)]
             result = []
             for item in inventory:
                 if item["effective_status"] != "active":
@@ -58,7 +50,7 @@ class ModelRuntime:
                     supported = item["provider_name"] in (EmbeddingModel if kind == "embedding" else STRICT_RERANK_PROVIDERS)
                     result.append(
                         {
-                            "id": str(item["id"]),
+                            "id": item["id"],
                             "name": item["name"],
                             "provider": item["provider_name"],
                             "instance": item.get("instance_name", ""),
@@ -71,13 +63,14 @@ class ModelRuntime:
             return result
 
     async def resolve(self, tenant_id: str, model_id: Any, model_type: str) -> dict[str, Any]:
-        if not isinstance(model_id, str) or not model_id.isascii() or not model_id.isdecimal() or not 0 < int(model_id) < 2**63:
+        identifier = parse_model_id(model_id) if isinstance(model_id, str) else None
+        if identifier is None:
             raise SkillSearchError("MODEL_NOT_FOUND", "An enabled model ID is required", False)
         async with async_db_connection() as db:
             from api.db.services.model_provider_service import resolve_config
 
             try:
-                config = await resolve_config(db, tenant_id, int(model_id), model_type)
+                config = await resolve_config(db, tenant_id, identifier, model_type)
             except LookupError:
                 raise SkillSearchError("MODEL_NOT_FOUND", "Model is unavailable for this tenant", False) from None
         from core.llm import EmbeddingModel

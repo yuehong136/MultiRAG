@@ -8,19 +8,21 @@ from email import policy
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
-from types import SimpleNamespace
 from typing import Any, cast
-from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
 from pypdf import PdfWriter
 from sqlalchemy.orm import Session
 
-from api.apps.llm_app import AddLLMRequest, add_llm
-from api.db.db_models import LLMFactories, TenantLLM
+from api.db.db_models import TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.services import provider_verification
+from common import settings
 from core.llm.ocr_model import PaddleOCROcrModel
 from deepdoc.parser.paddleocr_parser import SUPPORTED_PADDLEOCR_ALGORITHMS, AlgorithmType
+from tests.support.provider_instances import REAL_VERIFY_MODEL
+from tests.support.provider_instances import http as http
+from tests.support.provider_instances import owned_engine as owned_engine
 
 
 @pytest.fixture
@@ -95,28 +97,29 @@ def ocr_wire_server() -> Iterator[tuple[str, list[dict[str, Any]]]]:
 
 @pytest.mark.parametrize("algorithm", SUPPORTED_PADDLEOCR_ALGORITHMS)
 @pytest.mark.parametrize("protocol", ["sync", "job"])
-async def test_saved_model_roundtrip_and_pdf_http_contract(pg_scratch_engine: sa.Engine, ocr_wire_server: tuple[str, list[dict[str, Any]]], algorithm: AlgorithmType, protocol: str) -> None:
-    # Mirror only the production tables used here, in the disposable scratch DB.
-    LLMFactories.__table__.create(pg_scratch_engine, checkfirst=True)
-    TenantLLM.__table__.create(pg_scratch_engine, checkfirst=True)
+def test_saved_model_roundtrip_and_pdf_http_contract(
+    http: tuple[Any, ...], ocr_wire_server: tuple[str, list[dict[str, Any]]], algorithm: AlgorithmType, protocol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, owner, engine, _ = http
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "PaddleOCR", "llm": []}])
+    monkeypatch.setattr(provider_verification, "verify_model", REAL_VERIFY_MODEL)
     base_url, calls = ocr_wire_server
     api_url = base_url + ("/api/v2/ocr/jobs" if protocol == "job" else "/ocr" if algorithm == "PP-OCRv5" else "/layout-parsing")
-    tenant_id = uuid4().hex
     config = {"paddleocr_api_url": api_url, "paddleocr_algorithm": algorithm, "paddleocr_access_token": "contract-test-token"}
-    with Session(pg_scratch_engine) as db:
-        if db.get(LLMFactories, "PaddleOCR") is None:
-            db.add(LLMFactories(name="PaddleOCR", tags="OCR"))
-            db.commit()
-        response = await add_llm(AddLLMRequest(llm_factory="PaddleOCR", llm_name="wire-model", mdl_type="ocr", api_key=config, api_base="", max_tokens=0), db, SimpleNamespace(id=tenant_id))
-        assert json.loads(response.body)["retcode"] == 0
-        db.commit()
-
-    # Independent native readback after the handler's session closes.
-    with pg_scratch_engine.connect() as connection:
-        row = connection.execute(sa.text("SELECT api_key, mdl_type FROM usr_ai.t_ai_tenant_llms WHERE tenant_id = :tenant"), {"tenant": tenant_id}).one()
-    assert row.mdl_type == "ocr"
-    assert json.loads(row.api_key)["api_key"] == config
-    model = PaddleOCROcrModel(row.api_key, "wire-model")
+    response = client.post(
+        "/api/v1/providers/PaddleOCR/instances",
+        json={"instance_name": "wire", "api_key": json.dumps(config), "model_ids": [], "custom_model": {"model_name": "wire-model", "model_types": ["ocr"], "max_tokens": 0}},
+    )
+    assert response.status_code == 200, response.text
+    assert calls
+    calls.clear()
+    with Session(engine) as reader:
+        row = reader.scalar(sa.select(TenantModel))
+        assert row.model_types == ["ocr"] and row.max_tokens == 0
+        assert reader.get(TenantModelProvider, row.provider_id).tenant_id == owner
+        key = reader.get(TenantModelInstance, row.instance_id).api_key
+        assert json.loads(key) == config
+    model = PaddleOCROcrModel(key, "wire-model")
     pdf = PdfWriter()
     pdf.add_blank_page(width=200, height=300)
     pdf.add_blank_page(width=200, height=300)
@@ -158,19 +161,15 @@ async def test_saved_model_roundtrip_and_pdf_http_contract(pg_scratch_engine: sa
         {"paddleocr_api_url": "http://127.0.0.1/api/v2/ocr/jobs", "paddleocr_algorithm": "PP-OCRv5"},
     ],
 )
-async def test_invalid_configuration_is_rejected_without_persistence(pg_scratch_engine: sa.Engine, config: dict[str, str]) -> None:
-    LLMFactories.__table__.create(pg_scratch_engine, checkfirst=True)
-    TenantLLM.__table__.create(pg_scratch_engine, checkfirst=True)
-    tenant_id = uuid4().hex
-    with Session(pg_scratch_engine) as db:
-        if db.get(LLMFactories, "PaddleOCR") is None:
-            db.add(LLMFactories(name="PaddleOCR", tags="OCR"))
-            db.commit()
-        response = await add_llm(
-            AddLLMRequest(llm_factory="PaddleOCR", llm_name="invalid-model", mdl_type="ocr", api_key=config),
-            db,
-            SimpleNamespace(id=tenant_id),
-        )
-        assert json.loads(response.body)["retcode"] != 0
-    with pg_scratch_engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT count(*) FROM usr_ai.t_ai_tenant_llms WHERE tenant_id = :tenant"), {"tenant": tenant_id}).scalar_one() == 0
+def test_invalid_configuration_is_rejected_without_persistence(http: tuple[Any, ...], config: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _, engine, _ = http
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "PaddleOCR", "llm": []}])
+    monkeypatch.setattr(provider_verification, "verify_model", REAL_VERIFY_MODEL)
+    response = client.post(
+        "/api/v1/providers/PaddleOCR/instances",
+        json={"instance_name": "wire", "api_key": json.dumps(config), "model_ids": [], "custom_model": {"model_name": "wire-model", "model_types": ["ocr"], "max_tokens": 0}},
+    )
+    assert response.status_code == 400
+    with Session(engine) as reader:
+        for table in (TenantModel, TenantModelInstance, TenantModelProvider):
+            assert reader.scalar(sa.select(sa.func.count()).select_from(table)) == 0

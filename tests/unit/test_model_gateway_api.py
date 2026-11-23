@@ -11,6 +11,9 @@ from api.model_gateway import management
 PREFIX = "/api/v1/model-gateway"
 
 
+MODEL_ID = "a" * 32
+
+
 def _routes():
     # register_page loads route files under the name without the "_api" suffix.
     return sys.modules["api.apps.restful_apis.model_gateway"]
@@ -34,7 +37,7 @@ def _sdk_token_principal():
 
 @pytest.mark.parametrize(
     ("method", "path"),
-    [("GET", "/catalog"), ("PATCH", "/catalog/models/7"), ("PATCH", "/settings"), ("GET", "/overview"), ("POST", "/keys"), ("GET", "/logs"), ("GET", "/usage")],
+    [("GET", "/catalog"), ("PATCH", f"/catalog/models/{MODEL_ID}"), ("PATCH", "/settings"), ("GET", "/overview"), ("POST", "/keys"), ("GET", "/logs"), ("GET", "/usage")],
 )
 def test_routes_do_not_exist_while_the_gateway_is_disabled(client, monkeypatch, method, path):
     monkeypatch.setattr(management, "catalog_view", pytest.fail)
@@ -61,14 +64,14 @@ def test_publishing_routes_are_gone(enabled, method, path):
 
 def test_catalog_is_listed_for_the_owner(enabled, monkeypatch):
     async def catalog_view(db, tenant_id):
-        return {"new_models_enabled": True, "connections": [], "models": [{"model_id": 7, "call_name": "qwen", "tenant": tenant_id}]}
+        return {"new_models_enabled": True, "connections": [], "models": [{"model_id": MODEL_ID, "call_name": "qwen", "tenant": tenant_id}]}
 
     monkeypatch.setattr(management, "catalog_view", catalog_view)
 
     response = enabled.get(f"{PREFIX}/catalog")
 
     assert response.status_code == 200
-    assert response.json()["data"]["models"] == [{"model_id": 7, "call_name": "qwen", "tenant": "user-unit"}]
+    assert response.json()["data"]["models"] == [{"model_id": MODEL_ID, "call_name": "qwen", "tenant": "user-unit"}]
 
 
 def test_model_switch_alias_and_limits_reach_the_operation(enabled, monkeypatch):
@@ -80,11 +83,11 @@ def test_model_switch_alias_and_limits_reach_the_operation(enabled, monkeypatch)
 
     monkeypatch.setattr(management, "update_catalog_model", update_catalog_model)
 
-    response = enabled.patch(f"{PREFIX}/catalog/models/7", json={"enabled": False, "alias": "chat-default", "rpm_limit": 600, "tpm_limit": None})
+    response = enabled.patch(f"{PREFIX}/catalog/models/{MODEL_ID}", json={"enabled": False, "alias": "chat-default", "rpm_limit": 600, "tpm_limit": None})
 
     assert response.status_code == 200
     # Explicit nulls reach the operation, so an alias or a limit can be removed again.
-    assert seen == {"tenant_id": "user-unit", "model_id": 7, "changes": {"enabled": False, "alias": "chat-default", "rpm_limit": 600, "tpm_limit": None}}
+    assert seen == {"tenant_id": "user-unit", "model_id": MODEL_ID, "changes": {"enabled": False, "alias": "chat-default", "rpm_limit": 600, "tpm_limit": None}}
 
 
 def test_connection_switch_and_default_reach_their_operations(enabled, monkeypatch):
@@ -198,10 +201,10 @@ def test_invalid_bodies_are_rejected_before_any_operation(enabled, monkeypatch, 
 @pytest.mark.parametrize(
     ("path", "body"),
     [
-        ("/catalog/models/7", {"alias": "chat default"}),
-        ("/catalog/models/7", {"tpm_limit": -5}),
-        ("/catalog/models/7", {"token_quota": 100, "quota_period": "day"}),
-        ("/catalog/models/7", {"base_url": "http://elsewhere"}),
+        (f"/catalog/models/{MODEL_ID}", {"alias": "chat default"}),
+        (f"/catalog/models/{MODEL_ID}", {"tpm_limit": -5}),
+        (f"/catalog/models/{MODEL_ID}", {"token_quota": 100, "quota_period": "day"}),
+        (f"/catalog/models/{MODEL_ID}", {"base_url": "http://elsewhere"}),
         ("/catalog/models/seven", {"enabled": True}),
         ("/catalog/instances/inst-1", {}),
         ("/settings", {"new_models_enabled": "sometimes"}),

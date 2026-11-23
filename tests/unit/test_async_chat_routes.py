@@ -254,7 +254,7 @@ def test_chat_completion_direct_mode_without_chat_id(client: TestClient, monkeyp
     monkeypatch.setattr(
         chat_api,
         "get_tenant_default_model_by_type",
-        lambda db, tenant_id, model_type: {"llm_name": "default-llm", "llm_factory": "OpenAI", "id": 7},
+        lambda db, tenant_id, model_type: {"llm_name": "default-llm", "llm_factory": "OpenAI", "id": "a" * 32},
     )
 
     resp = client.post(
@@ -267,8 +267,8 @@ def test_chat_completion_direct_mode_without_chat_id(client: TestClient, monkeyp
     assert body["code"] == 0
     assert body["data"]["answer"] == "直答"
     assert "chat_id" not in body["data"]
-    assert seen["dialog"].llm_id == "default-llm@OpenAI"
-    assert seen["dialog"].tenant_llm_id == 7
+    assert seen["dialog"].llm_id == "a" * 32
+    assert seen["dialog"].tenant_llm_id == "a" * 32
     assert seen["dialog"].kb_ids == []
     assert chat_route_stubs.updates == []
 

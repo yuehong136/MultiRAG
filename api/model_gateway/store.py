@@ -36,13 +36,13 @@ class Caller:
     tenant_id: str
     key_name: str
     allow_all_models: bool
-    allowed_model_ids: frozenset[int] = frozenset()
+    allowed_model_ids: frozenset[str] = frozenset()
     allowed_instance_ids: frozenset[str] = frozenset()
     tags: dict[str, Any] | None = None
     limits: Limits = NO_LIMITS
     quota: Quota | None = None
 
-    def may_use(self, model_id: int, instance_id: str) -> bool:
+    def may_use(self, model_id: str, instance_id: str) -> bool:
         return self.allow_all_models or model_id in self.allowed_model_ids or instance_id in self.allowed_instance_ids
 
 
@@ -56,7 +56,7 @@ class PublicModel:
 class ResolvedModel:
     """A registered model a request may call; ``name`` is its call name."""
 
-    model_id: int
+    model_id: str
     name: str
     model_type: str
     upstream: UpstreamTarget
@@ -75,7 +75,7 @@ class RequestLogEntry:
     started_at: datetime
     tags: dict[str, Any] | None = None
     model: str | None = None
-    upstream_model_id: int | None = None
+    upstream_model_id: str | None = None
     upstream_model_name: str | None = None
     stream: bool = False
     status_code: int = 500
@@ -138,7 +138,7 @@ class SqlGatewayStore:
                 tenant_id=key.tenant_id,
                 key_name=key.name,
                 allow_all_models=bool(key.allow_all_models),
-                allowed_model_ids=frozenset(int(item) for item in key.allowed_model_ids or []),
+                allowed_model_ids=frozenset(key.allowed_model_ids),
                 allowed_instance_ids=frozenset(str(item) for item in key.allowed_instance_ids or []),
                 tags=dict(key.tags) if key.tags else None,
                 limits=Limits(rpm=key.rpm_limit, tpm=key.tpm_limit, max_parallel=key.max_parallel_requests),

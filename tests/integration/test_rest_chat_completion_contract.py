@@ -325,7 +325,8 @@ def test_question_attachment_uses_uploaded_authority_and_committed_descriptor(re
 @pytest.mark.parametrize("stream", [False, True])
 def test_saved_empty_and_explicit_model_resolution_without_config_mutation(rest_chat_contract: RestChatContract, monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
     import core.llm as providers
-    from api.db.db_models import LLM, Dialog, Tenant, TenantLLM
+    from api.db.db_models import LLM, Dialog, Tenant
+    from tests.support.registered_model import register_model
 
     ctx = rest_chat_contract
     selected: list[str] = []
@@ -349,17 +350,10 @@ def test_saved_empty_and_explicit_model_resolution_without_config_mutation(rest_
         ids = {}
         for model in ("saved", "override"):
             db.add(LLM(fid=ctx.factory, llm_name=model, mdl_type="chat", tags="CHAT", max_tokens=8192, is_tools=False))
-            row = TenantLLM(tenant_id=ctx.runtime["owners"][0], llm_factory=ctx.factory, llm_name=model, mdl_type="chat", api_key="controlled", api_base="", max_tokens=8192)
-            db.add(row)
-            db.flush()
+            row = register_model(db, tenant_id=ctx.runtime["owners"][0], provider_name=ctx.factory, model_name=model, api_key="controlled")
             ids[model] = row.id
-        default = db.scalar(sa.select(TenantLLM).where(TenantLLM.tenant_id == ctx.runtime["owners"][0], TenantLLM.llm_factory == ctx.factory, TenantLLM.llm_name == "chat"))
-        assert default is not None
-        tenant = db.get(Tenant, ctx.runtime["owners"][0])
-        assert tenant is not None
-        tenant.tenant_llm_id = default.id
         db.commit()
-    chat = ctx.create_chat(llm_id=f"saved@{ctx.factory}", prompt_config={"system": "Answer directly", "parameters": [], "refine_multiturn": False})
+    chat = ctx.create_chat(llm_id=ids["saved"], prompt_config={"system": "Answer directly", "parameters": [], "refine_multiturn": False})
     saved = ctx.read_chat(chat["id"])
     assert saved["tenant_llm_id"] == ids["saved"]
     # Numeric tenant defaults are authoritative even when the old name is stale.
@@ -367,7 +361,7 @@ def test_saved_empty_and_explicit_model_resolution_without_config_mutation(rest_
     with Session(ctx.runtime["engine"]) as db:
         db.execute(sa.update(Tenant).where(Tenant.id == ctx.runtime["owners"][0]).values(llm_id="stale-default"))
         db.commit()
-    for override, expected in ((None, "saved"), (f"override@{ctx.factory}", "override")):
+    for override, expected in ((None, "saved"), (ids["override"], "override")):
         body: dict[str, Any] = {"chat_id": chat["id"], "question": "select", "stream": stream}
         if override:
             body["llm_id"] = override

@@ -3,12 +3,13 @@ import enum
 import os
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, db_connection
-from api.db.services.llm_service import LLMBundle, LLMService
+from api.db.db_models import Tenant, TenantModel, TenantModelInstance, TenantModelProvider, db_connection
+from api.db.model_contract import DEFAULT_MODEL_FIELDS, MODEL_TYPE_BITS, parse_model_id
+from api.db.services.llm_service import LLMBundle
+from api.db.services.provider_model_resolution import model_config, model_for_id, model_records
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService
 from common import settings
@@ -16,23 +17,20 @@ from common.constants import LLMType
 
 
 def get_ocr_model_reference(db: Session, tenant_id: str, provider_name: str) -> str | None:
-    """Prefer an active numeric registration, then atomically import env config."""
+    """Prefer the configured active model, then atomically import env config."""
     query = (
-        select(TenantLLM, TenantModel)
-        .join(TenantModel, TenantModel.id == TenantLLM.id)
-        .join(TenantModelInstance, TenantModelInstance.id == TenantModel.instance_id)
-        .join(TenantModelProvider, TenantModelProvider.id == TenantModelInstance.provider_id)
+        model_records()
         .where(
-            TenantLLM.tenant_id == tenant_id,
             TenantModelProvider.tenant_id == tenant_id,
             TenantModelProvider.provider_name == provider_name,
             TenantModelProvider.status == "active",
             TenantModelInstance.status == "active",
-            TenantLLM.status == "1",
+            TenantModel.status == "active",
+            TenantModel.model_type.bitwise_and(MODEL_TYPE_BITS["ocr"]) != 0,
         )
-        .order_by(TenantLLM.id)
+        .order_by(TenantModel.create_time, TenantModel.id)
     )
-    candidates = [row.id for row, model in db.execute(query) if "ocr" in model.model_types]
+    candidates = [model.id for model, _, _ in db.execute(query)]
     owner = db.get(Tenant, tenant_id)
     if owner is None:
         raise LookupError("Tenant not found")
@@ -59,56 +57,26 @@ def resolve_model_type(db: Session, tenant_id: str, model_ref: str) -> list[str]
     """Resolve types from the tenant's registration, preserving provider identity."""
     if not tenant_id or not model_ref:
         raise LookupError("Tenant and model reference are required")
-    row = TenantLLMService.get_api_key(db, tenant_id, model_ref)
-    if row is None:
-        raise LookupError("Tenant model not found")
-    config = TenantLLMService.resolve_model_config(db, row.to_dict())
-    model_types = config.get("model_types", [row.mdl_type])
-    if not isinstance(model_types, list) or not model_types or any(not isinstance(model_type, str) or not model_type for model_type in model_types):
+    model, instance, provider = model_for_id(db, model_ref, tenant_id)
+    if (model.status, instance.status, provider.status) != ("active", "active", "active"):
+        raise LookupError("Model is unavailable")
+    capabilities = model.model_types
+    if not capabilities:
         raise LookupError("Tenant model has no usable capability")
-    return list(model_types)
+    return capabilities
 
 
 def get_model_config_by_id(
     db: Session,
-    tenant_model_id: int,
+    tenant_model_id: str,
     *,
     tenant_id: str | None = None,
     allowed_tenant_ids: set[str] | None = None,
     model_type: str | None = None,
 ) -> dict[str, Any]:
-    """Apply the trusted tenant scope in SQL, before loading model credentials.
-
-    Management callers may retain their existing unscoped lookup. Retrieval
-    callers must pass the authenticated tenant and authorized dataset owners.
-    An explicit empty scope never falls back to an unscoped lookup.
-    """
-    if allowed_tenant_ids is not None:
-        scope = {identifier for identifier in allowed_tenant_ids if identifier}
-        if tenant_id is not None:
-            scope &= {tenant_id}
-        if not scope:
-            raise LookupError("No authorization for tenant model.")
-        tenant_model = db.scalar(select(TenantLLM).where(TenantLLM.id == tenant_model_id, TenantLLM.tenant_id.in_(scope)))
-    else:
-        filters: dict[str, Any] = {"id": tenant_model_id}
-        if tenant_id is not None:
-            filters["tenant_id"] = tenant_id
-        tenant_model = TenantLLMService.get_or_none(db, **filters)
-    if not tenant_model:
-        reason = "not found or not authorized" if allowed_tenant_ids is not None else "not found"
-        raise LookupError(f"Tenant Model with id {tenant_model_id} {reason}")
-
-    from api.db.services.provider_model_resolution import linked_model, resolve_linked_config
-
-    raw_config = tenant_model.to_dict()
-    link = linked_model(db, tenant_model_id, raw_config["tenant_id"]) if raw_config.get("tenant_id") else None
-    if link and len(link[0].model_types) > 1 and model_type is None:
-        raise LookupError("Model capability is required for a model with multiple capabilities")
-    config = resolve_linked_config(db, raw_config, expected_type=model_type)
-    if model_type is not None and config["mdl_type"] != model_type:
-        raise LookupError("Model does not support the requested capability")
-    return TenantLLMService.resolve_model_config(db, config)
+    """Resolve model credentials only within the authorized tenant scope."""
+    row = model_for_id(db, tenant_model_id, tenant_id, allowed_tenant_ids=allowed_tenant_ids)
+    return TenantLLMService.decode_model_config(model_config(*row, capability=model_type))
 
 
 def get_model_config_by_type_and_name(
@@ -120,25 +88,8 @@ def get_model_config_by_type_and_name(
     if not model_name:
         raise ValueError("Model Name is required")
     expected = model_type.value if hasattr(model_type, "value") else model_type
-    model = TenantLLMService.get_api_key(db, tenant_id, model_name, expected)
-    if model is not None:
-        config = TenantLLMService.resolve_model_config(db, model.to_dict())
-        config["mdl_type"] = expected
-        return config
-    # Retain the existing, declared legacy CHAT/vision fallback without dropping
-    # a requested provider or changing its persisted registration.
-    if expected in {LLMType.CHAT.value, LLMType.IMAGE2TEXT.value}:
-        fallback_type = LLMType.IMAGE2TEXT.value if expected == LLMType.CHAT.value else LLMType.CHAT.value
-        model = TenantLLMService.get_api_key(db, tenant_id, model_name, fallback_type)
-        if model is not None:
-            config = TenantLLMService.resolve_model_config(db, model.to_dict())
-            if expected == LLMType.CHAT.value and config["mdl_type"] == LLMType.IMAGE2TEXT.value:
-                return config
-            if expected == LLMType.IMAGE2TEXT.value and config["mdl_type"] == LLMType.CHAT.value and "model_types" not in config:
-                catalog = LLMService.query(db, fid=config["llm_factory"], llm_name=config["llm_name"])
-                if catalog and "IMAGE2TEXT" in {tag.strip() for tag in (catalog[0].tags or "").split(",")}:
-                    config["mdl_type"] = expected
-                    return config
+    if parse_model_id(model_name):
+        return get_model_config_by_id(db, model_name, tenant_id=tenant_id, model_type=expected)
     name, factory = TenantLLMService.split_model_name_and_factory(model_name)
     if expected == LLMType.EMBEDDING.value and "tei-" in os.getenv("COMPOSE_PROFILES", "") and name == os.getenv("TEI_MODEL", "") and factory in {"Builtin", None}:
         embedding = settings.EMBEDDING_CFG
@@ -151,7 +102,7 @@ def get_model_config_by_type_and_name(
             "mdl_type": expected,
             "max_tokens": embedding.get("max_tokens", 8192),
         }
-    raise LookupError(f"Tenant Model with name {model_name} and type {expected} not found")
+    raise LookupError(f"Model reference {model_name!r} is unavailable for {expected}")
 
 
 def get_tenant_default_model_by_type(
@@ -164,39 +115,15 @@ def get_tenant_default_model_by_type(
         raise LookupError("Tenant not found")
 
     model_type_val = model_type if isinstance(model_type, str) else model_type.value
-    model_name = ""
-    tenant_model_id: int | None = None
-
-    match model_type_val:
-        case LLMType.EMBEDDING.value:
-            model_name = tenant.embd_id
-            tenant_model_id = tenant.tenant_embd_id
-        case LLMType.SPEECH2TEXT.value:
-            model_name = tenant.asr_id
-            tenant_model_id = tenant.tenant_asr_id
-        case LLMType.IMAGE2TEXT.value:
-            model_name = tenant.img2txt_id
-            tenant_model_id = tenant.tenant_img2txt_id
-        case LLMType.CHAT.value:
-            model_name = tenant.llm_id
-            tenant_model_id = tenant.tenant_llm_id
-        case LLMType.RERANK.value:
-            model_name = tenant.rerank_id
-            tenant_model_id = tenant.tenant_rerank_id
-        case LLMType.TTS.value:
-            model_name = tenant.tts_id
-            tenant_model_id = tenant.tenant_tts_id
-        case LLMType.OCR.value:
-            model_name = tenant.ocr_id
-            tenant_model_id = tenant.tenant_ocr_id
-        case _:
-            raise ValueError(f"Unknown model type {model_type_val}")
-
-    if tenant_model_id:
-        return get_model_config_by_id(db, tenant_model_id, tenant_id=tenant_id, model_type=model_type_val)
-    if not model_name:
-        raise ValueError(f"No default {model_type_val} model is set.")
-    return get_model_config_by_type_and_name(db, tenant_id, model_type_val, model_name)
+    field = DEFAULT_MODEL_FIELDS.get(model_type_val)
+    if field is None:
+        raise ValueError(f"Unknown model type {model_type_val}")
+    identifier = getattr(tenant, f"tenant_{field}")
+    if identifier:
+        return get_model_config_by_id(db, identifier, tenant_id=tenant_id, model_type=model_type_val)
+    if model_type_val == LLMType.EMBEDDING.value and (reference := getattr(tenant, field)):
+        return get_model_config_by_type_and_name(db, tenant_id, model_type_val, reference)
+    raise LookupError(f"No default {model_type_val} model is set.")
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +163,7 @@ async def build_named_bundle_async(tenant_id: str, model_type: str, llm_id: str,
 
 async def build_bundle_by_id_async(
     tenant_id: str,
-    tenant_model_id: int,
+    tenant_model_id: str,
     *,
     db: AsyncSession | None = None,
     allowed_tenant_ids: set[str] | None = None,
@@ -266,11 +193,10 @@ async def build_bundle_by_id_async(
 
 
 def resolve_parser_reference(db: Session, tenant_id: str, reference: str) -> tuple[str, str | None]:
-    """Dispatch numeric OCR references without encoding provider suffixes."""
-    from common.parser_config_utils import normalize_layout_recognizer
+    """Dispatch registered OCR IDs and built-in parser modes."""
 
-    if not reference.isdecimal():
-        return normalize_layout_recognizer(reference)
+    if parse_model_id(reference) is None:
+        return reference, None
     types = resolve_model_type(db, tenant_id, reference)
     if "ocr" not in types:
         return reference, None

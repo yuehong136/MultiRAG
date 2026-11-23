@@ -37,7 +37,8 @@ UNAVAILABLE = "unavailable"
 class NameSource:
     """What naming needs to know about one model."""
 
-    model_id: int
+    model_id: str
+    registration_order: int
     provider: str
     instance_name: str
     model_name: str
@@ -45,15 +46,15 @@ class NameSource:
     preferred: bool = False
 
 
-def assign_names(sources: Iterable[NameSource]) -> dict[int, tuple[str, ...]]:
+def assign_names(sources: Iterable[NameSource]) -> dict[str, tuple[str, ...]]:
     """Every name each model answers to, its primary (call) name first.
 
     The primary name is the alias, else the bare name, else ``Provider/model``,
     else ``Provider/instance/model`` — the first of those the model owns.
     """
-    ordered = sorted(sources, key=lambda source: (not source.preferred, source.model_id))
-    owner: dict[str, int] = {}
-    claims: dict[int, dict[str, str]] = {source.model_id: {} for source in ordered}
+    ordered = sorted(sources, key=lambda source: (not source.preferred, source.registration_order))
+    owner: dict[str, str] = {}
+    claims: dict[str, dict[str, str]] = {source.model_id: {} for source in ordered}
     tiers = (
         ("alias", lambda source: source.alias),
         ("full", lambda source: f"{source.provider}/{source.instance_name}/{source.model_name}"),
@@ -66,7 +67,7 @@ def assign_names(sources: Iterable[NameSource]) -> dict[int, tuple[str, ...]]:
             if name and name not in owner:
                 owner[name] = source.model_id
                 claims[source.model_id][tier] = name
-    names: dict[int, tuple[str, ...]] = {}
+    names: dict[str, tuple[str, ...]] = {}
     for model_id, owned in claims.items():
         primary = [owned[tier] for tier in ("alias", "bare", "provider", "full") if tier in owned]
         names[model_id] = tuple(dict.fromkeys(primary))
@@ -77,7 +78,7 @@ def assign_names(sources: Iterable[NameSource]) -> dict[int, tuple[str, ...]]:
 class DirectoryModel:
     """One registered model with its gateway state and names."""
 
-    model_id: int
+    model_id: str
     model_name: str
     provider: str
     instance_id: str
@@ -115,7 +116,7 @@ class Directory:
     connections: tuple[Connection, ...]
     models: tuple[DirectoryModel, ...]
     _by_name: dict[str, DirectoryModel] = field(init=False, repr=False, compare=False)
-    _by_id: dict[int, DirectoryModel] = field(init=False, repr=False, compare=False)
+    _by_id: dict[str, DirectoryModel] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_by_name", {name: model for model in self.models for name in model.names})
@@ -124,7 +125,7 @@ class Directory:
     def lookup(self, name: str) -> DirectoryModel | None:
         return self._by_name.get(name)
 
-    def model(self, model_id: int) -> DirectoryModel | None:
+    def model(self, model_id: str) -> DirectoryModel | None:
         return self._by_id.get(model_id)
 
 
@@ -140,7 +141,7 @@ def _reason(model: RegisteredModel, servable: Sequence[str]) -> str | None:
 
 def build_directory(
     registered: Sequence[RegisteredModel],
-    settings: Mapping[int, GatewayModelSetting],
+    settings: Mapping[str, GatewayModelSetting],
     new_models_enabled: bool,
     connections: Sequence[Connection] = (),
 ) -> Directory:
@@ -148,6 +149,7 @@ def build_directory(
     names = assign_names(
         NameSource(
             model_id=model.model_id,
+            registration_order=model.registration_order,
             provider=model.provider,
             instance_name=model.instance_name,
             model_name=model.model_name,
@@ -195,7 +197,7 @@ async def tenant_setting(db: AsyncSession, tenant_id: str) -> GatewaySetting | N
     return await db.scalar(select(GatewaySetting).where(GatewaySetting.tenant_id == tenant_id).execution_options(**_FRESH))
 
 
-async def model_settings(db: AsyncSession, tenant_id: str) -> dict[int, GatewayModelSetting]:
+async def model_settings(db: AsyncSession, tenant_id: str) -> dict[str, GatewayModelSetting]:
     rows = (await db.scalars(select(GatewayModelSetting).where(GatewayModelSetting.tenant_id == tenant_id).execution_options(**_FRESH))).all()
     return {row.model_id: row for row in rows}
 

@@ -16,12 +16,13 @@ from pymilvus import DataType, MilvusClient
 from sqlalchemy.orm import Session
 
 from api.apps.services import dataset_api_service, dataset_embedding_service
-from api.db.db_models import Knowledgebase, LLMFactories, TenantLLM, UserTenant
+from api.db.db_models import Knowledgebase, LLMFactories, TenantModel, UserTenant
 from common import settings
 from common.config_utils import CONFIGS
 from core.nlp import search
 from tests.support.dataset_management_http import management_api as management_api
 from tests.support.dataset_management_http import request_api, sql_state
+from tests.support.registered_model import register_model
 from tests.support.web_consumer import tsx_runner
 
 
@@ -31,15 +32,15 @@ def embedding_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatc
     dataset, owner = env["datasets"][0], env["users"][0]
     name = "embedding_" + uuid4().hex
     collection = search.index_name_one(owner, name)
-    models: list[int] = []
+    models: list[str] = []
     with Session(env["engine"]) as db:
         db.merge(LLMFactories(name="Ollama", tags="EMBEDDING", status="1"))
         for tenant, model in [(owner, "old"), (owner, "candidate"), (env["users"][1], "foreign")]:
-            row = TenantLLM(tenant_id=tenant, llm_factory="Ollama", llm_name=model, mdl_type="embedding", api_key="controlled", api_base="http://controlled.invalid")
+            row = register_model(db, tenant_id=tenant, provider_name="Ollama", model_name=model, model_types=("embedding",), api_key="controlled" or "", base_url="http://controlled.invalid")
             db.add(row)
             db.flush()
             models.append(row.id)
-        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(name=name, embd_id="old@Ollama", tenant_embd_id=models[0], chunk_num=3))
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(name=name, embd_id=models[0], tenant_embd_id=models[0], chunk_num=3))
         db.commit()
 
     @contextmanager
@@ -107,9 +108,9 @@ def embedding_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatc
         assert not reader.has_collection(collection)
         reader.close()
         with env["engine"].begin() as db:
-            db.execute(sa.delete(TenantLLM).where(TenantLLM.id.in_(models)))
+            db.execute(sa.delete(TenantModel).where(TenantModel.id.in_(models)))
         with env["engine"].connect() as db:
-            assert db.scalar(sa.select(sa.func.count()).select_from(TenantLLM).where(TenantLLM.id.in_(models))) == 0
+            assert db.scalar(sa.select(sa.func.count()).select_from(TenantModel).where(TenantModel.id.in_(models))) == 0
         record.update(embedding_collection_removed=True, embedding_models_removed=True)
         record_path.write_text(json.dumps(record))
 
@@ -124,18 +125,18 @@ def test_check_and_switch_leave_stored_vectors_unchanged(embedding_api: dict[str
     dataset = env["datasets"][0]
     before_sql, before_vectors = sql_state(env), vectors(env)
     path = f"/datasets/{dataset}/embedding/check"
-    response = request_api(env, "POST", path, credential=env[kind][0], payload={"embd_id": "candidate@Ollama", "check_num": 5})
+    response = request_api(env, "POST", path, credential=env[kind][0], payload={"embd_id": env["model_ids"][1], "check_num": 5})
     assert response.status_code == 200 and response.json()["code"] == 0, response.text
     assert response.json()["data"]["summary"]["valid"] == 2
     assert response.json()["data"]["summary"]["avg_cos_sim"] == 1
     assert sql_state(env) == before_sql and vectors(env) == before_vectors
-    response = request_api(env, "PUT", f"/datasets/{dataset}", credential=env[kind][0], payload={"embedding_model": "candidate@Ollama"})
+    response = request_api(env, "PUT", f"/datasets/{dataset}", credential=env[kind][0], payload={"embedding_model": env["model_ids"][1]})
     assert response.status_code == 200 and response.json()["code"] == 0, response.text
     after = sql_state(env)
     kb = after[Knowledgebase.__tablename__][dataset]
-    assert kb["embd_id"] == "candidate@Ollama" and kb["tenant_embd_id"] == env["model_ids"][1]
+    assert kb["embd_id"] == env["model_ids"][1] and kb["tenant_embd_id"] == env["model_ids"][1]
     assert kb["chunk_num"] == 3 and vectors(env) == before_vectors
-    assert request_api(env, "GET", f"/datasets/{dataset}", credential=env[kind][0]).json()["data"]["embedding_model"] == "candidate@Ollama"
+    assert request_api(env, "GET", f"/datasets/{dataset}", credential=env[kind][0]).json()["data"]["embedding_model"] == env["model_ids"][1]
 
 
 def test_check_rejects_incompatible_invalid_empty_and_foreign_samples(embedding_api: dict[str, Any]) -> None:
@@ -146,20 +147,20 @@ def test_check_rejects_incompatible_invalid_empty_and_foreign_samples(embedding_
     path = f"/datasets/{dataset}/embedding/check"
     for candidate, code in [([[0, 1], [0, 1]], 10), ([[1, 0, 0], [1, 0, 0]], 102), ([[float("nan"), 0], [1, 0]], 102)]:
         state["vectors"] = candidate
-        result = request_api(env, "POST", path, credential=env["keys"][0], payload={"embd_id": "candidate@Ollama"})
+        result = request_api(env, "POST", path, credential=env["keys"][0], payload={"embd_id": env["model_ids"][1]})
         assert result.status_code == 200 and result.json()["code"] == code, result.text
     with env["engine"].begin() as db:
         db.execute(sa.update(UserTenant).where(UserTenant.user_id == env["users"][2], UserTenant.tenant_id == env["users"][0]).values(role="normal"))
     state["calls"].clear()
     for credential in [env["jwt"][1], env["keys"][1], env["jwt"][2], env["keys"][2]]:
-        result = request_api(env, "POST", path, credential=credential, payload={"embd_id": "candidate@Ollama"})
+        result = request_api(env, "POST", path, credential=credential, payload={"embd_id": env["model_ids"][1]})
         assert result.json()["code"] == 109, result.text
     assert not state["calls"]
-    result = request_api(env, "POST", path, credential=env["keys"][0], payload={"embd_id": "foreign@Ollama"})
+    result = request_api(env, "POST", path, credential=env["keys"][0], payload={"embd_id": env["model_ids"][2]})
     assert result.json()["code"] == 102 and not state["calls"], result.text
     assert sql_state(env) == before_sql and vectors(env) == before_vectors
     # Missing collection belongs to an owned dataset and is an explicit empty-sample failure.
-    result = request_api(env, "POST", f"/datasets/{env['datasets'][1]}/embedding/check", credential=env["keys"][0], payload={"embd_id": "candidate@Ollama"})
+    result = request_api(env, "POST", f"/datasets/{env['datasets'][1]}/embedding/check", credential=env["keys"][0], payload={"embd_id": env["model_ids"][1]})
     assert result.json()["code"] == 102, result.text
     assert sql_state(env) == before_sql and vectors(env) == before_vectors
 
@@ -172,7 +173,7 @@ def test_actual_web_embedding_consumer(embedding_api: dict[str, Any]) -> None:
     result = subprocess.run(
         [str(tsx_runner(checkout)), "--tsconfig", str(checkout / "tsconfig.app.json"), str(checkout / "scripts/verify-embedding-check.ts")],
         cwd=checkout,
-        env={**os.environ, "EMBEDDING_BASE": env["base"], "EMBEDDING_TOKEN": env["jwt"][0], "EMBEDDING_DATASET": env["datasets"][0]},
+        env={**os.environ, "EMBEDDING_BASE": env["base"], "EMBEDDING_TOKEN": env["jwt"][0], "EMBEDDING_DATASET": env["datasets"][0], "EMBEDDING_MODEL_ID": env["model_ids"][1]},
         capture_output=True,
         text=True,
         timeout=90,

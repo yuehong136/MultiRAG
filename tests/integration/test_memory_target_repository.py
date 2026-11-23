@@ -27,7 +27,7 @@ from tests.support.memory_maintenance_repository import environment as environme
 from tests.support.memory_maintenance_repository import service as explicit_jobs
 
 _ENTRY = "a" * 32
-_BINDING = ModelBinding(1, "controlled-embedding", 2, "binding-hash")
+_BINDING = ModelBinding("00000000000000000000000000000001", "controlled-embedding", 2, "binding-hash")
 
 
 async def seed(env: dict[str, Any]) -> None:
@@ -200,7 +200,7 @@ async def test_changed_confirmation_rejects_before_plan_creation(environment: di
     if change == "projection":
         env["messages"][101]["content_embed"] = [0.0, 1.0]
     if change == "model":
-        env["binding"] = ModelBinding(2, "changed-embedding", 2, "changed-config")
+        env["binding"] = ModelBinding("00000000000000000000000000000002", "changed-embedding", 2, "changed-config")
     async with env["factory"]() as db:
         _, discovery = services(db, env)
         with pytest.raises(RevisionConflict):
@@ -234,7 +234,7 @@ async def test_model_change_during_embedding_fails_closed_and_foreign_scope_is_n
     await seed(env)
 
     async def mutate() -> None:
-        env["binding"] = ModelBinding(2, "changed", 2, "different")
+        env["binding"] = ModelBinding("00000000000000000000000000000002", "changed", 2, "different")
 
     env["on_embed"] = mutate
     async with env["factory"]() as db:

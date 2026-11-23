@@ -79,15 +79,15 @@ def test_invalid_request_never_reads_search_or_model(client: TestClient, recomme
 
 
 @pytest.mark.parametrize("role", ["owner", "admin", "normal"])
-@pytest.mark.parametrize("chat_id", ["29", 29])
-def test_joined_search_binds_owner_model_and_keeps_zero_settings(client: TestClient, recommendation_module: ModuleType, monkeypatch: pytest.MonkeyPatch, role: str, chat_id: str | int) -> None:
+def test_joined_search_binds_owner_model_and_keeps_zero_settings(client: TestClient, recommendation_module: ModuleType, monkeypatch: pytest.MonkeyPatch, role: str) -> None:
     module = recommendation_module
+    chat_id = "a" * 32
     settings = {"temperature": 0, "parameter": {"retained": True}}
     detail = {"tenant_id": "team", "search_config": {"chat_id": chat_id, "llm_setting": settings}}
     monkeypatch.setattr(module.SearchService, "get_detail", lambda *_: detail)
     membership = Mock(return_value=SimpleNamespace(role=role))
     monkeypatch.setattr(module.UserTenantService, "get_membership", membership)
-    lookup = Mock(return_value={"id": 29, "mdl_type": "chat"})
+    lookup = Mock(return_value={"id": chat_id, "mdl_type": "chat"})
     monkeypatch.setattr(module, "get_model_config_by_type_and_name", lookup)
     monkeypatch.setattr(module, "load_prompt", lambda *_: "related prompt")
     bundles: list[Any] = []
@@ -102,7 +102,7 @@ def test_joined_search_binds_owner_model_and_keeps_zero_settings(client: TestCli
         async def async_chat(self, prompt: str, messages: list[dict[str, str]], gen_conf: dict[str, Any]) -> str:
             assert self.db is None
             assert self.tenant_id == "team"
-            assert self.config == {"id": 29, "mdl_type": "chat"}
+            assert self.config == {"id": chat_id, "mdl_type": "chat"}
             assert gen_conf == {"temperature": 0}
             gen_conf["temperature"] = 1
             return "1. First question\n 10. Tenth question\n11.   \nnon-numbered"
@@ -114,13 +114,13 @@ def test_joined_search_binds_owner_model_and_keeps_zero_settings(client: TestCli
     assert response.status_code == 200
     assert response.json()["code"] == 0
     assert response.json()["data"] == ["First question", "Tenth question"]
-    assert lookup.call_args.args[1:] == ("team", "chat", "29")
+    assert lookup.call_args.args[1:] == ("team", "chat", chat_id)
     assert membership.call_args.kwargs == {"tenant_id": "team", "user_id": "tenant-unit"}
     assert settings == {"temperature": 0, "parameter": {"retained": True}}
     assert len(bundles) == 1
 
 
-@pytest.mark.parametrize("config", [{"chat_id": True}, {"chat_id": 0}, {"chat_id": None}, {"llm_setting": []}, {"llm_setting": None}])
+@pytest.mark.parametrize("config", [{"chat_id": True}, {"chat_id": 0}, {"chat_id": 29}, {"chat_id": "29"}, {"chat_id": None}, {"llm_setting": []}, {"llm_setting": None}])
 def test_invalid_saved_config_cannot_trigger_default_model_fallback(client: TestClient, recommendation_module: ModuleType, monkeypatch: pytest.MonkeyPatch, config: dict[str, Any]) -> None:
     module = recommendation_module
     monkeypatch.setattr(module.SearchService, "get_detail", lambda *_: {"tenant_id": "tenant-unit", "search_config": config})

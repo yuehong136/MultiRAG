@@ -18,7 +18,7 @@ def prepared(capability: str, **changes: Any) -> PreparedTenantLLM:
     return PreparedTenantLLM(
         "tenant",
         {
-            "id": 71,
+            "id": "a" * 32,
             "tenant_id": "tenant",
             "llm_factory": "Controlled",
             "llm_name": "model",

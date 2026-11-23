@@ -52,7 +52,7 @@ from api.admin.admin_models import (
     TaskAdmin,
     TenantAdmin,
     TenantLangfuseAdmin,
-    TenantLLMAdmin,
+    TenantModelAdmin,
     ToolsDataAdmin,
     # 用户和租户 (3)
     UserAdmin,
@@ -133,7 +133,7 @@ def setup_admin(app: FastAPI) -> Admin:
     # LLM管理
     admin.add_view(LLMFactoriesAdmin)
     admin.add_view(LLMAdmin)
-    admin.add_view(TenantLLMAdmin)
+    admin.add_view(TenantModelAdmin)
     admin.add_view(TenantLangfuseAdmin)
 
     # AI护栏管理

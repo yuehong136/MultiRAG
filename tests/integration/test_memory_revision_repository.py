@@ -15,7 +15,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from api.db.db_models import Memory, TenantLLM
+from api.db.db_models import Memory, TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.memory_revision_models import (
     MEMORY_REVISION_MODELS,
     ManagedMemoryState,
@@ -31,6 +31,7 @@ from memory.revisions.service import RevisionService
 from memory.revisions.sources import SourceService
 from memory.revisions.storage import ManagedMessageStore
 from tests.support.database import scratch_database
+from tests.support.registered_model import register_model
 
 
 @pytest.fixture
@@ -103,20 +104,21 @@ async def revision_async_engine(revision_engine: sa.Engine) -> AsyncIterator[Asy
 async def repository(revision_async_engine: AsyncEngine) -> AsyncIterator[dict[str, Any]]:
     factory = async_sessionmaker(revision_async_engine, expire_on_commit=False)
     async with factory() as db, db.begin():
-        db.add(Memory(id="bank", tenant_id="tenant", name="owned revision bank", embd_id="legacy-alias", tenant_embd_id=None, llm_id="unused"))
-        db.add(
-            TenantLLM(
-                id=71,
+
+        def seed(session: sa.orm.Session) -> tuple[str, str]:
+            model = register_model(
+                session,
                 tenant_id="tenant",
-                llm_name="legacy-alias",
-                llm_factory="Controlled",
-                mdl_type="embedding",
+                provider_name="Controlled",
+                model_name="owned-embeddings",
+                model_types=("embedding",),
                 api_key="unused-test-credential",
-                api_base="http://controlled.invalid",
-                max_tokens=8192,
-                status="1",
+                base_url="http://controlled.invalid",
             )
-        )
+            return model.id, model.instance_id
+
+        model_id, instance_id = await db.run_sync(seed)
+        db.add(Memory(id="bank", tenant_id="tenant", name="owned revision bank", embd_id=model_id, tenant_embd_id=model_id, llm_id=""))
     rows = {
         1: {
             "memory_id": "bank",
@@ -145,7 +147,16 @@ async def repository(revision_async_engine: AsyncEngine) -> AsyncIterator[dict[s
             "forget_at": None,
         },
     }
-    yield {"factory": factory, "sync_url": revision_async_engine.url, "rows": rows, "counter": 2, "allocation_count": 0, "allocation_lock": asyncio.Lock()}
+    yield {
+        "factory": factory,
+        "sync_url": revision_async_engine.url,
+        "rows": rows,
+        "model_id": model_id,
+        "instance_id": instance_id,
+        "counter": 2,
+        "allocation_count": 0,
+        "allocation_lock": asyncio.Lock(),
+    }
 
 
 def _service(db: AsyncSession, env: dict[str, Any]) -> RevisionService:
@@ -165,8 +176,15 @@ def _service(db: AsyncSession, env: dict[str, Any]) -> RevisionService:
         assert await session.scalar(sa.select(Memory.id).where(Memory.id == memory_id, Memory.tenant_id == "tenant")) == memory_id
 
     async def binding(session: AsyncSession, memory_id: str, dimension: int) -> ModelBinding:
-        row = (await session.execute(sa.select(TenantLLM.id, TenantLLM.llm_name, TenantLLM.llm_factory, TenantLLM.api_base).where(TenantLLM.tenant_id == "tenant", TenantLLM.id == 71))).one()
-        return ModelBinding(row.id, f"{row.llm_name}@{row.llm_factory}", dimension, request_hash({"model": row.llm_name, "provider": row.llm_factory, "url": row.api_base}))
+        row = (
+            await session.execute(
+                sa.select(TenantModel.id, TenantModel.model_name, TenantModelProvider.provider_name, TenantModelInstance.base_url)
+                .join(TenantModelProvider, TenantModelProvider.id == TenantModel.provider_id)
+                .join(TenantModelInstance, TenantModelInstance.id == TenantModel.instance_id)
+                .where(TenantModelProvider.tenant_id == "tenant", TenantModel.id == env["model_id"])
+            )
+        ).one()
+        return ModelBinding(row.id, f"{row.model_name}@{row.provider_name}", dimension, request_hash({"model": row.model_name, "provider": row.provider_name, "url": row.base_url}))
 
     async def measure(memory_id: str) -> int:
         assert not db.in_transaction(), "Storage measurement must not hold SQL"
@@ -279,7 +297,7 @@ async def test_fresh_resolved_binding_change_rejects_pending_publication(reposit
         service = _service(db, env)
         await service.revise_entry("bank", entry_id, operation_id="revise", expected_revision=1, content="new body", reason="correction")
         async with env["factory"]() as writer, writer.begin():
-            await writer.execute(sa.update(TenantLLM).where(TenantLLM.id == 71).values(api_base="http://changed.invalid"))
+            await writer.execute(sa.update(TenantModelInstance).where(TenantModelInstance.id == env["instance_id"]).values(base_url="http://changed.invalid"))
         with pytest.raises(RevisionConflict, match="model_binding_changed"):
             await service.claim_publication("bank", "revise")
         assert (await service.get_entry("bank", entry_id))["current_revision"] == 1

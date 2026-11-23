@@ -22,8 +22,7 @@ from typing import Any
 from docx import Document
 
 from common.constants import MAXIMUM_PAGE_NUMBER, ParserType
-from common.parser_config_utils import normalize_layout_recognizer
-from core.app.naive import PARSERS, by_plaintext
+from core.app.naive import PARSERS, by_plaintext, resolve_pdf_parser
 from core.nlp import Node, bullets_category, docx_question_level, make_colon_as_title, rag_tokenizer, remove_contents_table, tokenize_chunks, tree_merge
 from deepdoc.parser import DocxParser, HtmlParser, PdfParser
 from deepdoc.parser.utils import get_text
@@ -137,7 +136,7 @@ def chunk(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = 
         return tokenize_chunks(chunks, doc, eng, None)
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
+        layout_recognizer, parser_model_name = resolve_pdf_parser(kwargs.get("tenant_id", ""), parser_config.get("layout_recognize", "DeepDOC"))
 
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"

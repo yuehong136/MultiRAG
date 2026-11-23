@@ -350,7 +350,7 @@ async def test_foreign_rerank_id_rejected_before_models_metadata_and_retrieval(s
     monkeypatch.setattr(db, "scalar", AsyncMock(return_value=None))
     metadata = AsyncMock()
     monkeypatch.setattr(service, "apply_meta_data_filter", metadata)
-    result = await service.search_datasets(db, "user", SearchDatasetsRequest(question="q", dataset_ids=["a", "b"], tenant_rerank_id=42, meta_data_filter={"method": "auto"}))
+    result = await service.search_datasets(db, "user", SearchDatasetsRequest(question="q", dataset_ids=["a", "b"], tenant_rerank_id="a" * 32, meta_data_filter={"method": "auto"}))
     assert result[2] == RetCode.AUTHENTICATION_ERROR
     service._bundle.assert_not_called()
     metadata.assert_not_called()

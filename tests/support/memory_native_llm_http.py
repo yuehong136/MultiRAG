@@ -9,7 +9,7 @@ from typing import Any, cast
 import pytest
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Memory, TenantLLM
+from api.db.db_models import Memory, TenantModel
 from api.db.services.tenant_llm_service import TenantLLMService
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.memory_writes_http import WriteChat
@@ -25,10 +25,10 @@ def native_api(writes_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> I
     with Session(env["engine"]) as db:
         bank = db.get(Memory, env["memory_id"])
         assert bank is not None
-        model = db.get(TenantLLM, bank.tenant_llm_id)
+        model = db.get(TenantModel, bank.tenant_llm_id)
         assert model is not None
-        model.max_tokens = 16384
-        env["native_model_reference"] = str(model.id)
+        model.extra = {**model.extra, "max_tokens": 16384}
+        env["native_model_reference"] = model.id
         db.commit()
 
     class NativeChat(WriteChat):

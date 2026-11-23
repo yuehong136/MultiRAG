@@ -1667,7 +1667,7 @@ OpenAI 消息适配使用同一个路径，显式传 `openai-compatible: true`�
 
 ## Go Provider API（并行实现）
 
-本节描述 Go `internal/` 的独立实现；当前 Web 模型页仍使用 Python `/v1/llm/*`。
+本节描述 Go `internal/` 的独立实现。Web 模型页使用 Python 的 [模型管理 API](../../api/db/services/MODEL_PROVIDERS.md)。
 提供商管理基础路径为 `/api/v1/providers`，模型聊天入口为 `/api/v1/chat/completions`；现有认证与用户/tenant 约束继续适用。
 
 PPIO、TokenPony、Groq 接入聊天和严格模型发现，保留实例凭据隔离、完整历史、推理文本、

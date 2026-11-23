@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import Document, db_connection, get_async_db, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.model_contract import ModelID
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_image_lock import image_reference_key, image_write_locks
 from api.db.services.document_image_service import _raster
@@ -628,7 +629,7 @@ class RetrievalTestRequest(BaseModel):
     vector_similarity_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     top_k: int = Field(default=1024, ge=1)
     rerank_id: str | None = None
-    tenant_rerank_id: int | None = None
+    tenant_rerank_id: ModelID | None = None
     keyword: bool = Field(default=False)
     highlight: bool = Field(default=False)
     use_kg: bool = Field(default=False)
@@ -682,7 +683,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     kb_names = [kb.name for kb in kbs]
 
     try:
-        KnowledgebaseService.ensure_same_embedding_model(kbs)
+        KnowledgebaseService.ensure_same_embedding_model(kbs, db=db)
     except EmbeddingModelMismatchError as e:
         return get_result(
             retmsg=str(e),
@@ -781,7 +782,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             return get_error_data_result(retmsg="Dataset not found!")
 
         if kb.tenant_embd_id:
-            embd_config = get_model_config_by_id(db, kb.tenant_embd_id, model_type="embedding")
+            embd_config = get_model_config_by_id(db, kb.tenant_embd_id, tenant_id=kb.tenant_id, model_type="embedding")
         else:
             embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
         embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)

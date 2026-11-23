@@ -26,12 +26,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from api.db.db_models import APIToken, Document, Knowledgebase, Task, Tenant, TenantLLM, User, UserTenant, get_async_db, get_db
+from api.db.db_models import APIToken, Document, Knowledgebase, Task, Tenant, TenantModel, TenantModelProvider, User, UserTenant, get_async_db, get_db
 from api.db.joint_services import tenant_model_service as models
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import resources
 from tests.support.database import scratch_database
 from tests.support.event_loop import UVICORN_LOOP
+from tests.support.registered_model import register_model
 from tests.support.resource_journal import ResourceJournal
 from tests.support.web_consumer import tsx_runner
 
@@ -106,23 +107,36 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
         cleanup.callback(save)
         save()
         with Session(engine) as db:
+            embeddings = {}
             for key, owner in owners.items():
                 db.add(User(id=owner, email=f"{owner}@rerank.test", nickname="Rerank auth", password="unused", access_token="active"))
                 db.add(Tenant(id=owner, name="Rerank auth", llm_id="", embd_id="embedding", asr_id="", img2txt_id="", parser_ids="naive"))
                 db.add(UserTenant(id=membership_ids[key], user_id=owner, tenant_id=owner, role="owner", invited_by=owner))
-                db.add(TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="embedding", mdl_type="embedding", api_key="controlled-provider-key"))
+                embeddings[owner] = register_model(db, tenant_id=owner, provider_name="OpenAI", model_name="embedding", model_types=("embedding",), api_key="controlled-provider-key").id
             db.add(UserTenant(id=membership_ids["shared_member"], user_id=owners["caller"], tenant_id=owners["shared"], role="normal", invited_by=owners["shared"]))
             for name, identifier in ids.items():
                 owner = owners[{"own": "caller", "incompatible": "shared"}.get(name, name)]
-                db.add(Knowledgebase(id=identifier, tenant_id=owner, created_by=owner, name=name, permission="team", embd_id="other" if name == "incompatible" else "embedding", parser_config={}))
+                embedding_id = (
+                    register_model(db, tenant_id=owner, provider_name="OpenAI", model_name="different", model_types=("embedding",), api_key="controlled-provider-key").id
+                    if name == "incompatible"
+                    else embeddings[owner]
+                )
+                db.add(Knowledgebase(id=identifier, tenant_id=owner, created_by=owner, name=name, permission="team", embd_id=embedding_id, tenant_embd_id=embedding_id, parser_config={}))
             db.add(APIToken(tenant_id=owners["caller"], token=token, beta=beta, name="rerank-auth"))
-            registrations = {key: TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="rerank", mdl_type="rerank", api_key="controlled-provider-key") for key, owner in owners.items()}
-            db.add_all(registrations.values())
+            registrations = {
+                key: register_model(db, tenant_id=owner, provider_name="OpenAI", model_name="rerank", model_types=("rerank",), api_key="controlled-provider-key") for key, owner in owners.items()
+            }
             db.commit()
             model_ids = {key: row.id for key, row in registrations.items()}
         manifest["model_ids"] = model_ids
         with Session(engine) as reader:
-            stored_models = dict(reader.execute(sa.select(TenantLLM.tenant_id, TenantLLM.id).where(TenantLLM.tenant_id.in_(list(owners.values())), TenantLLM.mdl_type == "rerank")).all())
+            stored_models = dict(
+                reader.execute(
+                    sa.select(TenantModelProvider.tenant_id, TenantModel.id)
+                    .join(TenantModel, TenantModel.provider_id == TenantModelProvider.id)
+                    .where(TenantModelProvider.tenant_id.in_(list(owners.values())), TenantModel.model_name == "rerank")
+                ).all()
+            )
         assert model_ids == {key: stored_models[owner] for key, owner in owners.items()}
         journal.event("sql-model-identities-readback", database=engine.url.database, model_ids=model_ids)
         save()
@@ -243,11 +257,11 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
 
 def snapshot(engine: sa.Engine) -> str:
     with Session(engine) as db:
-        state = {model.__tablename__: [row.to_dict() for row in db.scalars(sa.select(model))] for model in (Knowledgebase, TenantLLM, Document, Task, APIToken)}
+        state = {model.__tablename__: [row.to_dict() for row in db.scalars(sa.select(model))] for model in (Knowledgebase, TenantModel, Document, Task, APIToken)}
     return hashlib.sha256(json.dumps(state, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def post(env: dict[str, Any], route: str, datasets: list[str], model_id: int, *, authenticated: bool = True, extras: dict[str, Any] | None = None) -> requests.Response:
+def post(env: dict[str, Any], route: str, datasets: list[str], model_id: str | int, *, authenticated: bool = True, extras: dict[str, Any] | None = None) -> requests.Response:
     body: dict[str, Any] = {"question": "q", "tenant_rerank_id": model_id}
     token = env["token"]
     if route == "embedded":
@@ -260,7 +274,7 @@ def post(env: dict[str, Any], route: str, datasets: list[str], model_id: int, *,
     payload = {**body, **(extras or {})}
     record_http_input(env["journal"], "POST", url, payload, headers)
     response = requests.post(url, headers=headers, json=payload, timeout=30)
-    assert response.status_code == (200 if authenticated else 401), response.text
+    assert response.status_code == (401 if not authenticated else 422 if isinstance(model_id, int) else 200), response.text
     return response
 
 
@@ -277,21 +291,23 @@ def test_registered_http_scope_and_zero_denial_side_effects(rerank_api: dict[str
     for route in ("sdk", "embedded", "collection", "single"):
         for selection, model, reason in (
             ([ids["own"]], models_by_owner["foreign"], "foreign model"),
-            ([ids["own"]], max(models_by_owner.values()) + 10000, "missing model"),
+            ([ids["own"]], uuid4().hex, "missing model"),
             ([ids["own"]], 0, "zero model id"),
             ([ids["own"], ids["foreign"]], models_by_owner["caller"], "mixed unauthorized datasets"),
             ([ids["own"]], models_by_owner["caller"], "missing auth"),
         ):
             for name in ("decoded", "providers", "fetch", "translation", "metadata", "schedule"):
                 env[name].reset_mock()
-            result = post(env, route, selection, model, authenticated=reason != "missing auth", extras={"cross_languages": ["English"], "tenant_id": env["owners"]["foreign"]}).json()
-            assert business_code(result) != 0, (route, reason, result)
-            if reason in {"foreign model", "missing model", "zero model id"}:
-                assert business_code(result) == 109, (route, reason, result)
+            response = post(env, route, selection, model, authenticated=reason != "missing auth", extras={"cross_languages": ["English"], "tenant_id": env["owners"]["foreign"]})
+            result = response.json()
+            code = response.status_code if response.status_code == 422 else business_code(result)
+            assert code != 0, (route, reason, result)
+            if reason in {"foreign model", "missing model"}:
+                assert code == 109, (route, reason, result)
             for name in ("decoded", "providers", "fetch", "translation", "metadata", "schedule"):
                 env[name].assert_not_called()
             assert snapshot(env["engine"]) == before and not env["writes"]
-            checks.append({"route": route, "case": reason, "code": business_code(result), "provider_calls": 0, "credential_resolutions": 0, "writes": 0, "scheduled": 0})
+            checks.append({"route": route, "case": reason, "code": code, "provider_calls": 0, "credential_resolutions": 0, "writes": 0, "scheduled": 0})
         # SDK ownership remains strict. Shared access is exercised by the two
         # REST variants and embedded route without broadening SDK permissions.
         allowed_cases = [(["own"], "caller")] if route == "sdk" else [(["shared"], "caller"), (["shared"], "shared"), (["own", "shared"], "shared")]
@@ -342,7 +358,7 @@ for (const id of JSON.parse(process.env.RERANK_ALLOWED!)) {
  const result = await knowledgeRetrievalAPI.test({...args, tenant_rerank_id:id});
  assert.equal(result.total,0);
 }
-await assert.rejects(knowledgeRetrievalAPI.test({...args,tenant_rerank_id:Number(process.env.RERANK_FOREIGN)}),APIError);
+await assert.rejects(knowledgeRetrievalAPI.test({...args,tenant_rerank_id:process.env.RERANK_FOREIGN}),APIError);
 console.log('Real Web retrieval consumer: own/shared models accepted; foreign model rejected');
 """.replace("WEB_ROOT", str(root))
     script_sha256 = hashlib.sha256(script_source.encode()).hexdigest()

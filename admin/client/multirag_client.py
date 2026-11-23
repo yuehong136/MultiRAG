@@ -12,6 +12,15 @@ try:
 except Exception:
     MultipartEncoder = None
 
+_MODEL_CAPABILITIES = {
+    "llm_id": "chat",
+    "img2txt_id": "image2text",
+    "embd_id": "embedding",
+    "rerank_id": "rerank",
+    "asr_id": "speech2text",
+    "tts_id": "tts",
+}
+
 
 def _variable_text(value: Any) -> str:
     while isinstance(value, Tree):
@@ -979,44 +988,45 @@ class MultiRAGClient:
         else:
             print(f"Fail to list chats, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
 
-    def list_user_model_providers(self, command: dict):
+    def list_user_model_providers(self, command: dict[str, Any]) -> None:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("GET", "llm/my_llms", use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        if response.status_code == 200:
-            new_input = []
-            for key, value in res_json.get("data", {}).items():
-                new_input.append({"model_provider": key, "models": value})
-            self._print_table_simple(new_input)
-        else:
-            print(f"Fail to list model providers, code: {res_json.get('retcode')}, message: {res_json.get('retmsg')}")
+        page_number = 1
+        rows: list[dict[str, Any]] = []
+        while True:
+            response = self.http_client.request("GET", "models", params={"page": page_number, "page_size": 100}, use_api_base=True, auth_kind="web")
+            result = response.json()
+            if response.status_code != 200 or result.get("code") != 0:
+                print(f"Could not list model providers. {result.get('message', '')}")
+                return
+            data = result["data"]
+            rows.extend(
+                {
+                    "model_provider": model["provider_name"],
+                    "model_instance": model["instance_name"],
+                    "model_name": model["name"],
+                    "model_id": model["id"],
+                    "model_types": ", ".join(model["model_types"]),
+                    "status": model["effective_status"],
+                }
+                for model in data["items"]
+            )
+            if not data["items"] or page_number * 100 >= data["total"]:
+                break
+            page_number += 1
+        self._print_table_simple(rows)
 
-    def list_user_default_models(self, command: dict):
+    def list_user_default_models(self, command: dict[str, Any]) -> None:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("GET", "users/me/models", use_api_base=True, auth_kind="web")
-        res_json = response.json()
-        if response.status_code == 200:
-            new_input = []
-            for key, value in res_json.get("data", {}).items():
-                if key == "asr_id" and value != "":
-                    new_input.append({"model_category": "ASR", "model_name": value})
-                elif key == "embd_id" and value != "":
-                    new_input.append({"model_category": "Embedding", "model_name": value})
-                elif key == "llm_id" and value != "":
-                    new_input.append({"model_category": "LLM", "model_name": value})
-                elif key == "rerank_id" and value != "":
-                    new_input.append({"model_category": "Reranker", "model_name": value})
-                elif key == "tts_id" and value != "":
-                    new_input.append({"model_category": "TTS", "model_name": value})
-                elif key == "img2txt_id" and value != "":
-                    new_input.append({"model_category": "VLM", "model_name": value})
-            self._print_table_simple(new_input)
+        response = self.http_client.request("GET", "models/default", use_api_base=True, auth_kind="web")
+        result = response.json()
+        if response.status_code == 200 and result.get("code") == 0:
+            self._print_table_simple(result["data"]["models"])
         else:
-            print(f"Fail to list default models, code: {res_json.get('retcode')}, message: {res_json.get('retmsg')}")
+            print(f"Could not list default models. {result.get('message', '')}")
 
     def login_user(self, command: dict):
         """Re-login as a different user during interactive session."""
@@ -1104,36 +1114,33 @@ class MultiRAGClient:
             msg = res_json.get("message", res_json.get("retmsg", ""))
             print(f"Fail to get current user: {msg}")
 
-    def create_model_provider(self, command: dict):
+    def create_model_provider(self, command: dict[str, Any]) -> None:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
         llm_factory: str = command["provider_name"]
         api_key: str = command["provider_key"]
-        payload = {"api_key": api_key, "llm_factory": llm_factory}
-        response = self.http_client.request("POST", "llm/set_api_key", json_body=payload, use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        code = res_json.get("code", res_json.get("retcode", -1))
-        if response.status_code == 200 and code == 0:
+        provider = urllib.parse.quote(llm_factory, safe="")
+        payload = {"api_key": api_key, "instance_name": "default"}
+        response = self.http_client.request("POST", f"providers/{provider}/instances", json_body=payload, use_api_base=True, auth_kind="web")
+        result = response.json()
+        if response.status_code == 200 and result.get("code") == 0:
             print(f"Success to add model provider {llm_factory}")
         else:
-            msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to add model provider {llm_factory}: {msg}")
+            print(f"Could not add model provider {llm_factory}. {result.get('message', '')}")
 
-    def drop_model_provider(self, command: dict):
+    def drop_model_provider(self, command: dict[str, Any]) -> None:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
         llm_factory: str = command["provider_name"]
-        payload = {"llm_factory": llm_factory}
-        response = self.http_client.request("POST", "llm/delete_factory", json_body=payload, use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        code = res_json.get("code", res_json.get("retcode", -1))
-        if response.status_code == 200 and code == 0:
+        provider = urllib.parse.quote(llm_factory, safe="")
+        response = self.http_client.request("DELETE", f"providers/{provider}", use_api_base=True, auth_kind="web")
+        result = response.json()
+        if response.status_code == 200 and result.get("code") == 0:
             print(f"Success to drop model provider {llm_factory}")
         else:
-            msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to drop model provider {llm_factory}: {msg}")
+            print(f"Could not drop model provider {llm_factory}. {result.get('message', '')}")
 
     def set_default_model(self, command: dict):
         if self.server_type != "user":
@@ -1908,42 +1915,14 @@ class MultiRAGClient:
         print(f"Fail to list chats: {msg}")
         return None
 
-    def _get_default_models(self) -> dict | None:
-        response = self.http_client.request("GET", "users/me/models", use_api_base=True, auth_kind="web")
-        res_json = response.json()
-        if response.status_code == 200:
-            code = res_json.get("code", res_json.get("retcode", -1))
-            if code == 0:
-                return res_json.get("data", {})
-            msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to get default models, code: {code}, message: {msg}")
-            return None
-        else:
-            print(f"Fail to get default models, HTTP code: {response.status_code}, message: {res_json}")
-            return None
-
-    def _set_default_models(self, model_type: str, model_id: str):
-        current = self._get_default_models()
-        if current is None:
-            return
-        current[model_type] = model_id
-        payload = {
-            "tenant_id": current.get("tenant_id", ""),
-            "llm_id": current.get("llm_id", ""),
-            "embd_id": current.get("embd_id", ""),
-            "img2txt_id": current.get("img2txt_id", ""),
-            "asr_id": current.get("asr_id", ""),
-            "tts_id": current.get("tts_id", ""),
-            "rerank_id": current.get("rerank_id", ""),
-        }
-        response = self.http_client.request("PATCH", "users/me/models", json_body=payload, use_api_base=True, auth_kind="web")
-        res_json = response.json()
-        code = res_json.get("code", res_json.get("retcode", -1))
-        if response.status_code == 200 and code == 0:
+    def _set_default_models(self, model_type: str, model_id: str) -> None:
+        payload = {"model_type": _MODEL_CAPABILITIES[model_type], "model_id": model_id}
+        response = self.http_client.request("PATCH", "models/default", json_body=payload, use_api_base=True, auth_kind="web")
+        result = response.json()
+        if response.status_code == 200 and result.get("code") == 0:
             print(f"Success to set {model_type} to '{model_id}'")
         else:
-            msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to set {model_type}: {msg}")
+            print(f"Could not set {model_type}. {result.get('message', '')}")
 
     def _wait_parse_done(self, dataset_name: str, dataset_id: str, document_ids: list[str]) -> bool:
         required = set(document_ids)

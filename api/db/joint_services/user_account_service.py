@@ -40,7 +40,6 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService, UserService, UserTenantService
 from api.utils.api_utils import group_by
-from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common import settings
 from core.nlp import search
 from memory.services.messages import MessageService
@@ -63,10 +62,6 @@ def initialize_user_tenant(db: Session, user_info: dict[str, Any], role: str | U
     db.add(UserTenant(id=uuid.uuid4().hex, tenant_id=tenant_id, user_id=tenant_id, invited_by=tenant_id, role=role.value if isinstance(role, UserTenantRole) else role))
     db.flush()
     initialize_tenant_models(db, tenant_id)
-    values = {field: getattr(tenant, field) for field in ("llm_id", "embd_id", "asr_id", "img2txt_id", "rerank_id")}
-    for field, value in ensure_tenant_model_id_for_params(db, tenant_id, values).items():
-        setattr(tenant, field, value)
-    db.flush()
     return tenant
 
 

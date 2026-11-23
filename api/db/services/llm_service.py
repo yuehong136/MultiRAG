@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import json
 import logging
 import queue
 import re
@@ -10,10 +11,13 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
+from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.db.db_models import LLM
+from api.db.db_models import LLM, Tenant, TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.model_contract import DEFAULT_MODEL_FIELDS, MODEL_TYPE_BITS
 from api.db.services.common_service import CommonService
 from api.db.services.tenant_llm_service import LLM4Tenant, PreparedTenantLLM, TenantLLMService, start_langfuse_observation
 from common.asyncio_utils import finish_owned_work
@@ -88,12 +92,14 @@ class LLMService(CommonService):
         super().__init__(LLM)
 
 
-def get_init_tenant_llm(db: Session, user_id: str) -> list[dict[str, Any]]:
-    """Seed only explicitly configured defaults, preserving zero token limits."""
+def initialize_tenant_models(db: Session, tenant_id: str) -> None:
+    """Register configured defaults in the caller's tenant creation transaction."""
     from api.db.services.model_provider_service import catalog
     from common import settings
 
-    records: dict[tuple[str, str], dict[str, Any]] = {}
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise LookupError("Tenant not found")
     for capability, config in (
         ("chat", settings.CHAT_CFG),
         ("embedding", settings.EMBEDDING_CFG),
@@ -104,58 +110,54 @@ def get_init_tenant_llm(db: Session, user_id: str) -> list[dict[str, Any]]:
         reference = config.get("model", "")
         if not reference:
             continue
-        name, factory = TenantLLMService.split_model_name_and_factory(reference)
+        field = DEFAULT_MODEL_FIELDS[capability]
+        model_name, factory = TenantLLMService.split_model_name_and_factory(reference)
         factory = factory or config.get("factory", "")
         if not factory:
             raise ValueError("Configured default model requires a provider")
-        declarations = [item for item in catalog(factory) if item.model_name == name]
-        if declarations and capability not in declarations[0].model_types:
+        declaration = next((item for item in catalog(factory) if item.model_name == model_name), None)
+        if declaration and capability not in declaration.model_types:
             raise ValueError("Configured default model does not support its capability")
-        token_limit = config.get("max_tokens")
-        if token_limit is None:
-            token_limit = declarations[0].max_tokens if declarations else 8192
-        record = {
-            "tenant_id": user_id,
-            "llm_factory": factory,
-            "llm_name": name,
-            "mdl_type": capability,
-            "api_key": config.get("api_key", ""),
-            "api_base": config.get("base_url", ""),
-            "max_tokens": token_limit,
-        }
-        previous = records.get((factory, name))
-        if previous and (previous["api_key"], previous["api_base"]) != (record["api_key"], record["api_base"]):
-            raise ValueError("Configured defaults require distinct provider instances")
-        records.setdefault((factory, name), record)
-    return list(records.values())
-
-
-def initialize_tenant_models(db: Session, tenant_id: str) -> None:
-    """Create configured defaults and env OCR in the caller's transaction."""
-    from sqlalchemy import select
-
-    from api.db.db_models import TenantLLM, TenantModel
-    from api.db.model_backfill import backfill
-    from api.db.services.model_provider_service import catalog
-
-    created: list[tuple[TenantLLM, list[str], bool]] = []
-    for record in get_init_tenant_llm(db, tenant_id):
-        existing = db.scalar(select(TenantLLM.id).where(TenantLLM.tenant_id == tenant_id, TenantLLM.llm_factory == record["llm_factory"], TenantLLM.llm_name == record["llm_name"]))
-        if existing is not None:
-            continue
-        declarations = [item for item in catalog(record["llm_factory"]) if item.model_name == record["llm_name"]]
-        capabilities = declarations[0].model_types if declarations else [record["mdl_type"]]
-        row = TenantLLM(**record)
-        db.add(row)
-        created.append((row, capabilities, declarations[0].is_tools if declarations else False))
-    db.flush()
-    backfill(db.connection(), tenant_id)
-    for row, capabilities, tools in created:
-        model = db.get(TenantModel, row.id)
+        api_key = config.get("api_key") or ""
+        if not isinstance(api_key, str):
+            api_key = json.dumps(api_key, ensure_ascii=False)
+        base_url = config.get("base_url") or ""
+        provider = db.scalar(select(TenantModelProvider).where(TenantModelProvider.tenant_id == tenant_id, TenantModelProvider.provider_name == factory))
+        if provider is None:
+            provider = TenantModelProvider(id=uuid4().hex, tenant_id=tenant_id, provider_name=factory, status="active")
+            db.add(provider)
+            db.flush()
+        instance = db.scalar(
+            select(TenantModelInstance)
+            .where(TenantModelInstance.provider_id == provider.id, TenantModelInstance.api_key == api_key, TenantModelInstance.base_url == base_url, TenantModelInstance.region == "")
+            .order_by(TenantModelInstance.create_time, TenantModelInstance.id)
+            .limit(1)
+        )
+        if instance is None:
+            existing = db.scalar(select(TenantModelInstance.id).where(TenantModelInstance.provider_id == provider.id, TenantModelInstance.instance_name == "default"))
+            instance_name = f"default-{capability}" if existing else "default"
+            instance = TenantModelInstance(id=uuid4().hex, provider_id=provider.id, instance_name=instance_name, api_key=api_key, base_url=base_url, region="", status="active")
+            db.add(instance)
+            db.flush()
+        model = db.scalar(select(TenantModel).where(TenantModel.instance_id == instance.id, TenantModel.model_name == model_name))
         if model is None:
-            raise RuntimeError("Configured default was not linked")
-        model.model_types = list(capabilities)
-        model.is_tools = tools
+            token_limit = config.get("max_tokens")
+            if token_limit is None:
+                token_limit = declaration.max_tokens if declaration else 8192
+            model = TenantModel(
+                provider_id=provider.id,
+                instance_id=instance.id,
+                model_name=model_name,
+                model_type=sum(MODEL_TYPE_BITS[item] for item in declaration.model_types) if declaration else MODEL_TYPE_BITS[capability],
+                status="active",
+                extra={"max_tokens": token_limit, "is_tools": bool(declaration and declaration.is_tools)},
+            )
+            db.add(model)
+            db.flush()
+        elif not model.model_type & MODEL_TYPE_BITS[capability]:
+            model.model_type |= MODEL_TYPE_BITS[capability]
+        setattr(tenant, field, model.id)
+        setattr(tenant, f"tenant_{field}", model.id)
     db.flush()
     TenantLLMService.ensure_ocr_models_from_env(db, tenant_id)
 

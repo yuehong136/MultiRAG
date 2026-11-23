@@ -17,8 +17,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from api.apps.services import memory_maintenance_service, memory_revision_service
-from api.db.db_models import Base, Memory, Task, TenantLLM
+from api.db.db_models import Base, Memory, Task, TenantModel, TenantModelProvider
 from api.db.joint_services import memory_write_runtime
+from api.db.services.tenant_llm_service import TenantLLMService
 from core.utils.redis_conn import REDIS_CONN
 from memory.revisions.storage import ManagedMessageStore
 from memory.services.messages import index_name
@@ -37,7 +38,7 @@ def memory_live_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     journal = ResourceJournal("memory-real-workload")
     observer = ProviderObserver(journal, capture_synthetic_content=os.environ.get("MULTIRAG_MEMORY_CAPTURE_SYNTHETIC_RESPONSES") == "1")
     observer.set_stage("source_embedding", phase="bank-initialization")
-    identifiers = {"chat": int(os.environ["MULTIRAG_MEMORY_CHAT_MODEL_ID"]), "embedding": int(os.environ["MULTIRAG_MEMORY_EMBEDDING_MODEL_ID"])}
+    identifiers = {"chat": os.environ["MULTIRAG_MEMORY_CHAT_MODEL_ID"], "embedding": os.environ["MULTIRAG_MEMORY_EMBEDDING_MODEL_ID"]}
     configs = configured_models(identifiers)
     provider_factory = os.environ.get("MULTIRAG_MEMORY_LIVE_PROVIDER", "Tongyi-Qianwen")
     if provider_factory == "OpenAI":
@@ -48,7 +49,7 @@ def memory_live_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
         assert configs["chat"]["llm_name"] == "qwen-flash"
         assert configs["embedding"]["llm_name"] == "text-embedding-v4"
     assert all(config["llm_factory"] == provider_factory for config in configs.values())
-    identities: dict[str, int] = {}
+    identities: dict[str, str] = {}
     counter = "memory-live-ids-" + uuid4().hex
     queue = "memory-live-queue-" + uuid4().hex
     mids: list[str] = []
@@ -121,13 +122,18 @@ def memory_live_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
                 db.execute(sa.delete(Task).where(Task.doc_id.in_(mids)))
                 db.execute(sa.delete(Memory).where(Memory.id.in_(mids)))
                 # Covers a commit whose acknowledgement was lost in copy_models.
-                db.execute(sa.delete(TenantLLM).where(TenantLLM.tenant_id == tenant))
+                TenantLLMService.delete_by_tenant_id(db, tenant)
                 db.commit()
             with Session(env["engine"]) as reader:
                 remaining = {table.fullname: reader.scalar(sa.select(sa.func.count()).select_from(table).where(table.c.memory_id.in_(mids))) for table in tables}
                 assert not any(remaining.values()), remaining
                 assert reader.scalar(sa.select(sa.func.count()).select_from(Memory).where(Memory.id.in_(mids))) == 0
-                assert reader.scalar(sa.select(sa.func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == tenant)) == 0
+                assert (
+                    reader.scalar(
+                        sa.select(sa.func.count()).select_from(TenantModel).join(TenantModelProvider, TenantModel.provider_id == TenantModelProvider.id).where(TenantModelProvider.tenant_id == tenant)
+                    )
+                    == 0
+                )
             journal.event("live-workload-sql-cleanup-readback", sql_remaining=remaining, model_rows_absent=True)
         except BaseException as error:
             cleanup_errors.append(error)

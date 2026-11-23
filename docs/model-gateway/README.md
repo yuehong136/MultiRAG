@@ -63,7 +63,7 @@ MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
 |---|---|
 | `APIToken`（`api/db/db_models.py`）明文存储、整租户范围，没有有效期、启停和模型范围；现有鉴权依赖（`api/utils/api_utils.py`）对登录态和令牌一视同仁，令牌可以调用包括令牌管理在内的接口 | 不作为模型调用凭据。新建独立 Key；既有 RAG SDK 令牌保持不变 |
 | `api/apps/restful_apis/openai_api.py` 的 `/api/v1/openai/{chat_id}/chat/completions` 绑定聊天助手并进入检索链路，用量是本地估算 | 不是模型直连接口。保持原合同，不在其上扩展 |
-| 用量只有 `TenantLLM.used_tokens` 累计值，由 `LLMBundle`（`api/db/services/llm_service.py`）写入 | 没有按请求、按 Key 的记录。新增调用记录表 |
+| 用量只有 `TenantModel.used_tokens` 累计值，由 `LLMBundle`（`api/db/services/llm_service.py`）写入 | 没有按请求、按 Key 的记录。新增调用记录表 |
 | `core/llm` 的驱动面向 RAG：失败以 `**ERROR**` 前缀文本返回，流式只产出文本 | 不承载标准协议。网关不经过它 |
 | 模型登记为 Provider → Instance → Model；`api/db/services/model_provider_service.py` 的 `resolve_config()` 按租户、模型 ID 和能力返回连接配置，并校验启用状态 | 连接和上游凭据继续只在此维护。网关只读 |
 | `common/url_utils.py` 提供 `ensure_api_version()` 等地址归一化 | 直接复用 |
@@ -106,7 +106,7 @@ MULTIRAG_MODEL_GATEWAY__ENABLED=true uv run python -m api.model_gateway.server
 | 字段 | 含义 |
 |---|---|
 | `id`、`tenant_id` | 标识和所属租户 |
-| `model_id` | 已登记模型的数字 ID（`TenantLLM.id`），租户内唯一；不是外键，模型删除后行留下但不再生效 |
+| `model_id` | 已登记模型的 32 位十六进制字符串 ID（`TenantModel.id`）；模型删除后保留该行供追溯 |
 | `enabled` | 开放开关 |
 | `alias` | 可空；租户内唯一（部分唯一索引） |
 | `preferred` | 同名模型里是否拥有不带前缀的名字；设为真时清除其他同名模型的标记 |
@@ -262,9 +262,14 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 
 ## 6. 调用记录与用量
 
+模型目录、Key 允许列表和调用记录使用同一个注册模型 ID。
+旧库通过 [模型身份迁移](../../api/db/services/MODEL_PROVIDERS.md#existing-installations)
+统一转换这三处引用，保留原有 Key 范围、别名、注册顺序和历史用量。
+OpenAI 兼容端点继续接收目录中的调用名称。
+
 - 每个请求在结束后写一行。写入失败不影响已经返回的响应，但要记错误日志和指标。
 - 用量优先取上游返回值。取不到时标 `unavailable`，数值留空；失败或被取消的请求同样可能消耗了资源。
-- 网关不更新 `TenantLLM.used_tokens`。该累计值仍只由 `LLMBundle` 写入，避免两处计数。
+- 网关不更新 `TenantModel.used_tokens`。该累计值仍只由 `LLMBundle` 写入，避免两处计数。
 - 查询按 Key、模型、时间范围、状态和 `end_user` 筛选。汇总首期直接分组查询；
   数据量上来之后再加按日汇总表。
 - 保留天数可配置，清理任务在第二阶段提供。停用、撤销 Key 不删除它的历史记录。

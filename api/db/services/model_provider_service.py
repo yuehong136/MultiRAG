@@ -4,13 +4,14 @@ import os
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
-from api.db.model_contract import DEFAULT_MODEL_FIELDS, ConnectionCandidate, DiscoveredModel, DiscoveryInput, InstanceInput, InstancePatch, ModelRegistration
+from api.db.db_models import Tenant, TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.model_contract import DEFAULT_MODEL_FIELDS, MODEL_TYPE_BITS, ConnectionCandidate, DiscoveredModel, DiscoveryInput, InstanceInput, InstancePatch, ModelRegistration, parse_model_id
 from api.db.provider_catalog import provider_order, provider_transport, public_factories, regional_provider
 from api.db.services.model_deletion_policy import ModelReference, collect_blocking_model_references
+from api.db.services.provider_model_resolution import ModelRecord, model_config, model_records
 from common import settings
 
 
@@ -123,21 +124,21 @@ def instance_projection(instance: TenantModelInstance, provider: TenantModelProv
     }
 
 
-def model_projection(row: TenantLLM, model: TenantModel, instance: TenantModelInstance, provider: TenantModelProvider) -> dict[str, Any]:
-    active = row.status == "1" and instance.status == "active" and provider.status == "active"
+def model_projection(model: TenantModel, instance: TenantModelInstance, provider: TenantModelProvider) -> dict[str, Any]:
+    active = model.status == "active" and instance.status == "active" and provider.status == "active"
     return {
-        "id": row.id,
+        "id": model.id,
         "name": model.model_name,
         "provider_id": provider.id,
         "provider_name": provider.provider_name,
         "instance_id": instance.id,
         "instance_name": instance.instance_name,
         "model_types": list(model.model_types),
-        "status": "active" if row.status == "1" else "inactive",
+        "status": model.status,
         "effective_status": "active" if active else "inactive",
-        "max_tokens": row.max_tokens,
+        "max_tokens": model.max_tokens,
         "is_tools": model.is_tools,
-        "reference": str(row.id),
+        "reference": model.id,
     }
 
 
@@ -149,7 +150,13 @@ async def lock_owner(db: AsyncSession, tenant_id: str) -> Tenant:
 
 
 async def provider_for_owner(db: AsyncSession, tenant_id: str, name: str) -> TenantModelProvider:
-    provider = await db.scalar(select(TenantModelProvider).where(TenantModelProvider.tenant_id == tenant_id, TenantModelProvider.provider_name == name))
+    query = (
+        select(TenantModelProvider)
+        .where(TenantModelProvider.tenant_id == tenant_id, or_(TenantModelProvider.provider_name == name, TenantModelProvider.id == name))
+        .order_by((TenantModelProvider.id == name).desc())
+        .limit(1)
+    )
+    provider = await db.scalar(query)
     if provider is None:
         raise LookupError("Provider not found")
     return provider
@@ -157,7 +164,13 @@ async def provider_for_owner(db: AsyncSession, tenant_id: str, name: str) -> Ten
 
 async def instance_for_owner(db: AsyncSession, tenant_id: str, provider_name: str, instance_name: str) -> tuple[TenantModelProvider, TenantModelInstance]:
     provider = await provider_for_owner(db, tenant_id, provider_name)
-    instance = await db.scalar(select(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id, TenantModelInstance.instance_name == instance_name))
+    query = (
+        select(TenantModelInstance)
+        .where(TenantModelInstance.provider_id == provider.id, or_(TenantModelInstance.instance_name == instance_name, TenantModelInstance.id == instance_name))
+        .order_by((TenantModelInstance.id == instance_name).desc())
+        .limit(1)
+    )
+    instance = await db.scalar(query)
     if instance is None:
         raise LookupError("Instance not found")
     return provider, instance
@@ -176,27 +189,22 @@ async def add_provider(db: AsyncSession, tenant_id: str, name: str) -> dict[str,
     return {"id": provider.id, "name": name, "status": provider.status}
 
 
-async def add_model(db: AsyncSession, tenant_id: str, provider_name: str, instance_name: str, registration: ModelRegistration) -> dict[str, Any]:
+async def add_model(db: AsyncSession, tenant_id: str, provider_name: str, instance_name: str, registration: ModelRegistration, *, extra: dict[str, bool] | None = None) -> dict[str, Any]:
     await lock_owner(db, tenant_id)
     provider, instance = await instance_for_owner(db, tenant_id, provider_name, instance_name)
     if await db.scalar(select(TenantModel.id).where(TenantModel.instance_id == instance.id, TenantModel.model_name == registration.model_name)):
         raise ModelConflict("Model already exists")
-    row = TenantLLM(
-        tenant_id=tenant_id,
-        llm_factory=provider_name,
-        llm_name="model:" + uuid4().hex,
-        mdl_type=registration.model_types[0],
-        api_key=instance.api_key,
-        api_base=instance.base_url,
-        max_tokens=registration.max_tokens,
-        status="1",
+    model = TenantModel(
+        provider_id=provider.id,
+        instance_id=instance.id,
+        model_name=registration.model_name,
+        model_type=sum(MODEL_TYPE_BITS[capability] for capability in registration.model_types),
+        status="active",
+        extra={**(extra or {}), "max_tokens": registration.max_tokens, "is_tools": registration.is_tools},
     )
-    db.add(row)
-    await db.flush()
-    model = TenantModel(id=row.id, instance_id=instance.id, model_name=registration.model_name, model_types=list(registration.model_types), is_tools=registration.is_tools)
     db.add(model)
     await db.flush()
-    return model_projection(row, model, instance, provider)
+    return model_projection(model, instance, provider)
 
 
 def validate_key(provider_name: str, api_key: str) -> None:
@@ -236,6 +244,8 @@ async def verify_candidate(db: AsyncSession, tenant_id: str, provider_name: str,
 
     if db.new or db.dirty or db.deleted:
         raise ValueError("Connection verification requires a clean transaction")
+    if parse_model_id(provider_name):
+        provider_name = (await provider_for_owner(db, tenant_id, provider_name)).provider_name
     models = candidate_models(provider_name, request)
     probe = models[0]
     if request.model_ids is None and request.custom_model is None and not request.custom_models:
@@ -264,6 +274,8 @@ async def verify_candidate(db: AsyncSession, tenant_id: str, provider_name: str,
 
 
 async def create_instance(db: AsyncSession, tenant_id: str, provider_name: str, request: InstanceInput) -> dict[str, Any]:
+    if parse_model_id(provider_name):
+        provider_name = (await provider_for_owner(db, tenant_id, provider_name)).provider_name
     models = candidate_models(provider_name, request)
     await verify_candidate(db, tenant_id, provider_name, request)
     owner = await lock_owner(db, tenant_id)
@@ -292,25 +304,21 @@ async def patch_instance(db: AsyncSession, tenant_id: str, provider_name: str, i
     await lock_owner(db, tenant_id)
     provider, instance = await instance_for_owner(db, tenant_id, provider_name, instance_name)
     provider_transport(
-        provider_name,
+        provider.provider_name,
         request.api_key if request.api_key else instance.api_key,
         request.base_url if request.base_url is not None else instance.base_url,
         request.region if request.region is not None else instance.region,
         stored=not bool(request.api_key),
     )
     if request.clear_api_key:
-        validate_key(provider_name, "")
+        validate_key(provider.provider_name, "")
         instance.api_key = ""
     elif request.api_key:
-        validate_key(provider_name, request.api_key)
+        validate_key(provider.provider_name, request.api_key)
         instance.api_key = request.api_key
     for field in ("base_url", "region", "status"):
         if field in request.model_fields_set:
             setattr(instance, field, getattr(request, field))
-    # Keep the old row's credential snapshot useful for a reviewed rollback and
-    # direct legacy readers. Runtime always applies the authoritative instance.
-    ids = select(TenantModel.id).where(TenantModel.instance_id == instance.id)
-    await db.execute(update(TenantLLM).where(TenantLLM.id.in_(ids), TenantLLM.tenant_id == tenant_id).values(api_key=instance.api_key, api_base=instance.base_url))
     await db.flush()
     return instance_projection(instance, provider)
 
@@ -318,30 +326,18 @@ async def patch_instance(db: AsyncSession, tenant_id: str, provider_name: str, i
 async def provider_capabilities_for_owner(db: AsyncSession, tenant_id: str) -> dict[str, set[str]]:
     """Read inventory capability metadata without loading instance credentials."""
     query = (
-        select(TenantModelProvider.provider_name, TenantModel.model_types)
-        .select_from(TenantModel)
-        .join(TenantModelInstance, TenantModel.instance_id == TenantModelInstance.id)
-        .join(TenantModelProvider, TenantModelInstance.provider_id == TenantModelProvider.id)
-        .join(TenantLLM, TenantModel.id == TenantLLM.id)
-        .where(TenantLLM.tenant_id == tenant_id, TenantModelProvider.tenant_id == tenant_id)
+        select(TenantModelProvider.provider_name, TenantModel.model_type).join(TenantModelProvider, TenantModel.provider_id == TenantModelProvider.id).where(TenantModelProvider.tenant_id == tenant_id)
     )
     capabilities: dict[str, set[str]] = {}
-    for name, model_types in (await db.execute(query)).all():
-        capabilities.setdefault(name, set()).update(model_types)
+    for name, mask in (await db.execute(query)).all():
+        capabilities.setdefault(name, set()).update(capability for capability, bit in MODEL_TYPE_BITS.items() if mask & bit)
     return capabilities
 
 
-async def models_for_owner(db: AsyncSession, tenant_id: str) -> list[tuple[TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider]]:
-    query = (
-        select(TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider)
-        .join(TenantModel, TenantModel.id == TenantLLM.id)
-        .join(TenantModelInstance, TenantModel.instance_id == TenantModelInstance.id)
-        .join(TenantModelProvider, TenantModelInstance.provider_id == TenantModelProvider.id)
-        .where(TenantLLM.tenant_id == tenant_id, TenantModelProvider.tenant_id == tenant_id)
-        .order_by(TenantLLM.id)
-    )
-    rows = [tuple(row) for row in (await db.execute(query)).all()]
-    return sorted(rows, key=lambda item: (*provider_order(item[3].provider_name), item[2].instance_name, item[1].model_name, item[0].id))
+async def models_for_owner(db: AsyncSession, tenant_id: str) -> list[ModelRecord]:
+    query = model_records().where(TenantModelProvider.tenant_id == tenant_id)
+    rows = [(row[0], row[1], row[2]) for row in (await db.execute(query)).all()]
+    return sorted(rows, key=lambda item: (provider_order(item[2].provider_name), item[1].instance_name, item[0].model_name, item[0].id))
 
 
 async def instances_for_owner(db: AsyncSession, tenant_id: str) -> list[tuple[TenantModelInstance, TenantModelProvider]]:
@@ -351,50 +347,53 @@ async def instances_for_owner(db: AsyncSession, tenant_id: str) -> list[tuple[Te
     return sorted(rows, key=lambda item: (*provider_order(item[1].provider_name), item[0].instance_name))
 
 
-async def require_unreferenced(db: AsyncSession, rows: list[tuple[TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider]]) -> None:
+async def require_unreferenced(db: AsyncSession, rows: list[ModelRecord]) -> None:
     """Apply the project policy at one seam before the lifecycle deletes rows."""
     references = await collect_blocking_model_references(db, rows)
     if references:
         raise ModelConflict("Model is referenced; update its consumers before deletion", references)
 
 
-async def delete_models(db: AsyncSession, rows: list[tuple[TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider]]) -> None:
+async def delete_models(db: AsyncSession, rows: list[ModelRecord]) -> None:
     await require_unreferenced(db, rows)
     identifiers = [row.id for row, *_ in rows]
     if identifiers:
         await db.execute(delete(TenantModel).where(TenantModel.id.in_(identifiers)))
-        await db.execute(delete(TenantLLM).where(TenantLLM.id.in_(identifiers)))
 
 
 async def delete_provider(db: AsyncSession, tenant_id: str, provider_name: str) -> None:
     await lock_owner(db, tenant_id)
     provider = await provider_for_owner(db, tenant_id, provider_name)
-    rows = [row for row in await models_for_owner(db, tenant_id) if row[3].id == provider.id]
+    rows = [row for row in await models_for_owner(db, tenant_id) if row[2].id == provider.id]
     await delete_models(db, rows)
     await db.execute(delete(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id))
     await db.delete(provider)
 
 
-async def delete_instance(db: AsyncSession, tenant_id: str, provider_name: str, instance_name: str) -> None:
+async def delete_instances(db: AsyncSession, tenant_id: str, provider_name: str, instance_names: list[str]) -> None:
     await lock_owner(db, tenant_id)
-    _provider, instance = await instance_for_owner(db, tenant_id, provider_name, instance_name)
-    rows = [row for row in await models_for_owner(db, tenant_id) if row[2].id == instance.id]
+    instances = {(await instance_for_owner(db, tenant_id, provider_name, name))[1] for name in instance_names}
+    identifiers = {instance.id for instance in instances}
+    rows = [row for row in await models_for_owner(db, tenant_id) if row[1].id in identifiers]
     await delete_models(db, rows)
-    await db.delete(instance)
+    for instance in instances:
+        await db.delete(instance)
 
 
-async def set_default(db: AsyncSession, tenant_id: str, model_type: str, model_id: int | None) -> None:
+async def set_default(db: AsyncSession, tenant_id: str, model_type: str, model_id: str) -> None:
     owner = await lock_owner(db, tenant_id)
     field = DEFAULT_MODEL_FIELDS[model_type]
-    if model_id is not None:
-        rows = [row for row in await models_for_owner(db, tenant_id) if row[0].id == model_id]
-        if not rows:
+    if model_id:
+        query = model_records().where(TenantModelProvider.tenant_id == tenant_id, TenantModel.id == model_id)
+        row = (await db.execute(query)).one_or_none()
+        if row is None:
             raise LookupError("Model not found")
-        projection = model_projection(*rows[0])
-        if model_type not in projection["model_types"] or projection["effective_status"] != "active":
-            raise ValueError("Model is not active for the requested capability")
-    setattr(owner, field, str(model_id) if model_id is not None else "")
-    setattr(owner, "tenant_" + field, model_id)
+        try:
+            model_config(*row, capability=model_type)
+        except LookupError as exc:
+            raise ValueError("Model is not active for the requested capability") from exc
+    setattr(owner, field, model_id)
+    setattr(owner, "tenant_" + field, model_id or None)
     await db.flush()
 
 
@@ -404,47 +403,44 @@ async def defaults_for_owner(db: AsyncSession, tenant_id: str) -> dict[str, Any]
     owner = await db.get(Tenant, tenant_id)
     if owner is None:
         raise LookupError("Tenant not found")
-    rows = {row[0].id: row for row in await models_for_owner(db, tenant_id)}
+    rows = {model.id: (model, instance, provider) for model, instance, provider in await models_for_owner(db, tenant_id)}
     models = []
     for capability, field in DEFAULT_MODEL_FIELDS.items():
         identifier = getattr(owner, "tenant_" + field)
-        reference = getattr(owner, field) or ""
         row = rows.get(identifier)
-        builtin_name = None
-        if row is None and identifier is None and capability == "embedding" and "tei-" in os.getenv("COMPOSE_PROFILES", ""):
-            name, provider = TenantLLMService.split_model_name_and_factory(reference)
-            if name and name == os.getenv("TEI_MODEL", "") and provider in {None, "Builtin"}:
-                builtin_name = name
-        models.append(
-            {
-                "model_type": capability,
-                "model_id": identifier,
-                "reference": str(identifier) if row else reference,
-                "model_provider": row[3].provider_name if row else "Builtin" if builtin_name else "",
-                "model_instance": row[2].instance_name if row else "default" if builtin_name else "",
-                "model_name": row[1].model_name if row else builtin_name or reference,
-            }
-        )
+        if row:
+            model, instance, provider = row
+            models.append(
+                {
+                    "model_type": capability,
+                    "model_id": model.id,
+                    "model_provider": provider.provider_name,
+                    "model_instance": instance.instance_name,
+                    "model_name": model.model_name,
+                    "enable": capability in model.model_types and model_projection(*row)["effective_status"] == "active",
+                }
+            )
+        elif identifier is None and capability == "embedding" and "tei-" in os.getenv("COMPOSE_PROFILES", ""):
+            name, provider_name = TenantLLMService.split_model_name_and_factory(getattr(owner, field) or "")
+            if name and name == os.getenv("TEI_MODEL", "") and provider_name in {None, "Builtin"}:
+                models.append(
+                    {
+                        "model_type": capability,
+                        "model_id": "",
+                        "model_provider": "Builtin",
+                        "model_instance": "default",
+                        "model_name": name,
+                        "enable": True,
+                    }
+                )
     return {"models": models}
 
 
-async def resolve_config(db: AsyncSession, tenant_id: str, model_id: int, model_type: str) -> dict[str, Any]:
+async def resolve_config(db: AsyncSession, tenant_id: str, model_id: str, model_type: str) -> dict[str, Any]:
     from api.db.services.tenant_llm_service import TenantLLMService
 
-    matched = [row for row in await models_for_owner(db, tenant_id) if row[0].id == model_id]
-    if matched:
-        row, model, instance, _provider = matched[0]
-        projection = model_projection(*matched[0])
-        if projection["effective_status"] != "active" or model_type not in model.model_types:
-            raise LookupError("Model is unavailable for the requested capability")
-        config = row.to_dict()
-        config.update(
-            llm_name=model.model_name, api_key=instance.api_key, api_base=instance.base_url, mdl_type=model_type, model_types=list(model.model_types), is_tools=model.is_tools, region=instance.region
-        )
-        decoded = TenantLLMService.decode_model_config(config)
-        decoded["is_tools"] = model.is_tools
-        return decoded
-    legacy_row = await db.scalar(select(TenantLLM).where(TenantLLM.id == model_id, TenantLLM.tenant_id == tenant_id, TenantLLM.mdl_type == model_type, TenantLLM.status == "1"))
-    if legacy_row is None:
+    query = model_records().where(TenantModelProvider.tenant_id == tenant_id, TenantModel.id == model_id)
+    row = (await db.execute(query)).one_or_none()
+    if row is None:
         raise LookupError("Model is unavailable for the requested capability")
-    return TenantLLMService.decode_model_config(legacy_row.to_dict())
+    return TenantLLMService.decode_model_config(model_config(*row, capability=model_type))

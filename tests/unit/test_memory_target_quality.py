@@ -97,7 +97,7 @@ def conditions(case: dict[str, Any], *, input_ids: list[int] | None = None, entr
     return {
         "inputs": [reference(identity) for identity in (input_ids if input_ids is not None else [case["sources"][-1]["source_id"]])],
         "targets": targets,
-        "model_binding": ModelBinding(56, "fixture-embedding@fixture", 2, "f" * 64).to_dict(),
+        "model_binding": ModelBinding("00000000000000000000000000000038", "fixture-embedding@fixture", 2, "f" * 64).to_dict(),
     }
 
 

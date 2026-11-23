@@ -20,6 +20,7 @@ from api.apps.services import memory_api_service, memory_context_service
 from api.apps.services.memory_revision_service import LegacyStateReconciliationRequired
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from api.db.db_models import get_async_db
+from api.db.model_contract import ModelID
 from api.identity.principal import AuthenticationSource
 from api.utils.api_utils import Principal, async_current_user, get_error_argument_result, get_json_result
 from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
@@ -43,8 +44,8 @@ class CreateMemoryRequest(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=MEMORY_NAME_LIMIT, description="Memory名称")
     memory_type: list[str] = Field(..., min_length=1, description="Memory类型列表，如['raw', 'semantic']")
-    embd_id: str = Field(..., description="嵌入模型ID")
-    llm_id: str = Field(..., description="LLM模型ID")
+    embd_id: ModelID = Field(..., description="嵌入模型ID")
+    llm_id: ModelID = Field(..., description="LLM模型ID")
 
 
 class UpdateMemoryRequest(BaseModel):
@@ -55,17 +56,17 @@ class UpdateMemoryRequest(BaseModel):
     name: str | None = Field(None, max_length=MEMORY_NAME_LIMIT, description="Memory名称")
     avatar: str | None = Field(None, description="头像base64字符串")
     description: str | None = Field(None, description="描述")
-    embd_id: str | None = Field(None, description="嵌入模型ID")
+    embd_id: ModelID | None = Field(None, description="嵌入模型ID")
     memory_type: list[str] | None = Field(None, min_length=1, description="Memory类型列表")
-    llm_id: str | None = Field(None, description="LLM模型ID")
+    llm_id: ModelID | None = Field(None, description="LLM模型ID")
     permissions: str | None = Field(None, description="权限范围：me|team")
     memory_size: int | None = Field(None, gt=0, le=MEMORY_SIZE_LIMIT, description="最大Memory大小（字节）")
     forgetting_policy: str | None = Field(None, description="遗忘策略：fifo|lru")
     temperature: float | None = Field(None, ge=0, le=1, description="LLM温度参数")
     system_prompt: str | None = Field(None, description="系统提示词")
     user_prompt: str | None = Field(None, description="用户提示词")
-    tenant_llm_id: int | None = Field(None, description="租户LLM模型关联ID")
-    tenant_embd_id: int | None = Field(None, description="租户嵌入模型关联ID")
+    tenant_llm_id: ModelID | None = Field(None, description="租户LLM模型关联ID")
+    tenant_embd_id: ModelID | None = Field(None, description="租户嵌入模型关联ID")
 
 
 # ==================== API Endpoints ====================

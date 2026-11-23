@@ -61,7 +61,9 @@ class HTMLReport(ComponentBase):
         try:
             with db_connection() as db:
                 model_types = resolve_model_type(db, self._canvas.get_tenant_id(), self._param.llm_id)
-                model_type = "chat" if "chat" in model_types else model_types[0]
+                model_type = next((kind for kind in ("chat", "image2text") if kind in model_types), None)
+                if model_type is None:
+                    raise LookupError("HTML report requires a chat or vision model")
                 model_config = get_model_config_by_type_and_name(
                     db,
                     self._canvas.get_tenant_id(),

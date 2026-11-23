@@ -5,7 +5,10 @@ import { pathToFileURL } from 'node:url'
 const root = process.env.WEB_COMPLETION_CHECKOUT
 const base = process.env.BROWSER_CONSUMER_BASE
 const token = process.env.BROWSER_CONSUMER_TOKEN
-assert.ok(root && base && token)
+const modelId = process.env.BROWSER_CONSUMER_MODEL_ID
+assert.ok(root && base && token && modelId)
+assert.match(modelId, /^[0-9a-f]{32}$/)
+assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(new URL(base).hostname))
 Object.defineProperty(globalThis, 'localStorage', {
   value: { getItem: () => token, setItem: () => {}, removeItem: () => {} },
   configurable: true,
@@ -30,7 +33,7 @@ try {
   const browserId = 'Browser:consumer'
   const browser = buildGraphNode(Operator.Browser, {
     id: browserId,
-    form: { llm_id: 'browser-consumer@OpenAI', prompts: 'Inspect uploaded source', max_steps: 2,
+    form: { llm_id: modelId, prompts: 'Inspect uploaded source', max_steps: 2,
       temperature: 0, max_retries: 0, headless: false, enable_default_extensions: false,
       chromium_sandbox: false, persist_session: false, upload_sources: [] },
   })
@@ -54,6 +57,7 @@ try {
   const stored = typeof saved.dsl === 'string' ? JSON.parse(saved.dsl) : saved.dsl
   const restored = serializeGraphToDsl({ graph: deserializeDslToGraph(stored).graph })
   const params = restored.components[browserId].obj.params
+  assert.equal(params.llm_id, modelId)
   assert.equal(params.temperature, 0)
   assert.equal(params.max_retries, 0)
   assert.equal(params.headless, false)

@@ -345,7 +345,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
 
         kbs = KnowledgebaseService.get_by_ids(db, request.kb_ids or [])
         try:
-            KnowledgebaseService.ensure_same_embedding_model(kbs)
+            KnowledgebaseService.ensure_same_embedding_model(kbs, db=db)
         except EmbeddingModelMismatchError as e:
             return get_data_error_result(retmsg=str(e))
 

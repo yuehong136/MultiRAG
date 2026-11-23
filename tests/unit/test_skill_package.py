@@ -64,7 +64,9 @@ def test_semver_is_complete(version: str) -> None:
 def test_model_ids_do_not_accept_float_or_unsafe_json_number() -> None:
     with pytest.raises(ValidationError):
         UpdateConfig(revision=1, embedding_model_id=9007199254740993)
-    assert UpdateConfig(revision=1, embedding_model_id="9007199254740993").embedding_model_id == "9007199254740993"
+    with pytest.raises(ValidationError):
+        UpdateConfig(revision=1, embedding_model_id="9007199254740993")
+    assert UpdateConfig(revision=1, embedding_model_id="a" * 32).embedding_model_id == "a" * 32
 
 
 def test_binary_assets_preserved_and_counted() -> None:

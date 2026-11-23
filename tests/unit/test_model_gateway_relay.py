@@ -28,13 +28,18 @@ _DONE = b"data: [DONE]\n\n"
 _SSE = {"content-type": "text/event-stream"}
 
 
+CHAT_ID = "a" * 32
+EMBEDDING_ID = "b" * 32
+RESTRICTED_ID = "c" * 32
+
+
 class FakeStore:
     def __init__(self) -> None:
-        self.caller = Caller(key_id="k" * 32, tenant_id="tenant-1", key_name="eval-runner", allow_all_models=False, allowed_model_ids=frozenset({11, 12}), tags={"purpose": "eval"})
+        self.caller = Caller(key_id="k" * 32, tenant_id="tenant-1", key_name="eval-runner", allow_all_models=False, allowed_model_ids=frozenset({CHAT_ID, EMBEDDING_ID}), tags={"purpose": "eval"})
         self.models = {
-            "chat-default": ResolvedModel(11, "chat-default", "chat", UpstreamTarget(11, "VLLM", "qwen-upstream", "http://upstream.test/v1", "upstream-key")),
-            "embed-default": ResolvedModel(12, "embed-default", "embedding", UpstreamTarget(12, "Xinference", "bge-upstream", "http://upstream.test/v1", "x")),
-            "restricted": ResolvedModel(13, "restricted", "chat", UpstreamTarget(13, "VLLM", "other", "http://upstream.test/v1", "upstream-key")),
+            "chat-default": ResolvedModel(CHAT_ID, "chat-default", "chat", UpstreamTarget(CHAT_ID, "VLLM", "qwen-upstream", "http://upstream.test/v1", "upstream-key")),
+            "embed-default": ResolvedModel(EMBEDDING_ID, "embed-default", "embedding", UpstreamTarget(EMBEDDING_ID, "Xinference", "bge-upstream", "http://upstream.test/v1", "x")),
+            "restricted": ResolvedModel(RESTRICTED_ID, "restricted", "chat", UpstreamTarget(RESTRICTED_ID, "VLLM", "other", "http://upstream.test/v1", "upstream-key")),
         }
         self.records: list[RequestLogEntry] = []
         self.fail_record = False
@@ -167,7 +172,7 @@ def test_completed_call_is_logged_with_reported_usage_and_no_body():
     entry = gateway.only_record()
     assert entry.id == response.headers["x-request-id"]
     assert (entry.tenant_id, entry.key_id, entry.key_name, entry.tags) == ("tenant-1", "k" * 32, "eval-runner", {"purpose": "eval"})
-    assert (entry.model, entry.upstream_model_id, entry.upstream_model_name) == ("chat-default", 11, "qwen-upstream")
+    assert (entry.model, entry.upstream_model_id, entry.upstream_model_name) == ("chat-default", CHAT_ID, "qwen-upstream")
     assert (entry.endpoint, entry.stream, entry.status_code, entry.error_type, entry.end_user) == ("chat.completions", False, 200, None, "job-7")
     assert (entry.usage.prompt_tokens, entry.usage.completion_tokens, entry.usage.total_tokens, entry.usage.source) == (3, 2, 5, "reported")
     assert entry.started_at.tzinfo is not None and entry.duration_ms >= 0

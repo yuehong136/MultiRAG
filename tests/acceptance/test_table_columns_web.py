@@ -9,12 +9,13 @@ import sqlalchemy as sa
 from playwright.sync_api import expect, sync_playwright
 from sqlalchemy.orm import Session
 
-from api.db.db_models import LLM, Knowledgebase, LLMFactories, TenantLLM
+from api.db.db_models import LLM, Knowledgebase, LLMFactories, TenantModel
 from scripts.acceptance.api import ProductAPI, response_data
 from scripts.acceptance.browser import WebAcceptance
 from scripts.acceptance.evidence import Evidence
 from tests.support.document_parse_retirement import parse_api as parse_api
 from tests.support.product_acceptance import product_web_server
+from tests.support.registered_model import register_model
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
@@ -23,7 +24,7 @@ def test_table_settings_real_save_reload_and_locales(parse_api: dict[str, Any]) 
     with Session(env["engine"]) as db:
         db.merge(LLMFactories(name="Builtin", tags="Text Embedding", status="1"))
         db.merge(LLM(fid="Builtin", llm_name="scratch-embedding", mdl_type="embedding", max_tokens=8192, tags="Text Embedding", status="1"))
-        registered = TenantLLM(tenant_id=env["owners"][0], llm_factory="Builtin", llm_name="scratch-embedding", mdl_type="embedding", api_key="", max_tokens=8192)
+        registered = register_model(db, tenant_id=env["owners"][0], provider_name="Builtin", model_name="scratch-embedding", model_types=("embedding",), api_key="" or "", max_tokens=8192)
         db.add(registered)
         db.flush()
         registered_id = registered.id
@@ -78,4 +79,4 @@ def test_table_settings_real_save_reload_and_locales(parse_api: dict[str, Any]) 
     finally:
         client.session.close()
         with env["engine"].begin() as db:
-            db.execute(sa.delete(TenantLLM).where(TenantLLM.id == registered_id))
+            db.execute(sa.delete(TenantModel).where(TenantModel.id == registered_id))

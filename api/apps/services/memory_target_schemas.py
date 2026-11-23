@@ -4,6 +4,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
+from api.db.model_contract import ModelID
+
 
 def decimal_version(value: Any) -> Any:
     if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 19 and value == str(int(value)):
@@ -46,7 +48,7 @@ class TargetEntryCondition(BaseModel):
 
 class TargetModelBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    tenant_model_id: TargetVersion | None = None
+    tenant_model_id: ModelID | None = None
     model_reference: str = Field(min_length=1, max_length=512)
     dimension: int = Field(strict=True, ge=1, le=32768)
     config_reference: str = Field(max_length=256)

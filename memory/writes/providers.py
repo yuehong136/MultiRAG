@@ -37,9 +37,9 @@ class MemoryWriteSettings:
     memory_id: str
     tenant_id: str
     embd_id: str
-    tenant_embd_id: int | None
+    tenant_embd_id: str | None
     llm_id: str
-    tenant_llm_id: int | None
+    tenant_llm_id: str | None
     memory_type: int
     temperature: float
     system_prompt: str

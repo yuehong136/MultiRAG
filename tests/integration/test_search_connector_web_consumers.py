@@ -25,7 +25,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from api.db.db_models import Connector, Connector2Kb, Document, File, Knowledgebase, Search, SyncLogs, Task, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, get_async_db
+from api.db.db_models import Connector, Connector2Kb, Document, File, Knowledgebase, Search, SyncLogs, Task, Tenant, TenantModel, TenantModelInstance, TenantModelProvider, get_async_db
+from api.db.model_contract import MODEL_TYPE_BITS
 from tests.support.resource_journal import ResourceJournal
 from tests.support.rest_document_contract import rest_documents as rest_documents
 from tests.support.web_consumer import pinned_web_checkout as _pinned_checkout
@@ -40,7 +41,7 @@ def _hash(value: Any) -> str:
 
 
 def _sql_state(engine: sa.Engine) -> dict[str, list[dict[str, Any]]]:
-    models = (Connector, Connector2Kb, SyncLogs, Task, File, Document, Tenant, Knowledgebase, Search, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider)
+    models = (Connector, Connector2Kb, SyncLogs, Task, File, Document, Tenant, Knowledgebase, Search, TenantModel, TenantModelInstance, TenantModelProvider)
     with engine.connect() as reader:
         return {model.__tablename__: [dict(row) for row in reader.execute(sa.select(model.__table__).order_by(*model.__table__.primary_key.columns)).mappings()] for model in models}
 
@@ -240,7 +241,7 @@ def test_actual_web_search_defaults_and_azure_static_crud(
     private.mkdir(mode=0o700)
     evidence.mkdir(mode=0o700)
     owners = env["owners"]
-    numeric_ids = [17001, 17002]
+    model_ids = [uuid4().hex for _ in owners]
     provider_ids, instance_ids = [uuid4().hex for _ in owners], [uuid4().hex for _ in owners]
     search_id = uuid4().hex
     connectors = {mode: {"id": uuid4().hex, "name": "after67-w-" + uuid4().hex} for mode in ("account_key", "connection_string", "sas_token")}
@@ -253,7 +254,7 @@ def test_actual_web_search_defaults_and_azure_static_crud(
         endpoint=database_endpoint,
         owners=owners,
         datasets=env["datasets"],
-        models=numeric_ids,
+        models=model_ids,
         providers=provider_ids,
         instances=instance_ids,
         search=search_id,
@@ -317,7 +318,7 @@ def test_actual_web_search_defaults_and_azure_static_crud(
             if config["mdl_type"] == "embedding":
                 assert config["id"] is None and config["llm_factory"] == "Builtin" and config["llm_name"] == tei_model
             else:
-                assert tenant_id == owners[0] and config["id"] == numeric_ids[0] and config["tenant_id"] == owners[0]
+                assert tenant_id == owners[0] and config["id"] == model_ids[0] and config["tenant_id"] == owners[0]
                 assert config["api_base"] == "https://controlled.invalid/v1" and config["max_tokens"] == 0
             model_calls.append({"model_type": config["mdl_type"], "id": config["id"], "tenant_id": tenant_id, "max_tokens": config["max_tokens"]})
 
@@ -360,24 +361,20 @@ def test_actual_web_search_defaults_and_azure_static_crud(
                         status="active",
                     )
                 )
+                db.flush()
                 db.add(
-                    TenantLLM(
-                        id=numeric_ids[index],
-                        tenant_id=owner_id,
-                        llm_factory="OpenAI",
-                        llm_name="controlled-chat",
-                        mdl_type="chat",
-                        api_key="controlled-test-only",
-                        api_base="https://controlled.invalid/v1",
-                        max_tokens=0,
-                        status="1",
+                    TenantModel(
+                        id=model_ids[index],
+                        provider_id=provider_ids[index],
+                        instance_id=instance_ids[index],
+                        model_name="controlled-chat",
+                        model_type=MODEL_TYPE_BITS["chat"],
+                        extra={"max_tokens": 0, "is_tools": False},
                     )
                 )
-                db.flush()
-                db.add(TenantModel(id=numeric_ids[index], instance_id=instance_ids[index], model_name="controlled-chat", model_types=["chat"], is_tools=False))
             owner = db.get(Tenant, owners[0])
             assert owner is not None
-            owner.llm_id, owner.tenant_llm_id = str(numeric_ids[0]), numeric_ids[0]
+            owner.llm_id = owner.tenant_llm_id = model_ids[0]
             owner.embd_id, owner.tenant_embd_id = tei_model + "@Builtin", None
             dataset = db.get(Knowledgebase, env["datasets"][0])
             assert dataset is not None
@@ -385,10 +382,11 @@ def test_actual_web_search_defaults_and_azure_static_crud(
             db.add(Search(id=search_id, tenant_id=owners[0], created_by=owners[0], name="Controlled saved search", search_config={"kb_ids": [dataset.id], "doc_ids": []}, status="1"))
             db.commit()
         seeded = _sql_state(env["engine"])
-        for index, identifier in enumerate(numeric_ids):
-            row = next(item for item in seeded[TenantLLM.__tablename__] if item["id"] == identifier)
-            assert row["tenant_id"] == owners[index]
-        assert not any(row["llm_factory"] == "Builtin" for row in seeded[TenantLLM.__tablename__])
+        for index, identifier in enumerate(model_ids):
+            row = next(item for item in seeded[TenantModel.__tablename__] if item["id"] == identifier)
+            provider = next(item for item in seeded[TenantModelProvider.__tablename__] if item["id"] == row["provider_id"])
+            assert provider["tenant_id"] == owners[index]
+        assert not any(row["provider_name"] == "Builtin" for row in seeded[TenantModelProvider.__tablename__])
         assert not any(seeded[model.__tablename__] for model in (Connector, Connector2Kb, SyncLogs, Task, File, Document))
         prepared = {
             "webRoot": str(checkout),
@@ -397,8 +395,8 @@ def test_actual_web_search_defaults_and_azure_static_crud(
             "searchId": search_id,
             "kbIds": [env["datasets"][0]],
             "teiModel": tei_model,
-            "modelIds": [numeric_ids[0]],
-            "forbiddenModelIds": [numeric_ids[1]],
+            "modelIds": [model_ids[0]],
+            "forbiddenModelIds": [model_ids[1]],
             "connectors": connectors,
         }
         _private_file(descriptor, json.dumps(prepared), journal, owned_files)
@@ -510,8 +508,7 @@ def test_actual_web_search_defaults_and_azure_static_crud(
                     (Connector2Kb, Connector2Kb.connector_id.in_(connector_ids)),
                     (Connector, Connector.id.in_(connector_ids)),
                     (Search, Search.id == search_id),
-                    (TenantModel, TenantModel.id.in_(numeric_ids)),
-                    (TenantLLM, TenantLLM.id.in_(numeric_ids)),
+                    (TenantModel, TenantModel.id.in_(model_ids)),
                     (TenantModelInstance, TenantModelInstance.id.in_(instance_ids)),
                     (TenantModelProvider, TenantModelProvider.id.in_(provider_ids)),
                 ):
@@ -521,15 +518,14 @@ def test_actual_web_search_defaults_and_azure_static_crud(
             for model, identifiers in (
                 (Connector, connector_ids),
                 (Search, {search_id}),
-                (TenantModel, set(numeric_ids)),
-                (TenantLLM, set(numeric_ids)),
+                (TenantModel, set(model_ids)),
                 (TenantModelInstance, set(instance_ids)),
                 (TenantModelProvider, set(provider_ids)),
             ):
                 assert not any(row["id"] in identifiers for row in final[model.__tablename__]), "Owned SQL resource survived cleanup"
             assert not any(row["connector_id"] in connector_ids for model in (Connector2Kb, SyncLogs) for row in final[model.__tablename__])
             journal.event(
-                "search-azure-sql-cleanup-readback", endpoint=database_endpoint, connector_ids=sorted(connector_ids), model_ids=numeric_ids, search_id=search_id, explicit_owned_rows_absent=True
+                "search-azure-sql-cleanup-readback", endpoint=database_endpoint, connector_ids=sorted(connector_ids), model_ids=model_ids, search_id=search_id, explicit_owned_rows_absent=True
             )
         finally:
             cleanup.close()

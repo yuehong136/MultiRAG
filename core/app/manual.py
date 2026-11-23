@@ -24,9 +24,8 @@ from typing import Any
 from docx import Document
 
 from common.constants import MAXIMUM_PAGE_NUMBER, ParserType
-from common.parser_config_utils import normalize_layout_recognizer
 from common.token_utils import num_tokens_from_string
-from core.app.naive import PARSERS, by_plaintext
+from core.app.naive import PARSERS, by_plaintext, resolve_pdf_parser
 from core.nlp import attach_media_context, bullets_category, concat_img, docx_question_level, rag_tokenizer, title_frequency, tokenize, tokenize_chunks, tokenize_table
 from deepdoc.parser import DocxParser, PdfParser
 from deepdoc.parser.figure_parser import vision_figure_parser_docx_wrapper, vision_figure_parser_pdf_wrapper
@@ -157,7 +156,7 @@ def chunk(
     # is it English
     eng = lang.lower() == "english"  # pdf_parser.is_english
     if re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
+        layout_recognizer, parser_model_name = resolve_pdf_parser(kwargs.get("tenant_id", ""), parser_config.get("layout_recognize", "DeepDOC"))
 
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"
@@ -184,7 +183,7 @@ def chunk(
             **kwargs,
         )
 
-        def _normalize_section(section):
+        def _normalize_section(section: tuple[Any, ...]) -> tuple[str, str, list[Any]]:
             # pad section to length 3: (txt, sec_id, poss)
             if len(section) == 1:
                 section = (section[0], "", [])
@@ -195,7 +194,8 @@ def chunk(
 
             txt, layoutno, poss = section
             if isinstance(poss, str):
-                poss = pdf_parser.extract_positions(poss)
+                extract_positions = getattr(pdf_parser, "extract_positions", None)
+                poss = (extract_positions(poss) if callable(extract_positions) else []) or []
                 if poss:
                     first = poss[0]  # tuple: ([pn], x1, x2, y1, y2)
                     pn = first[0]
@@ -203,7 +203,7 @@ def chunk(
                         pn = pn[0]  # [pn] -> pn
                         poss[0] = (pn, *first[1:])
 
-            return (txt, layoutno, poss)
+            return (txt, layoutno, poss or [])
 
         sections = [_normalize_section(sec) for sec in sections]
 
@@ -256,7 +256,10 @@ def chunk(
         chunks = []
         last_sid = -2
         tk_cnt = 0
-        for txt, sec_id, poss in sorted(sections, key=lambda x: (x[-1][0][0], x[-1][0][3], x[-1][0][1])):
+        # Without complete coordinates, preserve parser order rather than invent
+        # positions or move unpositioned text away from its surrounding sections.
+        ordered_sections = sorted(sections, key=lambda x: (x[-1][0][0], x[-1][0][3], x[-1][0][1])) if all(poss for _, _, poss in sections) else sections
+        for txt, sec_id, poss in ordered_sections:
             poss = "\t".join([tag(*pos) for pos in poss])
             if tk_cnt < 32 or (tk_cnt < 1024 and (sec_id == last_sid or sec_id == -1)):
                 if chunks:

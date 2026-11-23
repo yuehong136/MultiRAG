@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from api.db.db_models import TenantLLM
+from api.db.joint_services.tenant_model_service import get_model_config_by_id
 from tests.support.memory_startup_longitudinal import fingerprint, judgment
 from tests.support.memory_target_longitudinal import candidates_for, wait_job
 from tests.support.memory_workload_review import call, publish_reviewed, reviewed_candidates
@@ -70,13 +70,13 @@ def require_direct_openai_models(env: dict[str, Any]) -> None:
     with Session(env["engine"]) as db:
         db.execute(sa.text("SET TRANSACTION READ ONLY"))
         for kind, identifier in env["model_ids"].items():
-            model = db.get(TenantLLM, identifier)
-            assert model is not None and model.llm_factory == "OpenAI"
-            host = urlsplit(model.api_base or "https://api.openai.com/v1").hostname
+            model = get_model_config_by_id(db, identifier, model_type=kind)
+            assert model["llm_factory"] == "OpenAI"
+            host = urlsplit(model["api_base"] or "https://api.openai.com/v1").hostname
             assert host == "api.openai.com", "live_source_evaluation_requires_direct_official_host"
             expected = "gpt-6.1-terra" if kind == "chat" else "text-embedding-3-small"
-            assert model.llm_name == expected
-            hosts[kind] = {"model_name": model.llm_name, "host": host, "factory_default": not bool(model.api_base)}
+            assert model["llm_name"] == expected
+            hosts[kind] = {"model_name": model["llm_name"], "host": host, "factory_default": not bool(model["api_base"])}
     env["journal"].event("structured-live-copied-model-host-readback", models=hosts, credentials_printed=False)
 
 

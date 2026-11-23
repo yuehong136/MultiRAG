@@ -45,7 +45,7 @@ def _iso(value: datetime | None) -> str | None:
 # --- catalog ---------------------------------------------------------------
 
 
-def _catalog_model_view(model: DirectoryModel, requests: dict[int, int]) -> dict[str, Any]:
+def _catalog_model_view(model: DirectoryModel, requests: dict[str, int]) -> dict[str, Any]:
     return {
         "model_id": model.model_id,
         "model_name": model.model_name,
@@ -71,10 +71,10 @@ def _catalog_model_view(model: DirectoryModel, requests: dict[int, int]) -> dict
     }
 
 
-async def _requests_by_model(db: AsyncSession, tenant_id: str, since: datetime) -> dict[int, int]:
+async def _requests_by_model(db: AsyncSession, tenant_id: str, since: datetime) -> dict[str, int]:
     log = GatewayRequestLog
     query = select(log.upstream_model_id, func.count()).where(log.tenant_id == tenant_id, log.started_at >= since, log.upstream_model_id.is_not(None)).group_by(log.upstream_model_id)
-    return {int(model_id): int(count) for model_id, count in (await db.execute(query)).all()}
+    return {model_id: int(count) for model_id, count in (await db.execute(query)).all()}
 
 
 async def _catalog_of(db: AsyncSession, tenant_id: str, directory: Directory) -> dict[str, Any]:
@@ -90,7 +90,7 @@ async def catalog_view(db: AsyncSession, tenant_id: str) -> dict[str, Any]:
     return await _catalog_of(db, tenant_id, await load_directory(db, tenant_id, with_connections=True))
 
 
-async def _settings_rows(db: AsyncSession, tenant_id: str, actor_id: str, models: list[DirectoryModel]) -> dict[int, GatewayModelSetting]:
+async def _settings_rows(db: AsyncSession, tenant_id: str, actor_id: str, models: list[DirectoryModel]) -> dict[str, GatewayModelSetting]:
     """Each model's settings row, created with its current state where missing."""
     if models:
         values = [{"id": uuid.uuid4().hex, "tenant_id": tenant_id, "model_id": model.model_id, "enabled": model.enabled, "created_by": actor_id} for model in models]
@@ -104,7 +104,7 @@ async def _settings_rows(db: AsyncSession, tenant_id: str, actor_id: str, models
     return {row.model_id: row for row in rows}
 
 
-async def update_catalog_model(db: AsyncSession, tenant_id: str, actor_id: str, model_id: int, body: CatalogModelPatch) -> dict[str, Any]:
+async def update_catalog_model(db: AsyncSession, tenant_id: str, actor_id: str, model_id: str, body: CatalogModelPatch) -> dict[str, Any]:
     directory = await load_directory(db, tenant_id)
     model = directory.model(model_id)
     if model is None:
@@ -168,7 +168,7 @@ def _key_view(row: GatewayKey, quota_used: int | None = None) -> dict[str, Any]:
         "status": row.status,
         "expires_at": _iso(row.expires_at),
         "allow_all_models": row.allow_all_models,
-        "allowed_model_ids": [int(item) for item in row.allowed_model_ids or []],
+        "allowed_model_ids": row.allowed_model_ids,
         "allowed_instance_ids": [str(item) for item in row.allowed_instance_ids or []],
         "rpm_limit": row.rpm_limit,
         "tpm_limit": row.tpm_limit,
@@ -192,7 +192,7 @@ async def _owned_key(db: AsyncSession, tenant_id: str, key_id: str) -> GatewayKe
     return row
 
 
-async def _checked_model_ids(db: AsyncSession, tenant_id: str, model_ids: list[int]) -> list[int]:
+async def _checked_model_ids(db: AsyncSession, tenant_id: str, model_ids: list[str]) -> list[str]:
     unique = list(dict.fromkeys(model_ids))
     if unique and not set(unique) <= {model.model_id for model in await catalog.registered_models(db, tenant_id)}:
         raise ValueError("allowed_model_ids contains a model this tenant has not registered")
@@ -378,9 +378,9 @@ async def overview(db: AsyncSession, tenant_id: str, *, days: int, config: Model
             .limit(5)
         )
     ).all():
-        model = directory.model(int(model_id))
+        model = directory.model(model_id)
         top_models.append(
-            {"model_id": int(model_id), "name": model.call_name if model else upstream_name, "provider": model.provider if model else None, "requests": int(requests), "total_tokens": int(tokens)}
+            {"model_id": model_id, "name": model.call_name if model else upstream_name, "provider": model.provider if model else None, "requests": int(requests), "total_tokens": int(tokens)}
         )
     top_keys = [
         {"key_id": key_id, "key_name": key_name, "requests": int(requests), "total_tokens": int(tokens)}

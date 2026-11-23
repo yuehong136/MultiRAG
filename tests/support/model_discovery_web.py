@@ -24,7 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from api.db.db_models import TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, User, UserTenant, get_async_db
+from api.db.db_models import TenantModel, TenantModelInstance, TenantModelProvider, User, UserTenant, get_async_db
+from api.db.model_contract import parse_model_id
 from api.utils.api_utils import async_current_user
 from tests.support.resource_journal import ResourceJournal
 from tests.support.uvicorn_runtime import run_server
@@ -228,7 +229,7 @@ def run_web_discovery(
         result = _consumer(checkout, files[2], "owner", evidence, journal)
         readback = json.loads(files[3].read_text())
         identifiers = readback["modelIds"]
-        assert identifiers == result["modelIds"] and identifiers and all(type(value) is int and value > 0 for value in identifiers)
+        assert identifiers == result["modelIds"] and identifiers and all(parse_model_id(value) is not None for value in identifiers)
         with Session(engine) as reader:
             provider = reader.scalars(select(TenantModelProvider).where(TenantModelProvider.tenant_id == owner)).one()
             assert provider.provider_name == provider_name
@@ -239,16 +240,15 @@ def run_web_discovery(
             assert {model.model_name for model in models} == set(expected_models)
             for model in models:
                 expected = expected_models[model.model_name]
-                row = reader.get(TenantLLM, model.id)
-                assert row is not None and row.tenant_id == owner and row.max_tokens == expected["max_tokens"] and row.status == "1"
+                assert model.provider_id == provider.id and model.max_tokens == expected["max_tokens"] and model.status == "active"
                 assert model.model_types == expected["model_types"] and model.is_tools is expected["is_tools"]
-        journal.event("web-model-independent-readback", database=engine.url.database, owner=owner, numeric_model_ids=identifiers, expected_models=expected_models)
+        journal.event("web-model-independent-readback", database=engine.url.database, owner=owner, model_ids=identifiers, expected_models=expected_models)
         _consumer(checkout, files[2], "cleanup", evidence, journal)
         with Session(engine) as reader:
             retained_provider = reader.get(TenantModelProvider, provider.id)
             assert retained_provider is not None and retained_provider.tenant_id == owner and retained_provider.provider_name == provider_name
             assert reader.scalar(select(func.count()).select_from(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id)) == 0
-            assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == owner)) == 0
+            assert reader.scalar(select(func.count()).select_from(TenantModel).where(TenantModel.provider_id == provider.id)) == 0
             assert all(reader.get(TenantModel, value) is None for value in identifiers)
             assert reader.get(TenantModelInstance, instance.id) is None
         journal.event(
@@ -256,7 +256,7 @@ def run_web_discovery(
             database=engine.url.database,
             provider_retained=provider.id,
             owned_instance_models_absent=True,
-            numeric_model_ids=identifiers,
+            model_ids=identifiers,
             final_provider_cleanup_owner="registered scratch_database DROP + independent readback",
         )
     except BaseException:

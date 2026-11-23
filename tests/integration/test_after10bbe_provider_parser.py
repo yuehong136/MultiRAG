@@ -10,16 +10,17 @@ from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from api.db.db_models import LLM, File, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, User, UserTenant
+from api.db.db_models import LLM, File, Tenant, TenantModel, TenantModelInstance, TenantModelProvider, User, UserTenant
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_ocr_model_reference, resolve_parser_reference
+from api.db.model_contract import parse_model_id
 from api.db.services.llm_service import initialize_tenant_models
 from api.db.services.model_provider_service import catalog, models_for_owner
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import resources, settings
 from common.constants import MINERU_ENV_KEYS, OPENDATALOADER_ENV_KEYS, PADDLEOCR_ENV_KEYS
-from common.parser_config_utils import normalize_layout_recognizer
 from tests.support.provider_instances import owned_engine as owned_engine
 from tests.support.provider_instances import tenant
+from tests.support.registered_model import register_model
 
 pytestmark = pytest.mark.integration
 
@@ -37,10 +38,17 @@ def isolated_initialization(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def counts(engine: Engine, owner: str) -> list[int]:
     with Session(engine) as reader:
-        return [
+        counts = [
             reader.scalar(select(func.count()).select_from(model).where(getattr(model, field) == owner))
-            for model, field in ((User, "id"), (Tenant, "id"), (UserTenant, "tenant_id"), (File, "tenant_id"), (TenantLLM, "tenant_id"), (TenantModelProvider, "tenant_id"))
+            for model, field in ((User, "id"), (Tenant, "id"), (UserTenant, "tenant_id"), (File, "tenant_id"))
         ]
+        counts.extend(
+            (
+                reader.scalar(select(func.count()).select_from(TenantModel).join(TenantModelProvider, TenantModel.provider_id == TenantModelProvider.id).where(TenantModelProvider.tenant_id == owner)),
+                reader.scalar(select(func.count()).select_from(TenantModelProvider).where(TenantModelProvider.tenant_id == owner)),
+            )
+        )
+        return counts
 
 
 def test_actual_catalog_scalar_projection_and_atomic_registration(owned_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -78,12 +86,11 @@ def test_actual_catalog_scalar_projection_and_atomic_registration(owned_engine: 
         assert len(created) == 1
     assert counts(owned_engine, owner) == [1, 1, 1, 1, 1, 1]
     with Session(owned_engine) as reader:
-        row = reader.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner)).one()
-        model = reader.get(TenantModel, row.id)
+        model = reader.scalars(select(TenantModel).join(TenantModelProvider, TenantModel.provider_id == TenantModelProvider.id).where(TenantModelProvider.tenant_id == owner)).one()
         stored = reader.get(Tenant, owner)
-        assert model.model_types == ["chat", "image2text"] and model.is_tools is False and row.max_tokens == 0
-        assert stored.tenant_llm_id == stored.tenant_img2txt_id == row.id
-        assert get_model_config_by_type_and_name(reader, owner, "image2text", str(row.id))["mdl_type"] == "image2text"
+        assert model.model_types == ["chat", "image2text"] and model.is_tools is False and model.max_tokens == 0
+        assert stored.tenant_llm_id == stored.tenant_img2txt_id == model.id
+        assert get_model_config_by_type_and_name(reader, owner, "image2text", model.id)["mdl_type"] == "image2text"
         initialize_tenant_models(reader, owner)
         reader.commit()
     assert counts(owned_engine, owner) == [1, 1, 1, 1, 1, 1]
@@ -92,15 +99,15 @@ def test_actual_catalog_scalar_projection_and_atomic_registration(owned_engine: 
         user_api.user_register(db, duplicate, account)
     assert counts(owned_engine, duplicate) == [0] * 6
 
-    from api.db import model_backfill
+    from api.db.joint_services import user_account_service
 
-    original = model_backfill.backfill
+    original = user_account_service.initialize_tenant_models
 
     def fail_after_link(*args: Any, **kwargs: Any) -> None:
         original(*args, **kwargs)
         raise RuntimeError("controlled-after-link-failure")
 
-    monkeypatch.setattr(model_backfill, "backfill", fail_after_link)
+    monkeypatch.setattr(user_account_service, "initialize_tenant_models", fail_after_link)
     failed = uuid4().hex
     with Session(owned_engine) as db, pytest.raises(HTTPException):
         user_api.user_register(db, failed, {**account, "email": failed + "@example.test"})
@@ -132,26 +139,27 @@ def test_env_import_is_modern_visible_idempotent_and_rollback_safe(owned_engine:
     ensure = {"MinerU": TenantLLMService.ensure_mineru_from_env, "PaddleOCR": TenantLLMService.ensure_paddleocr_from_env, "OpenDataLoader": TenantLLMService.ensure_opendataloader_from_env}[provider]
     with Session(owned_engine) as db:
         reference = ensure(db, owner)
-        assert reference is not None and reference.isdecimal()
+        assert reference is not None and parse_model_id(reference) == reference
         assert ensure(db, owner) == reference
         db.commit()
     with Session(owned_engine) as reader:
-        model = reader.get(TenantModel, int(reference))
+        model = reader.get(TenantModel, reference)
         instance = reader.get(TenantModelInstance, model.instance_id)
-        assert model.model_types == ["ocr"] and reader.get(TenantLLM, int(reference)).max_tokens == 0
+        assert model.model_types == ["ocr"] and model.max_tokens == 0
         composite = f"{model.model_name}@{instance.instance_name}@{provider}"
-        assert normalize_layout_recognizer(composite) == (provider, composite)
         assert resolve_parser_reference(reader, owner, reference) == (provider, reference)
-        assert get_model_config_by_type_and_name(reader, owner, "ocr", composite)["instance_id"] == instance.id
+        assert get_model_config_by_type_and_name(reader, owner, "ocr", reference)["instance_id"] == instance.id
         with pytest.raises(LookupError):
-            get_model_config_by_type_and_name(reader, aborted, "ocr", composite)
+            get_model_config_by_type_and_name(reader, owner, "ocr", composite)
+        with pytest.raises(LookupError):
+            get_model_config_by_type_and_name(reader, aborted, "ocr", reference)
         assert get_ocr_model_reference(reader, owner, provider) == reference
         instance.status = "inactive"
         reader.commit()
     with Session(owned_engine) as reader:
         assert get_ocr_model_reference(reader, owner, provider) is None
-        assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == owner)) == 1
-        with pytest.raises(LookupError, match="disabled"):
+        assert counts(owned_engine, owner)[4] == 1
+        with pytest.raises(LookupError, match="unavailable"):
             get_model_config_by_type_and_name(reader, owner, "ocr", reference)
     with Session(owned_engine) as db:
         assert ensure(db, aborted) is not None
@@ -165,7 +173,7 @@ def test_env_import_is_modern_visible_idempotent_and_rollback_safe(owned_engine:
         try:
             async with async_sessionmaker(engine)() as session:
                 models = await models_for_owner(session, owner)
-                assert len(models) == 1 and models[0][0].id == int(reference)
+                assert len(models) == 1 and models[0][0].id == reference
         finally:
             await engine.dispose()
 
@@ -184,8 +192,8 @@ def test_all_target_catalog_models_have_valid_typed_capabilities() -> None:
 
 def test_startup_and_admin_registration_keep_env_identity_atomic(owned_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
     from admin.server.auth import add_tenant_for_admin
-    from api.db import model_backfill
     from api.db.init_data import init_superuser
+    from api.db.joint_services import user_account_service
     from api.db.joint_services.user_account_service import create_new_user
     from api.db.services.user_service import UserService
 
@@ -207,17 +215,18 @@ def test_startup_and_admin_registration_keep_env_identity_atomic(owned_engine: E
     assert counts(owned_engine, account_owner) == [1, 1, 1, 1, 1, 1]
     with Session(owned_engine) as db:
         TenantLLMService.delete_by_tenant_id(db, account_owner)
+        db.commit()
     assert counts(owned_engine, account_owner) == [1, 1, 1, 1, 0, 0]
     with Session(owned_engine) as reader:
         assert reader.scalar(select(func.count()).select_from(TenantModel)) == 2
         assert reader.scalar(select(func.count()).select_from(TenantModelInstance)) == 2
-    original = model_backfill.backfill
+    original = user_account_service.initialize_tenant_models
 
     def fail_after_link(*args: Any, **kwargs: Any) -> None:
         original(*args, **kwargs)
         raise RuntimeError("controlled startup linking failure")
 
-    monkeypatch.setattr(model_backfill, "backfill", fail_after_link)
+    monkeypatch.setattr(user_account_service, "initialize_tenant_models", fail_after_link)
     failed_email = uuid4().hex + "@example.test"
     with Session(owned_engine) as db, pytest.raises(RuntimeError):
         init_superuser(db, nickname="Failed fixture", email=failed_email, password="fixture-password")
@@ -238,19 +247,10 @@ def test_naive_and_pipeline_keep_complete_instance_reference(owned_engine: Engin
     owner = uuid4().hex
     with Session(owned_engine) as db:
         db.add(tenant(owner))
-        parent = TenantModelProvider(id=uuid4().hex, tenant_id=owner, provider_name=provider, status="active")
-        db.add(parent)
-        db.flush()
-        instances = [TenantModelInstance(id=uuid4().hex, provider_id=parent.id, instance_name=name, api_key="fixture-" + name, base_url="", region="", status="active") for name in ("first", "second")]
-        db.add_all(instances)
-        db.flush()
-        ids = []
-        for instance in instances:
-            row = TenantLLM(tenant_id=owner, llm_factory=provider, llm_name="model:" + uuid4().hex, mdl_type="ocr", api_key=instance.api_key, api_base="", max_tokens=0)
-            db.add(row)
-            db.flush()
-            db.add(TenantModel(id=row.id, instance_id=instance.id, model_name="shared-name", model_types=["ocr"], is_tools=False))
-            ids.append(row.id)
+        ids = [
+            register_model(db, tenant_id=owner, provider_name=provider, model_name="shared-name", model_types=("ocr",), instance_name=name, api_key="fixture-" + name, max_tokens=0).id
+            for name in ("first", "second")
+        ]
         db.get(Tenant, owner).tenant_ocr_id = ids[1]
         db.commit()
 
@@ -262,7 +262,7 @@ def test_naive_and_pipeline_keep_complete_instance_reference(owned_engine: Engin
     class ControlledParser:
         outlines: list[Any] = []
 
-        def __init__(self, identifier: int) -> None:
+        def __init__(self, identifier: str) -> None:
             self.identifier = identifier
 
         def parse_pdf(self, *args: Any, **kwargs: Any) -> tuple[list[tuple[str, str, str]], list[Any]]:
@@ -281,20 +281,20 @@ def test_naive_and_pipeline_keep_complete_instance_reference(owned_engine: Engin
         monkeypatch.setattr(module, "db_connection", connection)
         monkeypatch.setattr(module, "LLMBundle", bundle)
     outputs: dict[str, Any] = {}
-    config = {"parse_method": f"shared-name@second@{provider}", "output_format": "json", "preprocess": []}
+    config = {"parse_method": ids[1], "output_format": "json", "preprocess": []}
     process = SimpleNamespace(
         _param=SimpleNamespace(setups={"pdf": config}), _canvas=SimpleNamespace(_tenant_id=owner), callback=lambda *args: None, set_output=lambda key, value: outputs.__setitem__(key, value)
     )
     method = getattr(naive, "by_" + provider.lower())
     for explicit in (True, False):
-        config["parse_method"] = f"shared-name@second@{provider}" if explicit else provider
+        config["parse_method"] = ids[1] if explicit else provider
         pipeline.Parser._pdf(process, "fixture.pdf", b"controlled-pdf")
         assert outputs["json"][0]["text"] == str(ids[1])
         options = {provider.lower() + "_llm_name": config["parse_method"]} if explicit else {}
         sections, _, _ = method("fixture.pdf", binary=b"controlled-pdf", tenant_id=owner, **options)
         assert sections[0][0] == str(ids[1])
     with Session(owned_engine) as db:
-        db.get(TenantLLM, ids[1]).status = "0"
+        db.get(TenantModel, ids[1]).status = "inactive"
         db.commit()
     with Session(owned_engine) as reader:
         assert get_ocr_model_reference(reader, owner, provider) == str(ids[0])
@@ -303,26 +303,26 @@ def test_naive_and_pipeline_keep_complete_instance_reference(owned_engine: Engin
 
 def test_default_admin_first_start_model_failure_rolls_back_user(owned_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
     from admin.server.auth import init_default_admin
-    from api.db import model_backfill
+    from api.db.joint_services import user_account_service
 
     monkeypatch.setenv("PADDLEOCR_API_URL", "http://127.0.0.1:39413/controlled")
-    original = model_backfill.backfill
+    original = user_account_service.initialize_tenant_models
     calls = 0
 
     def fail_after_env_link(*args: Any, **kwargs: Any) -> None:
         nonlocal calls
         calls += 1
         original(*args, **kwargs)
-        if calls == 2:
+        if calls == 1:
             raise RuntimeError("controlled first-admin post-env failure")
 
     with monkeypatch.context() as patch:
-        patch.setattr(model_backfill, "backfill", fail_after_env_link)
+        patch.setattr(user_account_service, "initialize_tenant_models", fail_after_env_link)
         with Session(owned_engine) as db, pytest.raises(RuntimeError, match="post-env"):
             init_default_admin(db)
-    assert calls == 2
+    assert calls == 1
     with Session(owned_engine) as reader:
-        assert all(reader.scalar(select(func.count()).select_from(model)) == 0 for model in (User, Tenant, UserTenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider))
+        assert all(reader.scalar(select(func.count()).select_from(model)) == 0 for model in (User, Tenant, UserTenant, TenantModel, TenantModelInstance, TenantModelProvider))
     with Session(owned_engine) as db:
         init_default_admin(db)
         init_default_admin(db)
@@ -331,5 +331,5 @@ def test_default_admin_first_start_model_failure_rolls_back_user(owned_engine: E
         assert user.email == "admin@datav.com" and user.is_superuser is True
         assert reader.get(Tenant, user.id) is not None
         assert reader.scalars(select(UserTenant)).one().role == "owner"
-        assert reader.scalars(select(TenantLLM)).one().max_tokens == 0
-        assert reader.scalars(select(TenantModel)).one().model_types == ["ocr"]
+        model = reader.scalars(select(TenantModel)).one()
+        assert model.max_tokens == 0 and model.model_types == ["ocr"]

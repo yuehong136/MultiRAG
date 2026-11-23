@@ -125,10 +125,10 @@ vector_weight(0–1),similarity_threshold(0–1),fields。
 fields 为 name/tags/description/content，每项 `{enabled:boolean,weight:number}`；
 权重0–10，至少一项enabled且正权重；默认3/2/1/0.5，content默认禁用，其余启用。
 未提供字段不变，null仅用于明确清空模型引用。引用同tenant启用且类型匹配的
-`t_ai_tenant_llms.id`，API不允许用名称选择同名的另一套provider实例。
+`t_ai_tenant_models.id`。同名模型通过各自的注册 ID 选择具体 provider 实例。
 模型、维度、字段配置变化增加config revision，新generation完成前继续使用其快照旧配置。
-所有配置字段均进入generation快照；变更后requires_reindex=true。模型ID在所有JSON
-（含payload、generation快照）均保持十进制字符串；仅SQL列使用BIGINT。
+所有配置字段均进入generation快照；变更后requires_reindex=true。模型 ID 在 API、
+generation 快照和 SQL 中均为 32 位十六进制字符串。
 rerank在配置后必须实际执行；故障返回明确错误，不能悄悄伪装为已rerank结果。
 
 搜索总数为候选数，`total_relation=eq`或`gte`说明截断；不将top100当资产总量。

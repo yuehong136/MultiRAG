@@ -32,7 +32,7 @@ def test_sdk_denies_foreign_model_before_metadata_and_any_bundle(client: TestCli
         json={
             "dataset_ids": ["kb"],
             "question": "q",
-            "tenant_rerank_id": 42,
+            "tenant_rerank_id": "a" * 32,
             "cross_languages": ["English"],
             "metadata_condition": {"conditions": [{"name": "version", "comparison_operator": "is", "value": "v1"}]},
         },
@@ -53,7 +53,7 @@ async def test_embedded_denies_foreign_model_before_saved_search_metadata(async_
     monkeypatch.setattr(session, "build_bundle_by_id_async", bundle)
     monkeypatch.setattr(session, "cross_languages", translation)
     result = await session.retrieval_test_embedded(
-        session.SearchBotRetrievalTestRequest(kb_id=["kb"], question="q", tenant_rerank_id=42, search_id="search", cross_languages=["English"]), async_db, "user"
+        session.SearchBotRetrievalTestRequest(kb_id=["kb"], question="q", tenant_rerank_id="a" * 32, search_id="search", cross_languages=["English"]), async_db, "user"
     )
     import json
 
@@ -76,7 +76,7 @@ async def test_scoped_bundle_uses_request_session_and_model_owner(async_db: Asyn
             self.model_config = model_config
 
     monkeypatch.setattr(models, "LLMBundle", Bundle)
-    bundle = await models.build_bundle_by_id_async("shared-owner", 42, db=async_db, allowed_tenant_ids={"user", "shared-owner"}, model_type="rerank")
+    bundle = await models.build_bundle_by_id_async("shared-owner", "a" * 32, db=async_db, allowed_tenant_ids={"user", "shared-owner"}, model_type="rerank")
     assert bundle.db is None and bundle.tenant_id == "user"
     assert lookup.call_args.kwargs == {"allowed_tenant_ids": {"user", "shared-owner"}, "model_type": "rerank"}
 
@@ -86,6 +86,6 @@ def test_empty_scope_rejects_before_query_or_credentials(db: Session, monkeypatc
     monkeypatch.setattr(db, "scalar", query)
     monkeypatch.setattr(models.TenantLLMService, "resolve_model_config", credentials)
     with pytest.raises(LookupError, match="No authorization"):
-        models.get_model_config_by_id(db, 42, allowed_tenant_ids=set())
+        models.get_model_config_by_id(db, "a" * 32, allowed_tenant_ids=set())
     query.assert_not_called()
     credentials.assert_not_called()

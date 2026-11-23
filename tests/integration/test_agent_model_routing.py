@@ -1,4 +1,4 @@
-"""Real numeric registrations, Canvas invokes, chat/CV classes and controlled SDKs."""
+"""Real model registrations, Canvas invokes, chat/CV classes and controlled SDKs."""
 
 import json
 from collections.abc import AsyncIterator, Iterator
@@ -16,11 +16,13 @@ from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
 from agent.component import agent_with_tools, llm
-from api.db.db_models import TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.db_models import TenantModel, TenantModelInstance, TenantModelProvider
+from api.db.model_contract import MODEL_TYPE_BITS
 from api.db.services import tenant_llm_service
 from core.llm import CvModel
 from core.llm.chat import LiteLLMBase
 from core.utils.redis_conn import REDIS_CONN
+from tests.support.registered_model import register_model
 from tests.support.resource_journal import ResourceJournal
 
 IMAGE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII="
@@ -41,23 +43,25 @@ class Tool:
 @pytest.fixture
 async def routing(bootstrapped_engine: Engine, bootstrapped_async_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[dict[str, Any]]:
     engine, owner = bootstrapped_engine, uuid4().hex
-    provider_id, instance_id = uuid4().hex, uuid4().hex
-    journal = ResourceJournal("agent-numeric-model-routing")
-    journal.event("reserve-sql-rows", database=engine.url.database, owner=owner, provider=provider_id, instance=instance_id)
+    journal = ResourceJournal("agent-model-routing")
+    journal.event("reserve-sql-rows", database=engine.url.database, owner=owner)
     with Session(engine) as writer:
-        writer.add(TenantModelProvider(id=provider_id, tenant_id=owner, provider_name="OpenAI", status="active"))
-        writer.flush()
-        writer.add(TenantModelInstance(id=instance_id, provider_id=provider_id, instance_name="controlled", api_key="fixture", base_url="http://fixture.invalid/v1", region="", status="active"))
-        writer.flush()
-        row = TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="routing-fixture", mdl_type="chat", api_key="fixture", api_base="http://fixture.invalid/v1", status="1", used_tokens=0)
-        writer.add(row)
-        writer.flush()
-        identifier = row.id
-        writer.add(TenantModel(id=identifier, instance_id=instance_id, model_name="routing-fixture", model_types=["chat", "image2text"], is_tools=True))
+        row = register_model(
+            writer,
+            tenant_id=owner,
+            provider_name="OpenAI",
+            model_name="routing-fixture",
+            model_types=("chat", "image2text"),
+            instance_name="controlled",
+            api_key="fixture",
+            base_url="http://fixture.invalid/v1",
+            is_tools=True,
+        )
+        identifier, provider_id, instance_id = row.id, row.provider_id, row.instance_id
         writer.commit()
     with Session(engine) as reader:
         assert reader.get(TenantModel, identifier).model_types == ["chat", "image2text"]
-        assert reader.get(TenantLLM, identifier).tenant_id == owner
+        assert reader.get(TenantModelProvider, provider_id).tenant_id == owner
 
     @contextmanager
     def scratch_session() -> Iterator[Session]:
@@ -111,12 +115,11 @@ async def routing(bootstrapped_engine: Engine, bootstrapped_async_engine: AsyncE
         await transport.aclose()
         with Session(engine) as writer:
             writer.execute(delete(TenantModel).where(TenantModel.id == identifier))
-            writer.execute(delete(TenantLLM).where(TenantLLM.id == identifier))
             writer.execute(delete(TenantModelInstance).where(TenantModelInstance.id == instance_id))
             writer.execute(delete(TenantModelProvider).where(TenantModelProvider.id == provider_id))
             writer.commit()
         with Session(engine) as reader:
-            absent = [reader.get(model, key) is None for model, key in [(TenantModel, identifier), (TenantLLM, identifier), (TenantModelInstance, instance_id), (TenantModelProvider, provider_id)]]
+            absent = [reader.get(model, key) is None for model, key in [(TenantModel, identifier), (TenantModelInstance, instance_id), (TenantModelProvider, provider_id)]]
             assert all(absent)
             journal.event("sql-cleanup-independent-readback", absent=absent, database=engine.url.database)
 
@@ -151,7 +154,7 @@ def load(env: dict[str, Any], kind: str, owner: str | None = None) -> tuple[Canv
 
 
 @pytest.mark.parametrize("kind", ["LLM", "Agent"])
-async def test_numeric_chat_and_cv_invocation_restores_text_and_reuses_tools(routing: dict[str, Any], kind: str) -> None:
+async def test_registered_chat_and_cv_invocation_restores_text_and_reuses_tools(routing: dict[str, Any], kind: str) -> None:
     env = routing
     canvas, component = load(env, kind)
     initial = component.chat_mdl
@@ -176,13 +179,14 @@ async def test_numeric_chat_and_cv_invocation_restores_text_and_reuses_tools(rou
     [event async for event in canvas.run(query="same type")]
     assert not canvas.error and component.chat_mdl is text
     with Session(env["engine"]) as reader:
-        assert reader.get(TenantLLM, env["id"]).used_tokens > 0
+        assert reader.get(TenantModel, env["id"]).used_tokens > 0
         assert reader.get(TenantModel, env["id"]).model_types == ["chat", "image2text"]
     if kind == "Agent":
         assert env["tool"].calls == ["called"] * 3
     with Session(env["engine"]) as writer:
         writer.get(TenantModelInstance, env["instance"]).api_key = "fixture-rotated"
-        writer.get(TenantModel, env["id"]).is_tools = False
+        model = writer.get(TenantModel, env["id"])
+        model.extra = {**model.extra, "is_tools": False}
         writer.commit()
     [event async for event in canvas.run(query="configuration changed")]
     assert not canvas.error and component.chat_mdl is not text and text._provider_closed
@@ -194,7 +198,7 @@ async def test_numeric_chat_and_cv_invocation_restores_text_and_reuses_tools(rou
 
 @pytest.mark.parametrize("kind", ["LLM", "Agent"])
 @pytest.mark.parametrize("denial", ["foreign", "inactive-model", "inactive-instance", "inactive-provider", "unsupported"])
-async def test_numeric_denials_make_zero_provider_and_tool_calls(routing: dict[str, Any], kind: str, denial: str) -> None:
+async def test_registered_denials_make_zero_provider_and_tool_calls(routing: dict[str, Any], kind: str, denial: str) -> None:
     env = routing
     canvas, component = load(env, kind)
     if denial == "foreign":
@@ -202,17 +206,16 @@ async def test_numeric_denials_make_zero_provider_and_tool_calls(routing: dict[s
     else:
         with Session(env["engine"]) as writer:
             if denial == "inactive-model":
-                writer.get(TenantLLM, env["id"]).status = "0"
+                writer.get(TenantModel, env["id"]).status = "inactive"
             elif denial == "inactive-instance":
                 writer.get(TenantModelInstance, env["instance"]).status = "inactive"
             elif denial == "inactive-provider":
                 writer.get(TenantModelProvider, env["provider"]).status = "inactive"
             else:
-                writer.get(TenantModel, env["id"]).model_types = ["embedding"]
-                writer.get(TenantLLM, env["id"]).mdl_type = "embedding"
+                writer.get(TenantModel, env["id"]).model_type = MODEL_TYPE_BITS["embedding"]
             writer.commit()
     canvas.globals["sys.visual_files"] = [IMAGE]
     [event async for event in canvas.run(query="rejected")]
     assert canvas.error and env["wire"] == [] and env["tool"].calls == []
     with Session(env["engine"]) as reader:
-        assert reader.scalar(select(TenantLLM.used_tokens).where(TenantLLM.id == env["id"])) == 0
+        assert reader.scalar(select(TenantModel.used_tokens).where(TenantModel.id == env["id"])) == 0

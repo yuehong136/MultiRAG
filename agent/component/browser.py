@@ -32,7 +32,6 @@ from api.db import FileType
 from api.db.db_models import File, async_db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, resolve_model_type
 from api.db.services.file_service import FileService
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.utils.file_utils import filename_type
 from common import settings
 from common.misc_utils import get_uuid
@@ -256,10 +255,6 @@ class Browser(ComponentBase):
         key = cfg.get("api_key")
         if not model or not key or not base_url:
             raise ValueError("Browser requires tenant model credentials and an OpenAI-compatible endpoint")
-        model, _factory = TenantLLMService.split_model_name_and_factory(str(model))
-        suffix = TenantLLMService._FACTORY_SUFFIX.get(cfg.get("llm_factory"), "")
-        if suffix and model.endswith(suffix):
-            model = model[: -len(suffix)]
         return ChatOpenAI(
             model=model, api_key=key, base_url=base_url, temperature=self._param.temperature, max_retries=self._param.max_retries, add_schema_to_system_prompt=True, dont_force_structured_output=True
         )

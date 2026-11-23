@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import get_async_db
+from api.db.model_contract import ModelID
 from api.identity.principal import AuthenticationSource
 from api.model_gateway import management
 from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewaySettingsPatch
@@ -78,7 +79,7 @@ async def catalog_view(db: AsyncSession = Depends(get_async_db), user: Principal
 
 
 @router.patch("/catalog/models/{model_id}", summary="开放或关闭模型，设置别名、首选和模型级限额", response_model=None)
-async def update_catalog_model(model_id: int, body: CatalogModelPatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
+async def update_catalog_model(model_id: ModelID, body: CatalogModelPatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
     return await write(db, lambda: management.update_catalog_model(db, user.id, user.id, model_id, body))
 
 

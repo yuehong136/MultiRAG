@@ -77,7 +77,7 @@ Web 的 parser/metadata/chunk 客户端及 Agent Hub 的 MultiRAG 适配器均�
 共用数据集成员访问校验。路径入口 `POST /datasets/{id}/search` 继续服务 Python 管理 CLI，
 省略列表时默认检索路径数据集；传完整
 `dataset_ids` 列表，必须包含路径 ID，所有选中数据集均须可访问且 embedding 一致。
-`tenant_rerank_id` 接收整数或 null；指定模型须属于认证租户或所选数据集的所属租户，
+`tenant_rerank_id` 接收 32 位小写十六进制字符串或 null；指定模型须属于认证租户或所选数据集的所属租户，
 在读取模型配置、元数据或执行检索前拒绝越界模型 ID。
 联合检索一次完成排序、分页和文档聚合，不把每个数据集的分页结果拼接成联合结果。
 检索按每个选中库的租户、名称和 ID 绑定独立索引；同一租户拥有多个库时也保留逐库对应，

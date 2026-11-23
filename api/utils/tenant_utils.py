@@ -2,7 +2,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.db.services.llm_service import LLMService
 from api.db.services.tenant_llm_service import TenantLLMService
 from common.constants import LLMType
 from common.exceptions import ArgumentException
@@ -18,13 +17,6 @@ _KEY_TO_MODEL_TYPE = {
 }
 
 
-def _supports_model_type(db: Session, tenant_model: object, model_type: LLMType) -> bool:
-    model_name = getattr(tenant_model, "llm_name", "")
-    factory = getattr(tenant_model, "llm_factory", "")
-    models = LLMService.query(db, llm_name=model_name, fid=factory) if factory else LLMService.query(db, llm_name=model_name)
-    return any(model_type.value.upper() in {tag.strip().upper() for tag in (model.tags or "").split(",")} for model in models)
-
-
 def ensure_tenant_model_id_for_params(
     db: Session,
     tenant_id: str,
@@ -32,23 +24,18 @@ def ensure_tenant_model_id_for_params(
     *,
     strict: bool = False,
 ) -> dict[str, Any]:
-    for key in _KEY_TO_MODEL_TYPE:
+    for key, model_type in _KEY_TO_MODEL_TYPE.items():
         tenant_key = f"tenant_{key}"
         if key not in param_dict:
             continue
-        if param_dict[key] and not param_dict.get(tenant_key):
-            model_type = _KEY_TO_MODEL_TYPE[key]
+        if param_dict[key]:
             llm_setting = param_dict.get("llm_setting")
             if key == "llm_id" and isinstance(llm_setting, dict) and llm_setting.get("model_type") == LLMType.IMAGE2TEXT.value:
                 model_type = LLMType.IMAGE2TEXT
             tenant_model = TenantLLMService.get_api_key(db, tenant_id, param_dict[key], model_type)
-            if not tenant_model and model_type == LLMType.CHAT:
-                fallback_model = TenantLLMService.get_api_key(db, tenant_id, param_dict[key])
-                if fallback_model and _supports_model_type(db, fallback_model, model_type):
-                    tenant_model = fallback_model
             if strict and not tenant_model:
-                raise ArgumentException(f"Tenant Model with name {param_dict[key]} and type {model_type.value} not found")
+                raise ArgumentException(f"Tenant model {param_dict[key]} of type {model_type.value} not found.")
             param_dict[tenant_key] = tenant_model.id if tenant_model else None
-        elif not param_dict[key]:
+        else:
             param_dict[tenant_key] = None
     return param_dict

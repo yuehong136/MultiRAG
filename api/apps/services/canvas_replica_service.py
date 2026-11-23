@@ -20,6 +20,9 @@ class CanvasReplicaService:
     """
 
     TTL_SECS = 3 * 60 * 60
+    # Old replicas may carry retired model references. A cache miss reloads
+    # the canonical draft from SQL under the existing per-owner lock.
+    SCHEMA_VERSION = 2
     REPLICA_KEY_PREFIX = "canvas:replica"
     LOCK_KEY_PREFIX = "canvas:replica:lock"
     LOCK_TIMEOUT_SECS = 10
@@ -66,6 +69,8 @@ class CanvasReplicaService:
             payload = json.loads(cache_blob)
             if not isinstance(payload, dict):
                 raise ValueError("Canvas replica must be an object.")
+            if payload.get("schema_version") != cls.SCHEMA_VERSION:
+                return None
             payload["dsl"] = cls.normalize_dsl(payload.get("dsl", {}))
             return payload
         except Exception as error:
@@ -89,6 +94,7 @@ class CanvasReplicaService:
         title="",
     ):
         return {
+            "schema_version": cls.SCHEMA_VERSION,
             "canvas_id": canvas_id,
             "tenant_id": str(tenant_id),
             "runtime_user_id": str(runtime_user_id),

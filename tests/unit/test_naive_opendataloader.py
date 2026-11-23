@@ -6,7 +6,6 @@ import pytest
 from sqlalchemy.orm import Session
 
 from api.db.joint_services import tenant_model_service
-from common.parser_config_utils import normalize_layout_recognizer
 from core.app import naive
 from deepdoc.parser import opendataloader_parser
 from deepdoc.parser.opendataloader_parser import OpenDataLoaderParser
@@ -16,23 +15,22 @@ from tests.pdf_bbox_support import make_pdf
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("model@factory@oPeNdAtAlOaDeR", ("OpenDataLoader", "model@factory@oPeNdAtAlOaDeR")),
+        ("model@factory@oPeNdAtAlOaDeR", ("model@factory@oPeNdAtAlOaDeR", None)),
         ("OpenDataLoader", ("OpenDataLoader", None)),
-        ("@OpenDataLoader", ("OpenDataLoader", "@OpenDataLoader")),
-        ("model@MinerU", ("MinerU", "model@MinerU")),
-        ("model@PaddleOCR", ("PaddleOCR", "model@PaddleOCR")),
+        ("MinerU", ("MinerU", None)),
+        ("PaddleOCR", ("PaddleOCR", None)),
         (False, (False, None)),
         (None, (None, None)),
     ],
 )
-def test_normalize_parser_model(raw: Any, expected: tuple[Any, str | None]) -> None:
-    assert normalize_layout_recognizer(raw) == expected
+def test_builtin_parser_modes_do_not_resolve_model_ids(raw: Any, expected: tuple[Any, str | None]) -> None:
+    assert naive.resolve_pdf_parser("owner", raw) == expected
 
 
 @pytest.mark.parametrize(
     ("layout", "explicit", "candidates", "selected"),
     [
-        ("chosen@factory@oPeNdAtAlOaDeR", "ignored", ["41"], "chosen@factory@oPeNdAtAlOaDeR"),
+        ("ab" * 16, "ignored", ["41"], "ab" * 16),
         ("OpenDataLoader", "explicit", ["41"], "explicit"),
         ("OpenDataLoader", None, ["41"], "41"),
         ("OpenDataLoader", None, [], "42"),
@@ -64,6 +62,7 @@ def test_naive_chunk_routes_model_and_only_supported_pdf_options(monkeypatch: py
     monkeypatch.setattr(naive, "db_connection", lambda: nullcontext(db))
     monkeypatch.setattr(naive, "get_model_config_by_type_and_name", model_config)
     monkeypatch.setattr(naive, "LLMBundle", bundle)
+    monkeypatch.setattr(tenant_model_service, "resolve_parser_reference", lambda _db, _tenant, identifier: ("OpenDataLoader", identifier))
     monkeypatch.setattr(tenant_model_service, "get_ocr_model_reference", reference)
     monkeypatch.setattr(opendataloader_parser.requests, "post", post)
     binary = make_pdf(1)

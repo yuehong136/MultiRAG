@@ -5,6 +5,8 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from api.db.model_contract import ModelID
+
 _MAX_TAGS = 16
 _MAX_TAG_KEY = 64
 _MAX_TAG_VALUE = 256
@@ -40,7 +42,7 @@ def _future_instant(value: datetime | None) -> datetime | None:
 Tags = Annotated[dict[str, str] | None, AfterValidator(_valid_tags)]
 Expiry = Annotated[datetime | None, AfterValidator(_future_instant)]
 # Registered model ids, and connection (instance) ids whose models are all allowed.
-AllowedModelIds = Annotated[list[Annotated[int, Field(gt=0)]], Field(max_length=_MAX_ALLOWED_MODELS)]
+AllowedModelIds = Annotated[list[ModelID], Field(max_length=_MAX_ALLOWED_MODELS)]
 AllowedInstanceIds = Annotated[list[Annotated[str, StringConstraints(min_length=1, max_length=64)]], Field(max_length=_MAX_ALLOWED_INSTANCES)]
 # Limits are positive; leaving one out (or sending null) means unlimited.
 RateLimit = Annotated[int, Field(gt=0, le=2_000_000_000)]

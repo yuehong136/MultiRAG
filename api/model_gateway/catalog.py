@@ -84,7 +84,7 @@ class ModelUnavailable(Exception):
 class UpstreamTarget:
     """Where and how to reach one registered model."""
 
-    model_id: int
+    model_id: str
     factory: str
     model_name: str
     base_url: str
@@ -97,7 +97,7 @@ class UpstreamTarget:
         return None if self.api_key in _NO_CREDENTIAL else f"Bearer {self.api_key}"
 
 
-def upstream_from_config(config: Mapping[str, Any], model_id: int) -> UpstreamTarget:
+def upstream_from_config(config: Mapping[str, Any], model_id: str) -> UpstreamTarget:
     """Apply the relay address rules to a resolved model configuration."""
     factory = str(config.get("llm_factory") or "")
     rule = _RELAY_RULES.get(factory)
@@ -117,7 +117,7 @@ def upstream_from_config(config: Mapping[str, Any], model_id: int) -> UpstreamTa
     return UpstreamTarget(model_id=model_id, factory=factory, model_name=model_name, base_url=base_url, api_key=str(config.get("api_key") or ""))
 
 
-async def resolve_upstream(db: AsyncSession, tenant_id: str, model_id: int, model_type: str) -> UpstreamTarget:
+async def resolve_upstream(db: AsyncSession, tenant_id: str, model_id: str, model_type: str) -> UpstreamTarget:
     """Resolve an owner's registered model for one capability, or raise ModelUnavailable."""
     if model_type not in SUPPORTED_MODEL_TYPES:
         raise ModelUnavailable("endpoint_not_supported")
@@ -132,7 +132,8 @@ async def resolve_upstream(db: AsyncSession, tenant_id: str, model_id: int, mode
 class RegisteredModel:
     """One registered model as the gateway catalog shows it."""
 
-    model_id: int
+    model_id: str
+    registration_order: int
     model_name: str
     provider: str
     instance_id: str
@@ -158,13 +159,12 @@ class Connection:
 async def registered_models(db: AsyncSession, tenant_id: str) -> list[RegisteredModel]:
     """Every model the owner registered, in model management's order."""
     models = []
-    for row, model, instance, provider in await model_provider_service.models_for_owner(db, tenant_id):
-        if row.id is None:
-            continue
-        projection = model_provider_service.model_projection(row, model, instance, provider)
+    for model, instance, provider in await model_provider_service.models_for_owner(db, tenant_id):
+        projection = model_provider_service.model_projection(model, instance, provider)
         models.append(
             RegisteredModel(
-                model_id=row.id,
+                model_id=model.id,
+                registration_order=model.registration_order,
                 # The upstream name: the registration suffix is not part of it.
                 model_name=model.model_name.split("___")[0],
                 provider=provider.provider_name,
@@ -172,8 +172,8 @@ async def registered_models(db: AsyncSession, tenant_id: str) -> list[Registered
                 instance_name=instance.instance_name,
                 model_types=tuple(model.model_types),
                 available=projection["effective_status"] == "active",
-                relayable=row.llm_factory in RELAY_FACTORIES,
-                created=int(row.create_time or 0),
+                relayable=provider.provider_name in RELAY_FACTORIES,
+                created=int(model.create_time or 0),
             )
         )
     return models

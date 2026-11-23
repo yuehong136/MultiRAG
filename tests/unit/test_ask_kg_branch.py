@@ -46,7 +46,7 @@ def _fake_kb(parser_id="naive"):
 
 @pytest.fixture
 def ask_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs: None))
+    monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs, **kwargs: None))
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda s, tid, inst, t, name: {"llm_name": "emb-m"})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda s, tid, t, name: {"llm_name": "chat-m"})
     monkeypatch.setattr(dialog_service, "get_tenant_default_model_by_type", lambda s, tid, t: {"llm_name": "chat-m"})

@@ -243,26 +243,6 @@ class TenantService(CommonService):
         ]
 
     @classmethod
-    def get_null_tenant_model_id_rows(cls, db: Session):
-        stmt = select(
-            cls.model.id,
-            cls.model.llm_id,
-            cls.model.embd_id,
-            cls.model.asr_id,
-            cls.model.img2txt_id,
-            cls.model.rerank_id,
-            cls.model.tts_id,
-        ).where(
-            (cls.model.tenant_llm_id.is_(None))
-            | (cls.model.tenant_embd_id.is_(None))
-            | (cls.model.tenant_asr_id.is_(None))
-            | (cls.model.tenant_img2txt_id.is_(None))
-            | (cls.model.tenant_rerank_id.is_(None))
-            | (cls.model.tenant_tts_id.is_(None))
-        )
-        return db.execute(stmt).all()
-
-    @classmethod
     def get_joined_tenants_by_user_id(cls, db: Session, user_id: str):
         stmt = (
             select(cls.model.id.label("tenant_id"), cls.model.name, cls.model.llm_id, cls.model.embd_id, cls.model.asr_id, cls.model.img2txt_id, UserTenant.role)

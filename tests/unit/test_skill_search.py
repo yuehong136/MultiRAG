@@ -60,7 +60,7 @@ class Store:
 @pytest.fixture
 def config() -> dict[str, Any]:
     return {
-        "embedding_model_id": "9007199254740993",
+        "embedding_model_id": "ab" * 16,
         "rerank_model_id": None,
         "vector_weight": 0.25,
         "similarity_threshold": 0,
@@ -91,7 +91,7 @@ async def test_build_indexes_every_enabled_chunk_and_keeps_model_identity(config
     assert store.calls == ["create", "seal"]
     assert "".join(row["text"] for row in store.rows if row["field"] == "content") == document.content
     assert len({row["id"] for row in store.rows}) == len(store.rows)
-    assert models.resolved == [("tenant", "9007199254740993", "embedding")]
+    assert models.resolved == [("tenant", "ab" * 16, "embedding")]
 
 
 async def test_invalid_provider_response_does_not_create_generation(config: dict[str, Any]) -> None:
@@ -114,7 +114,7 @@ async def test_field_weight_hybrid_fusion_and_real_rerank(config: dict[str, Any]
     assert [hit.version_id for hit in hits] == ["v1", "v2"]
     assert hits[0].score == pytest.approx(0.75 * 0.75 * 0.75)
     assert hits[1].score == pytest.approx(0.25 * 0.75 + 0.75 * 0.25 * 0.5)
-    config["rerank_model_id"] = "8"
+    config["rerank_model_id"] = "cd" * 16
     reranked = await runtime.query("skill_" + "d" * 32, "tenant", config, "term", "hybrid", 20)
     assert models.reranked and reranked[0].version_id == "v2"
 

@@ -1,48 +1,47 @@
-"""多知识库 embedding 一致性校验：service 权威 helper。
+"""Registered embedding identities may share a vector space across connections."""
 
-`KnowledgebaseService.ensure_same_embedding_model` 是所有多知识库联合检索/对话
-入口的唯一校验点（dialog_service 四路径、dialog_app、sdk/doc、chat_api、dataset search）。
-判定键：tenant_embd_id（provider 实例级）；缺失时回退 embd_id 并剥 @factory 后缀。
-"""
+from uuid import uuid4
 
 import pytest
+from sqlalchemy.orm import Session
 
 from api.db.db_models import Knowledgebase
-from api.db.services import tenant_llm_service
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 
 
-def _kb(tenant_embd_id=None, embd_id="", **kw):
-    defaults = {"id": "kb-1", "name": "ds", "tenant_id": "tenant-unit"}
-    defaults.update(kw)
-    return Knowledgebase(tenant_embd_id=tenant_embd_id, embd_id=embd_id, **defaults)
+def _kb(tenant_embd_id: str | None = None, embd_id: str = "", tenant: str = "tenant-unit") -> Knowledgebase:
+    return Knowledgebase(tenant_embd_id=tenant_embd_id, embd_id=embd_id, tenant_id=tenant)
 
 
-def test_same_tenant_embd_id_passes_even_with_different_names():
-    kbs = [_kb(tenant_embd_id=7, embd_id="bge-m3"), _kb(tenant_embd_id=7, embd_id="alias-name")]
-    KnowledgebaseService.ensure_same_embedding_model(kbs)
+def test_same_base_model_across_registered_tenants_does_not_load_credentials(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    first, second = uuid4().hex, uuid4().hex
 
+    def model_names(statement: object) -> list[tuple[str, str, str]]:
+        query = str(statement)
+        assert "api_key" not in query
+        assert "(usr_ai.t_ai_tenant_model_providers.tenant_id, usr_ai.t_ai_tenant_models.id) IN" in query
+        return [("tenant-unit", first, "bge-m3"), ("shared", second, "bge-m3")]
 
-def test_different_tenant_embd_id_raises():
-    kbs = [_kb(tenant_embd_id=7), _kb(tenant_embd_id=8)]
+    monkeypatch.setattr(db, "execute", model_names)
+    KnowledgebaseService.ensure_same_embedding_model([_kb(first, "stale"), _kb(second, tenant="shared")], db=db)
     with pytest.raises(EmbeddingModelMismatchError):
-        KnowledgebaseService.ensure_same_embedding_model(kbs)
+        KnowledgebaseService.ensure_same_embedding_model([_kb(first), _kb(second, tenant="unrelated")], db=db)
 
 
-def test_fallback_same_model_name_across_factories_passes(monkeypatch):
-    # 宽松语义：同名模型挂不同 factory 视为同一向量空间（与上游一致）
-    monkeypatch.setattr(tenant_llm_service.settings, "FACTORY_LLM_INFOS", [{"name": "BAAI"}, {"name": "Ollama"}], raising=False)
-    kbs = [_kb(embd_id="bge-m3@BAAI"), _kb(embd_id="bge-m3@Ollama")]
-    KnowledgebaseService.ensure_same_embedding_model(kbs)
+def test_known_distinct_models_are_rejected(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    first, second = uuid4().hex, uuid4().hex
+    monkeypatch.setattr(db, "execute", lambda _: [("tenant-unit", first, "bge-m3"), ("tenant-unit", second, "text-embedding-3")])
+    with pytest.raises(EmbeddingModelMismatchError):
+        KnowledgebaseService.ensure_same_embedding_model([_kb(first), _kb(second)], db=db)
 
 
-def test_fallback_different_model_names_raise_with_detail():
-    kbs = [_kb(embd_id="bge-m3"), _kb(embd_id="text-embedding-3")]
+def test_base_name_for_builtin_without_tenant_registration(db: Session) -> None:
+    KnowledgebaseService.ensure_same_embedding_model([_kb(embd_id="bge-m3@Builtin"), _kb(embd_id="bge-m3")], db=db)
     with pytest.raises(EmbeddingModelMismatchError, match="bge-m3") as exc_info:
-        KnowledgebaseService.ensure_same_embedding_model(kbs)
+        KnowledgebaseService.ensure_same_embedding_model([_kb(embd_id="bge-m3"), _kb(embd_id="text-embedding-3")], db=db)
     assert "text-embedding-3" in str(exc_info.value)
 
 
-def test_empty_and_single_kb_pass():
-    KnowledgebaseService.ensure_same_embedding_model([])
-    KnowledgebaseService.ensure_same_embedding_model([_kb(embd_id="bge-m3")])
+def test_empty_and_single_kb_pass(db: Session) -> None:
+    KnowledgebaseService.ensure_same_embedding_model([], db=db)
+    KnowledgebaseService.ensure_same_embedding_model([_kb(embd_id="bge-m3")], db=db)

@@ -34,7 +34,7 @@ from api.identity.principal import Principal
 from api.identity.run_context import RunContext
 from api.utils.agent_completion import AgentCompletionAccumulator, normalize_agent_event
 from api.utils.api_utils import get_data_openai
-from common.constants import StatusEnum
+from common.constants import LLMType, StatusEnum
 from common.misc_utils import get_uuid
 from core.utils.task_runtime import finish_runtime, require_runtime_finish
 
@@ -50,6 +50,36 @@ class CanvasTemplateService(CommonService):
         """Keep multilingual data intact and order equal timestamps consistently."""
         statement = select(cls.model).order_by(cls.model.create_time.desc(), cls.model.id.asc())
         return list(db.scalars(statement).all())
+
+    @classmethod
+    def list_for_tenant(cls, db: Session, tenant_id: str) -> list[dict[str, Any]]:
+        from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
+
+        rows = cls.list_templates(db)
+        if not rows:
+            return []
+        defaults: dict[LLMType, str] = {}
+        for capability in (LLMType.CHAT, LLMType.IMAGE2TEXT):
+            try:
+                defaults[capability] = get_tenant_default_model_by_type(db, tenant_id, capability)["id"] or ""
+            except (LookupError, ValueError):
+                defaults[capability] = ""
+        result = []
+        for row in rows:
+            dto = row.to_dict()
+            dsl = dto["dsl"] = copy.deepcopy(dto.get("dsl"))
+            if isinstance(dsl, dict):
+                forms = [component.get("obj", {}).get("params", {}) for component in dsl.get("components", {}).values()]
+                forms.extend(node.get("data", {}).get("form", {}) for node in dsl.get("graph", {}).get("nodes", []))
+                for form in forms:
+                    if not isinstance(form, dict):
+                        continue
+                    form.pop("tenant_llm_id", None)
+                    if "llm_id" in form:
+                        ability = LLMType.IMAGE2TEXT if form.get("llm_filter") == "image2text" else LLMType.CHAT
+                        form["llm_id"] = defaults[ability]
+            result.append(dto)
+        return result
 
 
 class DataFlowTemplateService(CommonService):

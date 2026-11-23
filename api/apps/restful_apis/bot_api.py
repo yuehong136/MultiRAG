@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.concurrency import iterate_in_threadpool
 
-from api.db.db_models import TenantLLM, db_connection, get_async_db, get_db
+from api.db.db_models import TenantModel, TenantModelProvider, db_connection, get_async_db, get_db
 from api.db.joint_services.tenant_model_service import (
     build_bundle_by_id_async,
     build_default_bundle_async,
@@ -26,6 +26,7 @@ from api.db.joint_services.tenant_model_service import (
     get_model_config_by_type_and_name,
     get_tenant_default_model_by_type,
 )
+from api.db.model_contract import ModelID
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService, agent_event_error, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
@@ -164,7 +165,7 @@ class SearchBotRetrievalTestRequest(BaseModel):
     search_id: str | None = ""
     doc_ids: list[str] | None = None
     rerank_id: str | None = None
-    tenant_rerank_id: int | None = None
+    tenant_rerank_id: ModelID | None = None
     keyword: bool | None = False
     highlight: bool | None = False
 
@@ -815,11 +816,15 @@ async def retrieval_test_embedded(
         if {kb.id for kb in kbs} != set(kb_ids):
             return get_error_data_result(retmsg="Knowledgebase not found!")
         tenant_ids = [dataset.tenant_id for dataset in kbs]
-        KnowledgebaseService.ensure_same_embedding_model(kbs)
+        await db.run_sync(lambda s: KnowledgebaseService.ensure_same_embedding_model(kbs, db=s))  # TODO(async-phase4)
         kb = kbs[0]
         allowed_rerank_tenant_ids = {tenant_id, *[dataset.tenant_id for dataset in kbs]}
         if body.tenant_rerank_id is not None:
-            allowed_model = await db.scalar(select(TenantLLM.id).where(TenantLLM.id == body.tenant_rerank_id, TenantLLM.tenant_id.in_(allowed_rerank_tenant_ids)))
+            allowed_model = await db.scalar(
+                select(TenantModel.id)
+                .join(TenantModelProvider, TenantModel.provider_id == TenantModelProvider.id)
+                .where(TenantModel.id == body.tenant_rerank_id, TenantModelProvider.tenant_id.in_(allowed_rerank_tenant_ids))
+            )
             if allowed_model is None:
                 return get_json_result(data=False, retmsg="No authorization for rerank model.", retcode=RetCode.AUTHENTICATION_ERROR)
 
