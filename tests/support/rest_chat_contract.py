@@ -24,6 +24,11 @@ class RestChatContract:
     factory: str
     datasets: dict[str, str]
     provider: dict[str, Any]
+    model_ids: dict[str, dict[str, str]]
+
+    def model_id(self, capability: str, *, credential: str = "jwt") -> str:
+        owner = self.runtime["owners"][credential == "api_key"]
+        return self.model_ids[owner][capability]
 
     def request(self, method: str, path: str, *, credential: str | None = "jwt", **kwargs: Any) -> requests.Response:
         if method in {"POST", "PATCH", "PUT", "DELETE"}:
@@ -68,6 +73,7 @@ def rest_chat_contract(runtime_upload_api: dict[str, Any], monkeypatch: pytest.M
     factory = f"RestContract-{uuid4().hex}"
     datasets = {key: uuid4().hex for key in ("parsed", "unparsed", "foreign")}
     state: dict[str, Any] = {"calls": [], "answer": "Controlled answer", "failure": False}
+    model_ids: dict[str, dict[str, str]] = {owner: {} for owner in owners}
     record = env["record"]["rest_chat"] = {"factory": factory, "datasets": datasets, "owners": owners}
     env["journal"].event(
         "reserve-chat-scope",
@@ -152,6 +158,7 @@ def rest_chat_contract(runtime_upload_api: dict[str, Any], monkeypatch: pytest.M
                 db.add(LLM(fid=factory, llm_name=kind, mdl_type=kind, tags=kind.upper(), max_tokens=8192, is_tools=False))
                 for owner in owners:
                     model = register_model(db, tenant_id=owner, provider_name=factory, model_name=kind, model_types=(kind,), api_key="controlled")
+                    model_ids[owner][kind] = model.id
                     tenant = db.get(Tenant, owner)
                     assert tenant is not None
                     field = {"chat": "llm_id", "rerank": "rerank_id", "speech2text": "asr_id", "tts": "tts_id"}[kind]
@@ -161,7 +168,7 @@ def rest_chat_contract(runtime_upload_api: dict[str, Any], monkeypatch: pytest.M
                 owner = owners[1 if key == "foreign" else 0]
                 db.add(Knowledgebase(id=kb_id, tenant_id=owner, created_by=owner, name=key, embd_id="controlled-embedding", chunk_num=0 if key == "unparsed" else 1))
             db.commit()
-        yield RestChatContract(env, factory, datasets, state)
+        yield RestChatContract(env, factory, datasets, state, model_ids)
 
 
 def sse_frames(response: requests.Response) -> list[dict[str, Any] | str]:

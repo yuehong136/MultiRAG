@@ -26,7 +26,7 @@ def test_create_patch_replace_and_projection(rest_chat_contract: RestChatContrac
     chat = ctx.create_chat(credential=credential, name="  管理合同  ", llm_id=None, icon="data:image/png;base64,c2NyYXRjaA==")
     chat_id = chat["id"]
     assert chat["name"] == "管理合同" and chat["tenant_id"] == owner
-    assert chat["llm_id"] == f"chat@{ctx.factory}" and chat["llm_setting"] == {}
+    assert chat["llm_id"] == ctx.model_id("chat", credential=credential) and chat["llm_setting"] == {}
     assert chat["dataset_ids"] == [] and chat["kb_names"] == []
     assert "{knowledge}" in chat["prompt_config"]["system"]
     assert chat["prompt_config"]["parameters"] == [{"key": "knowledge", "optional": False}]
@@ -53,10 +53,11 @@ def test_create_patch_replace_and_projection(rest_chat_contract: RestChatContrac
 
 def test_dataset_and_model_guards_preserve_sql(rest_chat_contract: RestChatContract) -> None:
     ctx = rest_chat_contract
-    chat = ctx.create_chat(dataset_ids=[ctx.datasets["parsed"]], rerank_id=f"rerank@{ctx.factory}", llm_id=f"chat@{ctx.factory}")
+    chat = ctx.create_chat(dataset_ids=[ctx.datasets["parsed"]], rerank_id=ctx.model_id("rerank"), llm_id=ctx.model_id("chat"))
     assert chat["dataset_ids"] == [ctx.datasets["parsed"]] and chat["kb_names"] == ["parsed"]
     row = ctx.read_chat(chat["id"])
-    assert row["tenant_llm_id"] and row["tenant_rerank_id"] and row["rerank_id"] == f"rerank@{ctx.factory}"
+    assert row["llm_id"] == row["tenant_llm_id"] == ctx.model_id("chat")
+    assert row["rerank_id"] == row["tenant_rerank_id"] == ctx.model_id("rerank")
     before = ctx.snapshot()
     invalid_fields: list[dict[str, Any]] = [
         {"name": " "},
@@ -67,7 +68,9 @@ def test_dataset_and_model_guards_preserve_sql(rest_chat_contract: RestChatContr
         {"dataset_ids": [ctx.datasets["unparsed"]]},
         {"dataset_ids": [uuid4().hex]},
         {"llm_id": "missing-model"},
-        {"llm_id": f"chat@missing-{ctx.factory}"},
+        {"llm_id": uuid4().hex},
+        {"llm_id": ctx.model_id("chat", credential="api_key")},
+        {"rerank_id": ctx.model_id("rerank", credential="api_key")},
         {"rerank_id": "missing-reranker"},
         {"llm_setting": []},
         {"prompt_config": "wrong"},
@@ -154,7 +157,7 @@ def test_concurrent_and_hundred_chat_batch_delete(rest_chat_contract: RestChatCo
     ctx.runtime["record"]["rest_chat"]["bulk_chats"] = ids
     ctx.runtime["record_path"].write_text(json.dumps(ctx.runtime["record"]))
     with Session(ctx.runtime["engine"]) as db:
-        db.add_all([Dialog(id=chat_id, tenant_id=owner, name=chat_id, llm_id=f"chat@{ctx.factory}") for chat_id in ids])
+        db.add_all([Dialog(id=chat_id, tenant_id=owner, name=chat_id, llm_id=ctx.model_id("chat"), tenant_llm_id=ctx.model_id("chat")) for chat_id in ids])
         db.commit()
 
     def delete_one(chat_id: str) -> dict[str, Any]:

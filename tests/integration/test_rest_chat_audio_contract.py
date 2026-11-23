@@ -125,14 +125,18 @@ def test_transcription_success_failure_and_cleanup(rest_chat_contract: RestChatC
 
     owner = ctx.runtime["owners"][credential == "api_key"]
     with Session(ctx.runtime["engine"]) as db:
-        db.get(Tenant, owner).asr_id = "missing-model"
+        tenant = db.get(Tenant, owner)
+        assert tenant is not None
+        tenant.asr_id = tenant.tenant_asr_id = uuid4().hex
         db.commit()
     response = transcribe()
     assert response.status_code == 200 and response.json()["code"] != 0
     assert audio["asr"] == [b"controlled-audio"]
     audio["assert_clean"]()
     with Session(ctx.runtime["engine"]) as db:
-        db.get(Tenant, owner).asr_id = f"speech2text@{ctx.factory}"
+        tenant = db.get(Tenant, owner)
+        assert tenant is not None
+        tenant.asr_id = tenant.tenant_asr_id = ctx.model_id("speech2text", credential=credential)
         db.commit()
     for failure in ("constructor", "provider"):
         audio["failure"] = failure
