@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+from collections.abc import Coroutine
+from typing import Any
 
 import pytest
 
@@ -54,3 +56,30 @@ def test_run_task_executor_runs_main_on_a_loop_async_psycopg_accepts(monkeypatch
 
     assert len(seen) == 1
     assert isinstance(seen[0], asyncio.SelectorEventLoop)
+
+
+def test_run_task_executor_tolerates_asyncio_run_without_loop_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Importing agent components applies nest_asyncio, whose asyncio.run() accepts only (main, *, debug).
+    ran: list[bool] = []
+
+    async def recording_main() -> None:
+        ran.append(True)
+
+    def nest_style_run(main: Coroutine[Any, Any, None], *, debug: bool = False) -> None:
+        with asyncio.Runner(debug=debug, loop_factory=asyncio.SelectorEventLoop) as runner:
+            runner.run(main)
+
+    def disable_faulthandler() -> None:
+        pass
+
+    def skip_logger_initialization(_consumer_name: str) -> None:
+        pass
+
+    monkeypatch.setattr(task_executor, "main", recording_main)
+    monkeypatch.setattr(task_executor.faulthandler, "enable", disable_faulthandler)
+    monkeypatch.setattr(task_executor, "init_root_logger", skip_logger_initialization)
+    monkeypatch.setattr(task_executor.asyncio, "run", nest_style_run)
+
+    task_executor.run_task_executor([])
+
+    assert ran == [True]

@@ -3392,11 +3392,16 @@ def run_task_executor(argv: list[str] | None = None) -> None:
     CONSUMER_NAME = "task_executor_" + CONSUMER_NO
     faulthandler.enable()
     init_root_logger(CONSUMER_NAME)
-    # Windows 上 asyncio.run() 默认 ProactorEventLoop，psycopg 异步模式拒绝运行（InterfaceError），
-    # 记忆写入等 AsyncSession 路径每次回滚。与 api/multirag_server.py、api/model_gateway/server.py 一致改用 SelectorEventLoop。
-    loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
     try:
-        asyncio.run(main(), loop_factory=loop_factory)
+        if sys.platform == "win32":
+            # Windows 上 asyncio.run() 默认 ProactorEventLoop，psycopg 异步模式拒绝运行（InterfaceError），
+            # 记忆写入等 AsyncSession 路径每次回滚。与 api/multirag_server.py 一致改用 SelectorEventLoop。
+            # 用 Runner 而不是 asyncio.run(loop_factory=...)：agent 组件导入时 nest_asyncio.apply() 会把
+            # asyncio.run 换成不接受 loop_factory 的版本。
+            with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+                runner.run(main())
+        else:
+            asyncio.run(main())
     except Exception:
         logging.exception("Task executor terminated unexpectedly")
         sys.exit(1)
