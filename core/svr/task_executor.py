@@ -3392,8 +3392,11 @@ def run_task_executor(argv: list[str] | None = None) -> None:
     CONSUMER_NAME = "task_executor_" + CONSUMER_NO
     faulthandler.enable()
     init_root_logger(CONSUMER_NAME)
+    # Windows 上 asyncio.run() 默认 ProactorEventLoop，psycopg 异步模式拒绝运行（InterfaceError），
+    # 记忆写入等 AsyncSession 路径每次回滚。与 api/multirag_server.py、api/model_gateway/server.py 一致改用 SelectorEventLoop。
+    loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
     try:
-        asyncio.run(main())
+        asyncio.run(main(), loop_factory=loop_factory)
     except Exception:
         logging.exception("Task executor terminated unexpectedly")
         sys.exit(1)
