@@ -73,6 +73,10 @@ def test_askdata_shared_log_keeps_non_gbk_text(monkeypatch: pytest.MonkeyPatch, 
     monkeypatch.setattr(askdata_logger, "PerQuestionRoutingHandler", lambda base_dir: logging.NullHandler())
 
     with _isolated_loggers("askdata"):
+        # 导入 app 时 askdata 模块已在加载期初始化过该 logger；清空后只看本次新建的 handler，结束时原样恢复
+        existing = logging.getLogger("askdata")
+        existing.handlers.clear()
+        existing.filters.clear()
         logger = askdata_logger.get_askdata_logger()
         shared_handlers = [h for h in logger.handlers if isinstance(h, RotatingFileHandler)]
         assert len(shared_handlers) == 1
