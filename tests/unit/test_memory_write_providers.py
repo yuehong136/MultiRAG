@@ -58,7 +58,17 @@ def test_model_fingerprint_excludes_usage_and_changes_with_credentials() -> None
 
 @pytest.mark.parametrize(
     "response",
-    ["", "not json", "[]", '{"raw":[]}', '{"semantic":{}}', '{"semantic":[{"content":" ","valid_at":"2025-01-01 00:00:00"}]}', '{"semantic":[{"content":"fact","valid_at":"2025-02-30 00:00:00"}]}'],
+    [
+        "",
+        "not json",
+        "[]",
+        '{"raw":[]}',
+        '{"semantic":{}}',
+        '{"semantic":[{"content":" ","valid_at":"2025-01-01 00:00:00"}]}',
+        '{"semantic":[{"content":"fact","valid_at":"2025-02-30 00:00:00"}]}',
+        '{"episodic":[{"content":"event","valid_at":"2025-02-30"}]}',
+        '{"episodic":[{"content":"event","valid_at":"2025-01"}]}',
+    ],
 )
 def test_invalid_model_output_is_not_an_empty_success(response: str) -> None:
     with pytest.raises(RevisionValidationError):
@@ -71,6 +81,12 @@ def test_extraction_constructs_host_fields_and_preserves_literal_content() -> No
     assert parse_extractions("{}", {"semantic"}) == []
     with pytest.raises(RevisionValidationError, match="limit"):
         parse_extractions(json.dumps({"semantic": [{"content": "fact", "valid_at": "2025-01-01T10:00:00"}] * 101}), {"semantic"})
+
+
+def test_extraction_keeps_calendar_dates_at_day_precision() -> None:
+    # "我昨天身体不舒服" resolved against the conversation time, with no time of day to invent.
+    response = json.dumps({"episodic": [{"content": "用户昨天身体不舒服", "valid_at": "2026-11-23", "invalid_at": "2026-11-24"}]}, ensure_ascii=False)
+    assert parse_extractions(response, {"episodic"}) == [{"message_type": "episodic", "content": "用户昨天身体不舒服", "valid_at": "2026-11-23 00:00:00", "invalid_at": "2026-11-24 00:00:00"}]
 
 
 async def test_embedding_constructs_off_loop_after_releasing_sql(async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:

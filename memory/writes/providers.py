@@ -8,7 +8,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -30,6 +30,7 @@ from memory.writes.types import EmbeddingResult, ExtractionResult
 
 _MODEL_FIELDS = ("id", "tenant_id", "llm_factory", "llm_name", "mdl_type", "model_type", "api_key", "api_base", "region", "max_tokens", "instance_id")
 _REFERENCE_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?")
+_EVENT_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 @dataclass(frozen=True, repr=False)
@@ -84,6 +85,13 @@ def _source_time(value: Any) -> str:
 def _event_time(value: Any, *, required: bool) -> str | None:
     if not required and value in (None, ""):
         return None
+    # The prompt forbids inventing an unstated time of day, so a resolved "yesterday" comes back
+    # as an ISO 8601 calendar date. Store it at day precision instead of rejecting the extraction.
+    if isinstance(value, str) and _EVENT_DATE.fullmatch(value.strip()):
+        try:
+            return date.fromisoformat(value.strip()).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError as error:
+            raise RevisionValidationError("invalid_source_reference_time") from error
     timestamp = _source_time(value)
     return datetime.fromisoformat(timestamp.strip().replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M:%S")
 
