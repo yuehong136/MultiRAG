@@ -100,6 +100,7 @@ class Router:
         self._cooling_until: dict[str, float] = {}
         # Deployments the last background health check found failing.
         self._unhealthy: frozenset[str] = frozenset()
+        self._last_success: dict[str, float] = {}
 
     def plan(self, deployments: Sequence[D]) -> list[D]:
         """Every deployment once, in the order a request should try them."""
@@ -133,6 +134,12 @@ class Router:
 
     def succeeded(self, model_id: str) -> None:
         self._minute(model_id).successes += 1
+        self._last_success[model_id] = self._clock()
+
+    def seconds_since_success(self, model_id: str) -> float | None:
+        """How long ago a real call to this deployment succeeded; ``None`` when none did in this process."""
+        at = self._last_success.get(model_id)
+        return self._clock() - at if at is not None else None
 
     def failed(self, model_id: str, status_code: int, *, deployments: int) -> bool:
         """Count a failure; returns whether the deployment now rests."""

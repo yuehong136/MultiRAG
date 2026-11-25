@@ -4559,7 +4559,7 @@ class GatewayModelHealth(BaseModel):
     __tablename__ = "t_ai_gateway_model_health"
     __table_args__ = (
         sa.UniqueConstraint("tenant_id", "model_id", name="uq_gateway_model_health_tenant_model"),
-        sa.CheckConstraint("status IN ('healthy', 'unhealthy')", name="ck_gateway_model_health_status"),
+        sa.CheckConstraint("status IN ('healthy', 'rate_limited', 'unhealthy')", name="ck_gateway_model_health_status"),
         {"schema": "usr_ai"},
     )
 
@@ -4577,6 +4577,10 @@ class GatewayModelHealth(BaseModel):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Why it is not healthy: rate_limit, credential, quota, model_gone, transient, timeout, unreachable.
+    failure_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # A probe, or real calls that succeeded since the last round ("traffic").
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="probe", server_default="probe")
 
 
 class GatewayDailyUsage(BaseModel):

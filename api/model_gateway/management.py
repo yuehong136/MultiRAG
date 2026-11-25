@@ -132,6 +132,9 @@ async def _health_by_model(db: AsyncSession, tenant_id: str) -> dict[str, dict[s
             "error_message": row.error_message,
             "response_time_ms": row.response_time_ms,
             "checked_at": _iso(row.checked_at),
+            # Why it is not healthy, and whether a probe or real traffic says so.
+            "failure_class": row.failure_class,
+            "source": row.source,
         }
         for row in rows
     }

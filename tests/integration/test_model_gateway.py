@@ -44,6 +44,15 @@ from tests.support.resource_journal import ResourceJournal
 
 pytestmark = pytest.mark.integration
 
+
+@pytest.fixture(autouse=True)
+def _no_background_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The management app reads the process configuration: keep it from fetching prices or showing health."""
+    settings = get_app_config().model_gateway
+    monkeypatch.setattr(settings, "health_check_interval_seconds", 0.0)
+    monkeypatch.setattr(settings, "price_map_refresh_hours", 0.0)
+
+
 _GATEWAY_MODELS = (GatewayModelSetting, GatewaySetting, GatewayKey, GatewayRequestLog, GatewayDailyUsage, GatewayModelHealth)
 
 
@@ -143,13 +152,16 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
     health = ScriptDirectory.from_config(_alembic_config()).get_revision("2c4e6a8b0d1f")
     assert health is not None and health.down_revision == "1b3d5f7a9c2e"
     health_revision = health.module
+    classes = ScriptDirectory.from_config(_alembic_config()).get_revision("3d5f7b9c1e2a")
+    assert classes is not None and classes.down_revision == "2c4e6a8b0d1f"
+    classes_revision = classes.module
     journal = ResourceJournal("model_gateway_schema")
     for model_first in (False, True):
         schema = "model_gateway_" + uuid.uuid4().hex[:12]
         journal.event("reserve-schema", schema=schema, database=owned_engine.url.database, model_first=model_first)
         with owned_engine.begin() as connection:
             connection.execute(sa.schema.CreateSchema(schema))
-            _point_at(monkeypatch, connection, schema, tables_revision, catalog_revision, identity_revision, cost_revision, deployments_revision, health_revision)
+            _point_at(monkeypatch, connection, schema, tables_revision, catalog_revision, identity_revision, cost_revision, deployments_revision, health_revision, classes_revision)
             if model_first:
                 metadata = sa.MetaData()
                 for model in _GATEWAY_MODELS:
@@ -192,7 +204,15 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
             deployments_revision.upgrade()
             health_revision.upgrade()
             health_revision.upgrade()
+            classes_revision.upgrade()
+            classes_revision.upgrade()
             _assert_schema_matches_models(connection, schema)
+            health_table = sa.Table("t_ai_gateway_model_health", sa.MetaData(), autoload_with=connection, schema=schema)
+            limited = {"id": "h-1", "tenant_id": "t", "model_id": "a" * 32, "status": "rate_limited", "failure_class": "rate_limit", "response_time_ms": 3, "checked_at": datetime.now(UTC)}
+            connection.execute(health_table.insert().values(**limited))
+            assert connection.scalar(sa.select(health_table.c.source)) == "probe"
+            with pytest.raises(IntegrityError), connection.begin_nested():
+                connection.execute(health_table.insert().values(**{**limited, "id": "h-2", "model_id": "b" * 32, "status": "broken"}))
             if not model_first:
                 after = sa.Table("t_ai_gateway_model_settings", sa.MetaData(), autoload_with=connection, schema=schema)
                 assert dict(connection.execute(sa.select(after.c.id, after.c.deployment_order)).all()) == {"p-1": 1, "p-2": None}
@@ -238,6 +258,13 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
 
             with pytest.raises(RuntimeError, match="persisted model gateway data"):
                 catalog_revision.downgrade()
+            # The older schema cannot say "rate limited": such results go, and the status rule is the old one again.
+            classes_revision.downgrade()
+            assert connection.scalar(sa.select(sa.func.count()).select_from(health_table)) == 0
+            with pytest.raises(IntegrityError), connection.begin_nested():
+                connection.execute(
+                    sa.text(f"INSERT INTO {schema}.t_ai_gateway_model_health (id, tenant_id, model_id, status, response_time_ms, checked_at) VALUES ('h-3', 't', 'c', 'rate_limited', 1, now())")
+                )
             health_revision.downgrade()
             assert not sa.inspect(connection).has_table("t_ai_gateway_model_health", schema=schema)
             assert "previous_secret_hash" not in {column["name"] for column in sa.inspect(connection).get_columns("t_ai_gateway_keys", schema=schema)}
@@ -558,7 +585,7 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
     checked = {result.model_id: result for result in _run(health_round()) if result.tenant_id == owner}
     upstream.failing.clear()
     assert {model_id: result.status for model_id, result in checked.items()} == {chat_id: "healthy", embed_id: "healthy", twin_id: "unhealthy"}
-    assert (checked[twin_id].status_code, checked[chat_id].status_code) == (503, 200)
+    assert (checked[twin_id].status_code, checked[chat_id].status_code, checked[twin_id].failure_class) == (503, 200, "transient")
     probes = {item["url"]: item["body"] for item in upstream.requests[probes_from:] if "models.internal" in item["url"]}
     assert probes["http://models.internal:8000/v1/chat/completions"] == {"model": "qwen-upstream", "messages": [{"role": "user", "content": "test"}], "max_tokens": 1}
     assert probes["http://models.internal:9997/v1/embeddings"] == {"model": "bge-upstream", "input": "test"}
@@ -572,6 +599,7 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
             patched.setattr(get_app_config().model_gateway, "health_check_interval_seconds", 300.0)
             shown = {item["model_id"]: item["health"] for item in admin.get(f"{_PREFIX}/catalog").json()["data"]["models"]}
         assert (shown[chat_id]["status"], shown[twin_id]["status"], shown[twin_id]["status_code"], shown[closed_id]) == ("healthy", "unhealthy", 503, None)
+        assert (shown[twin_id]["failure_class"], shown[chat_id]["failure_class"], shown[chat_id]["source"]) == ("transient", None, "probe")
         assert "overloaded" in shown[twin_id]["error_message"] and shown[chat_id]["checked_at"]
     # The next round replaces the result instead of adding one.
     _run(health_round())

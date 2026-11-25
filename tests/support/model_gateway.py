@@ -84,7 +84,7 @@ def data_plane(engine: Engine, transport: httpx.AsyncBaseTransport | None, *, cl
     async_engine = create_async_engine(engine.url)
     store = SqlGatewayStore(async_sessionmaker(async_engine, expire_on_commit=False))
     limiter = MemoryLimiter(usage_since=store.tokens_used_since, clock=clock) if clock is not None else None
-    app = create_app(store=store, transport=transport, config=ModelGatewayConfig(enabled=True, **settings), limiter=limiter)
+    app = create_app(store=store, transport=transport, config=ModelGatewayConfig(**{"enabled": True, **QUIET, **settings}), limiter=limiter)
     with TestClient(app, backend_options=_BACKEND) as client:
         try:
             yield client
@@ -113,6 +113,11 @@ class _InProcess(httpx.BaseTransport):
 def sdk(client: TestClient, key: str) -> openai.OpenAI:
     """The real OpenAI SDK pointed at the in-process gateway, without SDK retries."""
     return openai.OpenAI(api_key=key, base_url="http://testserver/v1", http_client=httpx.Client(transport=_InProcess(client)), max_retries=0)
+
+
+# What tests switch off unless they ask for it: Redis state, background health checks, fetching prices
+# from the network, and importing LiteLLM's adapter at start.
+QUIET: dict[str, Any] = {"state_store": "memory", "health_check_interval_seconds": 0.0, "price_map_refresh_hours": 0.0, "messages_api_warm_up": False}
 
 
 def anthropic_sdk(client: TestClient, key: str) -> anthropic.Anthropic:

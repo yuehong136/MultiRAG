@@ -18,10 +18,11 @@ multirag:
 model_gateway:
   # 启用主 API 的网关管理接口；独立网关使用 api.model_gateway.server 启动
   enabled: true
-  # 限额计数和部署冷却放在 Redis 里，多个数据面进程共享、重启不清空；Redis 不可用时退回本进程计数
-  state_store: redis
-  # 启动时预先加载 /v1/messages（Anthropic 协议）的转换器，避免第一次调用多等几秒
-  messages_api_warm_up: true
+  # 以下各项不写就用默认值（见 common/app_config.py 的 ModelGatewayConfig），默认都是开启的：
+  #   state_store: redis                 限额计数和部署冷却放在 Redis，多进程共享；Redis 不可用时退回本进程计数
+  #   health_check_interval_seconds: 300 后台健康检查，每轮给每个可调用模型发一次 max_tokens=1 的真实请求；0 关闭
+  #   price_map_refresh_hours: 24        定时拉取 LiteLLM 价格表（需要访问 GitHub 或 price_map_url）；0 关闭
+  #   messages_api_warm_up: true         启动时预先加载 /v1/messages 的转换器
 
 multimodal_upload_storage:
   # 指定用于多模态文件上传的存储类型: minio, oss, s3, azure_spn, azure_sas

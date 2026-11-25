@@ -112,9 +112,10 @@ async def test_kicking_refreshes_in_the_background_and_not_again_until_due():
     assert len(seen) == 1
 
 
-def test_refreshing_is_off_unless_configured():
-    assert refresher_of(ModelGatewayConfig()) is None
-    first = refresher_of(ModelGatewayConfig(price_map_refresh_hours=24.0))
-    assert first is not None and first is refresher_of(ModelGatewayConfig(price_map_refresh_hours=24.0))
+def test_refreshing_is_on_by_default_and_zero_hours_switch_it_off():
+    assert refresher_of(ModelGatewayConfig(price_map_refresh_hours=0.0)) is None
+    first = refresher_of(ModelGatewayConfig())
+    assert first is not None and first is refresher_of(ModelGatewayConfig())
+    assert first._interval == 24 * 3600
     # An empty address means LiteLLM's own repository.
     assert first._source == price_refresh.MODEL_COST_MAP_URL

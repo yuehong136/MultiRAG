@@ -19,6 +19,7 @@ from api.model_gateway.relay import Relay
 from api.model_gateway.store import Caller, PublicModel, RequestLogEntry, ResolvedModel
 from api.model_gateway.usage import UNAVAILABLE, SSEUsageTap
 from common.app_config import ModelGatewayConfig
+from tests.support.model_gateway import QUIET
 
 CALLER_KEY = "Bearer caller-key"
 AUTH = {"authorization": CALLER_KEY}
@@ -99,7 +100,7 @@ class Gateway:
             result = handler(request)
             return await result if asyncio.iscoroutine(result) else result
 
-        self.app = create_app(store=self.store, transport=httpx.MockTransport(recording), config=ModelGatewayConfig(**settings), limiter=limiter)
+        self.app = create_app(store=self.store, transport=httpx.MockTransport(recording), config=ModelGatewayConfig(**{**QUIET, **settings}), limiter=limiter)
 
     def call(self, method: str, url: str, **kwargs) -> httpx.Response:
         # Leaving the context runs shutdown, which waits for stream log writes.

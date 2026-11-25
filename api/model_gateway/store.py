@@ -335,6 +335,8 @@ class SqlGatewayStore:
                     "error_message": result.error_message,
                     "response_time_ms": result.response_time_ms,
                     "checked_at": result.checked_at,
+                    "failure_class": result.failure_class,
+                    "source": result.source,
                 }
                 statement = insert(GatewayModelHealth).values(id=uuid.uuid4().hex, tenant_id=result.tenant_id, model_id=result.model_id, **values)
                 await db.execute(statement.on_conflict_do_update(constraint="uq_gateway_model_health_tenant_model", set_=values))
