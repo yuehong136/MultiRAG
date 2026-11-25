@@ -191,8 +191,22 @@ def cost_map_path() -> Path | None:
     return path if path is not None and path.is_file() else None
 
 
-@lru_cache(maxsize=1)
+_installed: PriceTable | None = None
+
+
 def default_table() -> PriceTable:
+    """The price table in use: the last one fetched, else the one bundled with ``litellm``."""
+    return _installed if _installed is not None else bundled_table()
+
+
+def install_table(entries: Mapping[str, Any] | None) -> None:
+    """Use a fetched cost map from now on; ``None`` returns to the bundled one."""
+    global _installed
+    _installed = PriceTable(entries) if entries is not None else None
+
+
+@lru_cache(maxsize=1)
+def bundled_table() -> PriceTable:
     """The cost map bundled with the installed ``litellm``; empty when it cannot be read."""
     path = cost_map_path()
     if path is None:

@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
+import anthropic
 import httpx
 import openai
 import sqlalchemy as sa
@@ -112,6 +113,11 @@ class _InProcess(httpx.BaseTransport):
 def sdk(client: TestClient, key: str) -> openai.OpenAI:
     """The real OpenAI SDK pointed at the in-process gateway, without SDK retries."""
     return openai.OpenAI(api_key=key, base_url="http://testserver/v1", http_client=httpx.Client(transport=_InProcess(client)), max_retries=0)
+
+
+def anthropic_sdk(client: TestClient, key: str) -> anthropic.Anthropic:
+    """The real Anthropic SDK pointed at the in-process gateway, without SDK retries."""
+    return anthropic.Anthropic(api_key=key, base_url="http://testserver", http_client=httpx.Client(transport=_InProcess(client)), max_retries=0)
 
 
 def logs(engine: Engine) -> list[GatewayRequestLog]:

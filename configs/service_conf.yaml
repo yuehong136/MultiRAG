@@ -18,6 +18,10 @@ multirag:
 model_gateway:
   # 启用主 API 的网关管理接口；独立网关使用 api.model_gateway.server 启动
   enabled: true
+  # 限额计数和部署冷却放在 Redis 里，多个数据面进程共享、重启不清空；Redis 不可用时退回本进程计数
+  state_store: redis
+  # 启动时预先加载 /v1/messages（Anthropic 协议）的转换器，避免第一次调用多等几秒
+  messages_api_warm_up: true
 
 multimodal_upload_storage:
   # 指定用于多模态文件上传的存储类型: minio, oss, s3, azure_spn, azure_sas

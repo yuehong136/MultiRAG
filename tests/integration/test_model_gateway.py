@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import anthropic
 import httpx
 import openai
 import pytest
@@ -26,21 +27,24 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
-from api.db.db_models import GatewayDailyUsage, GatewayKey, GatewayModelSetting, GatewayRequestLog, GatewaySetting
+from api.db.db_models import GatewayDailyUsage, GatewayKey, GatewayModelHealth, GatewayModelSetting, GatewayRequestLog, GatewaySetting
 from api.db.services import model_provider_service
 from api.db.services.model_deletion_policy import collect_blocking_model_references
+from api.model_gateway.health import HealthChecker, HealthResult
 from api.model_gateway.keys import hash_key
+from api.model_gateway.router import Router
 from api.model_gateway.store import SqlGatewayStore
+from common.app_config import get_app_config
 from tests.support.database import _alembic_config
 from tests.support.model_gateway import MANAGEMENT_PREFIX as _PREFIX
-from tests.support.model_gateway import data_plane, instance_id, logs, management, register_model, sdk
+from tests.support.model_gateway import anthropic_sdk, data_plane, instance_id, logs, management, register_model, sdk
 from tests.support.provider_instances import owned_engine as owned_engine
 from tests.support.provider_instances import tenant
 from tests.support.resource_journal import ResourceJournal
 
 pytestmark = pytest.mark.integration
 
-_GATEWAY_MODELS = (GatewayModelSetting, GatewaySetting, GatewayKey, GatewayRequestLog, GatewayDailyUsage)
+_GATEWAY_MODELS = (GatewayModelSetting, GatewaySetting, GatewayKey, GatewayRequestLog, GatewayDailyUsage, GatewayModelHealth)
 
 
 _DELTA = (
@@ -136,13 +140,16 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
     deployments = ScriptDirectory.from_config(_alembic_config()).get_revision("1b3d5f7a9c2e")
     assert deployments is not None and deployments.down_revision == "0a2c4e6f8b1d"
     deployments_revision = deployments.module
+    health = ScriptDirectory.from_config(_alembic_config()).get_revision("2c4e6a8b0d1f")
+    assert health is not None and health.down_revision == "1b3d5f7a9c2e"
+    health_revision = health.module
     journal = ResourceJournal("model_gateway_schema")
     for model_first in (False, True):
         schema = "model_gateway_" + uuid.uuid4().hex[:12]
         journal.event("reserve-schema", schema=schema, database=owned_engine.url.database, model_first=model_first)
         with owned_engine.begin() as connection:
             connection.execute(sa.schema.CreateSchema(schema))
-            _point_at(monkeypatch, connection, schema, tables_revision, catalog_revision, identity_revision, cost_revision, deployments_revision)
+            _point_at(monkeypatch, connection, schema, tables_revision, catalog_revision, identity_revision, cost_revision, deployments_revision, health_revision)
             if model_first:
                 metadata = sa.MetaData()
                 for model in _GATEWAY_MODELS:
@@ -183,6 +190,8 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
                 connection.execute(before.insert().values(id="p-2", tenant_id="t", model_id="f" * 32, created_by="u"))
             deployments_revision.upgrade()
             deployments_revision.upgrade()
+            health_revision.upgrade()
+            health_revision.upgrade()
             _assert_schema_matches_models(connection, schema)
             if not model_first:
                 after = sa.Table("t_ai_gateway_model_settings", sa.MetaData(), autoload_with=connection, schema=schema)
@@ -229,6 +238,9 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
 
             with pytest.raises(RuntimeError, match="persisted model gateway data"):
                 catalog_revision.downgrade()
+            health_revision.downgrade()
+            assert not sa.inspect(connection).has_table("t_ai_gateway_model_health", schema=schema)
+            assert "previous_secret_hash" not in {column["name"] for column in sa.inspect(connection).get_columns("t_ai_gateway_keys", schema=schema)}
             # Going back, an alias is unique again: the earliest model keeps it.
             deployments_revision.downgrade()
             assert dict(connection.execute(sa.select(settings_table.c.id, settings_table.c.alias)).all()) == {"s-1": "chat-default", "s-2": None, "s-4": "chat-default"}
@@ -479,6 +491,18 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
         assert len(upstream.requests) == forwarded + 3
         upstream.failing.clear()
 
+        # Anthropic's SDK calls the same model through /v1/messages; the upstream still sees a chat completion.
+        message = anthropic_sdk(gateway, full_key["key"]).messages.create(model="qwen-upstream", max_tokens=32, system="be brief", messages=[{"role": "user", "content": "hello"}])
+        assert (message.content[0].text, message.stop_reason, message.usage.input_tokens, message.usage.output_tokens) == ("hi", "end_turn", 3, 2)
+        assert upstream.requests[-1]["url"] == "http://models.internal:8000/v1/chat/completions"
+        assert upstream.requests[-1]["body"]["messages"] == [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hello"}]
+        with anthropic_sdk(gateway, full_key["key"]).messages.stream(model="qwen-upstream", max_tokens=32, messages=[{"role": "user", "content": "hello"}]) as stream:
+            assert "".join(stream.text_stream) == "hi"
+            assert stream.get_final_message().usage.output_tokens == 2
+        with pytest.raises(anthropic.NotFoundError) as unknown:
+            anthropic_sdk(gateway, full_key["key"]).messages.create(model="gpt-4o", max_tokens=8, messages=[{"role": "user", "content": "hello"}])
+        assert unknown.value.body["error"]["type"] == "not_found_error"
+
     rows = logs(owned_engine)
     assert [(row.endpoint, row.stream, row.status_code, row.error_code) for row in rows] == [
         ("chat.completions", False, 200, None),
@@ -493,8 +517,12 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
         ("embeddings", False, 400, "model_endpoint_mismatch"),
         ("chat.completions", False, 200, None),
         ("chat.completions", False, 502, "upstream_error"),
+        ("messages", False, 200, None),
+        ("messages", True, 200, None),
+        ("messages", False, 404, "model_not_found"),
     ]
-    rescued_row, stranded_row = rows[-2:]
+    rescued_row, stranded_row = rows[-5:-3]
+    assert [(row.upstream_model_id, row.total_tokens) for row in rows[-3:-1]] == [(chat_id, 5), (chat_id, 5)]
     # The call is counted under the deployment that answered; the trail keeps the one that did not.
     assert rescued_row.upstream_model_id == twin_id and rescued_row.total_tokens == 5
     assert [(item["model_id"], item["provider"], item["instance_name"], item["status_code"]) for item in rescued_row.attempts] == [
@@ -515,19 +543,55 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
     with Session(owned_engine) as reader:
         assert reader.get(GatewayKey, full_key["id"]).last_used_at is not None
 
+    async def health_round() -> list[HealthResult]:
+        engine = create_async_engine(owned_engine.url)
+        try:
+            store = SqlGatewayStore(async_sessionmaker(engine, expire_on_commit=False))
+            async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as probe_client:
+                return await HealthChecker(probe_client, store, Router(), interval_seconds=300.0).run_once()
+        finally:
+            await engine.dispose()
+
+    # A health check probes every callable model of owners that have a usable key, with the smallest request.
+    upstream.failing.add("twin.internal")
+    probes_from = len(upstream.requests)
+    checked = {result.model_id: result for result in _run(health_round()) if result.tenant_id == owner}
+    upstream.failing.clear()
+    assert {model_id: result.status for model_id, result in checked.items()} == {chat_id: "healthy", embed_id: "healthy", twin_id: "unhealthy"}
+    assert (checked[twin_id].status_code, checked[chat_id].status_code) == (503, 200)
+    probes = {item["url"]: item["body"] for item in upstream.requests[probes_from:] if "models.internal" in item["url"]}
+    assert probes["http://models.internal:8000/v1/chat/completions"] == {"model": "qwen-upstream", "messages": [{"role": "user", "content": "test"}], "max_tokens": 1}
+    assert probes["http://models.internal:9997/v1/embeddings"] == {"model": "bge-upstream", "input": "test"}
+    # Probes are not calls: they leave no request log.
+    assert len(logs(owned_engine)) == len(rows)
+
+    with management(owned_engine, owner) as admin:
+        # With health checks off the management page shows no health at all.
+        assert all(item["health"] is None for item in admin.get(f"{_PREFIX}/catalog").json()["data"]["models"])
+        with pytest.MonkeyPatch.context() as patched:
+            patched.setattr(get_app_config().model_gateway, "health_check_interval_seconds", 300.0)
+            shown = {item["model_id"]: item["health"] for item in admin.get(f"{_PREFIX}/catalog").json()["data"]["models"]}
+        assert (shown[chat_id]["status"], shown[twin_id]["status"], shown[twin_id]["status_code"], shown[closed_id]) == ("healthy", "unhealthy", 503, None)
+        assert "overloaded" in shown[twin_id]["error_message"] and shown[chat_id]["checked_at"]
+    # The next round replaces the result instead of adding one.
+    _run(health_round())
+    with Session(owned_engine) as reader:
+        stored_health = reader.scalars(sa.select(GatewayModelHealth).where(GatewayModelHealth.tenant_id == owner)).all()
+        assert {row.model_id: row.status for row in stored_health} == {chat_id: "healthy", embed_id: "healthy", twin_id: "healthy"}
+
     with management(owned_engine, owner) as admin:
         requests = {item["model_id"]: item["requests_7d"] for item in admin.get(f"{_PREFIX}/catalog").json()["data"]["models"]}
-        assert requests == {chat_id: 3, closed_id: 0, embed_id: 1, hosted_id: 0, twin_id: 2}
+        assert requests == {chat_id: 5, closed_id: 0, embed_id: 1, hosted_id: 0, twin_id: 2}
         # Renaming a key leaves history under the name it had at call time.
         assert admin.patch(f"{_PREFIX}/keys/{full_key['id']}", json={"name": "eval-runner-2", "description": "nightly evals"}).status_code == 200
         key_logs = admin.get(f"{_PREFIX}/logs", params={"key_id": full_key["id"], "outcome": "success"}).json()["data"]
-        assert key_logs["total"] == 5 and {item["key_name"] for item in key_logs["items"]} == {"eval-runner"}
+        assert key_logs["total"] == 7 and {item["key_name"] for item in key_logs["items"]} == {"eval-runner"}
         assert [len(item["attempts"] or []) for item in key_logs["items"]].count(2) == 1
-        assert admin.get(f"{_PREFIX}/logs", params={"outcome": "error"}).json()["data"]["total"] == 7
+        assert admin.get(f"{_PREFIX}/logs", params={"outcome": "error"}).json()["data"]["total"] == 8
         by_status = {code: admin.get(f"{_PREFIX}/logs", params={"status_code": code}).json()["data"]["total"] for code in (200, 299)}
         assert by_status[200] >= 4 and by_status[299] == 0
         by_model = {item["model"]: item["total_tokens"] for item in admin.get(f"{_PREFIX}/usage", params={"group_by": "model"}).json()["data"]["items"]}
-        assert (by_model["qwen-upstream"], by_model["VLLM/default/qwen-upstream"], by_model["embed-default"]) == (10, 5, 4)
+        assert (by_model["qwen-upstream"], by_model["VLLM/default/qwen-upstream"], by_model["embed-default"]) == (20, 5, 4)
 
         # Closing a connection closes every model in it, for every key.
         closed_catalog = admin.patch(f"{_PREFIX}/catalog/instances/{vllm}", json={"enabled": False}).json()["data"]
@@ -557,10 +621,35 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
         later = next(item for item in reopened["models"] if item["model_id"] == later_id)
         assert (reopened["new_models_enabled"], later["state"], later["enabled_by_default"]) == (True, "closed", False)
 
+        # Rotation gives the key a new secret; everything else about it stays.
+        rotated = admin.post(f"{_PREFIX}/keys/{narrow_key['id']}/rotate", json={"grace_period_seconds": 3600}).json()["data"]
+        assert (rotated["id"], rotated["name"], rotated["allowed_model_ids"]) == (narrow_key["id"], "indexing-job", [embed_id])
+        assert rotated["key"] != narrow_key["key"] and rotated["rotated_at"] and rotated["previous_key_expires_at"]
+        assert rotated["key"] not in json.dumps(admin.get(f"{_PREFIX}/keys").json()["data"])
+        assert admin.post(f"{_PREFIX}/keys/{narrow_key['id']}/rotate", json={"grace_period_seconds": -1}).status_code in (400, 422)
+        assert admin.post(f"{_PREFIX}/keys/missing/rotate", json={}).status_code == 404
+    with data_plane(owned_engine, httpx.MockTransport(upstream)) as gateway:
+        # During the grace period the old secret and the new one both work.
+        for secret in (narrow_key["key"], rotated["key"]):
+            assert [model.id for model in sdk(gateway, secret).models.list().data] == ["embed-default"]
+    with management(owned_engine, owner) as admin:
+        # Without a grace period every earlier secret stops at once, the one still in its grace period included.
+        latest = admin.post(f"{_PREFIX}/keys/{narrow_key['id']}/rotate", json={}).json()["data"]
+        assert latest["previous_key_expires_at"] is None
+    with data_plane(owned_engine, httpx.MockTransport(upstream)) as gateway:
+        for secret in (narrow_key["key"], rotated["key"]):
+            with pytest.raises(openai.AuthenticationError) as replaced:
+                sdk(gateway, secret).models.list()
+            assert replaced.value.code == "invalid_api_key"
+        assert [model.id for model in sdk(gateway, latest["key"]).models.list().data] == ["embed-default"]
+    narrow_key = {**narrow_key, "key": latest["key"]}
+
+    with management(owned_engine, owner) as admin:
         # Lifecycle: disable, revoke; a revoked key cannot be changed again.
         assert admin.patch(f"{_PREFIX}/keys/{narrow_key['id']}", json={"status": "disabled"}).json()["data"]["status"] == "disabled"
         assert admin.post(f"{_PREFIX}/keys/{empty_key['id']}/revoke").json()["data"]["status"] == "revoked"
         assert admin.patch(f"{_PREFIX}/keys/{empty_key['id']}", json={"status": "active"}).status_code == 409
+        assert admin.post(f"{_PREFIX}/keys/{empty_key['id']}/rotate", json={}).status_code == 409
         assert admin.patch(f"{_PREFIX}/keys/missing", json={"name": "x"}).status_code == 404
     with Session(owned_engine) as db:
         # An expiry in the past cannot be set through the API; age the key directly.

@@ -17,12 +17,13 @@ twice, so a retry always means another deployment. And when every deployment
 of a name is cooling down they are all tried anyway, instead of refusing the
 request: a wrong guess about health must not take a name offline.
 
-State lives in this process, like the limit counters.
+The counts behind a cooldown live in this process. The cooldown itself can be
+shared: ``rest`` puts a deployment to rest that another process saw failing.
 """
 
 import random
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypeVar, runtime_checkable
 
@@ -97,14 +98,20 @@ class Router:
         self._rng = rng or random.Random()
         self._minutes: dict[str, _Minute] = {}
         self._cooling_until: dict[str, float] = {}
+        # Deployments the last background health check found failing.
+        self._unhealthy: frozenset[str] = frozenset()
 
     def plan(self, deployments: Sequence[D]) -> list[D]:
         """Every deployment once, in the order a request should try them."""
         if len(deployments) < 2:
             return list(deployments)
-        healthy = [item for item in deployments if not self.cooling(item.model_id)]
-        resting = [item for item in deployments if self.cooling(item.model_id)]
+        resting = [item for item in deployments if self.cooling(item.model_id) or item.model_id in self._unhealthy]
+        healthy = [item for item in deployments if item not in resting]
         return self._ordered(healthy) + self._ordered(resting)
+
+    def set_unhealthy(self, model_ids: Iterable[str]) -> None:
+        """Replace the set of deployments a health check found failing; they are tried last."""
+        self._unhealthy = frozenset(model_ids)
 
     def cooling(self, model_id: str) -> bool:
         until = self._cooling_until.get(model_id)
@@ -114,6 +121,15 @@ class Router:
             del self._cooling_until[model_id]
             return False
         return True
+
+    @property
+    def cooldown_seconds(self) -> float:
+        return self._cooldown_seconds
+
+    def rest(self, model_id: str) -> None:
+        """Rest a deployment another process saw failing, unless it already rests here."""
+        if self._cooldown_seconds > 0 and not self.cooling(model_id):
+            self._cooling_until[model_id] = self._clock() + self._cooldown_seconds
 
     def succeeded(self, model_id: str) -> None:
         self._minute(model_id).successes += 1

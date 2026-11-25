@@ -24,9 +24,11 @@ import httpx
 from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
-from api.model_gateway import errors
+from api.model_gateway import anthropic, errors
+from api.model_gateway.anthropic import Translation
 from api.model_gateway.errors import GatewayError
 from api.model_gateway.limits import Limiter, Subject
+from api.model_gateway.redis_state import RedisCooldowns
 from api.model_gateway.router import STATUS_TIMEOUT, STATUS_UNREACHABLE, Router, is_retryable
 from api.model_gateway.store import Attempt, Caller, GatewayStore, RequestLogEntry, ResolvedModel
 from api.model_gateway.usage import SSEUsageTap, usage_from_payload
@@ -50,6 +52,15 @@ def request_id_of(request: Request) -> str:
         request_id = uuid.uuid4().hex
         request.state.request_id = request_id
     return request_id
+
+
+def caller_credential(request: Request) -> str | None:
+    """The caller's key as an ``Authorization`` value; Anthropic SDKs send it as ``x-api-key``."""
+    authorization = request.headers.get("authorization")
+    if authorization:
+        return authorization
+    api_key = request.headers.get("x-api-key")
+    return f"Bearer {api_key}" if api_key else None
 
 
 def _elapsed_ms(started: float) -> int:
@@ -103,8 +114,10 @@ def _attempt(resolved: ResolvedModel, status_code: int, error_code: str | None, 
 
 
 class Relay:
-    def __init__(self, client: httpx.AsyncClient, store: GatewayStore, settings: ModelGatewayConfig, limiter: Limiter, router: Router | None = None) -> None:
+    def __init__(self, client: httpx.AsyncClient, store: GatewayStore, settings: ModelGatewayConfig, limiter: Limiter, router: Router | None = None, cooldowns: RedisCooldowns | None = None) -> None:
         self._router = router or Router(cooldown_seconds=settings.cooldown_time_seconds)
+        # Cooldowns seen by other data plane processes; ``None`` keeps them to this one.
+        self._cooldowns = cooldowns
         self._client = client
         self._store = store
         self._settings = settings
@@ -113,11 +126,12 @@ class Relay:
         # Requests that passed admission and still hold slots, by request id.
         self._admitted: dict[str, list[Subject]] = {}
 
-    async def handle(self, request: Request, *, endpoint: str, model_type: str) -> Response:
+    async def handle(self, request: Request, *, endpoint: str, model_type: str, messages_api: bool = False) -> Response:
+        """Relay one call. ``messages_api`` takes an Anthropic Messages request and answers in that format."""
         request_id = request_id_of(request)
         started_at, started = datetime.now(UTC), time.monotonic()
         # Unauthenticated requests are rejected here and leave no request log.
-        caller = await self._store.authenticate(request.headers.get("authorization"))
+        caller = await self._store.authenticate(caller_credential(request))
         entry = RequestLogEntry(
             id=request_id,
             tenant_id=caller.tenant_id,
@@ -145,11 +159,22 @@ class Relay:
             if key_subject is not None:
                 await self._limiter.admit(request_id, [key_subject])
                 self._admitted[request_id] = [key_subject]
-            return await self._route(request, payload, deployments, entry, started)
+            translation: Translation | None = None
+            if messages_api:
+                try:
+                    translation = await anthropic.translate_request(payload)
+                except ValueError as error:
+                    raise errors.invalid_request(str(error), code="invalid_messages_request") from None
+                payload = translation.body
+            return await self._route(request, payload, deployments, entry, started, translation)
         except GatewayError as error:
             entry.status_code, entry.error_type, entry.error_code = error.status_code, error.error_type, error.code
             await self._finish(entry, started)
             raise
+
+    @property
+    def router(self) -> Router:
+        return self._router
 
     async def drain(self) -> None:
         """Wait for request logs of streams that ended just before shutdown."""
@@ -174,8 +199,11 @@ class Relay:
             raise errors.invalid_request("The request body must be a JSON object.", code="invalid_json")
         return payload
 
-    async def _route(self, request: Request, payload: dict[str, Any], deployments: list[ResolvedModel], entry: RequestLogEntry, started: float) -> Response:
+    async def _route(self, request: Request, payload: dict[str, Any], deployments: list[ResolvedModel], entry: RequestLogEntry, started: float, translation: Translation | None = None) -> Response:
         """Try the deployments in the router's order until one answers or none may be tried."""
+        if self._cooldowns is not None and len(deployments) > 1:
+            for model_id in await self._cooldowns.resting([item.model_id for item in deployments]):
+                self._router.rest(model_id)
         plan = self._router.plan(deployments)
         deadline = started + self._settings.total_timeout_seconds
         calls_left = 1 + self._settings.num_retries
@@ -201,26 +229,32 @@ class Relay:
                 response, caller_asked_for_usage = await self._send(request, payload, resolved, entry)
             except GatewayError as error:
                 status = STATUS_TIMEOUT if error.code == "upstream_timeout" else STATUS_UNREACHABLE
-                self._router.failed(resolved.model_id, status, deployments=len(plan))
+                await self._failed(resolved, status, len(plan))
                 entry.attempts.append(_attempt(resolved, error.status_code, error.code, attempt_started))
                 if not may_retry:
                     raise
                 await self._release(entry.id, subject)
                 continue
             if response.status_code >= 400:
-                self._router.failed(resolved.model_id, response.status_code, deployments=len(plan))
+                await self._failed(resolved, response.status_code, len(plan))
                 entry.attempts.append(_attempt(resolved, response.status_code, None, attempt_started))
                 if may_retry and is_retryable(response.status_code):
                     await response.aclose()
                     await self._release(entry.id, subject)
                     continue
-                return await self._relay_failure(response, response.headers.get("content-type", "application/json"), entry, started)
+                return await self._relay_failure(response, response.headers.get("content-type", "application/json"), entry, started, translation)
             self._router.succeeded(resolved.model_id)
             entry.attempts.append(_attempt(resolved, response.status_code, None, attempt_started))
-            return await self._deliver(response, caller_asked_for_usage, entry, started, deadline)
+            # The Messages format reports usage in its last events, so the usage chunk is always needed.
+            return await self._deliver(response, caller_asked_for_usage or translation is not None, entry, started, deadline, translation)
         # Only deployments at their limit were left.
         assert refusal is not None
         raise refusal
+
+    async def _failed(self, resolved: ResolvedModel, status_code: int, deployments: int) -> None:
+        """Count a failed call and, when it rests the deployment, tell the other processes."""
+        if self._router.failed(resolved.model_id, status_code, deployments=deployments) and self._cooldowns is not None:
+            await self._cooldowns.mark(resolved.model_id, self._router.cooldown_seconds)
 
     async def _release(self, request_id: str, subject: Subject | None) -> None:
         """Give back the slot of a deployment the request moved on from."""
@@ -257,12 +291,13 @@ class Relay:
         except httpx.HTTPError:
             raise errors.upstream_unreachable() from None
 
-    async def _deliver(self, response: httpx.Response, caller_asked_for_usage: bool, entry: RequestLogEntry, started: float, deadline: float) -> Response:
+    async def _deliver(self, response: httpx.Response, caller_asked_for_usage: bool, entry: RequestLogEntry, started: float, deadline: float, translation: Translation | None = None) -> Response:
         content_type = response.headers.get("content-type", "application/json")
         if "text/event-stream" in content_type:
             tap = SSEUsageTap(hide_usage_only_chunk=not caller_asked_for_usage)
+            events = self._stream(response, tap, entry, started, deadline)
             return StreamingResponse(
-                self._stream(response, tap, entry, started, deadline),
+                translation.stream(events) if translation is not None else events,
                 status_code=response.status_code,
                 media_type=content_type,
                 headers={REQUEST_ID_HEADER: entry.id, "cache-control": "no-cache", "x-accel-buffering": "no"},
@@ -280,11 +315,17 @@ class Relay:
             entry.usage = usage_from_payload(json.loads(raw))
         except (ValueError, UnicodeDecodeError):
             pass
+        body = bytes(raw)
+        if translation is not None:
+            try:
+                body = translation.response(body)
+            except ValueError:
+                raise errors.upstream_error(response.status_code) from None
         entry.status_code = response.status_code
         await self._finish(entry, started)
-        return Response(content=raw, status_code=response.status_code, media_type=content_type, headers={REQUEST_ID_HEADER: entry.id})
+        return Response(content=body, status_code=response.status_code, media_type=content_type, headers={REQUEST_ID_HEADER: entry.id})
 
-    async def _relay_failure(self, response: httpx.Response, content_type: str, entry: RequestLogEntry, started: float) -> Response:
+    async def _relay_failure(self, response: httpx.Response, content_type: str, entry: RequestLogEntry, started: float, translation: Translation | None = None) -> Response:
         status = response.status_code
         try:
             raw = bytearray()
@@ -310,6 +351,8 @@ class Relay:
         headers = {REQUEST_ID_HEADER: entry.id}
         if "retry-after" in response.headers:
             headers["retry-after"] = response.headers["retry-after"]
+        if translation is not None:
+            return Response(content=anthropic.upstream_error_body(status, bytes(raw)), status_code=status, media_type="application/json", headers=headers)
         return Response(content=bytes(raw), status_code=status, media_type=content_type, headers=headers)
 
     async def _stream(self, response: httpx.Response, tap: SSEUsageTap, entry: RequestLogEntry, started: float, deadline: float) -> AsyncIterator[bytes]:

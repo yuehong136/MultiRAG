@@ -121,6 +121,12 @@ class GatewayKeyCreate(_KeyLimits):
     allowed_instance_ids: AllowedInstanceIds = Field(default_factory=list)
 
 
+class GatewayKeyRotate(_Body):
+    """Replace a key's secret. The old secret keeps working for the grace period (LiteLLM's ``grace_period``)."""
+
+    grace_period_seconds: int = Field(default=0, ge=0, le=30 * 86400)
+
+
 class GatewayKeyPatch(_KeyLimits):
     name: KeyName | None = None
     description: Description | None = None

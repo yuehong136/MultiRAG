@@ -4482,6 +4482,10 @@ class GatewayKey(BaseModel):
     token_quota: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     quota_period: Mapped[str | None] = mapped_column(String(8), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # After a rotation the secret it replaced keeps working until the grace period ends.
+    previous_secret_hash: Mapped[str | None] = mapped_column(sa.CHAR(64), nullable=True)
+    previous_secret_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
@@ -4543,6 +4547,36 @@ class GatewayRequestLog(BaseModel):
     end_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tags: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+class GatewayModelHealth(BaseModel):
+    """The latest background health check of one registered model.
+
+    One row per model, replaced by every check; there is no history. Written
+    by the data plane, read by the management page.
+    """
+
+    __tablename__ = "t_ai_gateway_model_health"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "model_id", name="uq_gateway_model_health_tenant_model"),
+        sa.CheckConstraint("status IN ('healthy', 'unhealthy')", name="ck_gateway_model_health_status"),
+        {"schema": "usr_ai"},
+    )
+
+    create_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=get_utc_now)
+    update_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=get_utc_now)
+    create_time: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=get_timestamp_ms)
+    update_time: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=get_timestamp_ms)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # The upstream's answer; NULL when it could not be reached or did not answer in time.
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class GatewayDailyUsage(BaseModel):

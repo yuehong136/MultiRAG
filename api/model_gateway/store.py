@@ -6,21 +6,22 @@ upstream call or a stream is in progress.
 """
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import GatewayDailyUsage, GatewayKey, GatewayRequestLog, Tenant
+from api.db.db_models import GatewayDailyUsage, GatewayKey, GatewayModelHealth, GatewayRequestLog, Tenant
 from api.model_gateway import errors
 from api.model_gateway.catalog import ModelUnavailable, UpstreamTarget, resolve_upstream
 from api.model_gateway.directory import CALLABLE, load_directory
+from api.model_gateway.health import HealthResult, HealthTarget
 from api.model_gateway.keys import parse_key_id, verify_key
 from api.model_gateway.limits import NO_LIMITS, Limits, Quota
 from api.model_gateway.pricing import ModelPrice, resolve_price
@@ -200,6 +201,13 @@ def bearer_token(authorization: str | None) -> str | None:
     return token.strip() if scheme.lower() == "bearer" and token.strip() else None
 
 
+def _previous_secret_matches(token: str, key: GatewayKey, now: datetime) -> bool:
+    """A rotated key's old secret, while its grace period lasts."""
+    if key.previous_secret_hash is None or key.previous_secret_expires_at is None or key.previous_secret_expires_at <= now:
+        return False
+    return verify_key(token, key.previous_secret_hash)
+
+
 class SqlGatewayStore:
     """``GatewayStore`` backed by the application's async session factory."""
 
@@ -214,7 +222,7 @@ class SqlGatewayStore:
         now = datetime.now(UTC)
         async with self._sessions() as db:
             row = (await db.execute(select(GatewayKey, Tenant.status).join(Tenant, Tenant.id == GatewayKey.tenant_id).where(GatewayKey.id == key_id))).first()
-            if row is None or not verify_key(token, row[0].secret_hash):
+            if row is None or not (verify_key(token, row[0].secret_hash) or _previous_secret_matches(token, row[0], now)):
                 raise errors.invalid_api_key()
             key, tenant_status = row[0], row[1]
             # The secret is proven from here on, so the reason may be specific.
@@ -293,6 +301,44 @@ class SqlGatewayStore:
         async with self._sessions() as db:
             used = await db.scalar(query)
         return int(used or 0)
+
+    async def health_targets(self) -> list[HealthTarget]:
+        """Every callable model of the owners that have a usable key, with the capability to probe."""
+        now = datetime.now(UTC)
+        targets: list[HealthTarget] = []
+        async with self._sessions() as db:
+            has_key = (
+                select(GatewayKey.tenant_id)
+                .join(Tenant, Tenant.id == GatewayKey.tenant_id)
+                .where(GatewayKey.status == "active", Tenant.status == "1", or_(GatewayKey.expires_at.is_(None), GatewayKey.expires_at > now))
+                .distinct()
+            )
+            for tenant_id in (await db.scalars(has_key)).all():
+                for model in (await load_directory(db, tenant_id)).models:
+                    if model.state != CALLABLE:
+                        continue
+                    model_type = model.servable_types[0]
+                    try:
+                        upstream = await resolve_upstream(db, tenant_id, model.model_id, model_type)
+                    except ModelUnavailable:
+                        continue
+                    targets.append(HealthTarget(tenant_id=tenant_id, model_id=model.model_id, model_type=model_type, upstream=upstream))
+        return targets
+
+    async def record_health(self, results: Sequence[HealthResult]) -> None:
+        """Replace each model's latest health check."""
+        async with self._sessions() as db:
+            for result in results:
+                values = {
+                    "status": result.status,
+                    "status_code": result.status_code,
+                    "error_message": result.error_message,
+                    "response_time_ms": result.response_time_ms,
+                    "checked_at": result.checked_at,
+                }
+                statement = insert(GatewayModelHealth).values(id=uuid.uuid4().hex, tenant_id=result.tenant_id, model_id=result.model_id, **values)
+                await db.execute(statement.on_conflict_do_update(constraint="uq_gateway_model_health_tenant_model", set_=values))
+            await db.commit()
 
     async def delete_logs_before(self, cutoff: datetime, limit: int) -> int:
         """Delete up to ``limit`` of the oldest request logs started before ``cutoff``."""

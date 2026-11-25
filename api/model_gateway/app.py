@@ -14,10 +14,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.model_gateway import errors
+from api.model_gateway import anthropic, errors
 from api.model_gateway.errors import GatewayError
+from api.model_gateway.health import HealthChecker, HealthStore
 from api.model_gateway.limits import Limiter, MemoryLimiter
-from api.model_gateway.relay import REQUEST_ID_HEADER, Relay, request_id_of
+from api.model_gateway.price_refresh import refresher_of
+from api.model_gateway.redis_state import RedisCooldowns, RedisLimiter, shared_redis
+from api.model_gateway.relay import REQUEST_ID_HEADER, Relay, caller_credential, request_id_of
 from api.model_gateway.retention import LogCleaner, LogPruner
 from api.model_gateway.store import GatewayStore, SqlGatewayStore
 from common.app_config import ModelGatewayConfig, get_app_config
@@ -48,7 +51,16 @@ def create_app(
             raise RuntimeError("The model gateway requires the PostgreSQL async engine")
         store = SqlGatewayStore(async_session_factory)
     gateway_store: GatewayStore = store
-    gateway_limiter: Limiter = limiter or MemoryLimiter(usage_since=gateway_store.tokens_used_since)
+    redis = shared_redis(get_app_config().redis) if settings.state_store == "redis" else None
+    cooldowns = RedisCooldowns(redis) if redis is not None else None
+    gateway_limiter: Limiter
+    if limiter is not None:
+        gateway_limiter = limiter
+    elif redis is not None:
+        # A slot nobody gave back is free again once no call could still be running.
+        gateway_limiter = RedisLimiter(redis, gateway_store.tokens_used_since, slot_ttl_seconds=settings.total_timeout_seconds + 60)
+    else:
+        gateway_limiter = MemoryLimiter(usage_since=gateway_store.tokens_used_since)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -62,19 +74,32 @@ def create_app(
         )
         limits = httpx.Limits(max_connections=_MAX_UPSTREAM_CONNECTIONS, max_keepalive_connections=_MAX_KEEPALIVE_CONNECTIONS)
         async with httpx.AsyncClient(transport=transport, timeout=timeout, limits=limits, follow_redirects=False) as client:
-            relay = Relay(client, gateway_store, settings, gateway_limiter)
+            relay = Relay(client, gateway_store, settings, gateway_limiter, cooldowns=cooldowns)
             app.state.relay = relay
             cleanup: asyncio.Task[None] | None = None
             if settings.log_retention_days > 0 and isinstance(gateway_store, LogPruner):
                 cleaner = LogCleaner(gateway_store, retention_days=settings.log_retention_days, interval_seconds=settings.log_cleanup_interval_seconds)
                 cleanup = asyncio.create_task(cleaner.run_forever(), name="model-gateway-log-cleanup")
+            checks: asyncio.Task[None] | None = None
+            if settings.health_check_interval_seconds > 0 and isinstance(gateway_store, HealthStore):
+                checker = HealthChecker(client, gateway_store, relay.router, interval_seconds=settings.health_check_interval_seconds, timeout_seconds=settings.health_check_timeout_seconds)
+                checks = asyncio.create_task(checker.run_forever(), name="model-gateway-health-checks")
+            # LiteLLM's adapter behind /v1/messages takes seconds to import; do it before the first request.
+            warm = asyncio.create_task(anthropic.warm_up(), name="model-gateway-messages-adapter") if settings.messages_api_warm_up else None
+            prices: asyncio.Task[None] | None = None
+            refresher = refresher_of(settings)
+            if refresher is not None:
+                prices = asyncio.create_task(refresher.run_forever(), name="model-gateway-price-map")
             try:
                 yield
             finally:
-                if cleanup is not None:
-                    cleanup.cancel()
-                    await asyncio.gather(cleanup, return_exceptions=True)
+                for task in (cleanup, checks, prices, warm):
+                    if task is not None:
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
                 await relay.drain()
+                if redis is not None:
+                    await redis.aclose()
 
     app = FastAPI(title="MultiRAG Model Gateway", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
@@ -101,7 +126,7 @@ def create_app(
 
     @app.get("/v1/models")
     async def list_models(request: Request) -> JSONResponse:
-        caller = await gateway_store.authenticate(request.headers.get("authorization"))
+        caller = await gateway_store.authenticate(caller_credential(request))
         models = await gateway_store.visible_models(caller)
         data = [{"id": model.name, "object": "model", "created": model.created, "owned_by": "multirag"} for model in models]
         return JSONResponse(content={"object": "list", "data": data}, headers={REQUEST_ID_HEADER: request_id_of(request)})
@@ -115,5 +140,15 @@ def create_app(
     async def embeddings(request: Request) -> Response:
         relay: Relay = request.app.state.relay
         return await relay.handle(request, endpoint="embeddings", model_type="embedding")
+
+    @app.post("/v1/messages")
+    async def messages(request: Request) -> Response:
+        """Anthropic's Messages API, served by the same chat models; errors use Anthropic's envelope."""
+        relay: Relay = request.app.state.relay
+        try:
+            return await relay.handle(request, endpoint="messages", model_type="chat", messages_api=True)
+        except GatewayError as error:
+            headers = {**error.headers, REQUEST_ID_HEADER: request_id_of(request)}
+            return JSONResponse(status_code=error.status_code, content=anthropic.gateway_error_body(error), headers=headers)
 
     return app

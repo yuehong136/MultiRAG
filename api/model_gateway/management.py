@@ -16,18 +16,21 @@ from sqlalchemy import Integer, and_, case, cast, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import GatewayDailyUsage, GatewayKey, GatewayModelSetting, GatewayRequestLog, GatewaySetting
+from api.db.db_models import GatewayDailyUsage, GatewayKey, GatewayModelHealth, GatewayModelSetting, GatewayRequestLog, GatewaySetting
 from api.model_gateway import catalog
 from api.model_gateway.directory import CALLABLE, Directory, DirectoryModel, load_directory
-from api.model_gateway.keys import issue_key, redact_key
+from api.model_gateway.keys import issue_key, redact_key, reissue_key
 from api.model_gateway.limits import Quota
+from api.model_gateway.price_refresh import refresher_of
 from api.model_gateway.pricing import resolve_price
-from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewaySettingsPatch
-from common.app_config import ModelGatewayConfig
+from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewayKeyRotate, GatewaySettingsPatch
+from common.app_config import ModelGatewayConfig, get_app_config
 
 USAGE_GROUPS = ("key", "model", "day", "end_user")
 OVERVIEW_DAYS = (1, 7, 30)
 _RECENT_WINDOW = timedelta(days=7)
+# A health check older than three rounds (or a quarter of an hour, with short intervals) is not shown.
+_HEALTH_MIN_FRESH_SECONDS = 900
 _WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})
 _HEALTH_TIMEOUT_SECONDS = 1.0
 
@@ -47,8 +50,10 @@ def _iso(value: datetime | None) -> str | None:
 # --- catalog ---------------------------------------------------------------
 
 
-def _catalog_model_view(model: DirectoryModel, requests: dict[str, int]) -> dict[str, Any]:
+def _catalog_model_view(model: DirectoryModel, requests: dict[str, int], health: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return {
+        # The latest background health check; None while checks are off or none is recent.
+        "health": health.get(model.model_id),
         "model_id": model.model_id,
         "model_name": model.model_name,
         "provider": model.provider,
@@ -113,16 +118,40 @@ async def _requests_by_model(db: AsyncSession, tenant_id: str, since: datetime) 
     return {model_id: int(count) for model_id, count in (await db.execute(query)).all()}
 
 
+async def _health_by_model(db: AsyncSession, tenant_id: str) -> dict[str, dict[str, Any]]:
+    """Each model's latest health check, leaving out results too old to mean anything."""
+    interval = get_app_config().model_gateway.health_check_interval_seconds
+    if interval <= 0:
+        return {}
+    cutoff = datetime.now(UTC) - timedelta(seconds=max(3 * interval, _HEALTH_MIN_FRESH_SECONDS))
+    rows = (await db.scalars(select(GatewayModelHealth).where(GatewayModelHealth.tenant_id == tenant_id, GatewayModelHealth.checked_at >= cutoff))).all()
+    return {
+        row.model_id: {
+            "status": row.status,
+            "status_code": row.status_code,
+            "error_message": row.error_message,
+            "response_time_ms": row.response_time_ms,
+            "checked_at": _iso(row.checked_at),
+        }
+        for row in rows
+    }
+
+
 async def _catalog_of(db: AsyncSession, tenant_id: str, directory: Directory) -> dict[str, Any]:
     requests = await _requests_by_model(db, tenant_id, datetime.now(UTC) - _RECENT_WINDOW)
+    health = await _health_by_model(db, tenant_id)
     return {
         "new_models_enabled": directory.new_models_enabled,
         "connections": [{"instance_id": item.instance_id, "instance_name": item.instance_name, "provider": item.provider} for item in directory.connections],
-        "models": [_catalog_model_view(model, requests) for model in directory.models],
+        "models": [_catalog_model_view(model, requests, health) for model in directory.models],
     }
 
 
 async def catalog_view(db: AsyncSession, tenant_id: str) -> dict[str, Any]:
+    # The main API has no refresh loop of its own: looking at the catalog starts a refresh when one is due.
+    refresher = refresher_of(get_app_config().model_gateway)
+    if refresher is not None:
+        refresher.kick()
     return await _catalog_of(db, tenant_id, await load_directory(db, tenant_id, with_connections=True))
 
 
@@ -168,7 +197,7 @@ async def update_catalog_model(db: AsyncSession, tenant_id: str, actor_id: str, 
     await db.flush()
     updated = (await load_directory(db, tenant_id)).model(model_id)
     assert updated is not None
-    return _catalog_model_view(updated, await _requests_by_model(db, tenant_id, datetime.now(UTC) - _RECENT_WINDOW))
+    return _catalog_model_view(updated, await _requests_by_model(db, tenant_id, datetime.now(UTC) - _RECENT_WINDOW), await _health_by_model(db, tenant_id))
 
 
 async def update_catalog_instance(db: AsyncSession, tenant_id: str, actor_id: str, instance_id: str, body: CatalogInstancePatch) -> dict[str, Any]:
@@ -217,6 +246,9 @@ def _key_view(row: GatewayKey, quota_used: int | None = None) -> dict[str, Any]:
         # Tokens used in the current period; None for keys without a quota.
         "quota_used": quota_used,
         "last_used_at": _iso(row.last_used_at),
+        "rotated_at": _iso(row.rotated_at),
+        # Until when the secret replaced by the last rotation still works; None once it does not.
+        "previous_key_expires_at": _iso(row.previous_secret_expires_at) if row.previous_secret_expires_at is not None and row.previous_secret_expires_at > datetime.now(UTC) else None,
         "created_by": row.created_by,
         "updated_by": row.updated_by,
         "create_time": row.create_time,
@@ -323,9 +355,29 @@ async def update_key(db: AsyncSession, tenant_id: str, actor_id: str, key_id: st
     return await _key_with_usage(db, row)
 
 
+async def rotate_key(db: AsyncSession, tenant_id: str, actor_id: str, key_id: str, body: GatewayKeyRotate) -> dict[str, Any]:
+    """Give the key a new secret. Its id, name, scope, limits, usage and logs stay."""
+    row = await _owned_key(db, tenant_id, key_id)
+    if row.status == "revoked":
+        raise GatewayConflict("A revoked key cannot be rotated")
+    now = datetime.now(UTC)
+    issued = reissue_key(row.id)
+    # Only the secret just replaced gets the grace period; one replaced earlier stops working now.
+    row.previous_secret_hash = row.secret_hash if body.grace_period_seconds > 0 else None
+    row.previous_secret_expires_at = now + timedelta(seconds=body.grace_period_seconds) if body.grace_period_seconds > 0 else None
+    row.secret_hash = issued.secret_hash
+    row.rotated_at = now
+    row.updated_by = actor_id
+    await db.flush()
+    # Like creation, the only place the new plaintext leaves the process.
+    return {**await _key_with_usage(db, row), "key": issued.plaintext}
+
+
 async def revoke_key(db: AsyncSession, tenant_id: str, actor_id: str, key_id: str) -> dict[str, Any]:
     row = await _owned_key(db, tenant_id, key_id)
     row.status = "revoked"
+    row.previous_secret_hash = None
+    row.previous_secret_expires_at = None
     row.updated_by = actor_id
     await db.flush()
     return await _key_with_usage(db, row)

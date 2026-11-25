@@ -18,7 +18,7 @@ from api.db.db_models import get_async_db
 from api.db.model_contract import ModelID
 from api.identity.principal import AuthenticationSource
 from api.model_gateway import management
-from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewaySettingsPatch
+from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewayKeyRotate, GatewaySettingsPatch
 from api.utils.api_utils import Principal, async_current_user
 from common.app_config import get_app_config
 
@@ -114,6 +114,11 @@ async def create_key(body: GatewayKeyCreate, db: AsyncSession = Depends(get_asyn
 @router.patch("/keys/{key_id}", summary="修改 API Key 的元数据、可调用范围、有效期或启停状态", response_model=None)
 async def update_key(key_id: str, body: GatewayKeyPatch, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
     return await write(db, lambda: management.update_key(db, user.id, user.id, key_id, body))
+
+
+@router.post("/keys/{key_id}/rotate", summary="轮换 API Key：换新密钥，旧密钥在宽限期内仍可用；新密钥只在本次响应返回", response_model=None)
+async def rotate_key(key_id: str, body: GatewayKeyRotate, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
+    return await write(db, lambda: management.rotate_key(db, user.id, user.id, key_id, body))
 
 
 @router.post("/keys/{key_id}/revoke", summary="撤销 API Key；撤销后不可恢复", response_model=None)

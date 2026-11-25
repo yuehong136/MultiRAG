@@ -1,6 +1,6 @@
 # MultiRAG 模型网关（Model Gateway）
 
-> 状态：**P1 最小闭环、P2 限额、模型目录（取代发布）、调用记录清理、费用与按日汇总已实现；rerank 与 P3 尚未实现**（见第 10 节）
+> 状态：**P1 最小闭环、P2 限额、模型目录（取代发布）、调用记录清理、费用与按日汇总、多部署路由、Redis 共享计数、后台健康检查、Key 轮换、`/v1/messages` 已实现；rerank 与 P3 余项尚未实现**（见第 10 节）
 > 最后核验：2026-11-25
 > 维护范围：把已登记的模型以标准模型接口对外提供、API Key、调用记录与用量、限额
 
@@ -22,7 +22,10 @@ uv run python -m api.model_gateway.server
 （`common/app_config.py` 的 `ModelGatewayConfig`）：监听地址默认 `127.0.0.1:9390`，
 `public_base_url` 是调用方使用的地址（显示在管理页面上，留空时由监听地址推导），
 另有请求体上限、四个超时、多部署的重试次数和冷却时间（`num_retries` 默认 2、`cooldown_time_seconds` 默认 5，见第 4 节）
-和调用记录保留天数（`log_retention_days`，默认 0 即不清理，见第 6 节）。未启用时管理路由返回 404，数据面进程拒绝启动。
+和调用记录保留天数（`log_retention_days`，默认 0 即不清理，见第 6 节）。
+`state_store` 决定限额计数和冷却状态放在本进程（`memory`，代码默认）还是 Redis（`redis`，仓库的 `service_conf.yaml` 已设），见第 7 节；
+`health_check_interval_seconds`（默认 0 即关闭）开启后台健康检查，见第 4 节；`price_map_refresh_hours`（默认 0 即关闭）
+和 `price_map_url` 控制价格表的定时拉取，见第 6 节；`messages_api_warm_up` 让数据面启动时预先加载 `/v1/messages` 的转换器。未启用时管理路由返回 404，数据面进程拒绝启动。
 
 最小使用路径：
 
@@ -68,7 +71,7 @@ uv run python -m api.model_gateway.server
 | `core/llm` 的驱动面向 RAG：失败以 `**ERROR**` 前缀文本返回，流式只产出文本 | 不承载标准协议。网关不经过它 |
 | 模型登记为 Provider → Instance → Model；`api/db/services/model_provider_service.py` 的 `resolve_config()` 按租户、模型 ID 和能力返回连接配置，并校验启用状态 | 连接和上游凭据继续只在此维护。网关只读 |
 | `common/url_utils.py` 提供 `ensure_api_version()` 等地址归一化 | 直接复用 |
-| `core/utils/redis_conn.py` 有 Redis 令牌桶脚本 | 限额目前在数据面进程内计数，没有用它；需要多进程共享计数时再评估（第 11 节） |
+| `core/utils/redis_conn.py` 有 Redis 令牌桶脚本 | 没有用它：那是同步客户端和令牌桶，网关的限额是固定一分钟窗口，用自己的 Lua 脚本和异步客户端（第 7 节） |
 | 没有请求级限流，也没有按租户或按 Key 的配额 | 第二阶段补齐 |
 
 ## 3. 对象模型
@@ -148,7 +151,10 @@ uv run python -m api.model_gateway.server
 
 Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；`secret` 为高熵随机串。
 解析按固定长度切分，不按分隔符。明文只在创建响应里返回一次，之后只展示前缀和 `key_id`。
-轮换就是新建一把 Key 并撤销旧的，历史记录按各自的 `key_id` 保留。
+轮换（`POST /keys/{key_id}/rotate`）给同一把 Key 换一个新密钥：`key_id`、名称、范围、限额、用量和调用记录都不变。
+被换下的密钥摘要存在 `previous_secret_hash`，在 `previous_secret_expires_at` 之前仍然能通过认证，对应 LiteLLM
+`/key/regenerate` 的 `grace_period`；宽限期为 0 时旧密钥立即失效。只保留最近一次被换下的密钥，再次轮换会让更早的立即失效；
+撤销 Key 时一并清掉。`rotated_at` 记录最近一次轮换的时间。
 
 ### 调用记录 `GatewayRequestLog`（`t_ai_gateway_request_logs`）
 
@@ -199,7 +205,23 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 | `POST /v1/chat/completions` | 透传，含流式 |
 | `POST /v1/embeddings` | 透传 |
 
-`/v1/rerank`、`/v1/responses`、`/v1/messages` 等按需求逐个加入：每加一个端点，是一条转发规则加一个用量解析器。
+`/v1/rerank`、`/v1/responses` 等按需求逐个加入：每加一个端点，是一条转发规则加一个用量解析器。
+
+### `/v1/messages`：Anthropic 协议入口
+
+`POST /v1/messages` 接受 Anthropic Messages 请求，由同一批对话模型应答，供只会说 Anthropic 协议的客户端
+（Anthropic SDK、Claude Code 等）使用。上游仍然是 OpenAI 协议：请求转成 chat completion 发出去，响应（整段或流式）
+转回 Messages 格式。转换不是网关自己写的，用的是 LiteLLM 的适配器
+（`litellm/llms/anthropic/experimental_pass_through/adapters`），`api/model_gateway/anthropic.py` 只负责喂数据和组帧。
+
+- 认证：除 `Authorization: Bearer` 外也接受 `x-api-key`（三个端点都接受）。
+- 选部署、换部署重试、限额、调用记录、费用与 `/v1/chat/completions` 完全相同；调用记录的 `endpoint` 是 `messages`。
+- 错误用 Anthropic 的信封 `{"type":"error","error":{"type","message"}}`，`type` 按状态码取
+  （401 `authentication_error`、403 `permission_error`、404 `not_found_error`、429 `rate_limit_error`、5xx `api_error` 等）；
+  上游的 4xx 保留它的 `message`。流到一半失败时以一条 `error` 事件结束。
+- 流式时网关总是让上游返回用量，因为 Messages 格式在最后的 `message_delta` 里报告用量。
+- `litellm` 导入要几秒，所以按需加载，不在数据面导入时加载；`messages_api_warm_up` 为真时启动后在后台预先加载。
+- 没有做 `/v1/messages/count_tokens`。上游本身是 Anthropic 协议的厂商仍然不在转发规则里。
 
 ### 为什么透传而不是经过模型驱动
 
@@ -259,7 +281,21 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 （对健康状况判断错了也不至于让一个名字整体不可用）；连不上上游按 503 计入失败率（LiteLLM 不把它自己的
 `APIConnectionError` 计入，因为那个类型还包含本地错误）。
 
-冷却状态和失败计数在数据面进程的内存里，重启后清空，多个数据面进程各算各的；管理面看不到某个部署是否在冷却。
+失败计数在数据面进程的内存里。`state_store: redis` 时冷却本身是共享的：一个进程让某个部署冷却，会在 Redis 里写一个
+带过期时间的标记，其他进程选部署前读到它就同样让这个部署靠后（`api/model_gateway/redis_state.py` 的 `RedisCooldowns`）。
+什么时候该冷却仍由各进程按自己看到的调用判断，和多个 LiteLLM 实例一样。管理面看不到某个部署是否在冷却。
+
+### 后台健康检查
+
+`api/model_gateway/health.py`，`health_check_interval_seconds` 大于 0 时开启（默认关，与 LiteLLM 的
+`background_health_checks` 一样；LiteLLM 的默认间隔是 300 秒）。每一轮对「有可用 Key 的租户」的每个可调用模型发一次最小的
+真实请求，内容照 LiteLLM 的探测：对话模型是一条用户消息加 `max_tokens: 1`，向量模型是一段短输入；超时
+`health_check_timeout_seconds`（默认 60）。上游返回 2xx 记为健康，返回 4xx/5xx、连不上或超时记为不健康。
+
+- 结果写入 `t_ai_gateway_model_health`，每个模型一行，每轮覆盖，不留历史；管理面的模型目录带出 `health`
+  （状态、状态码、错误信息、耗时、检查时间）。检查关闭时，或结果比三轮更旧时，`health` 为空。
+- 路由把不健康的部署排到最后，直到之后某一轮发现它恢复；一个名字的部署全都不健康时照常尝试。
+- 探测是真实的、会计费的上游调用，但不写调用记录，不计入任何限额。每个数据面进程各跑各的检查。
 
 ### 请求流程
 
@@ -346,7 +382,14 @@ OpenAI 兼容端点继续接收目录中的调用名称。
 - **记账时机**：调用结束写调用记录时，按当时的价格算出 `cost` 存下来，之后改价不改写历史。
   模型没有价格或用量未知时 `cost` 为空，汇总里不计入。迁移之前的调用记录没有费用。
 - 单位是美元 / token；管理页面按「美元 / 每百万 token」显示和输入。
-- 尚未做：从远端定时刷新价格表；图像、音频、按次计费等非 token 价格；按服务层级（batch / flex）区分价格。
+- **定时拉取价格表**（`api/model_gateway/price_refresh.py`）：`price_map_refresh_hours` 大于 0 时，每隔这么久从
+  `price_map_url` 拉一次 LiteLLM 的价格表（留空即 LiteLLM 仓库里的 `model_prices_and_context_window.json`，
+  也可以是内部镜像地址或本机文件路径）。这是 LiteLLM 自己的做法：运行时拉远端，包里那份是兜底。这样新模型的价格
+  不必等 `litellm` 依赖升级，依赖版本可以一直跟着上游走。拉到的内容按 LiteLLM 的校验规则检查（至少 50 个模型、
+  不少于当前在用条目数的一半），通过才替换；拉取失败或校验不过时继续用上一次成功的结果，从没成功过就用包里那份。
+  数据面有定时循环；主 API 没有，改为在打开模型目录时按需在后台触发。两个进程各拉各的，可能短暂不一致。
+  默认关闭，因为它是一个对外网络请求。已经存进调用记录的费用不受影响。
+- 尚未做：图像、音频、按次计费等非 token 价格；按服务层级（batch / flex）区分价格。
 
 ## 7. 限额
 
@@ -365,7 +408,7 @@ OpenAI 兼容端点继续接收目录中的调用名称。
 - **token 事后结算**：用量在调用结束时才知道，所以越线的那次调用会完成，下一次被拒绝。
   不做预留和对账。用量未知的调用不计入 token 速率和配额。
 - **速率窗口**：固定的一分钟窗口。
-- **配额**：进程内计数，每个周期第一次用到时从调用记录里读出已用量，所以重启后配额依然有效。
+- **配额**：每个周期第一次用到时从按日汇总里读出已用量作为起点，之后在计数器上累加，所以重启后配额依然有效。
   这是软配额：并发请求和落库时机可能带来一两次调用的偏差。
 - **并发**：准入时占位，调用结束时释放，包括上游失败、流中断和客户端断开。
 
@@ -380,7 +423,12 @@ OpenAI 兼容端点继续接收目录中的调用名称。
 
 限制：
 
-- **计数在数据面进程内**。启动多个数据面进程时各自计数；需要全局一致的限额时要换成共享计数（见第 11 节）。
+- **计数放在哪里由 `state_store` 决定**。`memory`：在数据面进程内，多个进程各自计数，重启后每分钟窗口清空。
+  `redis`（`api/model_gateway/redis_state.py` 的 `RedisLimiter`）：四种限额都放在 Redis，多个进程合并计数，重启不清空。
+  做法照 LiteLLM 的 v3 限流器（`parallel_request_limiter_v3.py`）：一个 Lua 脚本先检查所有维度、全部通过才计数，
+  所以无论多少进程并发，被拒绝的请求都不消耗任何额度；窗口仍是固定的一分钟。并发槽位带过期时间，进程崩溃留下的槽位
+  在 `total_timeout_seconds` 加一分钟后自动释放。**Redis 不可用时默认放行并退回本进程计数**（LiteLLM 也是这样），
+  恢复后自动切回；期间的计数不会补记到 Redis。
 - 推理服务本身的并发上限仍由推理服务保证；网关限制的是准入。
 - 严格预算（不可超支）需要预留、幂等结算和崩溃恢复，属于单独的扩展。
 
@@ -396,6 +444,7 @@ OpenAI 兼容端点继续接收目录中的调用名称。
 | `PATCH /api/v1/model-gateway/catalog/instances/{instance_id}` | 开放或关闭一个连接下的全部模型 |
 | `PATCH /api/v1/model-gateway/settings` | 设置新登记模型的默认开放状态 |
 | `GET` / `POST /api/v1/model-gateway/keys`，`PATCH .../keys/{id}`，`POST .../keys/{id}/revoke` | 创建、修改元数据和可调用范围、启停、撤销 Key |
+| `POST /api/v1/model-gateway/keys/{key_id}/rotate` | 轮换：换新密钥并只在本次响应返回；请求体可带 `grace_period_seconds`（0 到 30 天，默认 0），旧密钥在这段时间内仍可用 |
 | `GET /api/v1/model-gateway/overview` | 接入地址、数据面健康状态、计数，以及最近 1 / 7 / 30 天的请求、失败、token、首字时延中位数、时间序列（每个时间桶的请求数、失败数、`total_tokens` 和 `spend`）、Top 模型与 Key（含 `spend`）、最近失败；`totals.spend` 是窗口内的美元费用 |
 | `GET /api/v1/model-gateway/logs` | 查询调用记录；`status_code` 按确切的状态码筛选，可与 `outcome` 同用 |
 | `GET /api/v1/model-gateway/usage` | 按 Key、模型、日期或 `end_user` 汇总用量 |
@@ -420,7 +469,7 @@ Web 管理页面在独立 Web 仓库的 `src/pages/settings/model-gateway/`，�
 | 文件 | 改动 |
 |---|---|
 | `api/db/db_models.py` | 末尾追加网关自有表。建表函数只识别这个文件命名空间里的模型类，所以表定义必须在这里 |
-| `configs/alembic/versions/` | `d1f3a5c7e9b2` 建表；`f3b5d7e9a1c2` 以模型目录取代发布（见下）；`0a2c4e6f8b1d` 加费用、模型价格、按日汇总表和清理用的索引，并回填汇总；`1b3d5f7a9c2e` 加权重、顺序和尝试记录，别名索引改为不唯一，并把已标记首选的模型的顺序设为 1（它原来独占共享的名字，升级后仍然排第一，其余同名模型作为后备） |
+| `configs/alembic/versions/` | `2c4e6a8b0d1f` 加健康检查表和 Key 轮换的三列；`d1f3a5c7e9b2` 建表；`f3b5d7e9a1c2` 以模型目录取代发布（见下）；`0a2c4e6f8b1d` 加费用、模型价格、按日汇总表和清理用的索引，并回填汇总；`1b3d5f7a9c2e` 加权重、顺序和尝试记录，别名索引改为不唯一，并把已标记首选的模型的顺序设为 1（它原来独占共享的名字，升级后仍然排第一，其余同名模型作为后备） |
 | `api/db/services/model_provider_service.py` | 新增只读的 `instances_for_owner()`，供目录列出没有模型的连接 |
 | `common/app_config.py` | 新增 `model_gateway` 配置段 |
 | `api/db/services/model_deletion_policy.py` | 目录取代发布后，网关不再登记删除保护引用 |
@@ -465,8 +514,9 @@ Key 范围里的对应 ID 保留，管理页面显示为已失效。
 | 模型目录（**已实现**） | 去掉发布；目录、开放开关、命名规则、别名与首选；Key 按连接或模型授权；概览；迁移 | 登记即可授权；同名模型名字稳定；迁移保持原暴露范围；按连接授权包含以后开放的模型 |
 | 清理、费用与按日汇总（**已实现**） | 调用记录保留期清理；按 LiteLLM 价格表和管理者定价记费用；按日汇总表及回填 | 清理分批且不动汇总；两条引导路径的 schema 一致；费用、汇总与调用记录逐项对得上 |
 | 多部署（**已实现**） | 同名或同别名的模型共同承接一个名字；顺序、权重、冷却、换部署重试；调用记录里的尝试记录 | 首选部署失败时由后备部署应答且记在后备名下；Key 的范围对每个部署生效；迁移后原首选模型仍排第一 |
+| 共享状态、健康检查、Key 轮换、`/v1/messages`、价格表拉取（**已实现**） | Redis 限额计数与冷却共享；后台健康检查；带宽限期的 Key 轮换；Anthropic 协议入口；定时拉取 LiteLLM 价格表 | 两个限流器共用一个 Redis 时合并计数，Redis 不可用时退回本进程；健康检查结果进目录且不写调用记录；宽限期内新旧密钥都可用；Anthropic SDK 完成普通和流式调用；拉取失败或内容异常时价格不变 |
 | P2 余项（未实现） | rerank | 单独验收 |
-| P3 按需 | 非 OpenAI 协议厂商；`/v1/responses`、`/v1/messages`；冷却状态跨进程共享与后台健康检查；正文日志（手动开启）；管理审计；严格预算 | 每项单独立项和验收 |
+| P3 按需 | 非 OpenAI 协议厂商；`/v1/responses`；按花费的预算与告警；正文日志（手动开启）；管理审计；严格预算 | 每项单独立项和验收 |
 
 验证按 [AGENTS.md 的验证表](../../AGENTS.md#验证) 执行：
 
@@ -490,7 +540,7 @@ Key 范围里的对应 ID 保留，管理页面显示为已失效。
 ## 11. 未决事项
 
 1. 响应里的 `model` 是否改写为调用名。改写流式响应需要逐块解析和重新序列化，与原样转发冲突。
-2. 多个数据面进程共享限额计数（例如放到 Redis）是否需要；如果做，共享存储不可用时默认放行还是拒绝。
+2. （已定）多个数据面进程通过 Redis 共享限额计数；Redis 不可用时放行并退回本进程计数，见第 7 节。
 3. 调用记录写入失败时，是否需要「拒绝新请求」的严格模式。
 4. 管理接口是否需要自动化凭据（独立于登录态的管理 Key）。
 5. embeddings 的 base64 编码依赖上游支持。上游不支持时，由网关转换还是原样返回上游错误。
@@ -503,6 +553,11 @@ Key 范围里的对应 ID 保留，管理页面显示为已失效。
 
 | 取舍 | 参考 |
 |---|---|
+| 限额计数放 Redis，一个 Lua 脚本先查后记，固定一分钟窗口，Redis 不可用时退回进程内 | [LiteLLM `parallel_request_limiter_v3.py`](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter_v3.py)（随依赖安装的版本，2026-11-25 核对） |
+| 后台健康检查默认关闭，探测是 `max_tokens: 1` 的真实请求，结果落表 | [LiteLLM `health_check.py`](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/health_check.py)、`LiteLLM_HealthCheckTable`（同上） |
+| 轮换保留 Key 本身，旧密钥有宽限期 | LiteLLM `/key/{key}/regenerate` 的 `grace_period`（同上） |
+| Anthropic 协议入口用现成的转换器，不自己写 | [LiteLLM Anthropic adapter](https://github.com/BerriAI/litellm/tree/main/litellm/llms/anthropic/experimental_pass_through/adapters)（同上）；[new-api `relay-router.go`](https://github.com/QuantumNous/new-api/blob/main/router/relay-router.go) 同样在 OpenAI 协议渠道前提供 `/v1/messages` |
+| 运行时拉取价格表，包里那份做兜底，校验后才替换 | [LiteLLM `get_model_cost_map.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm_core_utils/get_model_cost_map.py)（同上） |
 | 同一个名字下的多个模型是它的部署；`order` 先低后高、`weight` 加权随机；失败后冷却 5 秒，条件按状态码和一分钟失败率 | [LiteLLM `cooldown_handlers.py`](https://github.com/BerriAI/litellm/blob/main/litellm/router_utils/cooldown_handlers.py)、[`simple_shuffle.py`](https://github.com/BerriAI/litellm/blob/main/litellm/router_strategy/simple_shuffle.py)（随依赖安装的版本，2026-11-25 核对）；[new-api 渠道优先级与权重](https://github.com/QuantumNous/new-api) |
 | 调用记录里保留每一次尝试 | [Bifrost 日志的 `attempt_trail`](https://github.com/maximhq/bifrost) |
 | Key 除名称外的字段全部可选；归属层级可空 | [LiteLLM `schema.prisma`](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/schema.prisma)（`09ce4f50`）、[GPUStack `api_keys.py`](https://github.com/gpustack/gpustack/blob/main/gpustack/schemas/api_keys.py)（`aba5c665`） |

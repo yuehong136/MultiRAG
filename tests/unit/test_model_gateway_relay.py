@@ -1,6 +1,7 @@
 """Data plane behaviour against a controlled upstream and an in-memory store."""
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import time
@@ -711,3 +712,170 @@ def test_a_failed_deployment_gives_its_concurrency_slot_back():
 
     # The slot was free again each time, so the first deployment was tried on every call.
     assert _hosts(gateway) == ["primary.test", "backup.test"] * 3
+
+
+class SharedCooldowns:
+    """Stands in for the Redis board two gateway processes read and write."""
+
+    def __init__(self) -> None:
+        self.marked: dict[str, float] = {}
+
+    async def mark(self, model_id: str, seconds: float) -> None:
+        self.marked[model_id] = seconds
+
+    async def resting(self, model_ids: list[str]) -> set[str]:
+        return {model_id for model_id in model_ids if model_id in self.marked}
+
+
+def _process(board: SharedCooldowns, answers: dict[str, object]) -> Gateway:
+    gateway = _pooled(answers)
+    original = gateway.app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def with_board(app):
+        async with original(app):
+            app.state.relay._cooldowns = board
+            yield
+
+    gateway.app.router.lifespan_context = with_board
+    return gateway
+
+
+def test_a_deployment_one_process_rested_is_skipped_by_another():
+    board = SharedCooldowns()
+    first = _process(board, {"primary.test": 429, "backup.test": _completion})
+    second = _process(board, {"primary.test": 429, "backup.test": _completion})
+
+    assert _chat(first).status_code == 200
+    assert board.marked == {CHAT_ID: 5.0}
+    assert _chat(second).status_code == 200
+
+    # The second process never met the failing deployment.
+    assert _hosts(second) == ["backup.test"]
+    assert [len(record.attempts) for record in second.store.records] == [1]
+
+
+# --- /v1/messages: Anthropic's Messages API over the same chat models ---------
+
+MESSAGES = "/v1/messages"
+_HELLO = {"model": "chat-default", "max_tokens": 64, "system": "be brief", "messages": [{"role": "user", "content": "hi"}]}
+_FINISH = b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}\n\n'
+
+
+def _events(response: httpx.Response) -> list[dict]:
+    return [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:")]
+
+
+def test_a_messages_request_reaches_the_upstream_as_a_chat_completion_and_comes_back_as_a_message():
+    gateway = Gateway(_completion)
+
+    response = gateway.call("POST", MESSAGES, headers={"x-api-key": "caller-key", "anthropic-version": "2023-06-01"}, json=_HELLO)
+
+    assert response.status_code == 200
+    message = response.json()
+    assert (message["type"], message["role"], message["stop_reason"]) == ("message", "assistant", "end_turn")
+    assert message["content"] == [{"type": "text", "text": "hi"}]
+    assert message["usage"] == {"input_tokens": 3, "output_tokens": 2}
+    sent = gateway.upstream_json()
+    assert str(gateway.upstream_requests[-1].url) == "http://upstream.test/v1/chat/completions"
+    assert sent["model"] == "qwen-upstream" and sent["max_tokens"] == 64
+    assert sent["messages"] == [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}]
+    record = gateway.only_record()
+    assert (record.endpoint, record.model, record.status_code, record.usage.total_tokens) == ("messages", "chat-default", 200, 5)
+
+
+def test_a_streamed_messages_request_is_answered_in_anthropic_events():
+    gateway = Gateway(lambda request: httpx.Response(200, headers=_SSE, stream=Chunks([_DELTA, _FINISH, _USAGE_ONLY, _DONE])))
+
+    response = gateway.call("POST", MESSAGES, headers=AUTH, json={**_HELLO, "stream": True})
+
+    assert response.status_code == 200 and response.headers["content-type"].startswith("text/event-stream")
+    events = _events(response)
+    assert [event["type"] for event in events] == ["message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"]
+    assert events[2]["delta"] == {"type": "text_delta", "text": "hi"}
+    assert (events[4]["delta"]["stop_reason"], events[4]["usage"]["input_tokens"], events[4]["usage"]["output_tokens"]) == ("end_turn", 3, 2)
+    # Every event is named, as Anthropic's SDKs expect.
+    assert response.text.count("event: ") == len(events) and "[DONE]" not in response.text
+    # The gateway asked the upstream for usage on the caller's behalf.
+    assert gateway.upstream_json()["stream_options"] == {"include_usage": True}
+    record = gateway.only_record()
+    assert (record.stream, record.usage.total_tokens, record.first_token_ms is not None) == (True, 5, True)
+
+
+def test_tools_are_translated_both_ways():
+    def tool_call(request: httpx.Request) -> httpx.Response:
+        call = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+        return httpx.Response(
+            200, json={"id": "c1", "model": "qwen-upstream", "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {"role": "assistant", "content": None, "tool_calls": [call]}}]}
+        )
+
+    gateway = Gateway(tool_call)
+    tools = [{"name": "get_weather", "description": "weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}}]
+
+    response = gateway.call("POST", MESSAGES, headers=AUTH, json={**_HELLO, "tools": tools})
+
+    assert gateway.upstream_json()["tools"][0]["function"]["name"] == "get_weather"
+    message = response.json()
+    assert message["stop_reason"] == "tool_use"
+    assert [(block["type"], block.get("name"), block.get("input")) for block in message["content"]] == [("tool_use", "get_weather", {"city": "Paris"})]
+
+
+@pytest.mark.parametrize(
+    ("headers", "body", "status", "kind"),
+    [
+        ({}, _HELLO, 401, "authentication_error"),
+        (AUTH, {**_HELLO, "model": "gpt-4o"}, 404, "not_found_error"),
+        (AUTH, {**_HELLO, "model": "restricted"}, 403, "permission_error"),
+        (AUTH, {"model": "chat-default", "max_tokens": 8, "messages": []}, 400, "invalid_request_error"),
+    ],
+    ids=["no-key", "unknown-model", "model-not-allowed", "no-messages"],
+)
+def test_messages_errors_use_anthropics_envelope(headers, body, status, kind):
+    gateway = Gateway(_completion)
+
+    response = gateway.call("POST", MESSAGES, headers=headers, json=body)
+
+    assert response.status_code == status
+    assert response.json()["type"] == "error" and response.json()["error"]["type"] == kind
+    assert response.json()["error"]["message"] and response.headers["x-request-id"]
+    assert gateway.upstream_requests == []
+
+
+def test_an_upstream_refusal_of_a_messages_request_keeps_its_message():
+    gateway = Gateway(lambda request: httpx.Response(400, json={"error": {"message": "max_tokens is too large", "code": "bad"}}))
+
+    response = gateway.call("POST", MESSAGES, headers=AUTH, json=_HELLO)
+
+    assert response.status_code == 400
+    assert response.json() == {"type": "error", "error": {"type": "invalid_request_error", "message": "max_tokens is too large"}}
+    assert gateway.only_record().error_type == "upstream_rejected"
+
+
+def test_a_messages_call_fails_over_like_any_other():
+    gateway = _pooled({"primary.test": 503, "backup.test": _completion})
+
+    response = gateway.call("POST", MESSAGES, headers=AUTH, json=_HELLO)
+
+    assert response.status_code == 200 and response.json()["content"] == [{"type": "text", "text": "hi"}]
+    assert _hosts(gateway) == ["primary.test", "backup.test"]
+
+
+def test_a_messages_stream_that_breaks_ends_with_an_error_event():
+    class Broken(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield _DELTA
+            raise httpx.ReadError("connection reset")
+
+    gateway = Gateway(lambda request: httpx.Response(200, headers=_SSE, stream=Broken()))
+
+    response = gateway.call("POST", MESSAGES, headers=AUTH, json={**_HELLO, "stream": True})
+
+    last = _events(response)[-1]
+    assert (last["type"], last["error"]["type"]) == ("error", "api_error")
+    assert gateway.only_record().error_code == "upstream_stream_error"
+
+
+def test_the_openai_endpoints_accept_the_key_in_x_api_key_too():
+    gateway = Gateway(_completion)
+
+    assert gateway.call("GET", "/v1/models", headers={"x-api-key": "caller-key"}).status_code == 200
