@@ -51,6 +51,18 @@ class _AddressRule:
     ensure_version: bool = True
     # A provider-specific mapping of the stored base URL; replaces the two fields above.
     root: Callable[[str], str] | None = None
+    # Capabilities whose driver uses this root. A provider whose embedding driver
+    # is registered with another address shape is relayed for chat only.
+    model_types: frozenset[str] = frozenset({"chat", "embedding"})
+
+
+_CHAT = frozenset({"chat"})
+
+
+def _hosted(default_base_url: str, *, embedding: bool = False) -> _AddressRule:
+    """A hosted OpenAI-protocol provider: its driver uses the stored base URL
+    verbatim and falls back to the provider's public root."""
+    return _AddressRule(default_base_url=default_base_url, ensure_version=False, model_types=frozenset({"chat", "embedding"}) if embedding else _CHAT)
 
 
 # Providers reachable over the OpenAI ``/v1/...`` protocol. Others are added one
@@ -64,10 +76,46 @@ _RELAY_RULES: dict[str, _AddressRule] = {
     # The driver uses the configured base URL verbatim and has a default.
     "OpenAI": _AddressRule(default_base_url="https://api.openai.com/v1", ensure_version=False),
     "Tongyi-Qianwen": _AddressRule(root=_dashscope_compatible_root),
+    # Hosted providers the chat drivers reach over the OpenAI protocol. The
+    # defaults repeat ``core.llm.FACTORY_DEFAULT_BASE_URL`` and the constructor
+    # defaults of the drivers; the contract test compares them one by one.
+    # Embeddings are relayed where the embedding driver is ``OpenAIEmbed`` on
+    # the same root.
+    "DeepSeek": _hosted("https://api.deepseek.com/v1"),
+    "Moonshot": _hosted("https://api.moonshot.cn/v1"),
+    "ZHIPU-AI": _hosted("https://open.bigmodel.cn/api/paas/v4"),
+    "SILICONFLOW": _hosted("https://api.siliconflow.cn/v1"),
+    "StepFun": _hosted("https://api.stepfun.com/v1"),
+    "01.AI": _hosted("https://api.lingyiwanwu.com/v1"),
+    "BaiduYiyan": _hosted("https://qianfan.baidubce.com/v2"),
+    "Tencent Hunyuan": _hosted("https://api.hunyuan.cloud.tencent.com/v1"),
+    "PPIO": _hosted("https://api.ppinfra.com/v3/openai"),
+    "NovitaAI": _hosted("https://api.novita.ai/v3/openai"),
+    "GiteeAI": _hosted("https://ai.gitee.com/v1"),
+    "302.AI": _hosted("https://api.302.ai/v1"),
+    "Jiekou.AI": _hosted("https://api.jiekou.ai/openai"),
+    "LongCat": _hosted("https://api.longcat.chat/openai"),
+    "n1n": _hosted("https://api.n1n.ai/v1"),
+    "Avian": _hosted("https://api.avian.io/v1"),
+    "CometAPI": _hosted("https://api.cometapi.com/v1", embedding=True),
+    "DeerAPI": _hosted("https://api.deerapi.com/v1", embedding=True),
+    "PerfXCloud": _hosted("https://cloud.perfxlab.cn/v1", embedding=True),
+    "Upstage": _hosted("https://api.upstage.ai/v1/solar", embedding=True),
+    "Astraflow": _hosted("https://api-us-ca.umodelverse.ai/v1", embedding=True),
+    "Astraflow-CN": _hosted("https://api.modelverse.cn/v1", embedding=True),
+    "FuturMix": _hosted("https://futurmix.ai/v1", embedding=True),
 }
 RELAY_FACTORIES: frozenset[str] = frozenset(_RELAY_RULES)
 _ENDPOINT_PATHS: dict[str, str] = {"chat": "chat/completions", "embedding": "embeddings"}
 SUPPORTED_MODEL_TYPES: frozenset[str] = frozenset(_ENDPOINT_PATHS)
+
+
+def relay_types(factory: str) -> frozenset[str]:
+    """The capabilities the gateway can relay for a provider; empty when it is not in the rules."""
+    rule = _RELAY_RULES.get(factory)
+    return rule.model_types & SUPPORTED_MODEL_TYPES if rule is not None else frozenset()
+
+
 # Drivers treat these stored values as "no credential".
 _NO_CREDENTIAL = frozenset({"", "x"})
 
@@ -97,12 +145,14 @@ class UpstreamTarget:
         return None if self.api_key in _NO_CREDENTIAL else f"Bearer {self.api_key}"
 
 
-def upstream_from_config(config: Mapping[str, Any], model_id: str) -> UpstreamTarget:
+def upstream_from_config(config: Mapping[str, Any], model_id: str, model_type: str | None = None) -> UpstreamTarget:
     """Apply the relay address rules to a resolved model configuration."""
     factory = str(config.get("llm_factory") or "")
     rule = _RELAY_RULES.get(factory)
     if rule is None:
         raise ModelUnavailable("provider_not_supported")
+    if model_type is not None and model_type not in rule.model_types:
+        raise ModelUnavailable("endpoint_not_supported")
     configured = str(config.get("api_base") or "").strip()
     if rule.root is not None:
         base_url = rule.root(configured)
@@ -125,7 +175,7 @@ async def resolve_upstream(db: AsyncSession, tenant_id: str, model_id: str, mode
         config = await model_provider_service.resolve_config(db, tenant_id, model_id, model_type)
     except LookupError as error:
         raise ModelUnavailable("model_not_available") from error
-    return upstream_from_config(config, model_id)
+    return upstream_from_config(config, model_id, model_type)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +195,8 @@ class RegisteredModel:
     relayable: bool
     # Registration time in milliseconds, for ``/v1/models``.
     created: int
+    # The capabilities the provider's relay rule covers.
+    relay_types: frozenset[str] = SUPPORTED_MODEL_TYPES
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +226,7 @@ async def registered_models(db: AsyncSession, tenant_id: str) -> list[Registered
                 available=projection["effective_status"] == "active",
                 relayable=provider.provider_name in RELAY_FACTORIES,
                 created=int(model.create_time or 0),
+                relay_types=relay_types(provider.provider_name),
             )
         )
     return models

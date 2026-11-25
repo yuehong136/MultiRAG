@@ -11,6 +11,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -25,10 +26,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
-from api.db.db_models import GatewayKey, GatewayModelSetting, GatewayRequestLog, GatewaySetting
+from api.db.db_models import GatewayDailyUsage, GatewayKey, GatewayModelSetting, GatewayRequestLog, GatewaySetting
 from api.db.services import model_provider_service
 from api.db.services.model_deletion_policy import collect_blocking_model_references
 from api.model_gateway.keys import hash_key
+from api.model_gateway.store import SqlGatewayStore
 from tests.support.database import _alembic_config
 from tests.support.model_gateway import MANAGEMENT_PREFIX as _PREFIX
 from tests.support.model_gateway import data_plane, instance_id, logs, management, register_model, sdk
@@ -38,7 +40,7 @@ from tests.support.resource_journal import ResourceJournal
 
 pytestmark = pytest.mark.integration
 
-_GATEWAY_MODELS = (GatewayModelSetting, GatewaySetting, GatewayKey, GatewayRequestLog)
+_GATEWAY_MODELS = (GatewayModelSetting, GatewaySetting, GatewayKey, GatewayRequestLog, GatewayDailyUsage)
 
 
 _DELTA = (
@@ -65,10 +67,14 @@ class _Upstream:
 
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
+        # Hosts that answer 503 for now.
+        self.failing: set[str] = set()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         self.requests.append({"url": str(request.url), "authorization": request.headers.get("authorization"), "body": body})
+        if request.url.host in self.failing:
+            return httpx.Response(503, json={"error": {"message": "overloaded", "code": "overloaded"}})
         if request.url.path.endswith("/embeddings"):
             return httpx.Response(
                 200, json={"object": "list", "model": body["model"], "data": [{"object": "embedding", "index": 0, "embedding": _EMBEDDING_B64}], "usage": {"prompt_tokens": 4, "total_tokens": 4}}
@@ -124,13 +130,19 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
     """Fresh metadata and sequential gateway upgrades agree on constraints and types."""
     tables_revision, catalog_revision = _revisions()
     identity_revision = ScriptDirectory.from_config(_alembic_config()).get_revision("f7a9c2e4b6d8").module
+    cost = ScriptDirectory.from_config(_alembic_config()).get_revision("0a2c4e6f8b1d")
+    assert cost is not None and cost.down_revision == "f7a9c2e4b6d8"
+    cost_revision = cost.module
+    deployments = ScriptDirectory.from_config(_alembic_config()).get_revision("1b3d5f7a9c2e")
+    assert deployments is not None and deployments.down_revision == "0a2c4e6f8b1d"
+    deployments_revision = deployments.module
     journal = ResourceJournal("model_gateway_schema")
     for model_first in (False, True):
         schema = "model_gateway_" + uuid.uuid4().hex[:12]
         journal.event("reserve-schema", schema=schema, database=owned_engine.url.database, model_first=model_first)
         with owned_engine.begin() as connection:
             connection.execute(sa.schema.CreateSchema(schema))
-            _point_at(monkeypatch, connection, schema, tables_revision, catalog_revision, identity_revision)
+            _point_at(monkeypatch, connection, schema, tables_revision, catalog_revision, identity_revision, cost_revision, deployments_revision)
             if model_first:
                 metadata = sa.MetaData()
                 for model in _GATEWAY_MODELS:
@@ -141,7 +153,58 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
                 catalog_revision.upgrade()
                 catalog_revision.upgrade()
                 identity_revision._migrate_gateway_references(connection, identity_revision._gateway_reference_tables(connection))
+                # Calls made before costs existed are folded into the daily sums.
+                logs_table = sa.Table("t_ai_gateway_request_logs", sa.MetaData(), autoload_with=connection, schema=schema)
+                old = datetime(2026, 11, 20, 23, 30, tzinfo=UTC)
+                call = {"tenant_id": "t", "key_id": "key-0", "key_name": "runner", "endpoint": "chat.completions", "started_at": old, "duration_ms": 10}
+                for row in (
+                    {
+                        **call,
+                        "id": "r1",
+                        "upstream_model_id": "a" * 32,
+                        "upstream_model_name": "qwen",
+                        "status_code": 200,
+                        "prompt_tokens": 3,
+                        "completion_tokens": 2,
+                        "total_tokens": 5,
+                        "usage_source": "reported",
+                    },
+                    {**call, "id": "r2", "upstream_model_id": "a" * 32, "upstream_model_name": "qwen", "status_code": 502, "error_type": "upstream_error", "usage_source": "unavailable"},
+                    {**call, "id": "r3", "status_code": 404, "error_type": "invalid_request_error", "usage_source": "unavailable", "started_at": old + timedelta(hours=1)},
+                ):
+                    connection.execute(logs_table.insert().values(**row))
+            # Running it again, or over tables created from the models, changes nothing.
+            cost_revision.upgrade()
+            cost_revision.upgrade()
+            if not model_first:
+                # A preferred model used to take every call to its shared name; order 1 keeps it first.
+                before = sa.Table("t_ai_gateway_model_settings", sa.MetaData(), autoload_with=connection, schema=schema)
+                connection.execute(before.insert().values(id="p-1", tenant_id="t", model_id="e" * 32, preferred=True, created_by="u"))
+                connection.execute(before.insert().values(id="p-2", tenant_id="t", model_id="f" * 32, created_by="u"))
+            deployments_revision.upgrade()
+            deployments_revision.upgrade()
             _assert_schema_matches_models(connection, schema)
+            if not model_first:
+                after = sa.Table("t_ai_gateway_model_settings", sa.MetaData(), autoload_with=connection, schema=schema)
+                assert dict(connection.execute(sa.select(after.c.id, after.c.deployment_order)).all()) == {"p-1": 1, "p-2": None}
+                connection.execute(after.delete())
+            if not model_first:
+                daily = sa.Table("t_ai_gateway_daily_usage", sa.MetaData(), autoload_with=connection, schema=schema)
+                folded = {
+                    (str(row.date), row.model_id): (
+                        row.api_requests,
+                        row.successful_requests,
+                        row.failed_requests,
+                        row.usage_unknown_requests,
+                        row.total_tokens,
+                        row.total_response_time_ms,
+                        row.model_name,
+                    )
+                    for row in connection.execute(sa.select(daily)).all()
+                }
+                assert folded == {("2026-11-20", "a" * 32): (2, 1, 1, 1, 5, 20, "qwen"), ("2026-11-21", ""): (1, 0, 1, 1, 0, 10, None)}
+                connection.execute(daily.delete())
+                connection.execute(logs_table.delete())
 
             settings_table = sa.Table("t_ai_gateway_model_settings", sa.MetaData(), autoload_with=connection, schema=schema)
             tenant_table = sa.Table("t_ai_gateway_settings", sa.MetaData(), autoload_with=connection, schema=schema)
@@ -152,10 +215,9 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
             connection.execute(settings_table.insert().values(id="s-2", tenant_id="t", model_id="b" * 32, created_by="u"))
             with pytest.raises(IntegrityError), connection.begin_nested():
                 connection.execute(settings_table.insert().values(id="s-3", tenant_id="t", model_id="a" * 32, created_by="u"))
-            # Aliases are unique per tenant; models without one do not collide.
-            connection.execute(settings_table.update().where(settings_table.c.id == "s-1").values(alias="chat-default"))
-            with pytest.raises(IntegrityError), connection.begin_nested():
-                connection.execute(settings_table.update().where(settings_table.c.id == "s-2").values(alias="chat-default"))
+            # Models given the same alias are the deployments of that name.
+            connection.execute(settings_table.update().where(settings_table.c.id == "s-1").values(alias="chat-default", create_time=1))
+            connection.execute(settings_table.update().where(settings_table.c.id == "s-2").values(alias="chat-default", create_time=2))
             connection.execute(settings_table.insert().values(id="s-4", tenant_id="other", model_id="a" * 32, alias="chat-default", created_by="u"))
             with pytest.raises(IntegrityError), connection.begin_nested():
                 connection.execute(settings_table.update().where(settings_table.c.id == "s-2").values(rpm_limit=0))
@@ -167,8 +229,16 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
 
             with pytest.raises(RuntimeError, match="persisted model gateway data"):
                 catalog_revision.downgrade()
+            # Going back, an alias is unique again: the earliest model keeps it.
+            deployments_revision.downgrade()
+            assert dict(connection.execute(sa.select(settings_table.c.id, settings_table.c.alias)).all()) == {"s-1": "chat-default", "s-2": None, "s-4": "chat-default"}
+            with pytest.raises(IntegrityError), connection.begin_nested():
+                connection.execute(settings_table.update().where(settings_table.c.id == "s-2").values(alias="chat-default"))
+            assert "attempts" not in {column["name"] for column in sa.inspect(connection).get_columns("t_ai_gateway_request_logs", schema=schema)}
             for table in (settings_table, tenant_table, keys):
                 connection.execute(table.delete())
+            cost_revision.downgrade()
+            assert not sa.inspect(connection).has_table("t_ai_gateway_daily_usage", schema=schema)
             catalog_revision.downgrade()
             assert sa.inspect(connection).has_table("t_ai_gateway_models", schema=schema)
             assert "allowed_instance_ids" not in {column["name"] for column in sa.inspect(connection).get_columns("t_ai_gateway_keys", schema=schema)}
@@ -304,6 +374,13 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
         assert (chat["call_name"], chat["state"], chat["enabled_by_default"], chat["shares_name"], chat["servable_types"]) == ("qwen-upstream", "callable", True, True, ["chat"])
         assert chat["names"] == ["qwen-upstream", "VLLM/qwen-upstream", "VLLM/default/qwen-upstream"]
         assert models[twin_id]["call_name"] == "OpenAI-API-Compatible/qwen-upstream"
+        # Two models share the bare name, so a call to it may be served by either.
+        assert chat["pools"] == models[twin_id]["pools"] == [{"name": "qwen-upstream", "deployments": 2}]
+        assert (chat["weight"], chat["order"], models[embed_id]["pools"]) == (1, None, [])
+        # Order 1 makes this one the first choice and leaves the twin as its stand-in.
+        ordered = admin.patch(f"{_PREFIX}/catalog/models/{chat_id}", json={"order": 1, "weight": 3}).json()["data"]
+        assert (ordered["order"], ordered["weight"]) == (1, 3)
+        assert admin.patch(f"{_PREFIX}/catalog/models/{chat_id}", json={"order": 0}).status_code in (400, 422)
         assert (models[hosted_id]["state"], models[hosted_id]["reason"]) == ("unavailable", "provider_not_supported")
 
         closed = admin.patch(f"{_PREFIX}/catalog/models/{closed_id}", json={"enabled": False}).json()["data"]
@@ -390,6 +467,18 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
         assert forged.value.code == "invalid_api_key"
         assert len(upstream.requests) == forwarded
 
+        # The first choice is down: the same call is answered by the other deployment of the name.
+        upstream.failing.add("models.internal")
+        rescued = client.chat.completions.create(model="qwen-upstream", messages=hello)
+        assert rescued.choices[0].message.content == "hi"
+        assert [item["url"] for item in upstream.requests[forwarded:]] == ["http://models.internal:8000/v1/chat/completions", "http://twin.internal:8000/v1/chat/completions"]
+        # A key scoped to the failing connection has nowhere else to go.
+        with pytest.raises(openai.InternalServerError) as stranded:
+            sdk(gateway, connection_key["key"]).chat.completions.create(model="qwen-upstream", messages=hello)
+        assert (stranded.value.status_code, stranded.value.code) == (502, "upstream_error")
+        assert len(upstream.requests) == forwarded + 3
+        upstream.failing.clear()
+
     rows = logs(owned_engine)
     assert [(row.endpoint, row.stream, row.status_code, row.error_code) for row in rows] == [
         ("chat.completions", False, 200, None),
@@ -402,7 +491,17 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
         ("chat.completions", False, 404, "model_not_found"),
         ("chat.completions", False, 503, "model_unavailable"),
         ("embeddings", False, 400, "model_endpoint_mismatch"),
+        ("chat.completions", False, 200, None),
+        ("chat.completions", False, 502, "upstream_error"),
     ]
+    rescued_row, stranded_row = rows[-2:]
+    # The call is counted under the deployment that answered; the trail keeps the one that did not.
+    assert rescued_row.upstream_model_id == twin_id and rescued_row.total_tokens == 5
+    assert [(item["model_id"], item["provider"], item["instance_name"], item["status_code"]) for item in rescued_row.attempts] == [
+        (chat_id, "VLLM", "default", 503),
+        (twin_id, "OpenAI-API-Compatible", "default", 200),
+    ]
+    assert (stranded_row.upstream_model_id, stranded_row.attempts) == (chat_id, None)
     first, twin, streamed, embedded, denied_row = rows[:5]
     assert (first.tenant_id, first.key_id, first.key_name, first.model, first.gateway_model_id) == (owner, full_key["id"], "eval-runner", "qwen-upstream", None)
     assert (first.upstream_model_id, first.upstream_model_name, first.end_user) == (chat_id, "qwen-upstream", "job-7")
@@ -418,14 +517,17 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
 
     with management(owned_engine, owner) as admin:
         requests = {item["model_id"]: item["requests_7d"] for item in admin.get(f"{_PREFIX}/catalog").json()["data"]["models"]}
-        assert requests == {chat_id: 2, closed_id: 0, embed_id: 1, hosted_id: 0, twin_id: 1}
+        assert requests == {chat_id: 3, closed_id: 0, embed_id: 1, hosted_id: 0, twin_id: 2}
         # Renaming a key leaves history under the name it had at call time.
         assert admin.patch(f"{_PREFIX}/keys/{full_key['id']}", json={"name": "eval-runner-2", "description": "nightly evals"}).status_code == 200
         key_logs = admin.get(f"{_PREFIX}/logs", params={"key_id": full_key["id"], "outcome": "success"}).json()["data"]
-        assert key_logs["total"] == 4 and {item["key_name"] for item in key_logs["items"]} == {"eval-runner"}
-        assert admin.get(f"{_PREFIX}/logs", params={"outcome": "error"}).json()["data"]["total"] == 6
+        assert key_logs["total"] == 5 and {item["key_name"] for item in key_logs["items"]} == {"eval-runner"}
+        assert [len(item["attempts"] or []) for item in key_logs["items"]].count(2) == 1
+        assert admin.get(f"{_PREFIX}/logs", params={"outcome": "error"}).json()["data"]["total"] == 7
+        by_status = {code: admin.get(f"{_PREFIX}/logs", params={"status_code": code}).json()["data"]["total"] for code in (200, 299)}
+        assert by_status[200] >= 4 and by_status[299] == 0
         by_model = {item["model"]: item["total_tokens"] for item in admin.get(f"{_PREFIX}/usage", params={"group_by": "model"}).json()["data"]["items"]}
-        assert (by_model["qwen-upstream"], by_model["VLLM/default/qwen-upstream"], by_model["embed-default"]) == (5, 5, 4)
+        assert (by_model["qwen-upstream"], by_model["VLLM/default/qwen-upstream"], by_model["embed-default"]) == (10, 5, 4)
 
         # Closing a connection closes every model in it, for every key.
         closed_catalog = admin.patch(f"{_PREFIX}/catalog/instances/{vllm}", json={"enabled": False}).json()["data"]
@@ -434,7 +536,10 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
     with data_plane(owned_engine, httpx.MockTransport(upstream)) as gateway:
         assert sdk(gateway, connection_key["key"]).models.list().data == []
         with pytest.raises(openai.NotFoundError):
-            sdk(gateway, full_key["key"]).chat.completions.create(model="qwen-upstream", messages=[])
+            sdk(gateway, full_key["key"]).chat.completions.create(model="VLLM/qwen-upstream", messages=[])
+        # The shared name lives on in the connection that is still open.
+        sdk(gateway, full_key["key"]).chat.completions.create(model="qwen-upstream", messages=hello)
+        assert upstream.requests[-1]["url"] == "http://twin.internal:8000/v1/chat/completions"
 
     with management(owned_engine, owner) as admin:
         assert admin.patch(f"{_PREFIX}/catalog/instances/{vllm}", json={"enabled": True}).status_code == 200
@@ -565,8 +670,63 @@ def test_gateway_limits_refuse_and_quota_survives_a_restart(owned_engine: Engine
         assert (totals["requests"], totals["errors"], totals["total_tokens"], totals["usage_unknown"]) == (11, 4, 35, 4)
         assert totals["first_token_p50_ms"] is not None and overview["previous_requests"] == 0
         assert sum(item["requests"] for item in overview["series"]) == 11 and sum(item["errors"] for item in overview["series"]) == 4
+        assert sum(item["total_tokens"] for item in overview["series"]) == totals["total_tokens"]
         assert overview["errors_by_code"] == [{"status_code": 429, "code": "insufficient_quota", "count": 2}, {"status_code": 429, "code": "rate_limit_exceeded", "count": 2}]
-        assert overview["top_models"] == [{"model_id": chat_id, "name": "qwen-upstream", "provider": "VLLM", "requests": 11, "total_tokens": 35}]
+        assert overview["top_models"] == [{"model_id": chat_id, "name": "qwen-upstream", "provider": "VLLM", "requests": 11, "total_tokens": 35, "spend": 0.0}]
+        # A self-hosted model has no listed price, so nothing was charged so far.
+        assert totals["spend"] == 0
         assert {item["key_name"]: item["total_tokens"] for item in overview["top_keys"]} == {"rate-limited": 15, "token-limited": 5, "quota-limited": 15}
         assert [item["status_code"] for item in overview["recent_errors"]] == [429, 429, 429, 429]
-        assert admin.get(f"{_PREFIX}/overview", params={"days": 7}).json()["data"]["bucket"] == "day"
+        week = admin.get(f"{_PREFIX}/overview", params={"days": 7}).json()["data"]
+        assert (week["bucket"], len(week["series"])) == ("day", 7)
+        # Whole days come from the daily sums and agree with the logs of the same calls.
+        assert {name: week["totals"][name] for name in ("requests", "errors", "total_tokens", "usage_unknown")} == {"requests": 11, "errors": 4, "total_tokens": 35, "usage_unknown": 4}
+        assert week["series"][-1]["requests"] == 11 and week["top_models"] == overview["top_models"]
+        assert {item["key_name"]: item["total_tokens"] for item in week["top_keys"]} == {"rate-limited": 15, "token-limited": 5, "quota-limited": 15}
+
+        # The operator prices the model; later calls carry their cost.
+        assert admin.patch(f"{_PREFIX}/catalog/models/{chat_id}", json={"output_cost_per_token": "0.000002"}).status_code == 422
+        priced = admin.patch(f"{_PREFIX}/catalog/models/{chat_id}", json={"input_cost_per_token": "0.000001", "output_cost_per_token": "0.000002"}).json()["data"]
+        assert priced["pricing"] == {"source": "custom", "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06, "cache_read_input_token_cost": None, "tiered": False}
+        assert priced["custom_pricing"] == {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06, "cache_read_input_token_cost": None}
+
+    with data_plane(owned_engine, httpx.MockTransport(upstream)) as gateway:
+        sdk(gateway, quota_key["key"]).chat.completions.create(model="qwen-upstream", messages=prompt)
+
+    last = logs(owned_engine)[-1]
+    # 3 prompt tokens at 1e-6 and 2 completion tokens at 2e-6.
+    assert (last.cost, last.cache_read_input_tokens) == (Decimal("0.000007"), None)
+    with Session(owned_engine) as reader:
+        days = reader.scalars(sa.select(GatewayDailyUsage)).all()
+        assert sum(row.api_requests for row in days) == len(logs(owned_engine)) == sum(row.successful_requests + row.failed_requests for row in days)
+        assert sum(row.spend for row in days) == Decimal("0.000007")
+        assert sum(row.total_tokens for row in days) == sum(row.total_tokens or 0 for row in logs(owned_engine))
+
+    with management(owned_engine, owner) as admin:
+        for window in (1, 7):
+            spent = admin.get(f"{_PREFIX}/overview", params={"days": window}).json()["data"]
+            assert spent["totals"]["spend"] == pytest.approx(7e-06) and spent["top_models"][0]["spend"] == pytest.approx(7e-06)
+            assert sum(item["spend"] for item in spent["series"]) == pytest.approx(7e-06)
+        newest = admin.get(f"{_PREFIX}/logs", params={"page_size": 1}).json()["data"]["items"][0]
+        assert newest["cost"] == pytest.approx(7e-06)
+        # Clearing the price returns the model to the cost map, which does not list it.
+        cleared_price = admin.patch(f"{_PREFIX}/catalog/models/{chat_id}", json={"input_cost_per_token": None, "output_cost_per_token": None}).json()["data"]
+        assert cleared_price["pricing"] is None and cleared_price["custom_pricing"] is None
+
+    # Retention deletes the oldest logs in batches; the daily sums stay.
+    async_engine = create_async_engine(owned_engine.url)
+    store = SqlGatewayStore(async_sessionmaker(async_engine, expire_on_commit=False))
+
+    async def prune() -> tuple[int, int, int]:
+        try:
+            cutoff = datetime.now(UTC) + timedelta(minutes=1)
+            return await store.delete_logs_before(cutoff - timedelta(days=1), 100), await store.delete_logs_before(cutoff, 5), await store.delete_logs_before(cutoff, 100)
+        finally:
+            await async_engine.dispose()
+
+    total = len(logs(owned_engine))
+    with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop if sys.platform == "win32" else None) as runner:
+        assert runner.run(prune()) == (0, 5, total - 5)
+    assert logs(owned_engine) == []
+    with Session(owned_engine) as reader:
+        assert reader.scalar(sa.select(sa.func.sum(GatewayDailyUsage.api_requests))) == total

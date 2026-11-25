@@ -4,7 +4,11 @@ The request body is forwarded with three changes: the public model name
 becomes the upstream model name, the caller's credential is replaced by the
 upstream credential, and streaming chat requests ask the upstream to report
 usage. The response is passed through as received; it is never re-serialised.
-One request makes one upstream call: no retries, no fallback.
+
+A public name may have several deployments. The router orders them; a failed
+call moves on to the next one while nothing has been sent to the caller, up
+to ``num_retries`` times. The answer of the last deployment tried is the
+answer of the request, relayed exactly as a single deployment's would be.
 """
 
 import asyncio
@@ -23,7 +27,8 @@ from fastapi.responses import Response, StreamingResponse
 from api.model_gateway import errors
 from api.model_gateway.errors import GatewayError
 from api.model_gateway.limits import Limiter, Subject
-from api.model_gateway.store import Caller, GatewayStore, RequestLogEntry, ResolvedModel
+from api.model_gateway.router import STATUS_TIMEOUT, STATUS_UNREACHABLE, Router, is_retryable
+from api.model_gateway.store import Attempt, Caller, GatewayStore, RequestLogEntry, ResolvedModel
 from api.model_gateway.usage import SSEUsageTap, usage_from_payload
 from common.app_config import ModelGatewayConfig
 
@@ -72,17 +77,34 @@ def _upstream_error_code(raw: bytes) -> str | None:
     return str(code)[:64] if isinstance(code, (str, int)) and not isinstance(code, bool) else None
 
 
-def _limited_subjects(caller: Caller, resolved: ResolvedModel) -> list[Subject]:
-    subjects: list[Subject] = []
+def _key_subject(caller: Caller) -> Subject | None:
     if caller.limits or caller.quota is not None:
-        subjects.append(Subject(kind="key", id=caller.key_id, label="this API key", limits=caller.limits, quota=caller.quota))
+        return Subject(kind="key", id=caller.key_id, label="this API key", limits=caller.limits, quota=caller.quota)
+    return None
+
+
+def _model_subject(resolved: ResolvedModel) -> Subject | None:
     if resolved.limits:
-        subjects.append(Subject(kind="model", id=str(resolved.model_id), label=f"the model '{resolved.name}'", limits=resolved.limits))
-    return subjects
+        return Subject(kind="model", id=str(resolved.model_id), label=f"the model '{resolved.name}'", limits=resolved.limits)
+    return None
+
+
+def _attempt(resolved: ResolvedModel, status_code: int, error_code: str | None, since: float) -> Attempt:
+    upstream = resolved.upstream
+    return Attempt(
+        model_id=upstream.model_id,
+        model_name=upstream.model_name[:_MAX_END_USER_LENGTH],
+        provider=upstream.factory,
+        instance_name=resolved.instance_name,
+        status_code=status_code,
+        error_code=error_code,
+        duration_ms=_elapsed_ms(since),
+    )
 
 
 class Relay:
-    def __init__(self, client: httpx.AsyncClient, store: GatewayStore, settings: ModelGatewayConfig, limiter: Limiter) -> None:
+    def __init__(self, client: httpx.AsyncClient, store: GatewayStore, settings: ModelGatewayConfig, limiter: Limiter, router: Router | None = None) -> None:
+        self._router = router or Router(cooldown_seconds=settings.cooldown_time_seconds)
         self._client = client
         self._store = store
         self._settings = settings
@@ -115,14 +137,15 @@ class Relay:
             entry.stream = payload.get("stream") is True
             end_user = payload.get("user")
             entry.end_user = end_user[:_MAX_END_USER_LENGTH] if isinstance(end_user, str) and end_user else None
-            resolved = await self._store.resolve_model(caller, model_name, model_type)
-            entry.upstream_model_id = resolved.upstream.model_id
-            entry.upstream_model_name = resolved.upstream.model_name[:_MAX_END_USER_LENGTH]
-            subjects = _limited_subjects(caller, resolved)
-            if subjects:
-                await self._limiter.admit(request_id, subjects)
-                self._admitted[request_id] = subjects
-            return await self._forward(request, payload, resolved, entry, started)
+            deployments = await self._store.resolve_deployments(caller, model_name, model_type)
+            # A call refused before any deployment was tried is logged under the first one.
+            entry.upstream_model_id = deployments[0].upstream.model_id
+            entry.upstream_model_name = deployments[0].upstream.model_name[:_MAX_END_USER_LENGTH]
+            key_subject = _key_subject(caller)
+            if key_subject is not None:
+                await self._limiter.admit(request_id, [key_subject])
+                self._admitted[request_id] = [key_subject]
+            return await self._route(request, payload, deployments, entry, started)
         except GatewayError as error:
             entry.status_code, entry.error_type, entry.error_code = error.status_code, error.error_type, error.code
             await self._finish(entry, started)
@@ -151,7 +174,65 @@ class Relay:
             raise errors.invalid_request("The request body must be a JSON object.", code="invalid_json")
         return payload
 
-    async def _forward(self, request: Request, payload: dict[str, Any], resolved: ResolvedModel, entry: RequestLogEntry, started: float) -> Response:
+    async def _route(self, request: Request, payload: dict[str, Any], deployments: list[ResolvedModel], entry: RequestLogEntry, started: float) -> Response:
+        """Try the deployments in the router's order until one answers or none may be tried."""
+        plan = self._router.plan(deployments)
+        deadline = started + self._settings.total_timeout_seconds
+        calls_left = 1 + self._settings.num_retries
+        refusal: GatewayError | None = None
+        for index, resolved in enumerate(plan):
+            attempt_started = time.monotonic()
+            entry.upstream_model_id = resolved.upstream.model_id
+            entry.upstream_model_name = resolved.upstream.model_name[:_MAX_END_USER_LENGTH]
+            entry.price = resolved.price
+            subject = _model_subject(resolved)
+            if subject is not None:
+                try:
+                    await self._limiter.admit(entry.id, [subject])
+                except GatewayError as error:
+                    # A deployment at its own limit is passed over without an upstream call.
+                    entry.attempts.append(_attempt(resolved, error.status_code, error.code, attempt_started))
+                    refusal = error
+                    continue
+                self._admitted.setdefault(entry.id, []).append(subject)
+            calls_left -= 1
+            may_retry = calls_left > 0 and index < len(plan) - 1 and time.monotonic() < deadline
+            try:
+                response, caller_asked_for_usage = await self._send(request, payload, resolved, entry)
+            except GatewayError as error:
+                status = STATUS_TIMEOUT if error.code == "upstream_timeout" else STATUS_UNREACHABLE
+                self._router.failed(resolved.model_id, status, deployments=len(plan))
+                entry.attempts.append(_attempt(resolved, error.status_code, error.code, attempt_started))
+                if not may_retry:
+                    raise
+                await self._release(entry.id, subject)
+                continue
+            if response.status_code >= 400:
+                self._router.failed(resolved.model_id, response.status_code, deployments=len(plan))
+                entry.attempts.append(_attempt(resolved, response.status_code, None, attempt_started))
+                if may_retry and is_retryable(response.status_code):
+                    await response.aclose()
+                    await self._release(entry.id, subject)
+                    continue
+                return await self._relay_failure(response, response.headers.get("content-type", "application/json"), entry, started)
+            self._router.succeeded(resolved.model_id)
+            entry.attempts.append(_attempt(resolved, response.status_code, None, attempt_started))
+            return await self._deliver(response, caller_asked_for_usage, entry, started, deadline)
+        # Only deployments at their limit were left.
+        assert refusal is not None
+        raise refusal
+
+    async def _release(self, request_id: str, subject: Subject | None) -> None:
+        """Give back the slot of a deployment the request moved on from."""
+        if subject is None:
+            return
+        admitted = self._admitted.get(request_id)
+        if admitted is not None and subject in admitted:
+            admitted.remove(subject)
+        await self._limiter.settle(request_id, [subject], None)
+
+    async def _send(self, request: Request, payload: dict[str, Any], resolved: ResolvedModel, entry: RequestLogEntry) -> tuple[httpx.Response, bool]:
+        """Call one deployment and return its response once the status line is in."""
         upstream = resolved.upstream
         body = dict(payload)
         body["model"] = upstream.model_name
@@ -168,18 +249,16 @@ class Relay:
         if authorization:
             headers["authorization"] = authorization
         upstream_request = self._client.build_request("POST", upstream.endpoint_url(resolved.model_type), content=_encode_body(body), headers=headers)
-        deadline = started + self._settings.total_timeout_seconds
         try:
             async with asyncio.timeout(self._settings.first_response_timeout_seconds):
-                response = await self._client.send(upstream_request, stream=True)
+                return await self._client.send(upstream_request, stream=True), caller_asked_for_usage
         except (TimeoutError, httpx.TimeoutException):
             raise errors.upstream_timeout() from None
         except httpx.HTTPError:
             raise errors.upstream_unreachable() from None
 
+    async def _deliver(self, response: httpx.Response, caller_asked_for_usage: bool, entry: RequestLogEntry, started: float, deadline: float) -> Response:
         content_type = response.headers.get("content-type", "application/json")
-        if response.status_code >= 400:
-            return await self._relay_failure(response, content_type, entry, started)
         if "text/event-stream" in content_type:
             tap = SSEUsageTap(hide_usage_only_chunk=not caller_asked_for_usage)
             return StreamingResponse(

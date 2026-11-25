@@ -129,6 +129,7 @@ async def query_logs(
     model: str | None = Query(None, max_length=128),
     end_user: str | None = Query(None, max_length=255),
     outcome: Literal["success", "error"] | None = None,
+    status_code: int | None = Query(None, ge=100, le=599),
     start: datetime | None = None,
     end: datetime | None = None,
     db: AsyncSession = Depends(get_async_db),
@@ -144,6 +145,7 @@ async def query_logs(
             model=model,
             end_user=end_user,
             outcome=outcome,
+            status_code=status_code,
             start=_utc(start) if start else None,
             end=_utc(end) if end else None,
         )

@@ -51,17 +51,20 @@ class FakeStore:
         return self.caller
 
     async def visible_models(self, caller: Caller) -> list[PublicModel]:
-        return [PublicModel(model.name, 1700000000) for model in self.models.values() if caller.may_use(model.model_id, "instance-1")]
+        return [PublicModel(model.name, 1700000000) for model in self.models.values() if not isinstance(model, list) and caller.may_use(model.model_id, "instance-1")]
 
-    async def resolve_model(self, caller: Caller, name: str, model_type: str) -> ResolvedModel:
-        model = self.models.get(name)
+    async def resolve_deployments(self, caller: Caller, name: str, model_type: str) -> list[ResolvedModel]:
+        found = self.models.get(name)
+        if isinstance(found, list):
+            return list(found)
+        model = found
         if model is None:
             raise errors.model_not_found(name)
         if not caller.may_use(model.model_id, "instance-1"):
             raise errors.model_not_allowed(name)
         if model.model_type != model_type:
             raise errors.invalid_request("wrong endpoint", param="model", code="model_endpoint_mismatch")
-        return model
+        return [model]
 
     async def record(self, entry: RequestLogEntry) -> None:
         if self.fail_record:
@@ -567,3 +570,144 @@ async def test_stream_is_not_read_past_its_terminator():
     assert forwarded == [_DELTA, _DONE]
     assert served == [_DELTA, _DONE]
     assert (entry.status_code, entry.error_type) == (200, None)
+
+
+# --- several deployments of one name ----------------------------------------
+
+BACKUP_ID = "d" * 32
+THIRD_ID = "e" * 32
+
+
+def _deployment(model_id: str, host: str, upstream_name: str = "qwen-upstream", **extra) -> ResolvedModel:
+    return ResolvedModel(model_id, "chat-default", "chat", UpstreamTarget(model_id, "VLLM", upstream_name, f"http://{host}/v1", "upstream-key"), **extra)
+
+
+def _pooled(responses: dict[str, object], *, hosts: tuple[str, ...] = ("primary.test", "backup.test"), limiter=None, **settings) -> Gateway:
+    """A gateway whose ``chat-default`` has one deployment per host, tried in the order given."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        answer = responses[request.url.host]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer(request) if callable(answer) else httpx.Response(answer, json={"error": {"message": "upstream says no", "code": "nope"}})
+
+    gateway = Gateway(handler, limiter=limiter, **settings)
+    ids = (CHAT_ID, BACKUP_ID, THIRD_ID)
+    gateway.store.caller = dataclasses.replace(gateway.store.caller, allowed_model_ids=frozenset(ids))
+    gateway.store.models["chat-default"] = [_deployment(ids[index], host, order=index + 1) for index, host in enumerate(hosts)]
+    return gateway
+
+
+def _chat(gateway: Gateway, **body) -> httpx.Response:
+    return gateway.call("POST", CHAT, headers=AUTH, json={"model": "chat-default", "messages": [], **body})
+
+
+def _hosts(gateway: Gateway) -> list[str]:
+    return [request.url.host for request in gateway.upstream_requests]
+
+
+@pytest.mark.parametrize("failure", [500, 503, 429, 401, 403, 404, 408, httpx.ConnectError("refused")])
+def test_a_failed_deployment_hands_the_call_to_the_next_one(failure):
+    gateway = _pooled({"primary.test": failure, "backup.test": _completion})
+
+    response = _chat(gateway)
+
+    assert response.status_code == 200 and response.json()["id"] == "c1"
+    assert _hosts(gateway) == ["primary.test", "backup.test"]
+    record = gateway.only_record()
+    # The call is logged, priced and counted under the deployment that answered.
+    assert (record.status_code, record.error_type, record.upstream_model_id) == (200, None, BACKUP_ID)
+    assert [(attempt.model_id, attempt.status_code < 400) for attempt in record.attempts] == [(CHAT_ID, False), (BACKUP_ID, True)]
+    assert record.usage.total_tokens == 5
+
+
+def test_a_request_the_upstream_rejects_is_not_tried_elsewhere():
+    gateway = _pooled({"primary.test": 400, "backup.test": _completion})
+
+    response = _chat(gateway)
+
+    assert response.status_code == 400 and response.json()["error"]["message"] == "upstream says no"
+    assert _hosts(gateway) == ["primary.test"]
+    assert gateway.only_record().error_type == "upstream_rejected"
+
+
+def test_when_every_deployment_fails_the_last_answer_is_the_answer():
+    gateway = _pooled({"primary.test": 500, "backup.test": 429})
+
+    response = _chat(gateway)
+
+    assert response.status_code == 429 and response.json()["error"]["message"] == "upstream says no"
+    record = gateway.only_record()
+    assert [attempt.status_code for attempt in record.attempts] == [500, 429]
+    assert record.upstream_model_id == BACKUP_ID
+
+
+def test_a_request_calls_no_more_deployments_than_its_retries_allow():
+    hosts = ("primary.test", "backup.test", "third.test")
+    answers = {"primary.test": 500, "backup.test": 500, "third.test": _completion}
+
+    assert _chat(_pooled(answers, hosts=hosts)).status_code == 200
+    limited = _pooled(answers, hosts=hosts, num_retries=1)
+    assert _chat(limited).status_code == 502
+    assert _hosts(limited) == ["primary.test", "backup.test"]
+    single = _pooled(answers, hosts=hosts, num_retries=0)
+    assert _chat(single).status_code == 502
+    assert _hosts(single) == ["primary.test"]
+
+
+def test_a_stream_fails_over_before_anything_was_sent():
+    gateway = _pooled({"primary.test": 503, "backup.test": _stream})
+
+    response = _chat(gateway, stream=True)
+
+    assert response.status_code == 200 and response.text.endswith("data: [DONE]\n\n")
+    assert '"error"' not in response.text
+    record = gateway.only_record()
+    assert (record.upstream_model_id, record.usage.total_tokens, len(record.attempts)) == (BACKUP_ID, 5, 2)
+
+
+def test_each_deployment_is_called_by_its_own_upstream_name_and_address():
+    gateway = _pooled({"primary.test": 500, "backup.test": _completion})
+    gateway.store.models["chat-default"][1] = _deployment(BACKUP_ID, "backup.test", "qwen-on-backup", order=2)
+
+    _chat(gateway)
+
+    assert [json.loads(request.content)["model"] for request in gateway.upstream_requests] == ["qwen-upstream", "qwen-on-backup"]
+    assert gateway.only_record().upstream_model_name == "qwen-on-backup"
+
+
+def test_a_rate_limited_deployment_rests_and_later_calls_skip_it():
+    gateway = _pooled({"primary.test": 429, "backup.test": _completion})
+
+    with TestClient(gateway.app) as client:
+        for _ in range(3):
+            assert client.post(CHAT, headers=AUTH, json={"model": "chat-default", "messages": []}).status_code == 200
+
+    # Only the first call met the resting deployment.
+    assert _hosts(gateway) == ["primary.test", "backup.test", "backup.test", "backup.test"]
+    assert [len(record.attempts) for record in gateway.store.records] == [2, 1, 1]
+
+
+def test_a_deployment_at_its_own_limit_is_passed_over_without_a_call():
+    gateway = _pooled({"primary.test": _completion, "backup.test": _completion}, limiter=_frozen_limiter())
+    gateway.store.models["chat-default"][0] = _deployment(CHAT_ID, "primary.test", order=1, limits=Limits(rpm=1))
+
+    with TestClient(gateway.app) as client:
+        for _ in range(2):
+            assert client.post(CHAT, headers=AUTH, json={"model": "chat-default", "messages": []}).status_code == 200
+
+    assert _hosts(gateway) == ["primary.test", "backup.test"]
+    second = gateway.store.records[1]
+    assert [(attempt.model_id, attempt.status_code, attempt.error_code) for attempt in second.attempts] == [(CHAT_ID, 429, "rate_limit_exceeded"), (BACKUP_ID, 200, None)]
+
+
+def test_a_failed_deployment_gives_its_concurrency_slot_back():
+    gateway = _pooled({"primary.test": 500, "backup.test": _completion}, limiter=_frozen_limiter(), cooldown_time_seconds=0)
+    gateway.store.models["chat-default"][0] = _deployment(CHAT_ID, "primary.test", order=1, limits=Limits(max_parallel=1))
+
+    with TestClient(gateway.app) as client:
+        for _ in range(3):
+            assert client.post(CHAT, headers=AUTH, json={"model": "chat-default", "messages": []}).status_code == 200
+
+    # The slot was free again each time, so the first deployment was tried on every call.
+    assert _hosts(gateway) == ["primary.test", "backup.test"] * 3

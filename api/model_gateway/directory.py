@@ -15,10 +15,16 @@ Names. Each model answers to, in order of precedence when strings collide:
 For 3 and 4 the ``preferred`` model owns the name, otherwise the earliest
 registered. All registered models take part, open or not, so opening, closing
 or adding a model never moves a name another model already answers to.
+
+Deployments. The owner is the model a shared name is listed under; a call to
+that name may be served by any model that has the same name at the same level
+— the same alias, the same ``Provider/model`` or the same bare name. Those
+models are the name's deployments (LiteLLM's model group) and the router picks
+among them. ``Provider/instance/model`` always means exactly one model.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +33,7 @@ from api.db.db_models import GatewayModelSetting, GatewaySetting
 from api.model_gateway import catalog
 from api.model_gateway.catalog import SUPPORTED_MODEL_TYPES, Connection, RegisteredModel
 from api.model_gateway.limits import NO_LIMITS, Limits
+from api.model_gateway.pricing import ModelPrice, custom_price
 
 CALLABLE = "callable"
 CLOSED = "closed"
@@ -52,8 +59,19 @@ def assign_names(sources: Iterable[NameSource]) -> dict[str, tuple[str, ...]]:
     The primary name is the alias, else the bare name, else ``Provider/model``,
     else ``Provider/instance/model`` — the first of those the model owns.
     """
+    return _name_table(sources)[0]
+
+
+def name_groups(sources: Iterable[NameSource]) -> dict[str, tuple[str, ...]]:
+    """The models behind each name, its owner first."""
+    return _name_table(sources)[1]
+
+
+def _name_table(sources: Iterable[NameSource]) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
     ordered = sorted(sources, key=lambda source: (not source.preferred, source.registration_order))
     owner: dict[str, str] = {}
+    owner_tier: dict[str, str] = {}
+    members: dict[str, list[str]] = {}
     claims: dict[str, dict[str, str]] = {source.model_id: {} for source in ordered}
     tiers = (
         ("alias", lambda source: source.alias),
@@ -64,14 +82,18 @@ def assign_names(sources: Iterable[NameSource]) -> dict[str, tuple[str, ...]]:
     for tier, name_of in tiers:
         for source in ordered:
             name = name_of(source)
-            if name and name not in owner:
-                owner[name] = source.model_id
+            if not name:
+                continue
+            if name not in owner:
+                owner[name], owner_tier[name] = source.model_id, tier
                 claims[source.model_id][tier] = name
+            if owner_tier[name] == tier:
+                members.setdefault(name, []).append(source.model_id)
     names: dict[str, tuple[str, ...]] = {}
     for model_id, owned in claims.items():
         primary = [owned[tier] for tier in ("alias", "bare", "provider", "full") if tier in owned]
         names[model_id] = tuple(dict.fromkeys(primary))
-    return names
+    return names, {name: tuple(ids) for name, ids in members.items()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +120,13 @@ class DirectoryModel:
     names: tuple[str, ...]
     shares_name: bool
     created: int
+    # The operator's price; ``None`` leaves the model to LiteLLM's cost map.
+    custom_price: ModelPrice | None = None
+    # Routing among the deployments of a shared name, as in LiteLLM.
+    weight: int = 1
+    order: int | None = None
+    # Names this model serves together with other callable models: (name, deployments).
+    pools: tuple[tuple[str, int], ...] = ()
 
     @property
     def call_name(self) -> str:
@@ -117,6 +146,8 @@ class Directory:
     models: tuple[DirectoryModel, ...]
     _by_name: dict[str, DirectoryModel] = field(init=False, repr=False, compare=False)
     _by_id: dict[str, DirectoryModel] = field(init=False, repr=False, compare=False)
+    # Every model behind each name, the owner first.
+    groups: Mapping[str, tuple[str, ...]] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_by_name", {name: model for model in self.models for name in model.names})
@@ -127,6 +158,10 @@ class Directory:
 
     def model(self, model_id: str) -> DirectoryModel | None:
         return self._by_id.get(model_id)
+
+    def deployments(self, name: str) -> tuple[DirectoryModel, ...]:
+        """The models a call to ``name`` may be served by, open or not; the owner first."""
+        return tuple(self._by_id[model_id] for model_id in self.groups.get(name, ()))
 
 
 def _reason(model: RegisteredModel, servable: Sequence[str]) -> str | None:
@@ -146,7 +181,7 @@ def build_directory(
     connections: Sequence[Connection] = (),
 ) -> Directory:
     """Combine registrations, per-model settings and the owner default. Pure."""
-    names = assign_names(
+    names, groups = _name_table(
         NameSource(
             model_id=model.model_id,
             registration_order=model.registration_order,
@@ -164,7 +199,7 @@ def build_directory(
     models = []
     for model in registered:
         setting = settings.get(model.model_id)
-        servable = tuple(kind for kind in model.model_types if kind in SUPPORTED_MODEL_TYPES)
+        servable = tuple(kind for kind in model.model_types if kind in SUPPORTED_MODEL_TYPES and kind in model.relay_types)
         models.append(
             DirectoryModel(
                 model_id=model.model_id,
@@ -184,9 +219,20 @@ def build_directory(
                 names=names[model.model_id],
                 shares_name=name_counts[model.model_name] > 1,
                 created=model.created,
+                custom_price=custom_price(setting.input_cost_per_token, setting.output_cost_per_token, setting.cache_read_input_token_cost) if setting is not None else None,
+                weight=setting.weight if setting is not None and setting.weight is not None else 1,
+                order=setting.deployment_order if setting is not None else None,
             )
         )
-    return Directory(new_models_enabled=new_models_enabled, connections=tuple(connections), models=tuple(models))
+    callable_ids = {model.model_id for model in models if model.state == CALLABLE}
+    pools: dict[str, list[tuple[str, int]]] = {}
+    for name, ids in groups.items():
+        serving = [model_id for model_id in ids if model_id in callable_ids]
+        if len(serving) > 1:
+            for model_id in serving:
+                pools.setdefault(model_id, []).append((name, len(serving)))
+    models = [replace(model, pools=tuple(pools[model.model_id])) if model.model_id in pools else model for model in models]
+    return Directory(new_models_enabled=new_models_enabled, connections=tuple(connections), models=tuple(models), groups=groups)
 
 
 # Settings change through bulk statements in the same transaction; always read the rows back.

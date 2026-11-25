@@ -142,3 +142,74 @@ def test_a_key_may_use_listed_models_whole_connections_or_everything():
     assert not narrow.may_use(_id(5), "elsewhere")
     assert everything.may_use(_id(5), "elsewhere")
     assert not nothing.may_use(_id(1), "gpu-a")
+
+
+def test_a_capability_outside_the_providers_relay_rule_is_not_servable():
+    from dataclasses import replace
+
+    chat_only = frozenset({"chat"})
+    both = replace(_registered(1, "glm-4-plus", provider="ZHIPU-AI", types=("chat", "embedding")), relay_types=chat_only)
+    embedding = replace(_registered(2, "embedding-3", provider="ZHIPU-AI", types=("embedding",)), relay_types=chat_only)
+    directory = build_directory([both, embedding], {}, True)
+
+    assert directory.models[0].servable_types == ("chat",)
+    assert directory.models[0].reason is None
+    assert directory.models[1].servable_types == ()
+    assert directory.models[1].reason == "endpoint_not_supported"
+
+
+def _deployment_ids(directory, name: str) -> list[str]:
+    return [model.model_id for model in directory.deployments(name)]
+
+
+def test_models_sharing_a_name_are_its_deployments_owner_first():
+    directory = build_directory(
+        [_registered(1), _registered(2, provider="OpenAI-API-Compatible", instance="intranet"), _registered(3, instance="intl"), _registered(4, "qwen-flash")],
+        {},
+        new_models_enabled=True,
+    )
+
+    assert _deployment_ids(directory, "qwen-plus") == [_id(1), _id(2), _id(3)]
+    # The provider-qualified name covers that provider's connections only.
+    assert _deployment_ids(directory, "Tongyi-Qianwen/qwen-plus") == [_id(1), _id(3)]
+    # The connection-qualified name always means one model.
+    assert _deployment_ids(directory, "Tongyi-Qianwen/intl/qwen-plus") == [_id(3)]
+    assert _deployment_ids(directory, "qwen-flash") == [_id(4)]
+    assert _deployment_ids(directory, "gpt-4o") == []
+
+
+def test_models_given_the_same_alias_are_deployments_of_that_alias():
+    directory = build_directory(
+        [_registered(1, "qwen-plus"), _registered(2, "glm-4-flash", provider="ZHIPU-AI")],
+        {_id(1): _setting(1, alias="fast"), _id(2): _setting(2, alias="fast", weight=3, deployment_order=2)},
+        new_models_enabled=True,
+    )
+
+    assert _deployment_ids(directory, "fast") == [_id(1), _id(2)]
+    assert _deployment_ids(directory, "glm-4-flash") == [_id(2)]
+    first, second = directory.models
+    assert (first.weight, first.order) == (1, None)
+    assert (second.weight, second.order) == (3, 2)
+    # The alias is listed under its owner; the other model keeps its own call name.
+    assert (first.call_name, second.call_name) == ("fast", "glm-4-flash")
+
+
+def test_an_alias_does_not_pull_in_models_that_merely_have_that_bare_name():
+    directory = build_directory([_registered(1, "qwen-plus"), _registered(2, "qwen-max")], {_id(2): _setting(2, alias="qwen-plus")}, new_models_enabled=True)
+
+    # The alias outranks the bare name, so the name means the aliased model alone.
+    assert _deployment_ids(directory, "qwen-plus") == [_id(2)]
+    assert _deployment_ids(directory, "Tongyi-Qianwen/qwen-plus") == [_id(1)]
+
+
+def test_pools_count_only_the_models_that_can_serve():
+    directory = build_directory(
+        [_registered(1), _registered(2, instance="intl"), _registered(3, instance="closed"), _registered(4, "qwen-flash")],
+        {_id(3): _setting(3, enabled=False)},
+        new_models_enabled=True,
+    )
+
+    first, second, third, alone = directory.models
+    assert first.pools == (("Tongyi-Qianwen/qwen-plus", 2), ("qwen-plus", 2))
+    assert second.pools == first.pools
+    assert third.pools == () and alone.pools == ()

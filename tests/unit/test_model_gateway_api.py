@@ -250,15 +250,18 @@ def test_log_query_passes_validated_filters_and_utc_bounds(enabled, monkeypatch)
 
     monkeypatch.setattr(management, "query_logs", query_logs)
 
-    response = enabled.get(f"{PREFIX}/logs", params={"page": 2, "page_size": 20, "key_id": "k" * 32, "outcome": "error", "start": "2026-11-01T00:00:00", "end": "2026-11-02T08:00:00+08:00"})
+    response = enabled.get(
+        f"{PREFIX}/logs", params={"page": 2, "page_size": 20, "key_id": "k" * 32, "outcome": "error", "status_code": 429, "start": "2026-11-01T00:00:00", "end": "2026-11-02T08:00:00+08:00"}
+    )
 
     assert response.status_code == 200
     assert (seen["tenant_id"], seen["page"], seen["page_size"], seen["key_id"], seen["outcome"]) == ("user-unit", 2, 20, "k" * 32, "error")
+    assert seen["status_code"] == 429
     assert seen["start"] == datetime(2026, 11, 1, tzinfo=UTC)
     assert seen["end"] == datetime(2026, 11, 2, tzinfo=UTC)
 
 
-@pytest.mark.parametrize("params", [{"page": 0}, {"page_size": 101}, {"outcome": "slow"}, {"start": "yesterday"}])
+@pytest.mark.parametrize("params", [{"page": 0}, {"page_size": 101}, {"outcome": "slow"}, {"status_code": 99}, {"status_code": "4xx"}, {"start": "yesterday"}])
 def test_log_query_rejects_invalid_parameters(enabled, monkeypatch, params):
     monkeypatch.setattr(management, "query_logs", pytest.fail)
 

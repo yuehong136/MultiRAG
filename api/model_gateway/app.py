@@ -4,6 +4,7 @@ It serves ``/v1`` only and does not import ``api.apps``. Errors use the
 OpenAI error envelope, and every response carries ``x-request-id``.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ from api.model_gateway import errors
 from api.model_gateway.errors import GatewayError
 from api.model_gateway.limits import Limiter, MemoryLimiter
 from api.model_gateway.relay import REQUEST_ID_HEADER, Relay, request_id_of
+from api.model_gateway.retention import LogCleaner, LogPruner
 from api.model_gateway.store import GatewayStore, SqlGatewayStore
 from common.app_config import ModelGatewayConfig, get_app_config
 
@@ -62,9 +64,16 @@ def create_app(
         async with httpx.AsyncClient(transport=transport, timeout=timeout, limits=limits, follow_redirects=False) as client:
             relay = Relay(client, gateway_store, settings, gateway_limiter)
             app.state.relay = relay
+            cleanup: asyncio.Task[None] | None = None
+            if settings.log_retention_days > 0 and isinstance(gateway_store, LogPruner):
+                cleaner = LogCleaner(gateway_store, retention_days=settings.log_retention_days, interval_seconds=settings.log_cleanup_interval_seconds)
+                cleanup = asyncio.create_task(cleaner.run_forever(), name="model-gateway-log-cleanup")
             try:
                 yield
             finally:
+                if cleanup is not None:
+                    cleanup.cancel()
+                    await asyncio.gather(cleanup, return_exceptions=True)
                 await relay.drain()
 
     app = FastAPI(title="MultiRAG Model Gateway", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
