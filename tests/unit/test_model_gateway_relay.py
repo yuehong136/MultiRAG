@@ -1,6 +1,7 @@
 """Data plane behaviour against a controlled upstream and an in-memory store."""
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import time
@@ -18,6 +19,7 @@ from api.model_gateway.relay import Relay
 from api.model_gateway.store import Caller, PublicModel, RequestLogEntry, ResolvedModel
 from api.model_gateway.usage import UNAVAILABLE, SSEUsageTap
 from common.app_config import ModelGatewayConfig
+from tests.support.model_gateway import QUIET
 
 CALLER_KEY = "Bearer caller-key"
 AUTH = {"authorization": CALLER_KEY}
@@ -51,17 +53,20 @@ class FakeStore:
         return self.caller
 
     async def visible_models(self, caller: Caller) -> list[PublicModel]:
-        return [PublicModel(model.name, 1700000000) for model in self.models.values() if caller.may_use(model.model_id, "instance-1")]
+        return [PublicModel(model.name, 1700000000) for model in self.models.values() if not isinstance(model, list) and caller.may_use(model.model_id, "instance-1")]
 
-    async def resolve_model(self, caller: Caller, name: str, model_type: str) -> ResolvedModel:
-        model = self.models.get(name)
+    async def resolve_deployments(self, caller: Caller, name: str, model_type: str) -> list[ResolvedModel]:
+        found = self.models.get(name)
+        if isinstance(found, list):
+            return list(found)
+        model = found
         if model is None:
             raise errors.model_not_found(name)
         if not caller.may_use(model.model_id, "instance-1"):
             raise errors.model_not_allowed(name)
         if model.model_type != model_type:
             raise errors.invalid_request("wrong endpoint", param="model", code="model_endpoint_mismatch")
-        return model
+        return [model]
 
     async def record(self, entry: RequestLogEntry) -> None:
         if self.fail_record:
@@ -95,7 +100,7 @@ class Gateway:
             result = handler(request)
             return await result if asyncio.iscoroutine(result) else result
 
-        self.app = create_app(store=self.store, transport=httpx.MockTransport(recording), config=ModelGatewayConfig(**settings), limiter=limiter)
+        self.app = create_app(store=self.store, transport=httpx.MockTransport(recording), config=ModelGatewayConfig(**{**QUIET, **settings}), limiter=limiter)
 
     def call(self, method: str, url: str, **kwargs) -> httpx.Response:
         # Leaving the context runs shutdown, which waits for stream log writes.
@@ -567,3 +572,312 @@ async def test_stream_is_not_read_past_its_terminator():
     assert forwarded == [_DELTA, _DONE]
     assert served == [_DELTA, _DONE]
     assert (entry.status_code, entry.error_type) == (200, None)
+
+
+# --- several deployments of one name ----------------------------------------
+
+BACKUP_ID = "d" * 32
+THIRD_ID = "e" * 32
+
+
+def _deployment(model_id: str, host: str, upstream_name: str = "qwen-upstream", **extra) -> ResolvedModel:
+    return ResolvedModel(model_id, "chat-default", "chat", UpstreamTarget(model_id, "VLLM", upstream_name, f"http://{host}/v1", "upstream-key"), **extra)
+
+
+def _pooled(responses: dict[str, object], *, hosts: tuple[str, ...] = ("primary.test", "backup.test"), limiter=None, **settings) -> Gateway:
+    """A gateway whose ``chat-default`` has one deployment per host, tried in the order given."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        answer = responses[request.url.host]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer(request) if callable(answer) else httpx.Response(answer, json={"error": {"message": "upstream says no", "code": "nope"}})
+
+    gateway = Gateway(handler, limiter=limiter, **settings)
+    ids = (CHAT_ID, BACKUP_ID, THIRD_ID)
+    gateway.store.caller = dataclasses.replace(gateway.store.caller, allowed_model_ids=frozenset(ids))
+    gateway.store.models["chat-default"] = [_deployment(ids[index], host, order=index + 1) for index, host in enumerate(hosts)]
+    return gateway
+
+
+def _chat(gateway: Gateway, **body) -> httpx.Response:
+    return gateway.call("POST", CHAT, headers=AUTH, json={"model": "chat-default", "messages": [], **body})
+
+
+def _hosts(gateway: Gateway) -> list[str]:
+    return [request.url.host for request in gateway.upstream_requests]
+
+
+@pytest.mark.parametrize("failure", [500, 503, 429, 401, 403, 404, 408, httpx.ConnectError("refused")])
+def test_a_failed_deployment_hands_the_call_to_the_next_one(failure):
+    gateway = _pooled({"primary.test": failure, "backup.test": _completion})
+
+    response = _chat(gateway)
+
+    assert response.status_code == 200 and response.json()["id"] == "c1"
+    assert _hosts(gateway) == ["primary.test", "backup.test"]
+    record = gateway.only_record()
+    # The call is logged, priced and counted under the deployment that answered.
+    assert (record.status_code, record.error_type, record.upstream_model_id) == (200, None, BACKUP_ID)
+    assert [(attempt.model_id, attempt.status_code < 400) for attempt in record.attempts] == [(CHAT_ID, False), (BACKUP_ID, True)]
+    assert record.usage.total_tokens == 5
+
+
+def test_a_request_the_upstream_rejects_is_not_tried_elsewhere():
+    gateway = _pooled({"primary.test": 400, "backup.test": _completion})
+
+    response = _chat(gateway)
+
+    assert response.status_code == 400 and response.json()["error"]["message"] == "upstream says no"
+    assert _hosts(gateway) == ["primary.test"]
+    assert gateway.only_record().error_type == "upstream_rejected"
+
+
+def test_when_every_deployment_fails_the_last_answer_is_the_answer():
+    gateway = _pooled({"primary.test": 500, "backup.test": 429})
+
+    response = _chat(gateway)
+
+    assert response.status_code == 429 and response.json()["error"]["message"] == "upstream says no"
+    record = gateway.only_record()
+    assert [attempt.status_code for attempt in record.attempts] == [500, 429]
+    assert record.upstream_model_id == BACKUP_ID
+
+
+def test_a_request_calls_no_more_deployments_than_its_retries_allow():
+    hosts = ("primary.test", "backup.test", "third.test")
+    answers = {"primary.test": 500, "backup.test": 500, "third.test": _completion}
+
+    assert _chat(_pooled(answers, hosts=hosts)).status_code == 200
+    limited = _pooled(answers, hosts=hosts, num_retries=1)
+    assert _chat(limited).status_code == 502
+    assert _hosts(limited) == ["primary.test", "backup.test"]
+    single = _pooled(answers, hosts=hosts, num_retries=0)
+    assert _chat(single).status_code == 502
+    assert _hosts(single) == ["primary.test"]
+
+
+def test_a_stream_fails_over_before_anything_was_sent():
+    gateway = _pooled({"primary.test": 503, "backup.test": _stream})
+
+    response = _chat(gateway, stream=True)
+
+    assert response.status_code == 200 and response.text.endswith("data: [DONE]\n\n")
+    assert '"error"' not in response.text
+    record = gateway.only_record()
+    assert (record.upstream_model_id, record.usage.total_tokens, len(record.attempts)) == (BACKUP_ID, 5, 2)
+
+
+def test_each_deployment_is_called_by_its_own_upstream_name_and_address():
+    gateway = _pooled({"primary.test": 500, "backup.test": _completion})
+    gateway.store.models["chat-default"][1] = _deployment(BACKUP_ID, "backup.test", "qwen-on-backup", order=2)
+
+    _chat(gateway)
+
+    assert [json.loads(request.content)["model"] for request in gateway.upstream_requests] == ["qwen-upstream", "qwen-on-backup"]
+    assert gateway.only_record().upstream_model_name == "qwen-on-backup"
+
+
+def test_a_rate_limited_deployment_rests_and_later_calls_skip_it():
+    gateway = _pooled({"primary.test": 429, "backup.test": _completion})
+
+    with TestClient(gateway.app) as client:
+        for _ in range(3):
+            assert client.post(CHAT, headers=AUTH, json={"model": "chat-default", "messages": []}).status_code == 200
+
+    # Only the first call met the resting deployment.
+    assert _hosts(gateway) == ["primary.test", "backup.test", "backup.test", "backup.test"]
+    assert [len(record.attempts) for record in gateway.store.records] == [2, 1, 1]
+
+
+def test_a_deployment_at_its_own_limit_is_passed_over_without_a_call():
+    gateway = _pooled({"primary.test": _completion, "backup.test": _completion}, limiter=_frozen_limiter())
+    gateway.store.models["chat-default"][0] = _deployment(CHAT_ID, "primary.test", order=1, limits=Limits(rpm=1))
+
+    with TestClient(gateway.app) as client:
+        for _ in range(2):
+            assert client.post(CHAT, headers=AUTH, json={"model": "chat-default", "messages": []}).status_code == 200
+
+    assert _hosts(gateway) == ["primary.test", "backup.test"]
+    second = gateway.store.records[1]
+    assert [(attempt.model_id, attempt.status_code, attempt.error_code) for attempt in second.attempts] == [(CHAT_ID, 429, "rate_limit_exceeded"), (BACKUP_ID, 200, None)]
+
+
+def test_a_failed_deployment_gives_its_concurrency_slot_back():
+    gateway = _pooled({"primary.test": 500, "backup.test": _completion}, limiter=_frozen_limiter(), cooldown_time_seconds=0)
+    gateway.store.models["chat-default"][0] = _deployment(CHAT_ID, "primary.test", order=1, limits=Limits(max_parallel=1))
+
+    with TestClient(gateway.app) as client:
+        for _ in range(3):
+            assert client.post(CHAT, headers=AUTH, json={"model": "chat-default", "messages": []}).status_code == 200
+
+    # The slot was free again each time, so the first deployment was tried on every call.
+    assert _hosts(gateway) == ["primary.test", "backup.test"] * 3
+
+
+class SharedCooldowns:
+    """Stands in for the Redis board two gateway processes read and write."""
+
+    def __init__(self) -> None:
+        self.marked: dict[str, float] = {}
+
+    async def mark(self, model_id: str, seconds: float) -> None:
+        self.marked[model_id] = seconds
+
+    async def resting(self, model_ids: list[str]) -> set[str]:
+        return {model_id for model_id in model_ids if model_id in self.marked}
+
+
+def _process(board: SharedCooldowns, answers: dict[str, object]) -> Gateway:
+    gateway = _pooled(answers)
+    original = gateway.app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def with_board(app):
+        async with original(app):
+            app.state.relay._cooldowns = board
+            yield
+
+    gateway.app.router.lifespan_context = with_board
+    return gateway
+
+
+def test_a_deployment_one_process_rested_is_skipped_by_another():
+    board = SharedCooldowns()
+    first = _process(board, {"primary.test": 429, "backup.test": _completion})
+    second = _process(board, {"primary.test": 429, "backup.test": _completion})
+
+    assert _chat(first).status_code == 200
+    assert board.marked == {CHAT_ID: 5.0}
+    assert _chat(second).status_code == 200
+
+    # The second process never met the failing deployment.
+    assert _hosts(second) == ["backup.test"]
+    assert [len(record.attempts) for record in second.store.records] == [1]
+
+
+# --- /v1/messages: Anthropic's Messages API over the same chat models ---------
+
+MESSAGES = "/v1/messages"
+_HELLO = {"model": "chat-default", "max_tokens": 64, "system": "be brief", "messages": [{"role": "user", "content": "hi"}]}
+_FINISH = b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}\n\n'
+
+
+def _events(response: httpx.Response) -> list[dict]:
+    return [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:")]
+
+
+def test_a_messages_request_reaches_the_upstream_as_a_chat_completion_and_comes_back_as_a_message():
+    gateway = Gateway(_completion)
+
+    response = gateway.call("POST", MESSAGES, headers={"x-api-key": "caller-key", "anthropic-version": "2023-06-01"}, json=_HELLO)
+
+    assert response.status_code == 200
+    message = response.json()
+    assert (message["type"], message["role"], message["stop_reason"]) == ("message", "assistant", "end_turn")
+    assert message["content"] == [{"type": "text", "text": "hi"}]
+    assert message["usage"] == {"input_tokens": 3, "output_tokens": 2, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+    assert message["id"].startswith("msg_") and message["model"] == "chat-default"
+    sent = gateway.upstream_json()
+    assert str(gateway.upstream_requests[-1].url) == "http://upstream.test/v1/chat/completions"
+    assert sent["model"] == "qwen-upstream" and sent["max_tokens"] == 64
+    assert sent["messages"] == [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}]
+    record = gateway.only_record()
+    assert (record.endpoint, record.model, record.status_code, record.usage.total_tokens) == ("messages", "chat-default", 200, 5)
+
+
+def test_a_streamed_messages_request_is_answered_in_anthropic_events():
+    gateway = Gateway(lambda request: httpx.Response(200, headers=_SSE, stream=Chunks([_DELTA, _FINISH, _USAGE_ONLY, _DONE])))
+
+    response = gateway.call("POST", MESSAGES, headers=AUTH, json={**_HELLO, "stream": True})
+
+    assert response.status_code == 200 and response.headers["content-type"].startswith("text/event-stream")
+    events = _events(response)
+    assert [event["type"] for event in events] == ["message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"]
+    assert events[2]["delta"] == {"type": "text_delta", "text": "hi"}
+    assert (events[4]["delta"]["stop_reason"], events[4]["usage"]["input_tokens"], events[4]["usage"]["output_tokens"]) == ("end_turn", 3, 2)
+    # Every event is named, as Anthropic's SDKs expect.
+    assert response.text.count("event: ") == len(events) and "[DONE]" not in response.text
+    # The gateway asked the upstream for usage on the caller's behalf.
+    assert gateway.upstream_json()["stream_options"] == {"include_usage": True}
+    record = gateway.only_record()
+    assert (record.stream, record.usage.total_tokens, record.first_token_ms is not None) == (True, 5, True)
+
+
+def test_tools_are_translated_both_ways():
+    def tool_call(request: httpx.Request) -> httpx.Response:
+        call = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+        return httpx.Response(
+            200, json={"id": "c1", "model": "qwen-upstream", "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {"role": "assistant", "content": None, "tool_calls": [call]}}]}
+        )
+
+    gateway = Gateway(tool_call)
+    tools = [{"name": "get_weather", "description": "weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}}]
+
+    response = gateway.call("POST", MESSAGES, headers=AUTH, json={**_HELLO, "tools": tools})
+
+    assert gateway.upstream_json()["tools"][0]["function"]["name"] == "get_weather"
+    message = response.json()
+    assert message["stop_reason"] == "tool_use"
+    assert [(block["type"], block.get("name"), block.get("input")) for block in message["content"]] == [("tool_use", "get_weather", {"city": "Paris"})]
+
+
+@pytest.mark.parametrize(
+    ("headers", "body", "status", "kind"),
+    [
+        ({}, _HELLO, 401, "authentication_error"),
+        (AUTH, {**_HELLO, "model": "gpt-4o"}, 404, "not_found_error"),
+        (AUTH, {**_HELLO, "model": "restricted"}, 403, "permission_error"),
+        (AUTH, {"model": "chat-default", "max_tokens": 8, "messages": []}, 400, "invalid_request_error"),
+    ],
+    ids=["no-key", "unknown-model", "model-not-allowed", "no-messages"],
+)
+def test_messages_errors_use_anthropics_envelope(headers, body, status, kind):
+    gateway = Gateway(_completion)
+
+    response = gateway.call("POST", MESSAGES, headers=headers, json=body)
+
+    assert response.status_code == status
+    assert response.json()["type"] == "error" and response.json()["error"]["type"] == kind
+    assert response.json()["error"]["message"] and response.headers["x-request-id"]
+    assert gateway.upstream_requests == []
+
+
+def test_an_upstream_refusal_of_a_messages_request_keeps_its_message():
+    gateway = Gateway(lambda request: httpx.Response(400, json={"error": {"message": "max_tokens is too large", "code": "bad"}}))
+
+    response = gateway.call("POST", MESSAGES, headers=AUTH, json=_HELLO)
+
+    assert response.status_code == 400
+    assert response.json() == {"type": "error", "error": {"type": "invalid_request_error", "message": "max_tokens is too large"}, "request_id": response.headers["request-id"]}
+    assert gateway.only_record().error_type == "upstream_rejected"
+
+
+def test_a_messages_call_fails_over_like_any_other():
+    gateway = _pooled({"primary.test": 503, "backup.test": _completion})
+
+    response = gateway.call("POST", MESSAGES, headers=AUTH, json=_HELLO)
+
+    assert response.status_code == 200 and response.json()["content"] == [{"type": "text", "text": "hi"}]
+    assert _hosts(gateway) == ["primary.test", "backup.test"]
+
+
+def test_a_messages_stream_that_breaks_ends_with_an_error_event():
+    class Broken(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield _DELTA
+            raise httpx.ReadError("connection reset")
+
+    gateway = Gateway(lambda request: httpx.Response(200, headers=_SSE, stream=Broken()))
+
+    response = gateway.call("POST", MESSAGES, headers=AUTH, json={**_HELLO, "stream": True})
+
+    last = _events(response)[-1]
+    assert (last["type"], last["error"]["type"]) == ("error", "api_error")
+    assert gateway.only_record().error_code == "upstream_stream_error"
+
+
+def test_the_openai_endpoints_accept_the_key_in_x_api_key_too():
+    gateway = Gateway(_completion)
+
+    assert gateway.call("GET", "/v1/models", headers={"x-api-key": "caller-key"}).status_code == 200

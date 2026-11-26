@@ -1,6 +1,7 @@
 """Request bodies of the model gateway management API."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Annotated, Literal, Self
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -48,6 +49,11 @@ AllowedInstanceIds = Annotated[list[Annotated[str, StringConstraints(min_length=
 RateLimit = Annotated[int, Field(gt=0, le=2_000_000_000)]
 TokenQuota = Annotated[int, Field(gt=0, le=9_000_000_000_000_000)]
 QuotaPeriod = Literal["day", "month"]
+# LiteLLM's ``weight`` and ``order`` of a deployment; null returns to the default.
+Weight = Annotated[int, Field(ge=1, le=1000)]
+DeploymentOrder = Annotated[int, Field(ge=1, le=100)]
+# USD per token under LiteLLM's field names; twelve decimals hold a hundredth of a cent per million tokens.
+TokenCost = Annotated[Decimal, Field(ge=0, le=1, max_digits=13, decimal_places=12)]
 
 
 class _Body(BaseModel):
@@ -79,6 +85,22 @@ class CatalogModelPatch(_Limits):
     alias: ModelAlias | None = None
     preferred: bool | None = None
     description: Description | None = None
+    # Share of traffic among deployments of one order (default 1), and which order is tried first.
+    weight: Weight | None = None
+    order: DeploymentOrder | None = None
+    # The operator's price; null returns the model to LiteLLM's cost map.
+    input_cost_per_token: TokenCost | None = None
+    output_cost_per_token: TokenCost | None = None
+    cache_read_input_token_cost: TokenCost | None = None
+
+    @model_validator(mode="after")
+    def _a_price_starts_with_its_input_rate(self) -> Self:
+        sent = self.model_fields_set
+        clears_input = "input_cost_per_token" in sent and self.input_cost_per_token is None
+        sets_other = self.output_cost_per_token is not None or self.cache_read_input_token_cost is not None
+        if sets_other and (clears_input or "input_cost_per_token" not in sent):
+            raise ValueError("output_cost_per_token and cache_read_input_token_cost need input_cost_per_token in the same request")
+        return self
 
 
 class CatalogInstancePatch(_Body):
@@ -97,6 +119,12 @@ class GatewayKeyCreate(_KeyLimits):
     allow_all_models: bool = False
     allowed_model_ids: AllowedModelIds = Field(default_factory=list)
     allowed_instance_ids: AllowedInstanceIds = Field(default_factory=list)
+
+
+class GatewayKeyRotate(_Body):
+    """Replace a key's secret. The old secret keeps working for the grace period (LiteLLM's ``grace_period``)."""
+
+    grace_period_seconds: int = Field(default=0, ge=0, le=30 * 86400)
 
 
 class GatewayKeyPatch(_KeyLimits):

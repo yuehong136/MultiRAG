@@ -18,7 +18,7 @@ from api.db.db_models import get_async_db
 from api.db.model_contract import ModelID
 from api.identity.principal import AuthenticationSource
 from api.model_gateway import management
-from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewaySettingsPatch
+from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewayKeyRotate, GatewaySettingsPatch
 from api.utils.api_utils import Principal, async_current_user
 from common.app_config import get_app_config
 
@@ -116,6 +116,11 @@ async def update_key(key_id: str, body: GatewayKeyPatch, db: AsyncSession = Depe
     return await write(db, lambda: management.update_key(db, user.id, user.id, key_id, body))
 
 
+@router.post("/keys/{key_id}/rotate", summary="轮换 API Key：换新密钥，旧密钥在宽限期内仍可用；新密钥只在本次响应返回", response_model=None)
+async def rotate_key(key_id: str, body: GatewayKeyRotate, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
+    return await write(db, lambda: management.rotate_key(db, user.id, user.id, key_id, body))
+
+
 @router.post("/keys/{key_id}/revoke", summary="撤销 API Key；撤销后不可恢复", response_model=None)
 async def revoke_key(key_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
     return await write(db, lambda: management.revoke_key(db, user.id, user.id, key_id))
@@ -129,6 +134,7 @@ async def query_logs(
     model: str | None = Query(None, max_length=128),
     end_user: str | None = Query(None, max_length=255),
     outcome: Literal["success", "error"] | None = None,
+    status_code: int | None = Query(None, ge=100, le=599),
     start: datetime | None = None,
     end: datetime | None = None,
     db: AsyncSession = Depends(get_async_db),
@@ -144,6 +150,7 @@ async def query_logs(
             model=model,
             end_user=end_user,
             outcome=outcome,
+            status_code=status_code,
             start=_utc(start) if start else None,
             end=_utc(end) if end else None,
         )

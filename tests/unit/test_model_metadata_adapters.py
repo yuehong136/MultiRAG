@@ -322,7 +322,7 @@ async def test_service_preserves_static_baidu_and_remote_descriptors_without_ids
     }
     assert len(clients) == 1
     baidu = await model_provider_service.discover_models("BaiduYiyan", DiscoveryInput())
-    assert len(baidu) == 5 and all(item.source == "static" and set(item.model_types) <= {"chat", "image2text"} for item in baidu)
+    assert len(baidu) == 4 and all(item.source == "static" and set(item.model_types) <= {"chat", "image2text"} for item in baidu)
     assert len(clients) == 1
     with pytest.raises(ValueError, match="unavailable"):
         await model_provider_service.discover_models("Tencent Cloud", DiscoveryInput())

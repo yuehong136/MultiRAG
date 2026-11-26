@@ -6,6 +6,8 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from datetime import date as calendar_date
+from decimal import Decimal
 from typing import Any
 
 import sqlalchemy as sa
@@ -4388,7 +4390,8 @@ class GatewayModelSetting(BaseModel):
             "(rpm_limit IS NULL OR rpm_limit > 0) AND (tpm_limit IS NULL OR tpm_limit > 0) AND (max_parallel_requests IS NULL OR max_parallel_requests > 0)",
             name="ck_gateway_model_settings_limits",
         ),
-        sa.Index("uq_gateway_model_settings_tenant_alias", "tenant_id", "alias", unique=True, postgresql_where=text("alias IS NOT NULL")),
+        # Not unique: models given the same alias are the deployments of that name.
+        sa.Index("ix_gateway_model_settings_tenant_alias", "tenant_id", "alias", postgresql_where=text("alias IS NOT NULL")),
         {"schema": "usr_ai"},
     )
 
@@ -4405,6 +4408,14 @@ class GatewayModelSetting(BaseModel):
     rpm_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tpm_limit: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     max_parallel_requests: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Routing among the deployments of a shared name, as LiteLLM's ``weight`` and ``order``:
+    # the lowest order is tried first, and weight divides traffic within one order.
+    weight: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    deployment_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The operator's price in USD per token, under LiteLLM's field names; NULL uses LiteLLM's cost map.
+    input_cost_per_token: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 12), nullable=True)
+    output_cost_per_token: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 12), nullable=True)
+    cache_read_input_token_cost: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 12), nullable=True)
     created_by: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
@@ -4471,6 +4482,10 @@ class GatewayKey(BaseModel):
     token_quota: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     quota_period: Mapped[str | None] = mapped_column(String(8), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # After a rotation the secret it replaced keeps working until the grace period ends.
+    previous_secret_hash: Mapped[str | None] = mapped_column(sa.CHAR(64), nullable=True)
+    previous_secret_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
@@ -4489,6 +4504,8 @@ class GatewayRequestLog(BaseModel):
         sa.Index("ix_gateway_request_logs_tenant_started", "tenant_id", "started_at"),
         sa.Index("ix_gateway_request_logs_key_started", "key_id", "started_at"),
         sa.Index("ix_gateway_request_logs_model_started", "gateway_model_id", "started_at"),
+        # Retention deletes the oldest rows of every tenant.
+        sa.Index("ix_gateway_request_logs_started", "started_at"),
         {"schema": "usr_ai"},
     )
 
@@ -4516,7 +4533,13 @@ class GatewayRequestLog(BaseModel):
     prompt_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Prompt tokens served from the upstream's cache; they are part of ``prompt_tokens``.
+    cache_read_input_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # USD at the price in force when the call ended; NULL when the model has no price or the usage is unknown.
+    cost: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 10), nullable=True)
     usage_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Every upstream call the request made, in order, when it made more than one.
+    attempts: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     usage_source: Mapped[str] = mapped_column(String(16), nullable=False, default="unavailable", server_default="unavailable")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     first_token_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -4524,6 +4547,83 @@ class GatewayRequestLog(BaseModel):
     end_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tags: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+class GatewayModelHealth(BaseModel):
+    """The latest background health check of one registered model.
+
+    One row per model, replaced by every check; there is no history. Written
+    by the data plane, read by the management page.
+    """
+
+    __tablename__ = "t_ai_gateway_model_health"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "model_id", name="uq_gateway_model_health_tenant_model"),
+        sa.CheckConstraint("status IN ('healthy', 'rate_limited', 'unhealthy')", name="ck_gateway_model_health_status"),
+        {"schema": "usr_ai"},
+    )
+
+    create_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=get_utc_now)
+    update_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=get_utc_now)
+    create_time: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=get_timestamp_ms)
+    update_time: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=get_timestamp_ms)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # The upstream's answer; NULL when it could not be reached or did not answer in time.
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Why it is not healthy: rate_limit, credential, quota, model_gone, transient, timeout, unreachable.
+    failure_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # A probe, or real calls that succeeded since the last round ("traffic").
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="probe", server_default="probe")
+
+
+class GatewayDailyUsage(BaseModel):
+    """Model gateway usage per UTC day, key, model and endpoint.
+
+    Every request log adds to one row here in the same transaction, so sums
+    over days do not scan the logs and outlive their retention. The measure
+    columns carry the names of LiteLLM's daily spend tables. ``model_id`` is
+    the registered model that served the calls, or ``''`` for calls refused
+    before one was resolved; names are the latest snapshot.
+    """
+
+    __tablename__ = "t_ai_gateway_daily_usage"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "date", "key_id", "model_id", "endpoint", name="uq_gateway_daily_usage_bucket"),
+        sa.Index("ix_gateway_daily_usage_key_date", "key_id", "date"),
+        {"schema": "usr_ai"},
+    )
+
+    create_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=get_utc_now)
+    update_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=get_utc_now)
+    create_time: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=get_timestamp_ms)
+    update_time: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=get_timestamp_ms)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    date: Mapped[calendar_date] = mapped_column(sa.Date, nullable=False)
+    key_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    key_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    model_id: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
+    model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    endpoint: Mapped[str] = mapped_column(String(32), nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    completion_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    cache_read_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    total_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    spend: Mapped[Decimal] = mapped_column(sa.Numeric(20, 10), nullable=False, default=0, server_default="0")
+    api_requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    successful_requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    failed_requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    # Calls whose usage is unknown and therefore missing from the token sums.
+    usage_unknown_requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    total_response_time_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
 
 
 def ensure_skill_deferred_constraints(bind: Any) -> None:

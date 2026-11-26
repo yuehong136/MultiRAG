@@ -23,6 +23,8 @@ class Usage:
     total_tokens: int | None = None
     details: dict[str, Any] | None = None
     source: str = "unavailable"
+    # Prompt tokens served from the upstream's cache; part of ``prompt_tokens``.
+    cache_read_tokens: int | None = None
 
 
 UNAVAILABLE = Usage()
@@ -41,7 +43,11 @@ def usage_from_payload(payload: Any) -> Usage:
     if prompt is None and completion is None and total is None:
         return UNAVAILABLE
     details = {name: value for name, value in usage.items() if name.endswith("_details") and isinstance(value, dict)}
-    return Usage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total, details=details or None, source="reported")
+    # OpenAI reports cached tokens under prompt_tokens_details; DeepSeek as prompt_cache_hit_tokens.
+    cached = _count(details.get("prompt_tokens_details", {}).get("cached_tokens"))
+    if cached is None:
+        cached = _count(usage.get("prompt_cache_hit_tokens"))
+    return Usage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total, details=details or None, source="reported", cache_read_tokens=cached)
 
 
 def _event_payload(event: bytes) -> Any:

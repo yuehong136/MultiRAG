@@ -32,8 +32,9 @@ def test_catalog_and_litellm_metadata() -> None:
     assert len(entries) == 1
     assert entries[0]["url"] == DEFAULT
     assert len(entries[0]["llm"]) == 14
-    assert next(m for m in entries[0]["llm"] if m["llm_name"] == "gpt-4o")["mdl_type"] == ["image2text", "chat"]
-    assert {kind for m in entries[0]["llm"] for kind in (m["mdl_type"] if isinstance(m["mdl_type"], list) else [m["mdl_type"]])} == {"chat", "embedding", "image2text", "rerank", "speech2text", "tts"}
+    assert "IMAGE2TEXT" in next(m for m in entries[0]["llm"] if m["llm_name"] == "gpt-5.5")["tags"]
+    assert not any(m["llm_name"] in {"gpt-4o", "gpt-4o-mini", "deepseek-chat"} for m in entries[0]["llm"])
+    assert {kind for m in entries[0]["llm"] for kind in (m["mdl_type"] if isinstance(m["mdl_type"], list) else [m["mdl_type"]])} == {"chat", "embedding", "rerank", "speech2text", "tts"}
     assert all("model_type" not in m for m in entries[0]["llm"])
     assert FACTORY_DEFAULT_BASE_URL[SupportedLiteLLMProvider.FuturMix] == DEFAULT
     assert LITELLM_PROVIDER_PREFIX[SupportedLiteLLMProvider.FuturMix] == "openai/"

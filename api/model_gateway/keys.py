@@ -40,6 +40,12 @@ def issue_key() -> IssuedKey:
     return IssuedKey(key_id=key_id, secret_hash=hash_key(plaintext), plaintext=plaintext)
 
 
+def reissue_key(key_id: str) -> IssuedKey:
+    """A new secret for an existing key id: what a rotation hands out."""
+    plaintext = f"{KEY_PREFIX}{key_id}-{secrets.token_urlsafe(32)}"
+    return IssuedKey(key_id=key_id, secret_hash=hash_key(plaintext), plaintext=plaintext)
+
+
 def parse_key_id(presented: str) -> str | None:
     """Return the key id of a well-formed key, otherwise None. Never raises."""
     if len(presented) != _KEY_LENGTH or not presented.startswith(KEY_PREFIX) or presented[_ID_END] != "-":

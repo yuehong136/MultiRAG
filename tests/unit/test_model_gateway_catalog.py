@@ -8,12 +8,16 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from api.model_gateway.catalog import RELAY_FACTORIES, ModelUnavailable, upstream_from_config
+from api.model_gateway.catalog import RELAY_FACTORIES, ModelUnavailable, relay_types, upstream_from_config
 
 _BASE_URLS = ["http://models.internal:8000", "http://models.internal:8000/", "http://models.internal:8000/v1", "http://models.internal:8000/serving/v1/", "http://models.internal:8000/proxy"]
 _OPENAI_BASE_URLS = ["", "https://api.openai.com/v1", "https://api.openai.com/v1/", "https://relay.internal/openai/v1", "https://relay.internal/custom"]
 # OpenAI and Tongyi-Qianwen have their own rules and driver shapes, tested below.
-_SELF_HOSTED = sorted(RELAY_FACTORIES - {"OpenAI", "Tongyi-Qianwen"})
+_SELF_HOSTED = ["LM-Studio", "LocalAI", "OpenAI-API-Compatible", "VLLM", "Xinference"]
+# Hosted OpenAI-protocol providers: the driver uses the stored base URL verbatim.
+_HOSTED = sorted(RELAY_FACTORIES - {"OpenAI", "Tongyi-Qianwen", *_SELF_HOSTED})
+_HOSTED_WITH_EMBEDDING = sorted(factory for factory in _HOSTED if "embedding" in relay_types(factory))
+_HOSTED_BASE_URLS = ["", "https://relay.internal/vendor/v1", "https://relay.internal/vendor/v1/", "https://relay.internal/custom"]
 # Providers whose driver strips the ``___<suffix>`` appended at registration time.
 _CHAT_STRIPS_SUFFIX = {"VLLM", "OpenAI-API-Compatible"}
 _EMBEDDING_STRIPS_SUFFIX = {"VLLM", "OpenAI-API-Compatible", "LocalAI"}
@@ -212,3 +216,48 @@ def test_tongyi_embedding_is_relayed_on_the_embedding_driver_host(api_base):
     native = driver._dashscope_http_api_url or f"{_DASHSCOPE}/api/v1"
     assert urlsplit(target.base_url).hostname == urlsplit(native).hostname
     assert target.model_name == driver.model_name
+
+
+def test_every_relayed_provider_is_covered_by_a_contract_test():
+    assert set(_SELF_HOSTED) | set(_HOSTED) | {"OpenAI", "Tongyi-Qianwen"} == RELAY_FACTORIES
+    assert len(_HOSTED) >= 20
+
+
+@pytest.mark.parametrize("factory", _HOSTED)
+@pytest.mark.parametrize("api_base", _HOSTED_BASE_URLS)
+def test_hosted_chat_address_matches_the_chat_driver(factory, api_base):
+    from core.llm import ChatModel
+
+    driver = ChatModel[factory](key="upstream-key", model_name="served-model", base_url=api_base, provider=factory)
+    target = upstream_from_config(_config(factory, api_base), MODEL_ID, "chat")
+
+    if hasattr(driver, "prefix"):
+        # LiteLLM appends /chat/completions to this base for every OpenAI-protocol provider.
+        assert (target.base_url, target.model_name) == (driver.base_url, driver.model_name.removeprefix(driver.prefix))
+    else:
+        assert (target.base_url, target.model_name) == _driver_address(driver)
+    assert target.authorization() == "Bearer upstream-key"
+
+
+@pytest.mark.parametrize("factory", _HOSTED_WITH_EMBEDDING)
+@pytest.mark.parametrize("api_base", _HOSTED_BASE_URLS)
+def test_hosted_embedding_address_matches_the_embedding_driver(factory, api_base):
+    from core.llm import EmbeddingModel
+
+    driver = EmbeddingModel[factory](key="upstream-key", model_name="served-model", base_url=api_base)
+    target = upstream_from_config(_config(factory, api_base), MODEL_ID, "embedding")
+
+    assert (target.base_url, target.model_name) == _driver_address(driver)
+
+
+@pytest.mark.parametrize("factory", sorted(set(_HOSTED) - set(_HOSTED_WITH_EMBEDDING)))
+def test_chat_only_providers_do_not_relay_embeddings(factory):
+    assert relay_types(factory) == {"chat"}
+    with pytest.raises(ModelUnavailable) as raised:
+        upstream_from_config(_config(factory, ""), MODEL_ID, "embedding")
+
+    assert raised.value.reason == "endpoint_not_supported"
+
+
+def test_providers_outside_the_rules_relay_nothing():
+    assert relay_types("Anthropic") == frozenset()

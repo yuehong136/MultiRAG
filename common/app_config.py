@@ -954,6 +954,36 @@ class ModelGatewayConfig(_Section):
     stream_idle_timeout_seconds: float = Field(default=120.0, gt=0)
     # 单次请求从派发到结束的总时长上限
     total_timeout_seconds: float = Field(default=3600.0, gt=0)
+    # 一个名字有多个部署时，一次请求在失败后最多再换几个部署重试（LiteLLM 的 num_retries）；0 表示不重试
+    num_retries: int = Field(default=2, ge=0, le=10)
+    # 部署失败后暂停接收流量的秒数（LiteLLM 的 cooldown_time）；0 表示不冷却
+    cooldown_time_seconds: float = Field(default=5.0, ge=0)
+    # 启动时预先加载 /v1/messages（Anthropic 协议）用的 LiteLLM 转换器；关掉后第一次调用会多等几秒
+    messages_api_warm_up: bool = True
+    # 每隔多少小时从 price_map_url 拉取一次 LiteLLM 价格表；0 表示不拉取，只用随 litellm 依赖安装的那份。
+    # 这是一个对外网络请求：无法访问外网的环境设为 0，或把 price_map_url 指向内部镜像或本机文件。拉取失败不影响现有价格
+    price_map_refresh_hours: float = Field(default=24.0, ge=0)
+    # 价格表的地址（http/https 或本机文件路径）；留空用 LiteLLM 仓库里的那份
+    price_map_url: str = ""
+    # 后台健康检查的间隔秒数（300 是 LiteLLM 的默认间隔）；0 表示不检查。
+    # 每轮对每个可调用的模型发一次最小的真实请求（max_tokens=1），会产生少量上游费用
+    health_check_interval_seconds: float = Field(default=300.0, ge=0)
+    # 一次探测等待上游的上限
+    health_check_timeout_seconds: float = Field(default=60.0, gt=0)
+    # 限额计数和冷却状态放在哪里：memory 只在本进程内，多个数据面进程各算各的、重启清空；
+    # redis 用 redis 配置段的实例，多进程共享。Redis 不可用时自动退回本进程计数
+    state_store: Literal["memory", "redis"] = "redis"
+    # 调用记录保留天数；0 表示不清理。月度配额和 30 天概览的环比都从调用记录里读，所以最少 62 天
+    log_retention_days: int = Field(default=0, ge=0)
+    # 两次清理之间的间隔
+    log_cleanup_interval_seconds: float = Field(default=86400.0, gt=0)
+
+    @field_validator("log_retention_days")
+    @classmethod
+    def _retention_covers_quota_and_overview(cls, value: int) -> int:
+        if 0 < value < 62:
+            raise ValueError("log_retention_days must be 0 (keep everything) or at least 62")
+        return value
 
 
 # ---------------------------------------------------------------------------
