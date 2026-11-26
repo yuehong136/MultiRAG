@@ -494,7 +494,7 @@ OpenAI 兼容端点继续接收目录中的调用名称。
 | `PATCH /api/v1/model-gateway/settings` | 设置新登记模型的默认开放状态 |
 | `GET` / `POST /api/v1/model-gateway/keys`，`PATCH .../keys/{id}`，`POST .../keys/{id}/revoke` | 创建、修改元数据和可调用范围、启停、撤销 Key |
 | `POST /api/v1/model-gateway/keys/{key_id}/rotate` | 轮换：换新密钥并只在本次响应返回；请求体可带 `grace_period_seconds`（0 到 30 天，默认 0），旧密钥在这段时间内仍可用 |
-| `GET /api/v1/model-gateway/overview` | 接入地址、数据面健康状态、计数，以及最近 1 / 7 / 30 天的请求、失败、token、首字时延中位数、时间序列（每个时间桶的请求数、失败数、`total_tokens` 和 `spend`）、Top 模型与 Key（含 `spend`）、最近失败；`totals.spend` 是窗口内的美元费用 |
+| `GET /api/v1/model-gateway/overview` | 接入地址、数据面健康状态、计数，以及最近 1 / 7 / 30 天的请求、失败、token、首字时延中位数、时间序列（每个时间桶的请求数、失败数、`total_tokens`、`prompt_tokens`、`completion_tokens` 和 `spend`；`models` 按窗口内最忙的 5 个模型拆分请求数、token 和费用，其余合并在 `other` 下，键的顺序见 `series_models`；`latency` 是该桶内成功调用的耗时 P50、P95 和首字中位数，没有成功调用时为 `null`），`totals` 另有成功调用的 `duration_p50_ms` / `duration_p95_ms`（耗时分位只能从调用记录算，按日汇总表里没有，所以回看范围受调用记录保留期限制；失败的调用不计入，拒绝在几毫秒内返回会把慢的上游算快）、Top 模型与 Key（含 `spend`）、最近失败；`totals.spend` 是窗口内的美元费用 |
 | `GET /api/v1/model-gateway/logs` | 查询调用记录；`status_code` 按确切的状态码筛选，可与 `outcome` 同用 |
 | `GET /api/v1/model-gateway/usage` | 按 Key、模型、日期或 `end_user` 汇总用量 |
 
