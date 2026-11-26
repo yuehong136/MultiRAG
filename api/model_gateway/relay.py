@@ -166,11 +166,27 @@ class Relay:
                 except ValueError as error:
                     raise errors.invalid_request(str(error), code="invalid_messages_request") from None
                 payload = translation.body
+                if entry.end_user is None and isinstance(payload.get("user"), str) and payload["user"]:
+                    # Anthropic names the end user in ``metadata.user_id``.
+                    entry.end_user = payload["user"][:_MAX_END_USER_LENGTH]
             return await self._route(request, payload, deployments, entry, started, translation)
         except GatewayError as error:
             entry.status_code, entry.error_type, entry.error_code = error.status_code, error.error_type, error.code
             await self._finish(entry, started)
             raise
+
+    async def count_tokens(self, request: Request) -> int:
+        """Input tokens of a Messages request the caller could send. Counted locally and not logged."""
+        caller = await self._store.authenticate(caller_credential(request))
+        payload = await self._read_json(request)
+        model_name = payload.get("model")
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise errors.invalid_request("You must provide a model parameter.", param="model", code="missing_model")
+        await self._store.resolve_deployments(caller, model_name, "chat")
+        try:
+            return await anthropic.count_tokens(payload)
+        except ValueError as error:
+            raise errors.invalid_request(str(error), code="invalid_messages_request") from None
 
     @property
     def router(self) -> Router:
@@ -352,7 +368,7 @@ class Relay:
         if "retry-after" in response.headers:
             headers["retry-after"] = response.headers["retry-after"]
         if translation is not None:
-            return Response(content=anthropic.upstream_error_body(status, bytes(raw)), status_code=status, media_type="application/json", headers=headers)
+            return Response(content=anthropic.upstream_error_body(status, bytes(raw), entry.id), status_code=status, media_type="application/json", headers=headers)
         return Response(content=bytes(raw), status_code=status, media_type=content_type, headers=headers)
 
     async def _stream(self, response: httpx.Response, tap: SSEUsageTap, entry: RequestLogEntry, started: float, deadline: float) -> AsyncIterator[bytes]:

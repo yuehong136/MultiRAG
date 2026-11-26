@@ -529,6 +529,10 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
         with pytest.raises(anthropic.NotFoundError) as unknown:
             anthropic_sdk(gateway, full_key["key"]).messages.create(model="gpt-4o", max_tokens=8, messages=[{"role": "user", "content": "hello"}])
         assert unknown.value.body["error"]["type"] == "not_found_error"
+        # Counting and model listing are answered by the gateway itself, in the SDK's own shapes.
+        counted = anthropic_sdk(gateway, full_key["key"]).messages.count_tokens(model="qwen-upstream", messages=[{"role": "user", "content": "hello"}])
+        assert counted.input_tokens > 0
+        assert "qwen-upstream" in [model.id for model in anthropic_sdk(gateway, full_key["key"]).models.list()]
 
     rows = logs(owned_engine)
     assert [(row.endpoint, row.stream, row.status_code, row.error_code) for row in rows] == [

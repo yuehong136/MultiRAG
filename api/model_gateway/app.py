@@ -31,8 +31,20 @@ _MAX_UPSTREAM_CONNECTIONS = 1000
 _MAX_KEEPALIVE_CONNECTIONS = 100
 
 
+def _speaks_anthropic(request: Request) -> bool:
+    """Whether the caller expects Anthropic's shapes: its paths, or the header every Anthropic SDK sends."""
+    return request.url.path.startswith("/v1/messages") or "anthropic-version" in request.headers
+
+
+def _request_headers(request: Request) -> dict[str, str]:
+    request_id = request_id_of(request)
+    # ``request-id`` is the name Anthropic's SDKs read.
+    return {REQUEST_ID_HEADER: request_id, "request-id": request_id} if _speaks_anthropic(request) else {REQUEST_ID_HEADER: request_id}
+
+
 def _error_response(request: Request, error: GatewayError) -> JSONResponse:
-    return JSONResponse(status_code=error.status_code, content=error.body(), headers={**error.headers, REQUEST_ID_HEADER: request_id_of(request)})
+    content = anthropic.gateway_error_body(error, request_id_of(request)) if _speaks_anthropic(request) else error.body()
+    return JSONResponse(status_code=error.status_code, content=content, headers={**error.headers, **_request_headers(request)})
 
 
 def create_app(
@@ -128,6 +140,9 @@ def create_app(
     async def list_models(request: Request) -> JSONResponse:
         caller = await gateway_store.authenticate(caller_credential(request))
         models = await gateway_store.visible_models(caller)
+        if _speaks_anthropic(request):
+            # Claude Code and Anthropic's SDKs list models with their own page shape.
+            return JSONResponse(content=anthropic.models_page([(model.name, model.created) for model in models]), headers=_request_headers(request))
         data = [{"id": model.name, "object": "model", "created": model.created, "owned_by": "multirag"} for model in models]
         return JSONResponse(content={"object": "list", "data": data}, headers={REQUEST_ID_HEADER: request_id_of(request)})
 
@@ -145,10 +160,14 @@ def create_app(
     async def messages(request: Request) -> Response:
         """Anthropic's Messages API, served by the same chat models; errors use Anthropic's envelope."""
         relay: Relay = request.app.state.relay
-        try:
-            return await relay.handle(request, endpoint="messages", model_type="chat", messages_api=True)
-        except GatewayError as error:
-            headers = {**error.headers, REQUEST_ID_HEADER: request_id_of(request)}
-            return JSONResponse(status_code=error.status_code, content=anthropic.gateway_error_body(error), headers=headers)
+        response = await relay.handle(request, endpoint="messages", model_type="chat", messages_api=True)
+        response.headers["request-id"] = request_id_of(request)
+        return response
+
+    @app.post("/v1/messages/count_tokens")
+    async def count_message_tokens(request: Request) -> JSONResponse:
+        """Anthropic's token counting for a Messages request; nothing is sent upstream."""
+        relay: Relay = request.app.state.relay
+        return JSONResponse(content={"input_tokens": await relay.count_tokens(request)}, headers=_request_headers(request))
 
     return app

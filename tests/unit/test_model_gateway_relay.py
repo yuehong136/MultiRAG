@@ -776,7 +776,8 @@ def test_a_messages_request_reaches_the_upstream_as_a_chat_completion_and_comes_
     message = response.json()
     assert (message["type"], message["role"], message["stop_reason"]) == ("message", "assistant", "end_turn")
     assert message["content"] == [{"type": "text", "text": "hi"}]
-    assert message["usage"] == {"input_tokens": 3, "output_tokens": 2}
+    assert message["usage"] == {"input_tokens": 3, "output_tokens": 2, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+    assert message["id"].startswith("msg_") and message["model"] == "chat-default"
     sent = gateway.upstream_json()
     assert str(gateway.upstream_requests[-1].url) == "http://upstream.test/v1/chat/completions"
     assert sent["model"] == "qwen-upstream" and sent["max_tokens"] == 64
@@ -848,7 +849,7 @@ def test_an_upstream_refusal_of_a_messages_request_keeps_its_message():
     response = gateway.call("POST", MESSAGES, headers=AUTH, json=_HELLO)
 
     assert response.status_code == 400
-    assert response.json() == {"type": "error", "error": {"type": "invalid_request_error", "message": "max_tokens is too large"}}
+    assert response.json() == {"type": "error", "error": {"type": "invalid_request_error", "message": "max_tokens is too large"}, "request_id": response.headers["request-id"]}
     assert gateway.only_record().error_type == "upstream_rejected"
 
 

@@ -212,8 +212,29 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 
 `POST /v1/messages` 接受 Anthropic Messages 请求，由同一批对话模型应答，供只会说 Anthropic 协议的客户端
 （Anthropic SDK、Claude Code 等）使用。上游仍然是 OpenAI 协议：请求转成 chat completion 发出去，响应（整段或流式）
-转回 Messages 格式。转换不是网关自己写的，用的是 LiteLLM 的适配器
-（`litellm/llms/anthropic/experimental_pass_through/adapters`），`api/model_gateway/anthropic.py` 只负责喂数据和组帧。
+转回 Messages 格式。请求和整段响应的转换用 LiteLLM 的适配器
+（`litellm/llms/anthropic/experimental_pass_through/adapters`），`api/model_gateway/anthropic.py` 负责喂数据、清理和组帧。
+
+2026-11-26 对照 Anthropic 官方文档、Claude Code 的网关兼容要求、LiteLLM 主干、new-api 和 Bifrost 复查了一遍，按它们的做法改了这些：
+
+- **流式事件由 `anthropic_stream.py` 生成，不再用已安装的 LiteLLM 1.82 的 `AnthropicStreamWrapper`。** 那一版的事件队列是类级共享的
+  （并发的两条流会互相收到对方的事件），切换内容块时丢掉触发块（工具名和首段参数同块到达时参数丢失），
+  `reasoning_content` 被放进 text 块。LiteLLM 主干已重写这部分但不在锁定的版本里；这里的规则照主干和 new-api 的
+  `to_claude_messages_resp`：同一时刻只开一个块，某类内容第一次出现时开块，每个工具调用开一个 `tool_use` 块并带上同块到达的参数，
+  `reasoning_content` 进 `thinking` 块。升级 LiteLLM 后可以换回它的实现。
+- **上游沉默时每 10 秒发一条 `ping`**（new-api 的 `StartStreamKeepAlive` 同样是 10 秒）。长思考时这可能是流上唯一的字节。
+- **用量按 Anthropic 的口径报告**：`input_tokens` 不含缓存命中，`cache_read_input_tokens`、`cache_creation_input_tokens` 单列，流式和整段一致。
+- **整段响应**：`id` 是 `msg_…`，`model` 是调用方用的名字，`content_filter` 映射为 `refusal`，不输出空的 text 块和 LiteLLM 的私有字段。
+- **请求清理**：`messages` 里的 `system` 条目并入 `system`（Claude Code 对不认识的模型名会这样发）；`stop_sequences` 转成 `stop`；
+  `metadata.user_id` 记为调用记录的终端用户；纯文本 `document` 转成文本，PDF 转成 chat completions 的 `file` 部件；
+  OpenAI 协议上游不认识的字段（`top_k`、`thinking`、`output_config`、`context_management`、`service_tier` 等）和
+  只能在 Anthropic 侧执行的托管工具（bash、web search 等）不发给上游。`thinking` 的预算已由适配器换算成 `reasoning_effort`。
+- **`POST /v1/messages/count_tokens`**：用 LiteLLM 的 `token_counter` 在本地估算，返回 `{"input_tokens": n}`；校验 Key 和模型权限，
+  不调用上游，不写调用记录。这是估算值，不是上游分词器的结果。
+- **`GET /v1/models`** 在请求带 `anthropic-version` 头时返回 Anthropic 的分页形状（`data[].type=model`、`display_name`、`created_at`、
+  `has_more`、`first_id`、`last_id`），new-api 用同样的判断。
+- **错误**：错误体带 `request_id`，响应同时带 `request-id` 头（Anthropic SDK 读这个名字）；504 的类型是 `timeout_error`；
+  `/v1/messages` 下未知路径的 404/405 也用 Anthropic 的信封。
 
 - 认证：除 `Authorization: Bearer` 外也接受 `x-api-key`（三个端点都接受）。
 - 选部署、换部署重试、限额、调用记录、费用与 `/v1/chat/completions` 完全相同；调用记录的 `endpoint` 是 `messages`。
@@ -222,7 +243,9 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
   上游的 4xx 保留它的 `message`。流到一半失败时以一条 `error` 事件结束。
 - 流式时网关总是让上游返回用量，因为 Messages 格式在最后的 `message_delta` 里报告用量。
 - `litellm` 导入要几秒，所以按需加载，不在数据面导入时加载；`messages_api_warm_up` 为真时启动后在后台预先加载。
-- 没有做 `/v1/messages/count_tokens`。上游本身是 Anthropic 协议的厂商仍然不在转发规则里。
+- 还没有做的：上游本身是 Anthropic 协议时的原生透传（见第 11 节）；`tool_result.is_error` 不会传给上游；
+  多个工具调用的参数交错到达时，后到的那段会被丢弃并记一条警告（OpenAI 协议的上游实际按顺序发）。
+- 只用受控的假上游和真实 Anthropic SDK 验证过，没有对真实上游或真实 Claude Code 跑过。
 
 ### 为什么透传而不是经过模型驱动
 
@@ -565,6 +588,14 @@ Key 范围里的对应 ID 保留，管理页面显示为已失效。
 
 ## 11. 未决事项
 
+**待做：Anthropic 协议上游的原生透传（2026-11-26 记录）。** 现在转发规则只有 OpenAI 协议，上游是 Anthropic 本家或兼容
+Anthropic 协议的厂商时，`/v1/messages` 的请求会先转成 chat completion 再由上游转回去，`cache_control`、带签名的思考块、
+托管工具都过不去。参考实现都是"上游说 Anthropic 协议就原样透传"：new-api `relay/channel/claude/adaptor.go`
+（`ConvertClaudeRequest` 原样返回，设 `x-api-key`，`anthropic-version` 缺省 `2023-06-01`，合并转发 `anthropic-beta`）、
+Bifrost `integrations/anthropic.go` 的 `checkAnthropicPassthrough`、LiteLLM 主干 `messages/native/handler.py`。
+要补的是：转发规则加协议标记和 `messages` 端点；转发 `anthropic-version` / `anthropic-beta`；按 `message_start` / `message_delta`
+读用量的解析器；价格里加缓存写入价。另外 LiteLLM 锁在 `~=1.82.0`，升级后请求侧的清理和流式转换可以换回它的实现。
+
 **待做：预算告警（2026-11-25 记录，有需求时再做）。** 现在只有 Token 配额：用完即拒绝，管理页面上配额条超过 80% 变成警告色，
 没有任何主动通知，也没有按花费（美元）设的预算。要补的内容和可以照搬的设计：
 
@@ -594,7 +625,7 @@ Key 范围里的对应 ID 保留，管理页面显示为已失效。
 | 失败按限流、凭据、额度、模型不存在、瞬时错误、超时分类；健康可以只从真实流量得出 | [Bifrost `failureclass.go`](https://github.com/maximhq/bifrost/blob/main/core/failureclass.go)（2026-11-25 核对） |
 | 429 默认不计入熔断或离群 | [Portkey Circuit Breaker](https://portkey.ai/docs/product/ai-gateway/circuit-breaker)、[Envoy Outlier Detection](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/outlier) |
 | 轮换保留 Key 本身，旧密钥有宽限期 | LiteLLM `/key/{key}/regenerate` 的 `grace_period`（同上） |
-| Anthropic 协议入口用现成的转换器，不自己写 | [LiteLLM Anthropic adapter](https://github.com/BerriAI/litellm/tree/main/litellm/llms/anthropic/experimental_pass_through/adapters)（同上）；[new-api `relay-router.go`](https://github.com/QuantumNous/new-api/blob/main/router/relay-router.go) 同样在 OpenAI 协议渠道前提供 `/v1/messages` |
+| Anthropic 协议入口的请求和整段响应用现成的转换器；流式事件、ping、模型列表形状照 LiteLLM 主干、new-api、Bifrost 和 [Claude Code 网关要求](https://code.claude.com/docs/en/llm-gateway-protocol) | [LiteLLM Anthropic adapter](https://github.com/BerriAI/litellm/tree/main/litellm/llms/anthropic/experimental_pass_through/adapters)（同上）；[new-api `relay-router.go`](https://github.com/QuantumNous/new-api/blob/main/router/relay-router.go) 同样在 OpenAI 协议渠道前提供 `/v1/messages` |
 | 运行时拉取价格表，包里那份做兜底，校验后才替换 | [LiteLLM `get_model_cost_map.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm_core_utils/get_model_cost_map.py)（同上） |
 | 同一个名字下的多个模型是它的部署；`order` 先低后高、`weight` 加权随机；失败后冷却 5 秒，条件按状态码和一分钟失败率 | [LiteLLM `cooldown_handlers.py`](https://github.com/BerriAI/litellm/blob/main/litellm/router_utils/cooldown_handlers.py)、[`simple_shuffle.py`](https://github.com/BerriAI/litellm/blob/main/litellm/router_strategy/simple_shuffle.py)（随依赖安装的版本，2026-11-25 核对）；[new-api 渠道优先级与权重](https://github.com/QuantumNous/new-api) |
 | 调用记录里保留每一次尝试 | [Bifrost 日志的 `attempt_trail`](https://github.com/maximhq/bifrost) |
