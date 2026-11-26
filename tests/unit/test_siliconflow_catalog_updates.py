@@ -19,7 +19,7 @@ def test_four_models_have_exact_identifiers_contexts_and_capabilities() -> None:
         python_models = [model for model in factory["llm"] if model["llm_name"] == name]
         assert len(native_models) == len(python_models) == 1
         assert native_models[0]["max_tokens"] == [1048576, 1048576, 262144, 204800][index]
-        assert python_models[0]["max_tokens"] == [1000000, 1000000, 262000, 205000][index]
+        assert python_models[0]["max_tokens"] == [1048576, 1048576, 262000, 200000][index]
         assert native_models[0]["model_types"] == (["chat", "vision"] if index == 2 else ["chat"])
         assert python_models[0]["mdl_type"] == (["image2text", "chat"] if index == 2 else "chat")
         assert python_models[0]["is_tools"] is True
@@ -36,7 +36,7 @@ def test_public_catalog_exposes_pro_models_with_exact_capabilities(client: TestC
     for index, name in enumerate(NAMES):
         models = [model for model in payload["data"]["items"] if model["model_name"] == name]
         assert len(models) == 1
-        assert models[0]["max_tokens"] == [1000000, 1000000, 262000, 205000][index]
+        assert models[0]["max_tokens"] == [1048576, 1048576, 262000, 200000][index]
         assert models[0]["model_types"] == (["image2text", "chat"] if index == 2 else ["chat"])
         assert models[0]["is_tools"] is True
         if discovery:

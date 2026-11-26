@@ -1,8 +1,6 @@
 """Production catalog, probe selection and credential-safe provider failures."""
 
-import json
 from contextlib import asynccontextmanager
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -20,11 +18,11 @@ from common import settings
 from common.app_config import get_factory_llm_infos
 
 
-def test_openai_catalog_matches_go_and_excludes_retired_or_incompatible_models(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openai_catalog_lists_current_models_and_excludes_retired_or_incompatible_ones(monkeypatch: pytest.MonkeyPatch) -> None:
     factory = next(item for item in get_factory_llm_infos() if item["name"] == "OpenAI")
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [factory])
     models = {model.model_name: model for model in model_provider_service.catalog("OpenAI")}
-    excluded = {"gpt-3.5-turbo", "gpt-3.5-turbo-16k-0613", "gpt-4.1-nano", "gpt-4.5-preview", "gpt-4-32k", "o4-mini-high", "gpt-5.2-pro"}
+    excluded = {"gpt-3.5-turbo", "gpt-3.5-turbo-16k-0613", "gpt-4.1-nano", "gpt-4.5-preview", "gpt-4-32k", "o4-mini-high", "gpt-5.2-pro", "gpt-5.2", "gpt-5", "gpt-5.1"}
     assert not models.keys() & excluded
     assert factory["default_probe_model"] == "gpt-6-luna"
     assert models[factory["default_probe_model"]].model_types[0] == "chat"
@@ -33,13 +31,11 @@ def test_openai_catalog_matches_go_and_excludes_retired_or_incompatible_models(m
     assert all(not model.is_tools for name, model in models.items() if name.startswith("gpt-6"))
     assert models["gpt-transcribe"].model_types == ["speech2text"]
     assert models["gpt-transcribe"].max_tokens == models["whisper-1"].max_tokens == 0
-    go = json.loads((Path(__file__).resolve().parents[2] / "configs/models/openai.json").read_text())
-    assert len(go["models"]) == len(models)
-    types = {"asr": "speech2text", "vision": "image2text"}
-    for model in go["models"]:
-        declaration = models[model["name"]]
-        assert model["max_tokens"] == declaration.max_tokens
-        assert [types.get(kind, kind) for kind in model["model_types"]] == declaration.model_types
+    # The Go catalog follows upstream commit by commit and is not compared here.
+    for name in ("gpt-6.2-sol", "gpt-6.2-astra"):
+        assert models[name].max_tokens == 1050000
+        assert models[name].model_types == ["chat", "image2text"]
+    assert len(models) == 19
 
 
 @pytest.mark.parametrize(

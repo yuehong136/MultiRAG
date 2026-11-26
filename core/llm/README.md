@@ -5,16 +5,30 @@
 [`chat_model/base.py`](./chat_model/base.py) 与 `chat_model/models/` 仍提供同步入口。
 排查模型行为时先确认实际注册和调用方，不只按模型文件名定位。
 
+## 内置目录的取舍
+
+`configs/llm_factories.json` 只是新建实例时的候选列表，调整它不删除租户已保存的模型。
+2026-11-26 按 RAGFlow Go 侧 `conf/models/*.json`（上游 `9b18b04df`）整体刷新：
+
+- 对话与图像理解模型只保留 2026 年及之后发布的；上游有而本地没有的同厂商新模型一并加入，上下文长度以上游为准。
+- 嵌入、重排、语音模型没有按年份清理，只去掉已被同系列新版本取代的旧版本。
+- 转售类厂商（NVIDIA、GiteeAI、DeepInfra、Jiekou.AI、NovitaAI、302.AI、CometAPI、n1n、FuturMix）改为上游当前列表。
+- 一个厂商的对话模型全部早于 2026 时，保留上游当前仍列出的那些（TokenPony、Replicate、GiteeAI、DeepInfra）；
+  Azure-OpenAI 上游不再内置候选，本地同样清空，由部署名登记。
+- XunFei Spark 的驱动按模型名映射协议版本，Tencent Hunyuan 上游已换接入地址，这两家不引入上游的新名字。
+- 上游新增而本地没有驱动的厂商不在此列。
+
 ## OpenAI 内置目录
 
 2026-10-29 按 [OpenAI 模型目录](https://developers.openai.com/api/docs/models)和
 [退役公告](https://developers.openai.com/api/docs/deprecations)核对。
 Python 使用 `configs/llm_factories.json`，并行 Go 实现使用
-`configs/models/openai.json`；两份声明的模型名、能力与上下文保持一致，沿用各自 JSON schema。
+`configs/models/openai.json`，沿用各自 JSON schema。2026-11-26 起 Python 目录先行更新，
+Go 目录随上游提交逐步跟进，两份不再要求逐项一致。
 RAGFlow Go 的参照入口是 `conf/models/openai.json`，不是 Python 总目录；供应商声明仍需与官方接口核对。
 
-内置聊天目录保留 GPT-6 / 6.1、GPT-5.6、5.5、5.4 / mini 和 5.2。
-不再为新实例列出 GPT-3.5、GPT-4 系列、旧 o 系列、已弃用的 GPT-5 / 5.1 / 5.4-nano
+内置聊天目录保留 GPT-6 / 6.1 / 6.2、GPT-5.6、5.5 和 5.4 / mini。
+不再为新实例列出 GPT-3.5、GPT-4 系列、旧 o 系列、2026 年之前发布的 GPT-5 / 5.1 / 5.2、已弃用的 5.4-nano
 以及 ChatGPT 专用别名。`gpt-5.2-pro` 只支持 Responses，当前 Chat Completions 适配器不列出它。
 这只调整内置候选，不删除租户已保存的模型，也不更换其默认模型。
 
@@ -22,6 +36,9 @@ RAGFlow Go 的参照入口是 `conf/models/openai.json`，不是 Python 总目�
 GPT-6.1 Terra 与 GPT-6 Astra 的工具调用需要 Responses；GPT-6 Sol / Luna 的
 Chat Completions 工具调用要求 `reasoning_effort=none`。当前目录的 `is_tools` 无法表达
 这些条件，因此 GPT-6 系列仅声明聊天/图像能力，暂不声明工具能力。
+2026-11-26 增加 [`gpt-6.2-sol`](https://developers.openai.com/api/docs/models/gpt-6.2-sol) 与
+[`gpt-6.2-astra`](https://developers.openai.com/api/docs/models/gpt-6.2-astra)：上下文 1,050,000、输出 128,000、文本与图像输入；
+两者拒绝 `reasoning_effort=none`，同样不声明工具能力。
 聊天请求过滤 GPT-6 不支持的采样参数，保持调用方配置不变；接口限制见
 [官方兼容说明](https://developers.openai.com/api/docs/guides/latest-model#update-api-and-model-parameters)。
 Go 的 GPT-5 / GPT-6 请求同样省略采样参数，输出上限使用 `max_completion_tokens`，

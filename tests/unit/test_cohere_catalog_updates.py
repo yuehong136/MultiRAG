@@ -17,36 +17,39 @@ NEW_CHAT = {
     "command-r-plus-08-2024": 131072,
     "command-r-08-2024": 131072,
 }
-LEGACY = {
+KEPT = {
+    "embed-english-v3.0",
+    "embed-english-light-v3.0",
+    "embed-multilingual-v3.0",
+    "embed-multilingual-light-v3.0",
+    "rerank-english-v3.0",
+    "rerank-multilingual-v3.0",
+}
+RETIRED = {
     "command-r-plus",
     "command-r",
     "command",
     "command-nightly",
     "command-light",
     "command-light-nightly",
-    "embed-english-v3.0",
-    "embed-english-light-v3.0",
-    "embed-multilingual-v3.0",
-    "embed-multilingual-light-v3.0",
     "embed-english-v2.0",
     "embed-english-light-v2.0",
     "embed-multilingual-v2.0",
-    "rerank-english-v3.0",
-    "rerank-multilingual-v3.0",
     "rerank-english-v2.0",
     "rerank-multilingual-v2.0",
 }
 
 
-def test_python_active_catalog_retains_old_models_and_only_supported_capabilities() -> None:
+def test_python_active_catalog_lists_current_models_and_only_supported_capabilities() -> None:
     factory = next(item for item in get_factory_llm_infos() if item["name"] == "Cohere")
     models = {model.model_name: model for model in catalog("Cohere")}
-    assert len(models) == len(factory["llm"]) == 29
-    assert LEGACY <= models.keys()
+    assert len(models) == len(factory["llm"]) == 11
+    assert KEPT <= models.keys()
+    # Chat models released before 2026 and the v2 embedding/rerank generation are no longer offered.
+    assert not models.keys() & (RETIRED | (NEW_CHAT.keys() - {"command-a-plus-05-2026"}))
     assert all("mdl_type" in row and "model_type" not in row for row in factory["llm"])
-    for name, limit in NEW_CHAT.items():
-        assert models[name].max_tokens == limit and models[name].model_types == ["chat"]
-        assert models[name].is_tools is (name not in {"command-a-translate-08-2025", "command-a-vision-07-2025"})
+    chat = models["command-a-plus-05-2026"]
+    assert chat.max_tokens == NEW_CHAT["command-a-plus-05-2026"] and chat.model_types == ["chat"] and chat.is_tools is True
     assert models["embed-v4.0"].max_tokens == 131072 and models["embed-v4.0"].model_types == ["embedding"]
     for name in ("rerank-v4.0-pro", "rerank-v4.0-fast", "rerank-v3.5"):
         assert models[name].model_types == ["rerank"]
