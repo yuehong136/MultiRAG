@@ -804,6 +804,16 @@ def test_gateway_limits_refuse_and_quota_survives_a_restart(owned_engine: Engine
         assert {name: week["totals"][name] for name in ("requests", "errors", "total_tokens", "usage_unknown")} == {"requests": 11, "errors": 4, "total_tokens": 35, "usage_unknown": 4}
         assert week["series"][-1]["requests"] == 11 and week["top_models"] == overview["top_models"]
         assert {item["key_name"]: item["total_tokens"] for item in week["top_keys"]} == {"rate-limited": 15, "token-limited": 5, "quota-limited": 15}
+        # Each bucket also splits its tokens by direction and its calls by model, and says how long answers took.
+        for window in (overview, week):
+            assert window["series_models"] == [{"model_id": chat_id, "name": "qwen-upstream", "provider": "VLLM"}]
+            assert sum(item["prompt_tokens"] + item["completion_tokens"] for item in window["series"]) == window["totals"]["total_tokens"]
+            assert sum(item["models"].get(chat_id, {"requests": 0})["requests"] for item in window["series"]) == 11
+            assert sum(item["models"].get(chat_id, {"total_tokens": 0})["total_tokens"] for item in window["series"]) == 35
+            busy = next(item for item in reversed(window["series"]) if item["requests"])
+            assert busy["latency"]["p50_ms"] is not None and busy["latency"]["p50_ms"] <= busy["latency"]["p95_ms"]
+            assert window["totals"]["duration_p50_ms"] is not None and window["totals"]["duration_p50_ms"] <= window["totals"]["duration_p95_ms"]
+            assert all(item["latency"] is None for item in window["series"] if not item["requests"])
 
         # The operator prices the model; later calls carry their cost.
         assert admin.patch(f"{_PREFIX}/catalog/models/{chat_id}", json={"output_cost_per_token": "0.000002"}).status_code == 422

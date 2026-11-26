@@ -388,6 +388,9 @@ async def revoke_key(db: AsyncSession, tenant_id: str, actor_id: str, key_id: st
 
 # --- overview ----------------------------------------------------------------
 
+# The key under which a bucket sums every model outside the window's busiest five.
+OTHER_MODELS = "other"
+
 
 def public_base_url(config: ModelGatewayConfig) -> str | None:
     """Where callers reach the data plane, when the server can tell."""
@@ -444,8 +447,17 @@ async def _usage_from_logs(db: AsyncSession, tenant_id: str, bucket: str, start:
     truncated = func.date_trunc(bucket, func.timezone("UTC", log.started_at))
     buckets = {
         row[0].replace(tzinfo=UTC): row[1:]
-        for row in (await db.execute(select(truncated, func.count(), failures, _zero(log.total_tokens), _zero(log.cost)).where(in_window).group_by(truncated))).all()
+        for row in (
+            await db.execute(
+                select(truncated, func.count(), failures, _zero(log.total_tokens), _zero(log.cost), _zero(log.prompt_tokens), _zero(log.completion_tokens)).where(in_window).group_by(truncated)
+            )
+        ).all()
     }
+    by_model: dict[datetime, dict[str, tuple[int, int, float]]] = {}
+    for at, model_id, model_requests, tokens, model_spend in (
+        await db.execute(select(truncated, log.upstream_model_id, func.count(), _zero(log.total_tokens), _zero(log.cost)).where(in_window).group_by(truncated, log.upstream_model_id))
+    ).all():
+        by_model.setdefault(at.replace(tzinfo=UTC), {})[model_id or ""] = (int(model_requests), int(tokens), float(model_spend))
     ranking = (_zero(log.total_tokens).desc(), func.count().desc())
     models = (
         await db.execute(
@@ -460,7 +472,7 @@ async def _usage_from_logs(db: AsyncSession, tenant_id: str, bucket: str, start:
         await db.execute(select(log.key_id, func.max(log.key_name), func.count(), _zero(log.total_tokens), _zero(log.cost)).where(in_window).group_by(log.key_id).order_by(*ranking).limit(5))
     ).all()
     previous = await db.scalar(select(func.count()).select_from(log).where(log.tenant_id == tenant_id, log.started_at >= start - (end - start), log.started_at < start))
-    return {"totals": totals, "buckets": buckets, "models": models, "keys": keys, "previous": previous}
+    return {"totals": totals, "buckets": buckets, "by_model": by_model, "models": models, "keys": keys, "previous": previous}
 
 
 async def _usage_from_days(db: AsyncSession, tenant_id: str, start: datetime, days: int) -> dict[str, Any]:
@@ -482,8 +494,19 @@ async def _usage_from_days(db: AsyncSession, tenant_id: str, start: datetime, da
     ).one()
     buckets = {
         datetime.combine(row[0], datetime.min.time(), tzinfo=UTC): row[1:]
-        for row in (await db.execute(select(day.date, _zero(day.api_requests), _zero(day.failed_requests), _zero(day.total_tokens), _zero(day.spend)).where(in_window).group_by(day.date))).all()
+        for row in (
+            await db.execute(
+                select(day.date, _zero(day.api_requests), _zero(day.failed_requests), _zero(day.total_tokens), _zero(day.spend), _zero(day.prompt_tokens), _zero(day.completion_tokens))
+                .where(in_window)
+                .group_by(day.date)
+            )
+        ).all()
     }
+    by_model: dict[datetime, dict[str, tuple[int, int, float]]] = {}
+    for date, model_id, model_requests, tokens, model_spend in (
+        await db.execute(select(day.date, day.model_id, _zero(day.api_requests), _zero(day.total_tokens), _zero(day.spend)).where(in_window).group_by(day.date, day.model_id))
+    ).all():
+        by_model.setdefault(datetime.combine(date, datetime.min.time(), tzinfo=UTC), {})[model_id] = (int(model_requests), int(tokens), float(model_spend))
     ranking = (_zero(day.total_tokens).desc(), _zero(day.api_requests).desc())
     models = (
         await db.execute(
@@ -501,7 +524,31 @@ async def _usage_from_days(db: AsyncSession, tenant_id: str, start: datetime, da
     ).all()
     # The window before this one: the same number of whole days.
     previous = await db.scalar(select(_zero(day.api_requests)).where(day.tenant_id == tenant_id, day.date >= start.date() - timedelta(days=days), day.date < start.date()))
-    return {"totals": totals, "buckets": buckets, "models": models, "keys": keys, "previous": previous}
+    return {"totals": totals, "buckets": buckets, "by_model": by_model, "models": models, "keys": keys, "previous": previous}
+
+
+def _milliseconds(value: Any) -> int | None:
+    return round(float(value)) if value is not None else None
+
+
+async def _latency(db: AsyncSession, in_window: Any, bucket: str) -> tuple[tuple[int | None, int | None], dict[datetime, dict[str, int | None]]]:
+    """How long answered calls took: the window's median and p95, and the same per bucket with the first-token median.
+
+    Failed calls are left out: a refusal returns in milliseconds and would
+    make a slow upstream look fast. The daily sums keep no percentiles, so
+    every window reads the request logs, as far back as they are retained.
+    """
+    log = GatewayRequestLog
+    answered = and_(in_window, ~_failed())
+    p50 = func.percentile_cont(0.5).within_group(log.duration_ms)
+    p95 = func.percentile_cont(0.95).within_group(log.duration_ms)
+    first_token = func.percentile_cont(0.5).within_group(log.first_token_ms).filter(and_(log.stream.is_(True), log.first_token_ms.is_not(None)))
+    window = (await db.execute(select(p50, p95).where(answered))).one()
+    truncated = func.date_trunc(bucket, func.timezone("UTC", log.started_at))
+    rows = (await db.execute(select(truncated, p50, p95, first_token).where(answered).group_by(truncated))).all()
+    return (_milliseconds(window[0]), _milliseconds(window[1])), {
+        at.replace(tzinfo=UTC): {"p50_ms": _milliseconds(median), "p95_ms": _milliseconds(tail), "first_token_p50_ms": _milliseconds(first)} for at, median, tail, first in rows
+    }
 
 
 async def overview(db: AsyncSession, tenant_id: str, *, days: int, config: ModelGatewayConfig, data_plane: str, now: datetime | None = None) -> dict[str, Any]:
@@ -521,15 +568,40 @@ async def overview(db: AsyncSession, tenant_id: str, *, days: int, config: Model
     code = func.coalesce(log.error_code, log.error_type)
     errors_by_code = (
         await db.execute(
-            select(log.status_code, code, func.count().label("count")).where(in_window, failed).group_by(log.status_code, code).order_by(func.count().desc(), log.status_code, code).limit(3)
+            select(log.status_code, code, func.count().label("count")).where(in_window, failed).group_by(log.status_code, code).order_by(func.count().desc(), log.status_code, code).limit(6)
         )
     ).all()
 
+    (duration_p50, duration_p95), latency = await _latency(db, in_window, bucket)
+    # The charts split each bucket by the window's busiest models; every other model is one remainder.
+    ranked = [model_id for model_id, *_ in usage["models"]]
     step = timedelta(hours=1) if bucket == "hour" else timedelta(days=1)
-    series, cursor = [], start
+    series, cursor, any_other = [], start, False
     while cursor < end:
-        bucket_requests, bucket_errors, bucket_tokens, bucket_spend = usage["buckets"].get(cursor, (0, 0, 0, 0))
-        series.append({"start": cursor.isoformat(), "requests": int(bucket_requests), "errors": int(bucket_errors), "total_tokens": int(bucket_tokens), "spend": float(bucket_spend)})
+        bucket_requests, bucket_errors, bucket_tokens, bucket_spend, bucket_prompt, bucket_completion = usage["buckets"].get(cursor, (0, 0, 0, 0, 0, 0))
+        split: dict[str, dict[str, Any]] = {}
+        other = [0, 0, 0.0]
+        for model_id, (model_requests, tokens, model_spend) in usage["by_model"].get(cursor, {}).items():
+            if model_id in ranked:
+                split[model_id] = {"requests": model_requests, "total_tokens": tokens, "spend": model_spend}
+            else:
+                other = [other[0] + model_requests, other[1] + tokens, other[2] + model_spend]
+        if other[0]:
+            any_other = True
+            split[OTHER_MODELS] = {"requests": other[0], "total_tokens": other[1], "spend": other[2]}
+        series.append(
+            {
+                "start": cursor.isoformat(),
+                "requests": int(bucket_requests),
+                "errors": int(bucket_errors),
+                "total_tokens": int(bucket_tokens),
+                "prompt_tokens": int(bucket_prompt),
+                "completion_tokens": int(bucket_completion),
+                "spend": float(bucket_spend),
+                "models": split,
+                "latency": latency.get(cursor),
+            }
+        )
         cursor += step
 
     directory = await load_directory(db, tenant_id)
@@ -572,11 +644,17 @@ async def overview(db: AsyncSession, tenant_id: str, *, days: int, config: Model
             # USD; calls of models without a price add nothing.
             "spend": float(spend),
             "first_token_p50_ms": round(float(p50)) if p50 is not None else None,
+            # Of answered calls; None when the window has none.
+            "duration_p50_ms": duration_p50,
+            "duration_p95_ms": duration_p95,
         },
         "previous_requests": int(usage["previous"] or 0),
         "errors_by_code": [{"status_code": int(status), "code": error_code, "count": int(count)} for status, error_code, count in errors_by_code],
         "bucket": bucket,
         "series": series,
+        # The keys of each bucket's ``models``, in drawing order.
+        "series_models": [{"model_id": model["model_id"], "name": model["name"], "provider": model["provider"]} for model in top_models]
+        + ([{"model_id": OTHER_MODELS, "name": None, "provider": None}] if any_other else []),
         "top_models": top_models,
         "top_keys": top_keys,
         "recent_errors": [_log_view(row) for row in recent_errors],
