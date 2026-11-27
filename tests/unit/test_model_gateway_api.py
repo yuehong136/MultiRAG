@@ -57,6 +57,7 @@ def test_sdk_api_token_cannot_manage_the_gateway(enabled, monkeypatch):
 
     assert enabled.get(f"{PREFIX}/keys").status_code == 403
     assert enabled.post(f"{PREFIX}/keys", json={"name": "runner"}).status_code == 403
+    assert enabled.post(f"{PREFIX}/keys/import/apply", json={}).status_code == 403
 
 
 @pytest.mark.parametrize(("method", "path"), [("GET", "/candidates"), ("GET", "/models"), ("POST", "/models"), ("PATCH", "/models/m1"), ("DELETE", "/models/m1")])

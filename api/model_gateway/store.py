@@ -17,12 +17,12 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import GatewayDailyUsage, GatewayKey, GatewayModelHealth, GatewayRequestLog, Tenant
+from api.db.db_models import GatewayDailyUsage, GatewayImportedCredential, GatewayKey, GatewayModelHealth, GatewayRequestLog, Tenant
 from api.model_gateway import errors
 from api.model_gateway.catalog import ModelUnavailable, UpstreamTarget, resolve_upstream
 from api.model_gateway.directory import CALLABLE, load_directory
 from api.model_gateway.health import HealthResult, HealthTarget
-from api.model_gateway.keys import parse_key_id, verify_key
+from api.model_gateway.keys import import_lookup_digest, parse_key_id, verify_key
 from api.model_gateway.limits import NO_LIMITS, Limits, Quota
 from api.model_gateway.pricing import ModelPrice, resolve_price
 from api.model_gateway.usage import UNAVAILABLE, Usage
@@ -201,13 +201,6 @@ def bearer_token(authorization: str | None) -> str | None:
     return token.strip() if scheme.lower() == "bearer" and token.strip() else None
 
 
-def _previous_secret_matches(token: str, key: GatewayKey, now: datetime) -> bool:
-    """A rotated key's old secret, while its grace period lasts."""
-    if key.previous_secret_hash is None or key.previous_secret_expires_at is None or key.previous_secret_expires_at <= now:
-        return False
-    return verify_key(token, key.previous_secret_hash)
-
-
 class SqlGatewayStore:
     """``GatewayStore`` backed by the application's async session factory."""
 
@@ -216,15 +209,36 @@ class SqlGatewayStore:
 
     async def authenticate(self, authorization: str | None) -> Caller:
         token = bearer_token(authorization)
-        key_id = parse_key_id(token) if token else None
-        if token is None or key_id is None:
+        presented = token or authorization
+        if not presented:
             raise errors.invalid_api_key()
+        key_id = parse_key_id(token) if token else None
+        query = select(GatewayKey, Tenant.status).join(Tenant, Tenant.id == GatewayKey.tenant_id)
+        if key_id is not None:
+            query = query.where(GatewayKey.id == key_id)
+        else:
+            digest = import_lookup_digest(presented)
+            if digest is None:
+                raise errors.invalid_api_key()
+            query = query.join(GatewayImportedCredential, GatewayImportedCredential.key_id == GatewayKey.id).where(GatewayImportedCredential.digest == digest)
+            if token is None:
+                query = query.where(GatewayImportedCredential.allow_raw_authorization.is_(True))
         now = datetime.now(UTC)
         async with self._sessions() as db:
-            row = (await db.execute(select(GatewayKey, Tenant.status).join(Tenant, Tenant.id == GatewayKey.tenant_id).where(GatewayKey.id == key_id))).first()
-            if row is None or not (verify_key(token, row[0].secret_hash) or _previous_secret_matches(token, row[0], now)):
+            row = (await db.execute(query)).first()
+            if row is None:
                 raise errors.invalid_api_key()
             key, tenant_status = row[0], row[1]
+            accepted = [key.secret_hash]
+            if key.previous_secret_hash and key.previous_secret_expires_at and key.previous_secret_expires_at > now:
+                accepted.append(key.previous_secret_hash)
+            # An indexed spelling proves possession. Its original credential must still be current or in grace.
+            if key_id is None:
+                valid = key.import_digest in accepted
+            else:
+                valid = any(verify_key(presented, digest) for digest in accepted)
+            if not valid:
+                raise errors.invalid_api_key()
             # The secret is proven from here on, so the reason may be specific.
             if key.status != "active" or tenant_status != "1":
                 raise errors.api_key_disabled()

@@ -23,7 +23,7 @@ from api.model_gateway.keys import issue_key, redact_key, reissue_key
 from api.model_gateway.limits import Quota
 from api.model_gateway.price_refresh import refresher_of
 from api.model_gateway.pricing import resolve_price
-from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewayKeyRotate, GatewaySettingsPatch
+from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyImport, GatewayKeyPatch, GatewayKeyRotate, GatewaySettingsPatch
 from common.app_config import ModelGatewayConfig, get_app_config
 
 USAGE_GROUPS = ("key", "model", "day", "end_user")
@@ -235,7 +235,7 @@ def _key_view(row: GatewayKey, quota_used: int | None = None) -> dict[str, Any]:
         "name": row.name,
         "description": row.description,
         "tags": row.tags,
-        "redacted_key": redact_key(row.id),
+        "redacted_key": f"imported:{row.id[:8]}..." if row.import_digest and row.rotated_at is None else redact_key(row.id),
         "status": row.status,
         "expires_at": _iso(row.expires_at),
         "allow_all_models": row.allow_all_models,
@@ -310,15 +310,15 @@ async def list_keys(db: AsyncSession, tenant_id: str) -> list[dict[str, Any]]:
     return [_key_view(row, usage.get(row.id)) for row in rows]
 
 
-async def create_key(db: AsyncSession, tenant_id: str, actor_id: str, body: GatewayKeyCreate) -> dict[str, Any]:
-    issued = issue_key()
-    row = GatewayKey(
-        id=issued.key_id,
+async def build_key(db: AsyncSession, tenant_id: str, actor_id: str, body: GatewayKeyCreate | GatewayKeyImport, key_id: str, secret_hash: str) -> GatewayKey:
+    """Build an unpersisted key with the same tenant scope checks for creation and import."""
+    return GatewayKey(
+        id=key_id,
         tenant_id=tenant_id,
         name=body.name,
         description=body.description,
         tags=body.tags,
-        secret_hash=issued.secret_hash,
+        secret_hash=secret_hash,
         status="active",
         expires_at=body.expires_at,
         allow_all_models=body.allow_all_models,
@@ -331,6 +331,11 @@ async def create_key(db: AsyncSession, tenant_id: str, actor_id: str, body: Gate
         quota_period=body.quota_period,
         created_by=actor_id,
     )
+
+
+async def create_key(db: AsyncSession, tenant_id: str, actor_id: str, body: GatewayKeyCreate) -> dict[str, Any]:
+    issued = issue_key()
+    row = await build_key(db, tenant_id, actor_id, body, issued.key_id, issued.secret_hash)
     db.add(row)
     await db.flush()
     # The only place the plaintext ever leaves the process.

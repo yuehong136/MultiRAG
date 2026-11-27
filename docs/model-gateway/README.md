@@ -157,6 +157,46 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 `/key/regenerate` 的 `grace_period`；宽限期为 0 时旧密钥立即失效。只保留最近一次被换下的密钥，再次轮换会让更早的立即失效；
 撤销 Key 时一并清掉。`rotated_at` 记录最近一次轮换的时间。
 
+### 迁移已有调用方 Key
+
+平台管理员在 Web 的「设置 → 模型网关 → API Key → 导入已有 Key」下载 JSON 模板、选择清单、预览结果，再确认整批导入。Web 限当前管理员自己的租户，每批最多 1,000 条，文件最大 2 MiB。模板默认停用且未授权模型，请按原策略填写。网页接受下述摘要清单，也支持用 `key` 代替 `sha256`；通过 HTTPS 或 localhost 打开时，浏览器可将完整旧 Key 就地计算成摘要。导入接口只接受摘要。选定文件后请核对预览中的名称、状态和模型范围。遇到冲突时，修正清单并重新预览。
+
+具备目标数据库运维权限的管理员也可以用 CLI 导入相同格式的摘要清单。两种入口共用冲突校验和事务写入逻辑。导入成功的记录进入所属租户的 Key 列表，沿用网关的模型范围、限额、用量、停用、撤销和轮换。管理员第一次轮换会签发标准 `sk-mrag-` 密钥，原调用方可以在设定的宽限期内完成替换。
+
+在受控源环境里，对客户端实际发送的**完整 token**（含其前缀，去掉 HTTP 的 `Bearer `）按 UTF-8 计算 SHA-256，写入清单的 `sha256`。转换器可调用 `api.model_gateway.keys.import_lookup_digest` 验证格式并计算摘要。可导入主体为 32–256 个 Bearer 字符，末尾可另带最多两个 `=`，原生网关与 SDK 命名空间保留。默认使用 Bearer 或 `x-api-key`。
+
+若源系统接受同一凭据的多种写法，可将已核实为同等权限的其他完整写法逐个计算摘要，放入可选的 `alternate_sha256` 列表。若源系统允许直接将 token 作为 Authorization 头的值，可在该条记录设置 `allow_raw_authorization: true`。所有写法共用一条网关记录及其额度、宽限期、停用和撤销状态；每种写法的摘要在所有租户间唯一。具有额外语义的后缀（例如管理员指定渠道）不能登记为等价写法。
+
+下面是一份清单的结构。将示例占位值替换为真实的目标租户 ID、目录模型 ID 和 64 位小写十六进制摘要。每个来源应保持稳定的实例名和记录 ID，同名 Key 通过来源 ID 区分；同一租户内仍需满足现有名称唯一规则。
+
+```json
+{
+  "source": "previous-gateway",
+  "keys": [{
+    "source_id": "42",
+    "tenant_id": "<target tenant>",
+    "name": "support-bot",
+    "description": "客服应用",
+    "sha256": "<digest of the complete bearer token>",
+    "status": "active",
+    "expires_at": null,
+    "allowed_model_ids": ["<registered model id>"],
+    "unresolved": []
+  }]
+}
+```
+
+在已升级数据库的后端环境中执行。预览只查询数据库；加 `--apply` 后，所有条目通过才会在同一事务写入。
+
+```bash
+python -m api.model_gateway.import_keys migration.json
+python -m api.model_gateway.import_keys migration.json --apply
+```
+
+清单必须显式提供状态、带时区的到期时间或 `null`，以及 `unresolved`。源转换器应把未映射的账户归属、余额、子网、模型或其他授权约束列在 `unresolved` 中；非空会阻止整批写入。保留原限制的模型应映射到具体的 `allowed_model_ids`。仅在源权限确实覆盖整个连接或未来新增模型时，才使用连接范围或 `allow_all_models`。旧系统的账户余额和本系统的周期 token 配额须单独核对。
+
+输出报告按来源 ID 列出预览、已登记及冲突条目；相同清单可重跑，管理页面随后做出的撤销、轮换和范围变更优先。源数据变动会报告冲突，需由管理员核对差异。凭据摘要跨租户唯一，撤销或轮换后仍保留来源映射以防误重新签发。历史清单和凭据摘要留在部署环境。需要回退到旧 schema 时，应使用导入前配套备份。
+
 ### 调用记录 `GatewayRequestLog`（`t_ai_gateway_request_logs`）
 
 | 字段 | 含义 |
@@ -394,6 +434,7 @@ Key 的形态是 `sk-mrag-<key_id>-<secret>`：`key_id` 明文，用来查行；
 - 调用方用 `Authorization: Bearer <key>`。服务端按 `key_id` 查行，用常量时间比较校验
   `secret_hash`，再检查状态和有效期。首期每个请求直接读库，撤销和范围收窄对新请求立即生效；
   进行中的流不被中断。
+- 已迁入的 Key 通过唯一的摘要索引定位同一张 Key 表，再走上述校验；摘要索引单独命中不会授权。
 - `GET /v1/models` 和实际调用使用同一个授权判断函数。
 - 调用方只能提交目录里的模型名（第 3 节）。请求里不能指定上游地址、上游凭据或内部模型 ID。
 - 三类凭据互不通用：网关 Key 只能调用数据面；既有 RAG SDK 令牌和登录态不能调用数据面；
@@ -493,6 +534,7 @@ OpenAI 兼容端点继续接收目录中的调用名称。
 | `PATCH /api/v1/model-gateway/catalog/instances/{instance_id}` | 开放或关闭一个连接下的全部模型 |
 | `PATCH /api/v1/model-gateway/settings` | 设置新登记模型的默认开放状态 |
 | `GET` / `POST /api/v1/model-gateway/keys`，`PATCH .../keys/{id}`，`POST .../keys/{id}/revoke` | 创建、修改元数据和可调用范围、启停、撤销 Key |
+| `POST /api/v1/model-gateway/keys/import/preview`，`POST .../keys/import/apply` | 平台管理员预览或原子导入当前租户的摘要清单，见[迁移已有调用方 Key](#迁移已有调用方-key) |
 | `POST /api/v1/model-gateway/keys/{key_id}/rotate` | 轮换：换新密钥并只在本次响应返回；请求体可带 `grace_period_seconds`（0 到 30 天，默认 0），旧密钥在这段时间内仍可用 |
 | `GET /api/v1/model-gateway/overview` | 接入地址、数据面健康状态、计数，以及最近 1 / 7 / 30 天的请求、失败、token、首字时延中位数、时间序列（每个时间桶的请求数、失败数、`total_tokens`、`prompt_tokens`、`completion_tokens` 和 `spend`；`models` 按窗口内最忙的 5 个模型拆分请求数、token 和费用，其余合并在 `other` 下，键的顺序见 `series_models`；`latency` 是该桶内成功调用的耗时 P50、P95 和首字中位数，没有成功调用时为 `null`），`totals` 另有成功调用的 `duration_p50_ms` / `duration_p95_ms`（耗时分位只能从调用记录算，按日汇总表里没有，所以回看范围受调用记录保留期限制；失败的调用不计入，拒绝在几毫秒内返回会把慢的上游算快）、Top 模型与 Key（含 `spend`）、最近失败；`totals.spend` 是窗口内的美元费用 |
 | `GET /api/v1/model-gateway/logs` | 查询调用记录；`status_code` 按确切的状态码筛选，可与 `outcome` 同用 |
@@ -619,6 +661,8 @@ Bifrost `integrations/anthropic.go` 的 `checkAnthropicPassthrough`、LiteLLM �
 
 | 取舍 | 参考 |
 |---|---|
+| 承接调用方已有 Key，复用 Key 管理和轮换。管理员通过摘要清单导入 | [LiteLLM v1.111.0 自定义凭据校验](https://github.com/BerriAI/litellm/blob/e3370c9d6152cc4407a55e06c101e3c7dd4168ab/litellm/proxy/management_endpoints/key_management_endpoints.py#L1842-L1859)、[Unkey SDK 的 MigrateKeys](https://pkg.go.dev/github.com/unkeyed/sdks/api/go/v3#Keys.MigrateKeys)（2026-11-27 核对） |
+| 迁移 CLI 逐条报告未映射约束。MultiRAG 遇到未解决项时阻止整批写入 | [Bifrost 迁移 CLI 的归属、预算与未映射字段](https://github.com/maximhq/bifrost/blob/172617bb045c6f43d697843c115e64f0155ed143/scripts/bifrost-migration-cli/virtualkey.go#L18-L107)（2026-11-27 核对） |
 | 限额计数放 Redis，一个 Lua 脚本先查后记，固定一分钟窗口，Redis 不可用时退回进程内 | [LiteLLM `parallel_request_limiter_v3.py`](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter_v3.py)（随依赖安装的版本，2026-11-25 核对） |
 | 探测是 `max_tokens: 1` 的真实请求，结果落表 | [LiteLLM `health_check.py`](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/health_check.py)、`LiteLLM_HealthCheckTable`（同上） |
 | 推理模型的探测用 `max_completion_tokens: 16`；被限流不算故障，只有 401 和额度字样才算账号问题 | [new-api `channel-test.go`](https://github.com/QuantumNous/new-api/blob/main/controller/channel-test.go)、[`operation_setting.go`](https://github.com/QuantumNous/new-api/blob/main/setting/operation_setting/operation_setting.go)（2026-11-25 核对） |

@@ -9,16 +9,19 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import get_async_db
+from api.db.db_models import User, get_async_db
 from api.db.model_contract import ModelID
 from api.identity.principal import AuthenticationSource
 from api.model_gateway import management
-from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyPatch, GatewayKeyRotate, GatewaySettingsPatch
+from api.model_gateway.import_keys import import_keys
+from api.model_gateway.schemas import CatalogInstancePatch, CatalogModelPatch, GatewayKeyCreate, GatewayKeyImportBatch, GatewayKeyPatch, GatewayKeyRotate, GatewaySettingsPatch
 from api.utils.api_utils import Principal, async_current_user
 from common.app_config import get_app_config
 
@@ -109,6 +112,38 @@ async def list_keys(db: AsyncSession = Depends(get_async_db), user: Principal = 
 @router.post("/keys", summary="创建 API Key；明文只在本次响应中返回", response_model=None)
 async def create_key(body: GatewayKeyCreate, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> dict[str, Any] | JSONResponse:
     return await write(db, lambda: management.create_key(db, user.id, user.id, body))
+
+
+@router.post("/keys/import/{mode}", summary="管理员预览或导入当前租户的 Key 摘要清单", response_model=None)
+async def import_gateway_keys(mode: Literal["preview", "apply"], request: Request, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(require_manager)) -> JSONResponse:
+    if not await db.scalar(select(User.is_superuser).where(User.id == user.id)):
+        raise HTTPException(status_code=403, detail="Key migration requires a platform administrator")
+    # Validate before decoding and never include rejected inputs (possibly credentials) in responses.
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > 2 * 1024 * 1024:
+            return failure(413, "Key manifest exceeds 2 MiB")
+        raw.extend(chunk)
+    try:
+        batch = GatewayKeyImportBatch.model_validate_json(raw)
+    except ValidationError as exc:
+        first = exc.errors(include_input=False, include_context=False)[0]["loc"]
+        row = first[1] + 1 if len(first) > 1 and isinstance(first[1], int) else None
+        return failure(422, f"Invalid key manifest at row {row}" if row else "Invalid key manifest")
+    if any(item.tenant_id != user.id for item in batch.keys):
+        raise HTTPException(status_code=403, detail="Key manifest belongs to another tenant")
+    try:
+        rows = await import_keys(db, batch, apply=mode == "apply", actor_id=user.id)
+        applied = mode == "apply" and all("error" not in row for row in rows)
+        if applied:
+            await db.commit()
+        return JSONResponse(result({"applied": applied, "results": rows}), headers={"Cache-Control": "no-store"})
+    except IntegrityError:
+        await db.rollback()
+        return failure(409, "Concurrent key import conflict. Preview the file again.")
+    except SQLAlchemyError:
+        await db.rollback()
+        return failure(500, "Model gateway import failed")
 
 
 @router.patch("/keys/{key_id}", summary="修改 API Key 的元数据、可调用范围、有效期或启停状态", response_model=None)

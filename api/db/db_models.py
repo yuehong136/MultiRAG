@@ -4461,6 +4461,7 @@ class GatewayKey(BaseModel):
             name="ck_gateway_keys_quota",
         ),
         sa.Index("uq_gateway_keys_tenant_name_live", "tenant_id", "name", unique=True, postgresql_where=text("status <> 'revoked'")),
+        sa.Index("uq_gateway_keys_import_source", "import_source", "import_id", unique=True, postgresql_where=text("import_source IS NOT NULL")),
         {"schema": "usr_ai"},
     )
 
@@ -4470,6 +4471,11 @@ class GatewayKey(BaseModel):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     secret_hash: Mapped[str] = mapped_column(sa.CHAR(64), nullable=False)
+    # Immutable provenance. Rotation and revocation still use the ordinary secret and status checks.
+    import_source: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    import_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    import_digest: Mapped[str | None] = mapped_column(sa.CHAR(64), nullable=True)
+    import_spec_hash: Mapped[str | None] = mapped_column(sa.CHAR(64), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     allow_all_models: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
@@ -4488,6 +4494,17 @@ class GatewayKey(BaseModel):
     rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class GatewayImportedCredential(Base):
+    """Exact wire spelling reserved for one imported key, even after revocation."""
+
+    __tablename__ = "t_ai_gateway_imported_credentials"
+    __table_args__ = {"schema": "usr_ai"}
+
+    digest: Mapped[str] = mapped_column(sa.CHAR(64), primary_key=True)
+    key_id: Mapped[str] = mapped_column(sa.ForeignKey("usr_ai.t_ai_gateway_keys.id", ondelete="CASCADE"), nullable=False)
+    allow_raw_authorization: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=sa.false())
 
 
 class GatewayRequestLog(BaseModel):

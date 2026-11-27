@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from api.db.model_contract import ModelID
 
@@ -111,14 +111,45 @@ class GatewaySettingsPatch(_Body):
     new_models_enabled: bool
 
 
-class GatewayKeyCreate(_KeyLimits):
+class GatewayKeyPolicy(_KeyLimits):
     name: KeyName
     description: Description | None = None
     tags: Tags = None
-    expires_at: Expiry = None
     allow_all_models: bool = False
     allowed_model_ids: AllowedModelIds = Field(default_factory=list)
     allowed_instance_ids: AllowedInstanceIds = Field(default_factory=list)
+
+
+class GatewayKeyCreate(GatewayKeyPolicy):
+    expires_at: Expiry = None
+
+
+ImportDigest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+class GatewayKeyImport(GatewayKeyPolicy):
+    """Target policy and source metadata supplied by a privileged migration operator."""
+
+    source_id: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    tenant_id: Annotated[str, StringConstraints(min_length=1, max_length=32)]
+    sha256: ImportDigest
+    alternate_sha256: Annotated[list[ImportDigest], Field(max_length=8)] = Field(default_factory=list)
+    allow_raw_authorization: bool = False
+    status: Literal["active", "disabled", "revoked"]
+    expires_at: AwareDatetime | None
+    # The converter must explicitly account for constraints the destination cannot enforce.
+    unresolved: list[str]
+
+    @model_validator(mode="after")
+    def _unambiguous_scope(self) -> Self:
+        if self.allow_all_models and (self.allowed_instance_ids or self.allowed_model_ids):
+            raise ValueError("choose all models or a restricted scope")
+        return self
+
+
+class GatewayKeyImportBatch(_Body):
+    source: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    keys: Annotated[list[GatewayKeyImport], Field(min_length=1, max_length=1000)]
 
 
 class GatewayKeyRotate(_Body):

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 KEY_PREFIX = "sk-mrag-"
 _KEY_ID = re.compile(r"[0-9a-f]{32}")
 _SECRET = re.compile(r"[A-Za-z0-9_-]{43}")
+_EXTERNAL_TOKEN = re.compile(r"[A-Za-z0-9._~+/-]{32,256}={0,2}", re.ASCII)
 _ID_START = len(KEY_PREFIX)
 _ID_END = _ID_START + 32
 _KEY_LENGTH = _ID_END + 1 + 43
@@ -59,6 +60,13 @@ def parse_key_id(presented: str) -> str | None:
 def verify_key(presented: str, secret_hash: str) -> bool:
     """Constant-time check of a well-formed presented key against its stored digest."""
     return hmac.compare_digest(hash_key(presented), secret_hash)
+
+
+def import_lookup_digest(token: str) -> str | None:
+    """Only opaque bearer credentials can use the import index. Reserve native namespaces."""
+    if token.startswith((KEY_PREFIX, "multirag-", "ragflow-")) or not _EXTERNAL_TOKEN.fullmatch(token):
+        return None
+    return hash_key(token)
 
 
 def redact_key(key_id: str) -> str:

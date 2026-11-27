@@ -67,3 +67,10 @@ def test_redacted_form_shows_no_secret():
     assert redacted.startswith(keys.KEY_PREFIX + issued.key_id[:8])
     assert secret not in redacted
     assert issued.key_id not in redacted
+
+
+def test_import_lookup_accepts_only_external_bearer_credentials() -> None:
+    external = "sk-" + "a" * 45
+    assert keys.import_lookup_digest(external) == keys.hash_key(external)
+    for value in (keys.issue_key().plaintext, keys.KEY_PREFIX + "a" * 48, "multirag-" + "a" * 48, "short", "a" * 257, external + " ", external + "\n"):
+        assert keys.import_lookup_digest(value) is None

@@ -12,6 +12,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import anthropic
@@ -27,7 +28,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
-from api.db.db_models import GatewayDailyUsage, GatewayKey, GatewayModelHealth, GatewayModelSetting, GatewayRequestLog, GatewaySetting
+from api.db.db_models import GatewayDailyUsage, GatewayImportedCredential, GatewayKey, GatewayModelHealth, GatewayModelSetting, GatewayRequestLog, GatewaySetting
 from api.db.services import model_provider_service
 from api.db.services.model_deletion_policy import collect_blocking_model_references
 from api.model_gateway.health import HealthChecker, HealthResult
@@ -53,7 +54,7 @@ def _no_background_work(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "price_map_refresh_hours", 0.0)
 
 
-_GATEWAY_MODELS = (GatewayModelSetting, GatewaySetting, GatewayKey, GatewayRequestLog, GatewayDailyUsage, GatewayModelHealth)
+_GATEWAY_MODELS = (GatewayModelSetting, GatewaySetting, GatewayKey, GatewayImportedCredential, GatewayRequestLog, GatewayDailyUsage, GatewayModelHealth)
 
 
 _DELTA = (
@@ -155,13 +156,16 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
     classes = ScriptDirectory.from_config(_alembic_config()).get_revision("3d5f7b9c1e2a")
     assert classes is not None and classes.down_revision == "2c4e6a8b0d1f"
     classes_revision = classes.module
+    imports = ScriptDirectory.from_config(_alembic_config()).get_revision("4e60a8ca2f17")
+    assert imports is not None and imports.down_revision == classes.revision
+    import_revision = imports.module
     journal = ResourceJournal("model_gateway_schema")
     for model_first in (False, True):
         schema = "model_gateway_" + uuid.uuid4().hex[:12]
         journal.event("reserve-schema", schema=schema, database=owned_engine.url.database, model_first=model_first)
         with owned_engine.begin() as connection:
             connection.execute(sa.schema.CreateSchema(schema))
-            _point_at(monkeypatch, connection, schema, tables_revision, catalog_revision, identity_revision, cost_revision, deployments_revision, health_revision, classes_revision)
+            _point_at(monkeypatch, connection, schema, tables_revision, catalog_revision, identity_revision, cost_revision, deployments_revision, health_revision, classes_revision, import_revision)
             if model_first:
                 metadata = sa.MetaData()
                 for model in _GATEWAY_MODELS:
@@ -206,6 +210,8 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
             health_revision.upgrade()
             classes_revision.upgrade()
             classes_revision.upgrade()
+            import_revision.upgrade()
+            import_revision.upgrade()
             _assert_schema_matches_models(connection, schema)
             health_table = sa.Table("t_ai_gateway_model_health", sa.MetaData(), autoload_with=connection, schema=schema)
             limited = {"id": "h-1", "tenant_id": "t", "model_id": "a" * 32, "status": "rate_limited", "failure_class": "rate_limit", "response_time_ms": 3, "checked_at": datetime.now(UTC)}
@@ -259,6 +265,12 @@ def test_gateway_schema_matches_models_on_both_bootstrap_paths(owned_engine: Eng
             with pytest.raises(RuntimeError, match="persisted model gateway data"):
                 catalog_revision.downgrade()
             # The older schema cannot say "rate limited": such results go, and the status rule is the old one again.
+            with connection.begin_nested() as probe:
+                connection.execute(keys.update().where(keys.c.id == "key-1").values(import_digest="b" * 64))
+                with pytest.raises(RuntimeError, match="pre-import backup"):
+                    import_revision.downgrade()
+                probe.rollback()
+            import_revision.downgrade()
             classes_revision.downgrade()
             assert connection.scalar(sa.select(sa.func.count()).select_from(health_table)) == 0
             with pytest.raises(IntegrityError), connection.begin_nested():
@@ -706,6 +718,199 @@ def test_gateway_serves_registered_models_with_scoped_keys(owned_engine: Engine)
     # Being open in the gateway, or named in a key, does not keep a model from being deleted.
     assert _run(blocking_references(embed_id)) == []
     assert _run(blocking_references(chat_id)) == []
+
+
+def test_web_key_import(owned_engine: Engine) -> None:
+    from api.db.db_models import User
+
+    owner = uuid.uuid4().hex
+    token = "sk-" + uuid.uuid4().hex
+    entry = {"tenant_id": owner, "source_id": "1", "sha256": hash_key(token), "name": "team", "description": "Team integration", "status": "active", "expires_at": None, "unresolved": []}
+    batch = {"source": owner, "keys": [entry]}
+    route = f"{_PREFIX}/keys/import"
+    with Session(owned_engine) as db:
+        db.add(tenant(owner))
+        db.add(User(id=owner, nickname="operator", email=f"{owner}@example.test", is_superuser=False))
+        db.commit()
+    with management(owned_engine, owner) as client:
+        assert client.post(f"{route}/preview", json=batch).status_code == 403
+        with Session(owned_engine) as db:
+            db.execute(sa.update(User).where(User.id == owner).values(is_superuser=True))
+            db.commit()
+        invalid = client.post(f"{route}/preview", json={"source": owner, "keys": [{**entry, "key": token}]})
+        assert invalid.status_code == 422 and token not in invalid.text and "row 1" in invalid.text
+        assert client.post(f"{route}/apply", json={"source": owner, "keys": [{**entry, "tenant_id": "other"}]}).status_code == 403
+        assert client.post(f"{route}/preview", content=b"x" * (2 * 1024 * 1024 + 1)).status_code == 413
+        preview = client.post(f"{route}/preview", json=batch)
+        assert preview.headers["Cache-Control"] == "no-store" and preview.json()["data"]["results"][0]["action"] == "would_import"
+        assert entry["sha256"] not in preview.text
+        conflicting = client.post(f"{route}/apply", json={"source": owner, "keys": [entry, entry]})
+        assert conflicting.json()["data"]["applied"] is False
+        assert client.get(f"{_PREFIX}/keys").json()["data"] == []
+        applied = client.post(f"{route}/apply", json=batch).json()["data"]
+        assert applied["applied"] and applied["results"][0]["action"] == "imported"
+        assert client.post(f"{route}/apply", json=batch).json()["data"]["results"][0]["action"] == "already_imported"
+        with Session(owned_engine) as db:
+            key = db.get(GatewayKey, applied["results"][0]["key_id"])
+            assert key and (key.created_by, key.description) == (owner, "Team integration")
+    with data_plane(owned_engine, httpx.MockTransport(_Upstream())) as gateway:
+        assert gateway.get("/v1/models", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
+def test_imported_keys_use_the_existing_gateway_lifecycle(owned_engine: Engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from api.db import db_models
+    from api.model_gateway.import_keys import main
+
+    owner = uuid.uuid4().hex
+    with Session(owned_engine) as db:
+        db.add(tenant(owner))
+        native = {
+            factory: register_model(db, owner, factory, f"direct-{i}", "chat", f"https://native-{i}.test/v1", f"native-{i}") for i, factory in enumerate(("OpenAI", "ZHIPU-AI", "Tongyi-Qianwen"))
+        }
+        bridge = register_model(db, owner, "OpenAI-API-Compatible", "bridged-chat", "chat", "https://compat.test/v1", "bridge-test")
+        register_model(db, owner, "VLLM", "private-chat", "chat", "http://models.internal:8000", "upstream-test")
+        db.commit()
+    # The real operator CLI gets only a scratch DB. NullPool avoids sharing connections between its event loops.
+    engine = create_async_engine(owned_engine.url, poolclass=sa.pool.NullPool)
+    monkeypatch.setattr(db_models, "async_session_factory", async_sessionmaker(engine, expire_on_commit=False))
+    path = tmp_path / "manifest.json"
+    tokens = ["sk-" + uuid.uuid4().hex for _ in range(3)]
+    keys = [
+        {
+            "tenant_id": owner,
+            "source_id": str(i),
+            "sha256": hash_key(token),
+            "name": f"job{i}",
+            "status": "active",
+            "allowed_model_ids": [*native.values(), bridge],
+            "expires_at": None,
+            "unresolved": [],
+        }
+        for i, token in enumerate(tokens)
+    ]
+    keys[1]["status"] = "disabled"
+    keys[2]["expires_at"] = "2000-01-01T00:00:00Z"
+    bare = tokens[0].removeprefix("sk-")
+    keys[0].update(alternate_sha256=[hash_key(bare)], allow_raw_authorization=True)
+
+    def run(rows: list[dict[str, Any]], *, apply: bool, expected: int = 0) -> list[dict[str, Any]]:
+        path.write_text(json.dumps({"source": "test-cluster", "keys": rows}), encoding="utf-8")
+        monkeypatch.setattr(sys, "argv", ["import_keys", str(path), *(["--apply"] if apply else [])])
+        assert main() == expected
+        output = capsys.readouterr().out
+        assert all(token not in output and hash_key(token) not in output for token in [*tokens, bare])
+        return json.loads(output.splitlines()[-1])["results"]
+
+    assert run(keys, apply=False)[0]["action"] == "would_import"
+    assert run([*keys, {**keys[0], "unresolved": ["owner balance"]}], apply=True, expected=1)[-1]["error"] == "unresolved_source_policy"
+    with Session(owned_engine) as db:
+        assert db.scalar(sa.select(sa.func.count()).select_from(GatewayKey)) == 0
+    imported = run(keys, apply=True)
+    key_id = imported[0]["key_id"]
+    assert all(row["action"] == "already_imported" for row in run(keys, apply=True))
+    assert run([{**keys[0], "allowed_model_ids": [], "allow_all_models": True}], apply=True, expected=1)[0]["error"] == "source_record_changed"
+    assert run([{**keys[0], "source_id": "different"}], apply=True, expected=1)[0]["error"] == "credential_already_registered"
+    fresh = {**keys[0], "source_id": "extra", "sha256": hash_key("sk-" + uuid.uuid4().hex), "alternate_sha256": []}
+    assert run([fresh], apply=True, expected=1)[0]["error"] == "name_in_use"
+    assert run([{**fresh, "tenant_id": "missing"}], apply=True, expected=1)[0]["error"] == "unknown_tenant"
+    assert "allowed_model_ids" in run([{**fresh, "name": "extra", "allowed_model_ids": [uuid.uuid4().hex]}], apply=True, expected=1)[0]["error"]
+
+    upstream = _Upstream()
+    with management(owned_engine, owner) as admin, data_plane(owned_engine, httpx.MockTransport(upstream)) as gateway:
+        original = sdk(gateway, tokens[0])
+        assert {entry.id for entry in original.models.list().data} == {"bridged-chat", "direct-0", "direct-1", "direct-2"}
+        assert gateway.get("/v1/models", headers={"Authorization": bare}).status_code == 200
+        assert sdk(gateway, bare).models.list().data
+        assert gateway.get("/v1/models", headers={"Authorization": tokens[1]}).json()["error"]["code"] == "invalid_api_key"
+        messages = [{"role": "user", "content": "hello"}]
+        for i in range(len(native)):
+            assert original.chat.completions.create(model=f"direct-{i}", messages=messages).choices[0].message.content == "hi"
+            assert (upstream.requests[-1]["url"], upstream.requests[-1]["authorization"]) == (f"https://native-{i}.test/v1/chat/completions", f"Bearer native-{i}")
+        with original.chat.completions.create(model="bridged-chat", messages=messages, stream=True) as stream:
+            assert next(stream).choices[0].delta.content == "hi"
+            list(stream)
+        assert (upstream.requests[-1]["url"], upstream.requests[-1]["authorization"]) == ("https://compat.test/v1/chat/completions", "Bearer bridge-test")
+        with pytest.raises(openai.PermissionDeniedError):
+            original.chat.completions.create(model="private-chat", messages=messages)
+        for token, code in ((tokens[1], "api_key_disabled"), (tokens[2], "api_key_expired"), (hash_key(tokens[0]), "invalid_api_key")):
+            with pytest.raises(openai.AuthenticationError) as refused:
+                sdk(gateway, token).models.list()
+            assert refused.value.code == code
+        url = f"{_PREFIX}/keys/{key_id}"
+        admin.patch(url, json={"status": "disabled"}).raise_for_status()
+        assert run(keys, apply=True)[0]["current_status"] == "disabled"
+        with pytest.raises(openai.AuthenticationError) as disabled:
+            original.models.list()
+        assert disabled.value.code == "api_key_disabled"
+        assert gateway.get("/v1/models", headers={"Authorization": bare}).status_code == 401
+        assert len(upstream.requests) == 4
+        admin.patch(url, json={"status": "active"}).raise_for_status()
+        rotated = admin.post(f"{url}/rotate", json={"grace_period_seconds": 600}).json()["data"]
+        assert original.models.list().data and sdk(gateway, rotated["key"]).models.list().data
+        assert gateway.get("/v1/models", headers={"Authorization": bare}).status_code == 200
+        assert gateway.get("/v1/models", headers={"Authorization": rotated["key"]}).status_code == 401
+        admin.post(f"{url}/rotate", json={"grace_period_seconds": 0}).raise_for_status()
+        with pytest.raises(openai.AuthenticationError):
+            original.models.list()
+        assert gateway.get("/v1/models", headers={"Authorization": bare}).status_code == 401
+        admin.post(f"{url}/revoke").raise_for_status()
+        assert run(keys, apply=True)[0]["current_status"] == "revoked"
+        with pytest.raises(openai.AuthenticationError):
+            original.models.list()
+    with Session(owned_engine) as db:
+        assert db.scalar(sa.select(GatewayKey).where(GatewayKey.id == key_id)).status == "revoked"
+        assert db.scalar(sa.select(GatewayRequestLog.key_id).where(GatewayRequestLog.status_code == 200)) == key_id
+
+
+def test_concurrent_import_cannot_assign_one_spelling_to_two_tenants(owned_engine: Engine) -> None:
+    from api.model_gateway.import_keys import import_keys
+    from api.model_gateway.schemas import GatewayKeyImportBatch
+
+    owners = [uuid.uuid4().hex for _ in range(2)]
+    with Session(owned_engine) as db:
+        db.add_all([tenant(owner) for owner in owners])
+        db.commit()
+    shared = hash_key(uuid.uuid4().hex)
+
+    async def exercise() -> None:
+        engine = create_async_engine(owned_engine.url)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        gate = asyncio.Barrier(2)
+
+        async def submit(owner: str) -> bool:
+            # A conflict on the second imported spelling must roll back both parent keys and all their spellings.
+            entries = [
+                {
+                    "source_id": str(i),
+                    "tenant_id": owner,
+                    "sha256": hash_key(uuid.uuid4().hex),
+                    "alternate_sha256": [shared] if i else [],
+                    "name": str(i),
+                    "status": "active",
+                    "expires_at": None,
+                    "unresolved": [],
+                }
+                for i in range(2)
+            ]
+            batch = GatewayKeyImportBatch.model_validate({"source": owner, "keys": entries})
+            await gate.wait()
+            try:
+                async with sessions.begin() as session:
+                    results = await import_keys(session, batch, apply=True)
+                    return all(r.get("action") == "imported" for r in results)
+            except IntegrityError:
+                return False
+
+        try:
+            assert sorted(await asyncio.gather(*(submit(owner) for owner in owners))) == [False, True]
+        finally:
+            await engine.dispose()
+
+    _run(exercise())
+    with Session(owned_engine) as reader:
+        assert reader.scalar(sa.select(sa.func.count()).select_from(GatewayKey)) == 2
+        assert reader.scalar(sa.select(sa.func.count(sa.distinct(GatewayKey.tenant_id)))) == 1
+        assert reader.scalar(sa.select(sa.func.count()).select_from(GatewayImportedCredential)) == 3
 
 
 def test_gateway_limits_refuse_and_quota_survives_a_restart(owned_engine: Engine) -> None:
